@@ -1,0 +1,537 @@
+/* ⚠️ 本文件由 sync-shared-ui.js 自动生成，请勿直接修改！*/
+/*    基准源：shared-ui/element-theme.css —— 改基准后跑 node sync-shared-ui.js */
+/* ============================================================
+ * Element Plus 主题覆盖 —— 对齐「财务模块原来的样式」
+ *
+ * ⚠️ 基准：学管财务管理原型-20260923/index.html（2026-09-24 版），
+ *    完整设计系统见 shared-ui/shared-ui.css
+ *
+ * ⚠️ 为什么用「覆盖」而不是「重写页面」？
+ *    7 个页面共 3686 行，全部重写成自绘 CSS 风险极高，
+ *    而功能逻辑和 E2E 测试都是围绕现有 Element 组件写的。
+ *    只改外观 → 功能零风险，视觉一次全站对齐。
+ *
+ * ⚠️ 变量说明：
+ *    Element Plus 2.x 用 CSS 变量（--el-*），改 :root 下的变量即可全局生效。
+ *    少数组件（表格、菜单）需要额外写选择器覆盖。
+ *
+ * ⚠️ 这个文件必须在 element-plus/dist/index.css【之后】引入才生效。
+ * ============================================================ */
+
+/* ============================================================
+ * 一、全局变量：把 Element 的主色/圆角/字号换成原型口径
+ * ============================================================ */
+:root {
+  /* ---- 主色：原型的 #2563EB（不是 Element 默认的 #409EFF）---- */
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #5b8def;
+  --el-color-primary-light-5: #93b4f8;
+  --el-color-primary-light-7: #bfd3f9;
+  --el-color-primary-light-8: #dce8fb;
+  --el-color-primary-light-9: #eff6ff;
+  --el-color-primary-dark-2: #1d4ed8;
+
+  /* ---- 语义色（与原型 .tag-* 一致）---- */
+  --el-color-success: #047857;
+  --el-color-warning: #c2410c;
+  --el-color-danger: #b91c1c;
+  --el-color-info: #6b7280;
+
+  /* ---- 文字色 ---- */
+  --el-text-color-primary: #1f2937;
+  --el-text-color-regular: #374151;
+  --el-text-color-secondary: #8a94a6;
+  --el-text-color-placeholder: #b3bccb;
+
+  /* ---- 边框 / 底色 ---- */
+  --el-border-color: #e1e6ef;
+  --el-border-color-light: #e9edf3;
+  --el-border-color-lighter: #f1f4f9;
+  --el-fill-color-blank: #fff;
+
+  /* ---- 圆角：原型 7px（输入框/按钮）---- */
+  --el-border-radius-base: 7px;
+  --el-border-radius-small: 6px;
+
+  /* ---- 字号：原型基准 13px（Element 默认 14px）---- */
+  --el-font-size-base: 13px;
+  --el-font-size-small: 12.5px;
+  --el-font-size-extra-small: 11.5px;
+
+  /* ---- 组件高度：原型输入框/按钮 32px（Element 默认 32px 已一致）---- */
+  --el-component-size: 32px;
+  --el-component-size-small: 28px;
+}
+
+/* ============================================================
+ * 二、基础排版
+ * ============================================================ */
+html,
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei',
+    'PingFang SC', sans-serif;
+  font-size: 13px;
+  color: #1f2937;
+  background: #f5f8fc;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条（原型口径 8px / #D8E0EC） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d8e0ec;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #bfcbde;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ============================================================
+ * 三、卡片（el-card）→ 原型 .card
+ * ============================================================ */
+.el-card {
+  border: 1px solid #e9edf3;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+}
+.el-card__header {
+  border-bottom: 1px solid #f1f4f9;
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+.el-card__body {
+  padding: 14px 16px;
+}
+
+/* ============================================================
+ * 四、表格（el-table）→ 原型表格口径
+ * ============================================================ */
+.el-table {
+  font-size: 12.5px;
+  color: #374151;
+}
+/* 表头：浅灰底 + 小号加粗字（原型 thead th） */
+.el-table th.el-table__cell {
+  background: #fafbfd !important;
+  color: #6d7788;
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.2px;
+}
+/* ⚠️ 原型单元格内边距是 11px 14px，Element 默认靠 padding 变量控制。
+ *    这里覆盖变量比写 padding 更稳（不会破坏固定列/表头对齐）。 */
+.el-table {
+  --el-table-cell-padding-vertical: 11px;
+  --el-table-cell-padding-horizontal: 14px;
+  --el-table-header-cell-padding-vertical: 10px;
+}
+.el-table .el-table__cell .cell {
+  padding: 0 14px;
+  line-height: 1.55;
+}
+.el-table td.el-table__cell {
+  border-bottom: 1px solid #f4f6fa;
+}
+.el-table--border .el-table__cell {
+  border-right: 1px solid #f1f4f9;
+}
+.el-table__inner-wrapper::before {
+  display: none; /* 去掉底部那条多余的线 */
+}
+/* 行 hover（原型 #F9FBFF） */
+.el-table tbody tr:hover > td.el-table__cell {
+  background: #f9fbff !important;
+}
+/* 斑马纹弱化（原型基本不用条纹） */
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: #fcfdff;
+}
+/* 卡片内的表格不要自带外边框 */
+.el-card .el-table {
+  border: none;
+}
+/* 表格里的文字按钮（原型 .btn-link） */
+.el-table .el-button.is-link {
+  font-size: 12.5px;
+  padding: 0 3px;
+}
+
+/* ============================================================
+ * 五、按钮（el-button）→ 原型 .btn
+ * ============================================================ */
+.el-button {
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 400;
+}
+.el-button--primary {
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.25);
+}
+.el-button--primary:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+/* 次级按钮（原型 .btn-ghost） */
+.el-button--default:not(.is-text):not(.is-link) {
+  border-color: #e1e6ef;
+  color: #4b5563;
+}
+.el-button--default:not(.is-text):not(.is-link):hover {
+  border-color: #bfd3f9;
+  color: #1d4ed8;
+  background: #f8fbff;
+}
+/* 文字按钮（原型 .btn-link）：表格操作列常用 */
+.el-button.is-link {
+  font-size: 12.5px;
+  padding: 0 4px;
+}
+.el-button.is-link:hover {
+  text-decoration: underline;
+}
+
+/* ============================================================
+ * 六、输入框 / 下拉（el-input / el-select）→ 原型 .inp / .sel
+ * ============================================================ */
+.el-input__wrapper,
+.el-select__wrapper {
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px #e1e6ef inset;
+}
+.el-input__wrapper:hover,
+.el-select__wrapper:hover {
+  box-shadow: 0 0 0 1px #bfd3f9 inset;
+}
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px #93b4f8 inset, 0 0 0 3px rgba(37, 99, 235, 0.09);
+}
+.el-input__inner,
+.el-select__placeholder {
+  font-size: 12.5px;
+  color: #374151;
+}
+
+/* ============================================================
+ * 七、标签（el-tag）→ 原型 .tag（胶囊 + 小字）
+ *
+ * ⚠️ Element 的 el-tag 用 --el-tag-bg-color / --el-tag-text-color 变量控制，
+ *    且默认是「带边框的小方块」。要变成原型的「无边框胶囊」必须：
+ *      ① 覆盖 --el-tag-* 变量
+ *      ② 显式写 border:none + 圆角 11px（用 !important 压过组件内部样式）
+ * ============================================================ */
+.el-tag {
+  --el-tag-border-color: transparent;
+  border: none !important;
+  border-radius: 11px !important;
+  font-size: 11px !important;
+  height: 21px !important;
+  padding: 0 8px !important;
+  letter-spacing: 0.2px;
+}
+
+/* 用变量 + 直写色值双保险（不同 Element 小版本行为有差异） */
+.el-tag--primary,
+.el-tag--primary.el-tag--light,
+.el-tag--primary.el-tag--plain {
+  --el-tag-bg-color: #eff6ff;
+  --el-tag-text-color: #1d4ed8;
+  background-color: #eff6ff !important;
+  color: #1d4ed8 !important;
+}
+.el-tag--success,
+.el-tag--success.el-tag--light,
+.el-tag--success.el-tag--plain {
+  --el-tag-bg-color: #ecfdf5;
+  --el-tag-text-color: #047857;
+  background-color: #ecfdf5 !important;
+  color: #047857 !important;
+}
+.el-tag--warning,
+.el-tag--warning.el-tag--light,
+.el-tag--warning.el-tag--plain {
+  --el-tag-bg-color: #fff7ed;
+  --el-tag-text-color: #c2410c;
+  background-color: #fff7ed !important;
+  color: #c2410c !important;
+}
+.el-tag--danger,
+.el-tag--danger.el-tag--light,
+.el-tag--danger.el-tag--plain {
+  --el-tag-bg-color: #fef2f2;
+  --el-tag-text-color: #b91c1c;
+  background-color: #fef2f2 !important;
+  color: #b91c1c !important;
+}
+.el-tag--info,
+.el-tag--info.el-tag--light,
+.el-tag--info.el-tag--plain {
+  --el-tag-bg-color: #f3f4f6;
+  --el-tag-text-color: #6b7280;
+  background-color: #f3f4f6 !important;
+  color: #6b7280 !important;
+}
+/* 实心标签（状态筛选选中态）保持原型风格：主色底 + 白字 */
+.el-tag--primary.el-tag--dark {
+  background-color: #2563eb !important;
+  color: #fff !important;
+}
+.el-tag--info.el-tag--dark {
+  background-color: #6b7280 !important;
+  color: #fff !important;
+}
+
+/* ============================================================
+ * 八、弹窗（el-dialog）→ 原型 .modal
+ * ============================================================ */
+.el-dialog {
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(16, 24, 40, 0.22);
+}
+.el-dialog__header {
+  padding: 16px 20px;
+  margin: 0;
+  border-bottom: 1px solid #f1f4f9;
+}
+.el-dialog__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+.el-dialog__body {
+  padding: 18px 20px;
+  font-size: 12.5px;
+  color: #374151;
+}
+.el-dialog__footer {
+  padding: 13px 20px;
+  border-top: 1px solid #f1f4f9;
+}
+/* 遮罩（原型 rgba(17,24,39,.34)） */
+.el-overlay {
+  background-color: rgba(17, 24, 39, 0.34);
+}
+
+/* ============================================================
+ * 九、分页（el-pagination）→ 原型 .pg
+ * ============================================================ */
+.el-pagination {
+  font-size: 12px;
+  color: #8a94a6;
+}
+.el-pagination button,
+.el-pager li {
+  min-width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.el-pager li.is-active {
+  background: #2563eb;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ============================================================
+ * 十、菜单 / 标签页 / 描述列表等杂项
+ * ============================================================ */
+/* el-menu：去掉默认边框和背景，贴合原型 nav-item */
+.el-menu {
+  border-right: none;
+  background: transparent;
+}
+.el-menu-item {
+  height: 35px;
+  line-height: 35px;
+  border-radius: 8px;
+  margin: 0 10px 2px;
+  font-size: 13px;
+  color: #4b5563;
+}
+.el-menu-item:hover {
+  background: #f4f8ff;
+  color: #2563eb;
+}
+.el-menu-item.is-active {
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.el-menu-item.is-active::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+  margin-right: 9px;
+  flex: none;
+}
+
+/* el-descriptions：描述列表 → 原型 .kv */
+.el-descriptions {
+  font-size: 12.5px;
+}
+.el-descriptions__label {
+  color: #8a94a6 !important;
+  font-weight: 400 !important;
+}
+.el-descriptions__content {
+  color: #1f2937 !important;
+}
+
+/* el-alert：提示条 → 原型 .note */
+.el-alert {
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+.el-alert__title {
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+/* el-form 标签 */
+.el-form-item__label {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* el-message 提示（原型风格） */
+.el-message {
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+/* el-loading 遮罩色调一致 */
+.el-loading-mask {
+  background-color: rgba(255, 255, 255, 0.82);
+}
+
+/* ============================================================
+ * 十一、原型专属版式：部门 Tab / 统计行 / 分页文案 / 剩余天数
+ *
+ * ⚠️ 这批类名（.dept-tabs / .stat-line / .pager-bar / .money）
+ *    直接沿用原型 index.html 的写法，方便日后拿原型对照。
+ * ============================================================ */
+
+/* ---- 部门二级 Tab（原型 .dept-tabs）---- */
+.dept-tabs {
+  display: flex;
+  gap: 20px;
+  padding: 0 16px;
+  border-bottom: 1px solid #f1f4f9;
+}
+.dept-tabs b {
+  padding: 11px 0;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: #6b7280;
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+}
+.dept-tabs b:hover {
+  color: #1d4ed8;
+}
+.dept-tabs b.on {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.dept-tabs b.on::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: #2563eb;
+  border-radius: 2px;
+}
+
+/* ---- 工具栏里的内联统计（原型 .sel-tip / statTip）---- */
+.stat-line {
+  font-size: 12px;
+  color: #6b7280;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.stat-line b {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+/* ---- 内容区顶部操作条：左工具 + 右统计与主按钮（原型 .toolbar）---- */
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.table-toolbar .tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---- 分页文案条（原型 .pager：左侧文案 + 右侧页码）---- */
+.pager-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 4px 0;
+  color: #8a94a6;
+  font-size: 12px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* ---- 金额列（原型 .money / .money.due）---- */
+.money {
+  font-weight: 600;
+  color: #1f2937;
+}
+.money.due {
+  color: #c2410c;
+}
+
+/* ---- 单元格双行（主值 + 下方小字，如「到期日期 + 剩余 N 天」）---- */
+.cell2 {
+  line-height: 1.55;
+}
+.cell2 .sub {
+  font-size: 11px;
+  color: #9aa3b2;
+}
+
+/* ---- 卡片内嵌表格时，去掉 el-card 的额外内边距（原型卡片是「通栏」布局）---- */
+.card-flush .el-card__body {
+  padding: 0;
+}
+
+/* ---- 表格顶部与卡片圆角的衔接：Tab 紧贴卡片顶部 ---- */
+.card-flush .dept-tabs {
+  padding-top: 4px;
+}
+.card-flush .table-toolbar {
+  padding: 12px 16px;
+  margin-bottom: 0;
+  border-bottom: 1px solid #f4f6fa;
+}
+.card-flush .pager-bar {
+  padding: 11px 16px;
+  border-top: 1px solid #f4f6fa;
+}
+

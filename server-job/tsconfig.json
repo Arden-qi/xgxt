@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "node",
+
+    /* ★ 2026-10-03：教务模块的共享类型走子路径 shared-types/edu。
+     *   tsc 的 "node" 解析模式不认 package.json 的 exports 子路径，
+     *   所以这里显式映射一下。
+     *   （运行时由 Node 自己按 exports 解析，不受这里影响）
+     * ★ 2026-10-04：班级模块同理，加 shared-types/class。 */
+    "baseUrl": ".",
+    "paths": {
+      "shared-types/edu": ["node_modules/shared-types/dist/cjs/edu/index.d.ts"],
+      "shared-types/class": ["node_modules/shared-types/dist/cjs/class/index.d.ts"],
+      "shared-types/portal": ["node_modules/shared-types/dist/cjs/portal/index.d.ts"],
+      "shared-types/consult": ["node_modules/shared-types/dist/cjs/consult/index.d.ts"],
+      "shared-types/finance": ["node_modules/shared-types/dist/cjs/finance/index.d.ts"],
+      "shared-types/perm": ["node_modules/shared-types/dist/cjs/perm/index.d.ts"],
+      "shared-types/class-jh": ["node_modules/shared-types/dist/cjs/class-jh/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

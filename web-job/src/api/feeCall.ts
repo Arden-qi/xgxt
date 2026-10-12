@@ -1,0 +1,66 @@
+/**
+ * 催费管理 接口调用（就业管理 > 实训阶段）
+ *
+ * ⚠️ 路径与后端 /api/job/fee-call 完全一致
+ *
+ * 【这个模块不收款】
+ *   它只是"催办工单"：教务发起 → 班主任去催 → 标记结果。
+ *   真正的收费在财务模块（8005），本模块不碰钱。
+ *
+ * 【页面共用说明】
+ *   教务老师 → 发起 + 作废（看不到"处理"按钮）
+ *   班主任   → 处理（看不到"发起"按钮），且只看自己班
+ *   按钮显隐由后端返回的 canHandle 控制。
+ */
+
+import { http } from './request';
+import type {
+  PageData,
+  FeeCallListItem,
+  FeeCallDetail,
+  FeeCallQuery,
+  FeeCallPayload,
+  FeeCallHandlePayload,
+  FeeCallSummary,
+  FeeCallStudentOption,
+} from 'shared-types';
+
+/** 列表 */
+export function fetchFeeCallList(query: FeeCallQuery): Promise<PageData<FeeCallListItem>> {
+  return http.get<PageData<FeeCallListItem>>('/api/job/fee-call/page', query);
+}
+
+/** 详情（含该生历史催费） */
+export function fetchFeeCallDetail(id: string): Promise<FeeCallDetail> {
+  return http.get<FeeCallDetail>('/api/job/fee-call/detail', { id });
+}
+
+/** 可选学生（教务发起时选人） */
+export function fetchFeeCallStudentOptions(params?: {
+  keyword?: string;
+  limit?: number;
+}): Promise<FeeCallStudentOption[]> {
+  return http.get<FeeCallStudentOption[]>('/api/job/fee-call/student-options', params);
+}
+
+/** 新建催费单（教务老师） */
+export function createFeeCall(payload: FeeCallPayload): Promise<{ id: string }> {
+  return http.post<{ id: string }>('/api/job/fee-call/create', payload);
+}
+
+/** 处理（班主任催完了 / 学生交钱了） */
+export function handleFeeCall(
+  payload: FeeCallHandlePayload,
+): Promise<{ callStatus: number }> {
+  return http.post<{ callStatus: number }>('/api/job/fee-call/handle', payload);
+}
+
+/** 作废（发起人本人 / 管理员，逻辑删除） */
+export function voidFeeCall(id: string): Promise<null> {
+  return http.post<null>('/api/job/fee-call/void', { id });
+}
+
+/** 统计 */
+export function fetchFeeCallSummary(): Promise<FeeCallSummary> {
+  return http.get<FeeCallSummary>('/api/job/fee-call/summary');
+}

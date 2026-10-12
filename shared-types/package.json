@@ -1,0 +1,62 @@
+{
+  "name": "shared-types",
+  "version": "1.0.0",
+  "description": "学管系统公共类型定义（前后端共用）",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./edu": {
+      "types": "./dist/cjs/edu/index.d.ts",
+      "import": "./dist/esm/edu/index.js",
+      "require": "./dist/cjs/edu/index.js"
+    },
+    "./class": {
+      "types": "./dist/cjs/class/index.d.ts",
+      "import": "./dist/esm/class/index.js",
+      "require": "./dist/cjs/class/index.js"
+    },
+    "./portal": {
+      "types": "./dist/cjs/portal/index.d.ts",
+      "import": "./dist/esm/portal/index.js",
+      "require": "./dist/cjs/portal/index.js"
+    },
+    "./consult": {
+      "types": "./dist/cjs/consult/index.d.ts",
+      "import": "./dist/esm/consult/index.js",
+      "require": "./dist/cjs/consult/index.js"
+    },
+    "./finance": {
+      "types": "./dist/cjs/finance/index.d.ts",
+      "import": "./dist/esm/finance/index.js",
+      "require": "./dist/cjs/finance/index.js"
+    },
+    "./perm": {
+      "types": "./dist/cjs/perm/index.d.ts",
+      "import": "./dist/esm/perm/index.js",
+      "require": "./dist/cjs/perm/index.js"
+    },
+    "./class-jh": {
+      "types": "./dist/cjs/class-jh/index.d.ts",
+      "import": "./dist/esm/class-jh/index.js",
+      "require": "./dist/cjs/class-jh/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npm run build:cjs && npm run build:esm",
+    "build:cjs": "tsc -p tsconfig.json",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "watch": "tsc -p tsconfig.json --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

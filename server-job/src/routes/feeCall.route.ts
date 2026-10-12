@@ -1,0 +1,596 @@
+/**
+ * 催费管理 路由（就业管理 > 实训阶段）
+ *
+ * 接口前缀：/api/job/fee-call
+ * 表：t_job_fee_call
+ * 字段依据：斌哥 2026-09-30 拍板
+ *
+ * ============================================================
+ * 【业务规则（斌哥 2026-09-30 拍板）】
+ * ============================================================
+ *   1. 发起人 = 教务老师（ROLE_EDU_ADMIN）
+ *   2. 类别   = 住宿费 / 保险费 / 餐费（★ 没有学费）
+ *   3. 发起后【发站内信】推给该学生的班主任
+ *   4. 班主任【只看自己的班】
+ *   5. 班主任催完 → 标记「已催缴」→ 学生交了就标「已缴清」
+ *
+ * ============================================================
+ * 【⚠️ 这个模块不收款】
+ * ============================================================
+ *   它只是"催办工单"——教务发起、班主任去催、标记结果。
+ *   真正的收费/账目在财务模块（8005），本模块不碰钱。
+ *
+ * ⚠️ 铁律：逻辑删除，禁物理删除。
+ * ⚠️ 铁律：金额一律存「分」（整数）。
+ * ⚠️ 铁律：枚举双返回（feeType + feeTypeName）。
+ */
+
+import { Router } from 'express';
+import { z } from 'zod';
+import { randomUUID } from 'crypto';
+import {
+  BizCode,
+  FeeCallCategory,
+  FEE_CALL_CATEGORY_NAME,
+  FeeCallStatus,
+  FEE_CALL_STATUS_NAME,
+  DEPT_NAME,
+  RoleCode,
+  StudentStatus,
+  ClassStatus,
+  hasRole,
+} from 'shared-types';
+import { ok, page } from '../utils/response';
+import { db } from '../utils/db';
+import { wrap } from '../utils/wrap';
+import { today, fmtDate, fmtDateTime } from '../utils/date';
+import { validate } from '../middleware/validate';
+import { BizError } from '../middleware/errorHandler';
+import { sendNotice, NOTICE_TYPE } from '../utils/notice';
+// ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
+import { applyTrainingScope, myTrainingClassIds, operatorOf } from '../utils/stageScope';
+// ★ 信息流转：催费单新增/处理 → 推送班级管理模块（只读副本）
+import { syncFeeCallToClass } from '../services/urge-sync.service';
+
+export const feeCallRouter = Router();
+
+/** 表名常量 */
+const TABLE = 't_job_fee_call';
+const STUDENT_TABLE = 't_student_base';
+const CLASS_TABLE = 't_job_class';
+
+/** 可发起催费的学生状态（在校生都行）*/
+const ALLOW_STATUS: number[] = [
+  StudentStatus.TRIAL,
+  StudentStatus.PRE_STUDY,
+  StudentStatus.STUDYING,
+  StudentStatus.TRAINING,
+];
+
+/** 合法费用类别（只有这三类）*/
+const VALID_FEE_TYPES: number[] = [
+  FeeCallCategory.ACCOMMODATION, // 住宿费 2
+  FeeCallCategory.INSURANCE,     // 保险费 4
+  FeeCallCategory.MEAL,          // 餐费 3
+];
+
+/* ============================================================
+ * 内部工具
+ * ============================================================ */
+
+function getOperator(req: any) {
+  const u = req.user || {};
+  return {
+    userId: u.userId || u.id || '',
+    userName: u.userName || u.name || '',
+    roles: u.roles || [],
+  };
+}
+
+/** 分 → 元字符串（如 120000 → "1,200.00"）*/
+function fenToYuanText(fen: number | null | undefined): string | null {
+  if (fen === null || fen === undefined) return null;
+  const yuan = (Number(fen) / 100).toFixed(2);
+  const [int, dec] = yuan.split('.');
+  const withComma = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${withComma}.${dec}`;
+}
+
+/** 是否已逾期 */
+function isOverdue(dueDate: any, callStatus: number): boolean {
+  if (!dueDate) return false;
+  // 已缴清不算逾期
+  if (callStatus === FeeCallStatus.PAID) return false;
+  const due = fmtDate(dueDate);
+  return !!due && due < today();
+}
+
+/** 催费单行 → 输出结构 */
+function decorate(row: any, operator: { userId: string; roles: string[] }): any {
+  // 班主任本人（或管理员）可以处理
+  const isHeadTeacher = row.head_teacher_id === operator.userId;
+  const isAdmin = operator.roles.includes(RoleCode.SYS_ADMIN);
+  const notFinished = row.call_status !== FeeCallStatus.PAID;
+  const canHandle = notFinished && (isHeadTeacher || isAdmin);
+
+  return {
+    id: row.id,
+    feeType: row.fee_type,
+    feeTypeName: FEE_CALL_CATEGORY_NAME[row.fee_type] || '',
+
+    studentId: row.student_id,
+    studentNo: row.student_no || null,
+    studentName: row.student_name || null,
+    phone: row.phone || null,
+    parentPhone: row.parent_phone || null,
+
+    classId: row.class_id || null,
+    className: row.class_name || null,
+    deptCode: row.dept_code ?? null,
+    deptName: row.dept_code ? DEPT_NAME[row.dept_code] || null : null,
+    headTeacherId: row.head_teacher_id || null,
+    headTeacherName: row.head_teacher_name || null,
+
+    feeAmount: row.fee_amount ?? null,
+    feeAmountText: fenToYuanText(row.fee_amount),
+    dueDate: fmtDate(row.due_date),
+    overdue: isOverdue(row.due_date, row.call_status),
+    callReason: row.call_reason || null,
+
+    callStatus: row.call_status,
+    callStatusName: FEE_CALL_STATUS_NAME[row.call_status] || '',
+    handleTime: fmtDateTime(row.handle_time),
+    handleRemark: row.handle_remark || null,
+
+    applicantId: row.applicant_id || null,
+    applicantName: row.applicant_name || null,
+
+    remark: row.remark || null,
+    createTime: fmtDateTime(row.create_time),
+    canHandle,
+  };
+}
+
+/* ============================================================
+ * 1. 列表
+ *    GET /api/job/fee-call/page
+ * ============================================================ */
+
+const listSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  size: z.coerce.number().int().min(1).max(200).default(20),
+  keyword: z.string().optional(),
+  feeType: z.coerce.number().int().optional(),
+  classId: z.string().optional(),
+  callStatus: z.coerce.number().int().optional(),
+  onlyMine: z.coerce.boolean().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+});
+
+feeCallRouter.get(
+  '/page',
+  validate(listSchema),
+  wrap(async (req, res) => {
+    const q = (req as any).validated;
+    const operator = getOperator(req);
+
+    const base = db(TABLE).where('is_deleted', false);
+    await applyTrainingScope(base, req, { table: TABLE });
+
+    if (q.keyword) {
+      base.andWhere((b: any) => {
+        b.where('student_name', 'like', `%${q.keyword}%`)
+          .orWhere('student_no', 'like', `%${q.keyword}%`);
+      });
+    }
+    if (q.feeType !== undefined) base.andWhere('fee_type', q.feeType);
+    if (q.classId) base.andWhere('class_id', q.classId);
+    if (q.callStatus !== undefined) base.andWhere('call_status', q.callStatus);
+    if (q.startDate) base.andWhere('due_date', '>=', q.startDate);
+    if (q.endDate) base.andWhere('due_date', '<=', q.endDate);
+
+    // ★ 班主任只看自己的班（数据范围）
+    //   ★ 2026-10-08 修：补上项目经理 —— 原来只判班主任，
+    //     但项目经理被 applyTrainingScope 放进了"不限"分支 → 能看到全校催费单。
+    //     口径：项目经理只认自己带的实训班（与其它模块统一）。
+    const isAdmin = hasRole(operator.roles, RoleCode.SYS_ADMIN);
+    const isPM = hasRole(operator.roles, RoleCode.PROJECT_MANAGER);
+    const isHeadTeacher = hasRole(operator.roles, RoleCode.TEACH_HEAD);
+    const isEduAdmin = hasRole(operator.roles, RoleCode.ACAD_STAFF);
+
+    if (!isAdmin && isPM && !isEduAdmin) {
+      const myClasses = await db(CLASS_TABLE)
+        .where({ project_manager_id: operator.userId, is_deleted: false })
+        // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
+        // .whereNot('class_status', ClassStatus.GRADUATED)
+        .select('id');
+      const ids = myClasses.map((c: any) => c.id);
+      if (ids.length === 0) base.whereRaw('1 = 0');
+      else base.whereIn('class_id', ids);
+    } else if (isHeadTeacher && !isAdmin && !isEduAdmin) {
+      base.andWhere('head_teacher_id', operator.userId);
+    } else if (q.onlyMine) {
+      base.andWhere('head_teacher_id', operator.userId);
+    }
+
+    const [{ c: total }] = await base.clone().count({ c: '*' });
+    const rows = await base
+      .clone()
+      .orderBy([{ column: 'call_status', order: 'asc' }, { column: 'due_date', order: 'asc' }])
+      .limit(q.size)
+      .offset((q.page - 1) * q.size);
+
+    res.json(page(rows.map((r: any) => decorate(r, operator)), Number(total), q));
+  }),
+);
+
+/* ============================================================
+ * 2. 详情
+ *    GET /api/job/fee-call/detail
+ * ============================================================ */
+
+feeCallRouter.get(
+  '/detail',
+  validate(z.object({ id: z.string().min(1, '催费单ID必传') })),
+  wrap(async (req, res) => {
+    const { id } = (req as any).validated;
+    const operator = getOperator(req);
+
+    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    if (!row) throw new BizError(BizCode.FEE_CALL_NOT_FOUND, '催费单不存在');
+
+    const history = await db(TABLE)
+      .where({ student_id: row.student_id, is_deleted: false })
+      .whereNot('id', id)
+      .orderBy('create_time', 'desc')
+      .limit(20);
+
+    res.json(
+      ok({
+        ...decorate(row, operator),
+        history: history.map((h: any) => ({
+          id: h.id,
+          feeType: h.fee_type,
+          feeTypeName: FEE_CALL_CATEGORY_NAME[h.fee_type] || '',
+          dueDate: fmtDate(h.due_date),
+          callStatus: h.call_status,
+          callStatusName: FEE_CALL_STATUS_NAME[h.call_status] || '',
+          createTime: fmtDateTime(h.create_time),
+        })),
+      }),
+    );
+  }),
+);
+
+/* ============================================================
+ * 3. 可选学生（教务发起时选人）
+ *    GET /api/job/fee-call/student-options
+ * ============================================================ */
+
+feeCallRouter.get(
+  '/student-options',
+  validate(
+    z.object({
+      keyword: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(200).default(50),
+    }),
+  ),
+  wrap(async (req, res) => {
+    const q = (req as any).validated;
+
+    const query = db(`${STUDENT_TABLE} as s`)
+      .leftJoin(`${CLASS_TABLE} as c`, 's.class_id', 'c.id')
+      .where('s.is_deleted', false)
+      .whereIn('s.student_status', ALLOW_STATUS);
+
+    if (q.keyword) {
+      query.andWhere((x: any) => {
+        x.where('s.student_name', 'like', `%${q.keyword}%`).orWhere('s.student_no', 'like', `%${q.keyword}%`);
+      });
+    }
+
+    const rows = await query
+      .select(
+        's.id as student_id',
+        's.student_no',
+        's.student_name',
+        's.phone',
+        's.parent_phone',
+        'c.class_name',
+        'c.dept_code',
+        'c.head_teacher_id',
+        'c.head_teacher_name',
+      )
+      .orderBy('s.student_no', 'asc')
+      .limit(q.limit);
+
+    res.json(
+      ok(
+        rows.map((r: any) => ({
+          studentId: r.student_id,
+          studentNo: r.student_no,
+          studentName: r.student_name,
+          className: r.class_name || null,
+          deptCode: r.dept_code ?? null,
+          deptName: r.dept_code ? DEPT_NAME[r.dept_code] || null : null,
+          headTeacherId: r.head_teacher_id || null,
+          headTeacherName: r.head_teacher_name || null,
+          phone: r.phone || null,
+          parentPhone: r.parent_phone || null,
+        })),
+      ),
+    );
+  }),
+);
+
+/* ============================================================
+ * 4. 新建催费单
+ *    POST /api/job/fee-call/create
+ *
+ * ⚠️ 只有教务老师能发起（管理员也可）。
+ * ★ 发起后自动发站内信给班主任。
+ * ============================================================ */
+
+const createSchema = z.object({
+  feeType: z.coerce.number().int(),
+  studentId: z.string().min(1, '学生必传'),
+  feeAmount: z.coerce.number().int().min(0).optional().nullable(),
+  dueDate: z.string().min(1, '到期时间必填'),
+  callReason: z.string().max(500).optional().nullable(),
+  remark: z.string().max(500).optional().nullable(),
+});
+
+feeCallRouter.post(
+  '/create',
+  validate(createSchema),
+  wrap(async (req, res) => {
+    const body = (req as any).validated;
+    const operator = getOperator(req);
+
+    // ① 只有教务老师/管理员能发起
+    const allowed =
+      operator.roles.includes(RoleCode.ACAD_STAFF) || operator.roles.includes(RoleCode.SYS_ADMIN);
+    if (!allowed) {
+      throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有教务老师能发起催费');
+    }
+
+    // ② 类别必须是三类之一
+    if (!VALID_FEE_TYPES.includes(body.feeType)) {
+      throw new BizError(BizCode.PARAM_ERROR, '费用类别只能是住宿费/保险费/餐费');
+    }
+
+    // ③ 学生校验
+    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
+    if (!ALLOW_STATUS.includes(stu.student_status)) {
+      throw new BizError(BizCode.STUDENT_STATUS_NOT_ALLOW, '该学生当前状态不允许发起催费');
+    }
+
+    // ④ 到期日不能早于今天
+    if (body.dueDate < today()) {
+      throw new BizError(BizCode.FEE_DUE_DATE_INVALID, '到期时间不能早于今天');
+    }
+
+    // ⑤ 同类费用不能有未完成的重复催费
+    const dup = await db(TABLE)
+      .where({ student_id: stu.id, fee_type: body.feeType, is_deleted: false })
+      .whereNot('call_status', FeeCallStatus.PAID)
+      .first();
+    if (dup) {
+      throw new BizError(
+        BizCode.FEE_CALL_DUPLICATE,
+        `该学生已有同类未完成的催费单`,
+      );
+    }
+
+    // ⑥ 班级信息
+    let cls: any = null;
+    if (stu.class_id) cls = await db(CLASS_TABLE).where({ id: stu.class_id, is_deleted: false }).first();
+
+    const id = randomUUID();
+    const now = new Date();
+
+    await db.transaction(async (trx) => {
+      await trx(TABLE).insert({
+        id,
+        create_time: now,
+        create_by: operator.userId,
+        is_deleted: false,
+
+        fee_type: body.feeType,
+
+        student_id: stu.id,
+        student_no: stu.student_no || null,
+        student_name: stu.student_name || null,
+        phone: stu.phone || null,
+        parent_phone: stu.parent_phone || null,
+
+        class_id: cls?.id || stu.class_id || null,
+        class_name: cls?.class_name || stu.class_name || null,
+        dept_code: cls?.dept_code ?? stu.dept_code ?? null,
+        head_teacher_id: cls?.head_teacher_id || stu.head_teacher_id || null,
+        head_teacher_name: cls?.head_teacher_name || stu.head_teacher_name || null,
+
+        fee_amount: body.feeAmount ?? null,
+        due_date: body.dueDate,
+        call_reason: body.callReason || null,
+        remark: body.remark || null,
+
+        call_status: FeeCallStatus.PENDING,
+        applicant_id: operator.userId,
+        applicant_name: operator.userName,
+      });
+
+      // ★ 发站内信给班主任
+      const receiverId = cls?.head_teacher_id || stu.head_teacher_id;
+      if (receiverId) {
+        await sendNotice(
+          {
+            noticeType: NOTICE_TYPE.SYSTEM,
+            title: `【催费】${stu.student_name || ''} 的${FEE_CALL_CATEGORY_NAME[body.feeType] || ''}需催缴`,
+            content:
+              `${stu.student_name || ''}（${stu.student_no || ''}）的` +
+              `${FEE_CALL_CATEGORY_NAME[body.feeType] || ''}需催缴，到期时间 ${body.dueDate}。` +
+              (body.callReason ? `说明：${body.callReason}` : ''),
+            receiverId,
+            receiverName: cls?.head_teacher_name || stu.head_teacher_name || '班主任',
+            receiverRole: RoleCode.TEACH_HEAD,
+            senderId: operator.userId,
+            senderName: operator.userName,
+            bizType: 'feeCall',
+            bizId: id,
+            classId: cls?.id || stu.class_id,
+            className: cls?.class_name || stu.class_name,
+            studentId: stu.id,
+            studentName: stu.student_name,
+          },
+          trx,
+        );
+      }
+    });
+
+    // ★ 2026-10-05：教务点「发起催费」→ 推给班级管理（班级「催费管理」页读只读副本）
+    //    非阻断：失败只记日志，不能让催费单本身建不出来
+    await syncFeeCallToClass(id);
+
+    res.json(ok({ id }));
+  }),
+);
+
+/* ============================================================
+ * 5. 处理（班主任催完了 / 学生交钱了）
+ *    POST /api/job/fee-call/handle
+ *
+ * ⚠️ 只有该学生的班主任本人（或管理员）能处理。
+ * ============================================================ */
+
+feeCallRouter.post(
+  '/handle',
+  validate(
+    z.object({
+      id: z.string().min(1, '催费单ID必传'),
+      callStatus: z.coerce.number().int().min(2).max(3),
+      handleRemark: z.string().max(500).optional().nullable(),
+    }),
+  ),
+  wrap(async (req, res) => {
+    const body = (req as any).validated;
+    const operator = getOperator(req);
+
+    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    if (!row) throw new BizError(BizCode.FEE_CALL_NOT_FOUND, '催费单不存在');
+
+    // ★ 权限：只能处理自己班的
+    const isHeadTeacher = row.head_teacher_id === operator.userId;
+    const isAdmin = operator.roles.includes(RoleCode.SYS_ADMIN);
+    if (!isHeadTeacher && !isAdmin) {
+      throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有该学生的班主任能处理此催费单');
+    }
+
+    if (row.call_status === FeeCallStatus.PAID) {
+      throw new BizError(BizCode.FEE_CALL_STATUS_NOT_ALLOW, '该催费单已完成，不能重复处理');
+    }
+
+    await db(TABLE).where({ id: body.id }).update({
+      call_status: body.callStatus,
+      handle_time: new Date(),
+      handle_remark: body.handleRemark || null,
+      update_time: new Date(),
+      update_by: operator.userId,
+    });
+
+    // ★ 2026-10-05：催缴状态变了 → 把最新状态推给班级管理（只读副本）
+    await syncFeeCallToClass(body.id);
+
+    res.json(ok({ callStatus: body.callStatus }));
+  }),
+);
+
+/* ============================================================
+ * 6. 作废（发起人可以作废自己的）
+ *    POST /api/job/fee-call/void
+ *
+ * ⚠️ 实现方式 = 逻辑删除（is_deleted=true）。
+ *    为什么不用状态字段：FeeCallStatus 只有 1待催缴/2催缴中/3已缴清，
+ *    没有"作废"。为了一个作废去动公共枚举不划算，
+ *    而且"作废"本质就是"这条单子不要了" = 逻辑删除，语义正好对上。
+ * ============================================================ */
+
+feeCallRouter.post(
+  '/void',
+  validate(z.object({ id: z.string().min(1, '催费单ID必传') })),
+  wrap(async (req, res) => {
+    const { id } = (req as any).validated;
+    const operator = getOperator(req);
+
+    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    if (!row) throw new BizError(BizCode.FEE_CALL_NOT_FOUND, '催费单不存在');
+
+    const isApplicant = row.applicant_id === operator.userId;
+    const isAdmin = operator.roles.includes(RoleCode.SYS_ADMIN);
+    // ★ 万能测试号（SUPER_TEST）：验证「发起 → 作废」链路，业务验证用全放行
+    if (!isApplicant && !isAdmin && !operator.roles.includes('SUPER_TEST')) {
+      throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有发起人能作废此催费单');
+    }
+    if (row.call_status === FeeCallStatus.PAID) {
+      throw new BizError(BizCode.FEE_CALL_STATUS_NOT_ALLOW, '已缴清的催费单不能作废');
+    }
+
+    await db(TABLE).where({ id }).update({
+      is_deleted: true,
+      update_time: new Date(),
+      update_by: operator.userId,
+    });
+
+    res.json(ok(null));
+  }),
+);
+
+/* ============================================================
+ * 7. 统计
+ *    GET /api/job/fee-call/summary
+ * ============================================================ */
+
+feeCallRouter.get(
+  '/summary',
+  wrap(async (req, res) => {
+    const operator = getOperator(req);
+
+    const base = db(TABLE).where('is_deleted', false);
+
+    // 班主任只看自己的班
+    const isHeadTeacher = operator.roles.includes(RoleCode.TEACH_HEAD);
+    const isAdmin = operator.roles.includes(RoleCode.SYS_ADMIN);
+    const isEduAdmin = operator.roles.includes(RoleCode.ACAD_STAFF);
+    if (isHeadTeacher && !isAdmin && !isEduAdmin) {
+      base.andWhere('head_teacher_id', operator.userId);
+    }
+
+    const [{ c: total }] = await base.clone().count({ c: '*' });
+    const [{ c: pending }] = await base.clone().andWhere('call_status', FeeCallStatus.PENDING).count({ c: '*' });
+    const [{ c: calling }] = await base.clone().andWhere('call_status', FeeCallStatus.CALLING).count({ c: '*' });
+    const [{ c: done }] = await base.clone().andWhere('call_status', FeeCallStatus.PAID).count({ c: '*' });
+    const [{ c: overdue }] = await base
+      .clone()
+      .whereNot('call_status', FeeCallStatus.PAID)
+      .andWhere('due_date', '<', today())
+      .count({ c: '*' });
+
+    res.json(
+      ok({
+        total: Number(total),
+        // 前端卡片用的名字保持通用
+        pending: Number(pending) + Number(calling), // 待处理 = 待催缴+催缴中
+        called: Number(calling),
+        done: Number(done),
+        overdue: Number(overdue),
+        // 细分
+        pendingOnly: Number(pending),
+        calling: Number(calling),
+      }),
+    );
+  }),
+);
+
+export default feeCallRouter;

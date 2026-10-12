@@ -1,0 +1,749 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import { ConsultStatus, PermAction, StudentStatus } from 'shared-types/class';
+// ★ TransferType 在 shared-types 根导出（不在 /class 子路径下），与 student.route.ts 同口径
+import { TransferType } from 'shared-types';
+import { db } from '../../db';
+import { Errors, ok, pageData } from '../../http/response';
+import { pageQuerySchema, q, validate } from '../../lib/validate';
+import { baseInsert, baseUpdate, maxStudentNo, notDeleted, paginate } from '../../lib/repo';
+import { assertClassAccess } from '../../middleware/dataScope';
+import { requirePerm } from '../../lib/permGuard';
+import { isFullAccess } from '../../lib/authUser';
+import { rowToCamel, rowsToCamel } from '../../lib/case';
+import { now, uuid } from '../../lib/ids';
+import { ConsultStatusName, DeptName, GenderName, stageNameOf } from '../../lib/dict';
+import { assertClassAcceptStudent } from '../../lib/classRule';
+import { wrap } from '../../middleware/error';
+import {
+  tbl,
+  tblTrx,
+  tblIns,
+  tblInsTrx,
+  USE_UNI_TABLE,
+} from '../../../teaching/shared/uniTable';
+
+/**
+ * 咨询推送（需求 v1.2）
+ *
+ * 流程：咨询模块（8001）把学员信息推送到班主任 → 班主任在「待接收学员」页接收 →
+ *      接收时补充信息（含宿舍床位）并建档 → 学生来源标记为「咨询同步」。
+ *      驳回则必填原因，回传咨询模块。
+ *
+ * ── 第 4 期 · 第 6 批（2026-10-11 · 咨询域）：统一表切读 ──
+ *   本文件 25 处裸访问全部改走 `uniTable.ts` 路由层，涉及 6 张表：
+ *     t_class_consult_push     → t_uni_consult_push
+ *     t_class_student          → t_uni_student
+ *     t_class_info             → t_uni_class
+ *     t_class_repeat           → t_uni_repeat
+ *     t_class_grade            → t_uni_exam_score
+ *     t_class_student_transfer → t_uni_class_transfer   ★ 与岗位交接/升学转班共表
+ *
+ *   ★ 与宿舍域第 5 批不同：6 张表实测**零缺列**，不需要补列迁移
+ *     （但要跑 `20261011_003`：bed_no 类型对齐 + uk_consult_push 降级）。
+ *
+ *   ★★ **`t_uni_class_transfer` 被三件事共用，写入方必须自己说清是哪件**
+ *     ① 班级域「岗位交接」   → transfer_type=1(调岗) + post_transfer_type=1/2/3
+ *     ② 学生域「升学转班」   → transfer_type=6
+ *     ③ 本文件「换班留痕」   → transfer_type=7（StudentClassChange）
+ *     三者都写同一张表，靠 transfer_type 区分事件性质 —— 见 shared-types/enums.ts。
+ *
+ *   ★★ **本域写 `t_uni_class_transfer` 时绕开 `UNI_COL_RENAME`**
+ *     翻译表里 `t_class_transfer` 有 `from_user_name → from_class_name` 等改名
+ *     （为升学转班那条路径设的）。但 `t_class_student_transfer` **没有**登记翻译 ——
+ *     它的 `from_class_name`/`to_class_name` 装的就是**班级名**，语义天然一致，
+ *     不需要翻译也不该翻译。
+ */
+export const consultRouter = Router();
+
+/* ---------------- 统一表路由助手（第 6 批新增） ---------------- */
+const SRC = 'sms_class';
+const STAGE = 'class' as const;
+
+const PUSH_T = 't_class_consult_push';
+const STU_T = 't_class_student';
+const CLS_T = 't_class_info';
+const REPEAT_T = 't_class_repeat';
+const GRADE_T = 't_class_grade';
+const XFER_T = 't_class_student_transfer';
+
+const PUSH = () => tbl(db, SRC, PUSH_T, STAGE);
+const STU = () => tbl(db, SRC, STU_T, STAGE);
+const CLS = () => tbl(db, SRC, CLS_T, STAGE);
+const STU_TRX = (trx: import('knex').Knex.Transaction) => tblTrx(trx, SRC, STU_T, STAGE);
+const CLS_TRX = (trx: import('knex').Knex.Transaction) => tblTrx(trx, SRC, CLS_T, STAGE);
+const PUSH_TRX = (trx: import('knex').Knex.Transaction) => tblTrx(trx, SRC, PUSH_T, STAGE);
+
+/* ============================================================
+ * ★ 2026-10-06 用户拍板：待接收学员的「谁看得到 / 谁能接收」
+ *
+ *   「接收班级是由咨询、初高中决定的，此界面不设班级的选择；
+ *     对应班级的班主任可以接收学员，校长和学管也可以」
+ *
+ *   所以：
+ *     · 能看到的范围 —— 班主任只看「意向班级是自己带的班」的推送单；
+ *       校长 / 学管（学管主任）看全部。
+ *     · 能接收 —— 同上口径（本班班主任 / 校长 / 学管），教员与助教不参与接收。
+ *     · 接收班级 —— **只能**用推送单上的 intend_class_id，前端传什么都不认。
+ * ============================================================ */
+
+/** 只有「班主任」这一种角色能按班级接收（校长/学管走 isFullAccess 全量） */
+const RECEIVE_ROLE_HEAD_TEACHER = 'TEACH_HEAD';
+
+/** 该推送单当前用户能否接收 / 驳回 */
+function canHandlePush(user: { roles: string[]; classIds: string[] }, push: Record<string, unknown>): boolean {
+  if (isFullAccess(user as never)) return true; // 校长 / 学管 / 系统管理员
+  if (!user.roles.includes(RECEIVE_ROLE_HEAD_TEACHER)) return false;
+  const target = (push.intend_class_id as string) ?? null;
+  return !!target && user.classIds.includes(target);
+}
+
+function toPushItem(row: Record<string, unknown>): Record<string, unknown> {
+  const c = rowToCamel<Record<string, unknown>>(row);
+  const st = Number(row.apply_status);
+  const dept = row.intend_dept_code !== null && row.intend_dept_code !== undefined
+    ? Number(row.intend_dept_code)
+    : null;
+  const stage = row.intend_stage !== null && row.intend_stage !== undefined
+    ? Number(row.intend_stage)
+    : null;
+  const isRepeatIn = Number(row.is_repeat_in) === 1;
+  const isTransfer = row.source_system === 'transfer';
+  const isUpgrade = row.source_system === 'upgrade';
+  return {
+    ...c,
+    genderName: row.gender ? (GenderName[Number(row.gender)] ?? '未知') : '—',
+    applyStatusName: ConsultStatusName[st] ?? '未知',
+    intendDeptName: dept === null ? '—' : (DeptName[dept] ?? '未知'),
+    intendStageName: stage === null ? '—' : stageNameOf(stage),
+    isRepeatIn,
+    isTransfer,
+    isUpgrade,
+    sourceKind: isRepeatIn ? '末班重修' : isTransfer ? '换班转入' : isUpgrade ? '初高升学' : '咨询新生',
+  };
+}
+
+/* ------------------------------ 列表 ------------------------------ */
+
+const listSchema = z.object({
+  ...pageQuerySchema.shape,
+  applyStatus: z.coerce.number().int().optional(),
+  keyword: z.string().optional(),
+});
+
+/**
+ * @openapi
+ * /api/class/consult/list:
+ *   get:
+ *     tags: [咨询推送]
+ *     summary: 咨询推送单列表（班主任看推给自己的；学管/校长看全部）
+ *     parameters:
+ *       - { in: query, name: page, schema: { type: integer } }
+ *       - { in: query, name: size, schema: { type: integer } }
+ *       - { in: query, name: applyStatus, schema: { type: integer }, description: 1待接收 2已接收 3已驳回 }
+ *     responses:
+ *       200: { description: 分页列表 }
+ */
+consultRouter.get(
+  '/list',
+  validate({ query: listSchema }),
+  wrap(async (req, res) => {
+    const user = req.user!;
+    const query = q<z.infer<typeof listSchema>>(req);
+
+    const base = PUSH();
+    notDeleted(base);
+    // ★ 2026-10-06：非校长/学管 → 只看「意向班级是自己带的班」的推送单
+    //   （旧写法按旧角色码 ROLE_* 判断，那些码早已不存在 → 条件恒真，
+    //    结果是任何人都能看到全部推送单。现在按新码 + 班级归属重新收敛。）
+    if (!isFullAccess(user)) {
+      base.whereIn('intend_class_id', user.classIds.length ? user.classIds : ['__no_class__']);
+    }
+    if (query.applyStatus) base.where('apply_status', query.applyStatus);
+    if (query.keyword) base.where('student_name', 'like', `%${query.keyword}%`);
+    base.orderBy('push_time', 'desc');
+
+    const paged = await paginate(base, query, async (qb) =>
+      (await qb as Array<Record<string, unknown>>).map(toPushItem),
+    );
+    return ok(res, pageData(paged.total, paged.page, paged.size, paged.list), '查询成功');
+  }),
+);
+
+/**
+ * @openapi
+ * /api/class/consult/detail:
+ *   get:
+ *     tags: [咨询推送]
+ *     summary: 咨询推送单详情
+ */
+consultRouter.get(
+  '/detail',
+  validate({ query: z.object({ id: z.string().min(1, '缺少ID') }) }),
+  wrap(async (req, res) => {
+    const { id } = q<{ id: string }>(req);
+    const row = (await notDeleted(PUSH()).where('id', id).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) throw Errors.param('咨询推送单不存在');
+    return ok(res, toPushItem(row), '查询成功');
+  }),
+);
+
+/* ------------------------------ 咨询模块推送（入站） ------------------------------ */
+
+const pushSchema = z.object({
+  items: z.array(z.object({
+    consultNo: z.string().min(1, '缺少咨询单号'),
+    studentName: z.string().min(1, '缺少姓名'),
+    gender: z.coerce.number().int().optional().nullable(),
+    phone: z.string().optional().nullable(),
+    parentPhone: z.string().optional().nullable(),
+    age: z.coerce.number().int().optional().nullable(),
+    education: z.string().optional().nullable(),
+    origin: z.string().optional().nullable(),
+    graduateSchool: z.string().optional().nullable(),
+    homeAddress: z.string().optional().nullable(),
+    intendDeptCode: z.coerce.number().int().optional().nullable(),
+    intendStage: z.coerce.number().int().optional().nullable(),
+    intendClassId: z.string().optional().nullable(),
+    intendClassName: z.string().optional().nullable(),
+    remark: z.string().optional().nullable(),
+    pushTime: z.string().optional().nullable(),
+    /** ★ 2026-10-05 来源标识：'consult'（咨询新生，默认）/ 'upgrade'（初高升学） */
+    sourceSystem: z.string().optional().nullable(),
+    /** ★ 初高升学：来源侧学生主键（sms_class_jh.t_class_student.id） */
+    originStudentId: z.string().optional().nullable(),
+    /** ★ 初高升学：原班级 */
+    fromClassId: z.string().optional().nullable(),
+    fromClassName: z.string().optional().nullable(),
+  })).min(1, 'items 不能为空'),
+});
+
+/**
+ * @openapi
+ * /api/class/consult/push:
+ *   post:
+ *     tags: [咨询推送]
+ *     summary: 咨询模块推送学员信息（入站，供 8001 调用 / 演示用）
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               items: { type: array, items: { type: object } }
+ *     responses:
+ *       200: { description: 推送结果 }
+ */
+consultRouter.post(
+  '/push',
+  validate({ body: pushSchema }),
+  wrap(async (req, res) => {
+    const b = req.body as z.infer<typeof pushSchema>;
+    const t = now();
+    let inserted = 0;
+    let skipped = 0;
+    let reopened = 0;
+
+    for (const it of b.items) {
+      const dup = (await notDeleted(PUSH())
+        .where('consult_no', it.consultNo)
+        .first()) as Record<string, unknown> | undefined;
+      if (dup) {
+        /**
+         * ★ 2026-10-06 修：驳回后重新分派会被幂等去重「静默吞掉」
+         *
+         *   用户口径是「咨询把学生分班之后就不能再分派，**驳回之后可以**」。
+         *   之前这里只要 consult_no 已存在就一律 skip —— 于是被班主任驳回的学生，
+         *   咨询侧重新点「分班」时推送被丢掉：按钮亮了、后端也放行了，
+         *   但班级侧那条单子永远停在「已驳回」，班主任的「待接收」里再也看不到他。
+         *
+         *   现在：**已驳回(3) → 原地重新激活为「待接收」并换到新的意向班级**；
+         *   待接收(1) / 已接收(2) 仍然 skip（这才是「已分班不可再分派」）。
+         */
+        if (Number(dup.apply_status) === ConsultStatus.REJECTED) {
+          await PUSH()
+            .where({ id: dup.id })
+            .update({
+              student_name: it.studentName,
+              gender: it.gender ?? dup.gender ?? null,
+              phone: it.phone ?? dup.phone ?? null,
+              parent_phone: it.parentPhone ?? dup.parent_phone ?? null,
+              age: it.age ?? dup.age ?? null,
+              education: it.education ?? dup.education ?? null,
+              origin: it.origin ?? dup.origin ?? null,
+              graduate_school: it.graduateSchool ?? dup.graduate_school ?? null,
+              home_address: it.homeAddress ?? dup.home_address ?? null,
+              intend_dept_code: it.intendDeptCode ?? dup.intend_dept_code ?? null,
+              intend_stage: it.intendStage ?? dup.intend_stage ?? null,
+              intend_class_id: it.intendClassId ?? null,
+              intend_class_name: it.intendClassName ?? null,
+              remark: it.remark ?? dup.remark ?? null,
+              // 回到「待接收」并清掉上一次的驳回痕迹
+              apply_status: ConsultStatus.PENDING,
+              reject_reason: null,
+              receiver_id: null,
+              receiver_name: null,
+              receive_time: null,
+              student_id: null,
+              student_no: null,
+              push_time: it.pushTime ?? t,
+              update_time: t,
+            } as never);
+          reopened += 1;
+          continue;
+        }
+        skipped += 1;
+        continue;
+      }
+      await tblIns(db, SRC, PUSH_T, STAGE, {
+        ...baseInsert(undefined, uuid()),
+        consult_no: it.consultNo,
+        student_name: it.studentName,
+        gender: it.gender ?? null,
+        phone: it.phone ?? null,
+        parent_phone: it.parentPhone ?? null,
+        age: it.age ?? null,
+        education: it.education ?? null,
+        origin: it.origin ?? null,
+        graduate_school: it.graduateSchool ?? null,
+        home_address: it.homeAddress ?? null,
+        intend_dept_code: it.intendDeptCode ?? null,
+        intend_stage: it.intendStage ?? null,
+        intend_class_id: it.intendClassId ?? null,
+        intend_class_name: it.intendClassName ?? null,
+        remark: it.remark ?? null,
+        apply_status: ConsultStatus.PENDING,
+        push_time: it.pushTime ?? t,
+        // ★ 来源：咨询新生 = 'consult'；初高升学 = 'upgrade'（列表据此显示来源）
+        source_system: it.sourceSystem || 'consult',
+        origin_student_id: it.originStudentId ?? null,
+        from_class_id: it.fromClassId ?? null,
+        from_class_name: it.fromClassName ?? null,
+      } as never);
+      inserted += 1;
+    }
+
+    return ok(
+      res,
+      { inserted, skipped, reopened },
+      `已接收咨询推送 ${inserted} 条，重新激活驳回单 ${reopened} 条，跳过重复 ${skipped} 条`,
+    );
+  }),
+);
+
+/* ------------------------------ 分班状态（内部只读，供咨询侧判定按钮可用性） ------------------------------ */
+
+/**
+ * @openapi
+ * /api/class/consult/internal-status:
+ *   get:
+ *     tags: [咨询推送]
+ *     summary: 按咨询单号批量查推送状态（内部服务调用，供咨询「分班」按钮判定）
+ *     description: |
+ *       ★ 2026-10-06 新增。用途：咨询「收款与缴费」页要按「是否已分班」决定
+ *       「分班」按钮是否可用 —— 已推送/已接收的不允许重复分派，被驳回的可以重新分派。
+ *       状态唯一权威源在班级侧（本表），所以由咨询侧带内部令牌来查，而不是在
+ *       咨询库里维护一份可能失真的副本。
+ *     parameters:
+ *       - { in: query, name: nos, schema: { type: string }, description: 咨询单号，逗号分隔 }
+ *     responses:
+ *       200: { description: { [consultNo]: { applyStatus, intendClassId, intendClassName } } }
+ */
+consultRouter.get(
+  '/internal-status',
+  wrap(async (req, res) => {
+    const raw = String(req.query.nos || '').trim();
+    const nos = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+    if (!nos.length) return ok(res, {}, '查询成功');
+
+    const rows = (await notDeleted(PUSH())
+      .whereIn('consult_no', nos)
+      .select('consult_no', 'apply_status', 'intend_class_id', 'intend_class_name')) as Array<
+      Record<string, unknown>
+    >;
+
+    const map: Record<string, unknown> = {};
+    for (const r of rows) {
+      map[String(r.consult_no)] = {
+        applyStatus: Number(r.apply_status),
+        intendClassId: (r.intend_class_id as string) ?? null,
+        intendClassName: (r.intend_class_name as string) ?? null,
+      };
+    }
+    return ok(res, map, '查询成功');
+  }),
+);
+
+/* ------------------------------ 班主任接收并建档 ------------------------------ */
+
+function buildStudentNo(seq: number): string {
+  return `S${new Date().getFullYear()}${String(seq).padStart(4, '0')}`;
+}
+
+function seqOfStudentNo(no: string | null | undefined): number {
+  if (!no) return 0;
+  const m = /(\d{4})$/.exec(no);
+  return m ? Number(m[1]) : 0;
+}
+
+const receiveSchema = z.object({
+  id: z.string().min(1, '缺少咨询单ID'),
+  classId: z.string().optional().nullable(),
+  studentNo: z.string().optional().nullable(),
+  stage: z.coerce.number().int().optional().nullable(),
+  age: z.coerce.number().int().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  parentPhone: z.string().optional().nullable(),
+  education: z.string().optional().nullable(),
+  enrollDate: z.string().optional().nullable(),
+  studentStatus: z.coerce.number().int().optional().nullable(),
+  dormId: z.string().optional().nullable(),
+  dormNo: z.string().optional().nullable(),
+  bedNo: z.coerce.number().int().optional().nullable(),
+  remark: z.string().optional().nullable(),
+  /**
+   * 是否为「末班 / 重修」转来的接收（成绩管理「末班」→ 待接收学员 → 入班）。
+   * 为 true 时，即使目标班级已封班也允许接收。
+   */
+  repeatIn: z.coerce.boolean().optional(),
+});
+
+/**
+ * @openapi
+ * /api/class/consult/receive:
+ *   post:
+ *     tags: [咨询推送]
+ *     summary: 班主任接收咨询推送并补充信息建档（含宿舍床位）
+ *     description: |
+ *       接收后：① 生成学生档案（来源=咨询同步）；② 推送单状态 → 已接收；
+ *      ③ 若选了床位则占用该床位。
+ *     responses:
+ *       200: { description: 接收成功 }
+ */
+consultRouter.post(
+  '/receive',
+  // ★ 2026-10-06：改用审批类资源码 —— 学管主任（审批人）必须能接收，
+  //   而他在 student 写白名单里已被移除，挂 student:ADD 会把他误拦。
+  requirePerm('consultApprove', PermAction.APPROVE),
+  validate({ body: receiveSchema }),
+  wrap(async (req, res) => {
+    const user = req.user!;
+    const b = req.body as z.infer<typeof receiveSchema>;
+
+    const push = (await notDeleted(PUSH()).where('id', b.id).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!push) throw Errors.param('咨询推送单不存在');
+    if (Number(push.apply_status) === ConsultStatus.RECEIVED) {
+      throw Errors.param('该咨询单已接收，无需重复接收');
+    }
+    if (Number(push.apply_status) === ConsultStatus.REJECTED) {
+      throw Errors.param('该咨询单已驳回，不能直接接收');
+    }
+
+    // ★ 2026-10-06：接收权限 = 本班班主任 / 校长 / 学管（用户拍板）
+    if (!canHandlePush(user, push)) {
+      throw Errors.noOperationPermission('只有该班班主任、校长或学管可以接收学员');
+    }
+
+    // ★ 2026-10-06：接受班级**只能**取推送单上的意向班级
+    //   （用户拍板：接收班级由咨询 / 初高在推送时决定，本界面不设班级选择）
+    //   老逻辑是「前端传什么就用什么，没传就用老师负责的第一个班」——
+    //   那等于把「分到哪个班」的决定权交给了接收人，与需求相反。
+    const classId = (push.intend_class_id as string) ?? null;
+    if (!classId) {
+      throw Errors.param('该推送单未指定接受班级，请让咨询 / 教学管理（初高）重新分班后再接收');
+    }
+    assertClassAccess(user, classId, '该班级');
+
+    let className: string | null = null;
+    let deptCode = (push.intend_dept_code as number) ?? null;
+    let headTeacherId: string | null = null;
+    let headTeacherName: string | null = null;
+    let teacherId: string | null = null;
+    let teacherName: string | null = null;
+    let assistantId: string | null = null;
+    let assistantName: string | null = null;
+    let stage = b.stage ?? ((push.intend_stage as number) ?? null);
+
+    if (classId) {
+      const cls = (await notDeleted(CLS()).where('id', classId).first()) as
+        | Record<string, unknown>
+        | undefined;
+      if (!cls) throw Errors.classNotFound('所选班级不存在');
+      // 封班规则：非末班 / 重修的咨询新生，封班班级不收
+      assertClassAcceptStudent(cls, !!b.repeatIn || Number(push.is_repeat_in) === 1);
+      className = cls.class_name as string;
+      deptCode = cls.dept_code as number;
+      headTeacherId = (cls.head_teacher_id as string) ?? null;
+      headTeacherName = (cls.head_teacher_name as string) ?? null;
+      teacherId = (cls.teacher_id as string) ?? null;
+      teacherName = (cls.teacher_name as string) ?? null;
+      assistantId = (cls.assistant_id as string) ?? null;
+      assistantName = (cls.assistant_name as string) ?? null;
+      if (stage === null) stage = cls.stage as number;
+    }
+    if (deptCode === null) {
+      throw Errors.param('请选择要归入的班级（用于确定部门与学习阶段）');
+    }
+
+    /* ---------- 已建档学生转入（末班重修 / 换班）：不新建档案，只转班 ---------- */
+    const isRepeatIn = Number(push.is_repeat_in) === 1;
+    const isTransfer = push.source_system === 'transfer';
+    if (push.origin_student_id && (isRepeatIn || isTransfer)) {
+      const sid = push.origin_student_id as string;
+      const stu = (await notDeleted(STU()).where('id', sid).first()) as
+        | Record<string, unknown>
+        | undefined;
+      if (!stu) throw Errors.studentNotFound();
+
+      const fromClassId = (stu.class_id as string) ?? null;
+      const fromClassName = (stu.class_name as string) ?? null;
+      const nextRepeat = isRepeatIn ? Number(stu.repeat_count ?? 0) + 1 : Number(stu.repeat_count ?? 0);
+
+      // 末班记录需要带「成绩管理末班时的成绩」，接收时取该学员最近一次成绩快照
+      const latestGrade = isRepeatIn
+        ? ((await notDeleted(tbl(db, SRC, GRADE_T, STAGE))
+            .where('student_id', sid)
+            .orderBy('create_time', 'desc')
+            .first()) as Record<string, unknown> | undefined)
+        : undefined;
+
+      await db.transaction(async (trx) => {
+        const patch: Record<string, unknown> = {
+          class_id: classId,
+          class_name: className,
+          head_teacher_id: headTeacherId,
+          head_teacher_name: headTeacherName,
+          teacher_id: teacherId,
+          teacher_name: teacherName,
+          assistant_id: assistantId,
+          assistant_name: assistantName,
+          dept_code: deptCode,
+          ...baseUpdate(user),
+        };
+        if (isRepeatIn) patch.repeat_count = nextRepeat;
+        if (stage !== null && stage !== undefined) patch.stage = stage;
+        if (b.studentStatus) patch.student_status = b.studentStatus;
+        if (b.dormId) {
+          patch.dorm_id = b.dormId;
+          patch.dorm_no = b.dormNo ?? null;
+          patch.bed_no = b.bedNo ?? null;
+        }
+        await STU_TRX(trx).where({ id: sid }).update(patch);
+
+        if (isRepeatIn) {
+          // 末班记录（成绩管理 → 末班 → 班主任接收后回班重修，带成绩快照）
+          await tblInsTrx(trx, SRC, REPEAT_T, STAGE, {
+            ...baseInsert(user),
+            student_id: sid,
+            student_no: stu.student_no as string,
+            student_name: stu.student_name as string,
+            repeat_time: now(),
+            repeat_reason: (push.transfer_reason as string) || '成绩管理末班，班主任接收后回到班级重修',
+            from_class_id: fromClassId,
+            from_class_name: fromClassName,
+            to_class_id: classId,
+            to_class_name: className,
+            repeat_count: nextRepeat,
+            exam_name: (latestGrade?.exam_name as string) ?? null,
+            written_score: latestGrade?.written_score ?? null,
+            interview_score: latestGrade?.interview_score ?? null,
+            comp_score: latestGrade?.comp_score ?? null,
+          } as never);
+        } else {
+          // 学生换班留痕
+          // ★★ 统一表 `t_uni_class_transfer` 被三件事共用（岗位交接 / 升学转班 / 本域换班留痕），
+          //   靠 `transfer_type` 区分事件性质；老表 `t_class_student_transfer` **压根没这列**，
+          //   切读时必须显式给 7=学生换班，否则会落成默认 0=字典外的未知值。
+          //   ⚠️ `t_class_student_transfer` 未登记 `UNI_COL_RENAME` —— 它的
+          //   from_class_name / to_class_name 装的就是班级名，语义天然一致，不翻译。
+          //   （对比 `t_class_transfer` 登记了 from_user_name → from_class_name 改名，
+          //     那条路径的 from_user_name 装的是**人名**，两者语义不同、不能混用。）
+          await tblInsTrx(trx, SRC, XFER_T, STAGE, {
+            ...baseInsert(user),
+            student_id: sid,
+            student_no: stu.student_no as string,
+            student_name: stu.student_name as string,
+            from_class_id: fromClassId,
+            from_class_name: fromClassName,
+            to_class_id: classId,
+            to_class_name: className,
+            transfer_reason: (push.transfer_reason as string) || '班级信息管理发起换班',
+            consult_no: push.consult_no as string,
+            transfer_time: now(),
+            // ↓ 以下 4 个键统一表有、老表没有 → tblIns 会按老表列清单自动剔除
+            class_id: classId,
+            transfer_type: TransferType.STUDENT_CLASS_CHANGE,
+            transfer_date: (push.push_time as string ?? '').slice(0, 10) || now().slice(0, 10),
+            remark: `咨询单${String(push.consult_no ?? '')}接收转入`,
+          } as never);
+        }
+
+        // 班级人数：跨班时原班 -1、目标班 +1；同班不变
+        if (fromClassId && fromClassId !== classId && classId) {
+          await CLS_TRX(trx).where({ id: fromClassId }).decrement('student_count', 1);
+          await CLS_TRX(trx).where({ id: classId }).increment('student_count', 1);
+        }
+
+        await PUSH_TRX(trx).where({ id: b.id }).update({
+          apply_status: ConsultStatus.RECEIVED,
+          receiver_id: user.userId,
+          receiver_name: user.userName,
+          receive_time: now(),
+          student_id: sid,
+          student_no: stu.student_no as string,
+          ...baseUpdate(user),
+        });
+      });
+
+      if (isTransfer) {
+        return ok(
+          res,
+          { studentId: sid, studentNo: stu.student_no as string },
+          `已接收「${String(stu.student_name)}」的换班申请，学员转入班级「${String(className ?? '')}」`,
+        );
+      }
+      return ok(
+        res,
+        { studentId: sid, studentNo: stu.student_no as string },
+        `已接收「${String(stu.student_name)}」，学员回到班级「${String(className ?? '')}」重修（末班第 ${nextRepeat} 次）`,
+      );
+    }
+
+    // 学号
+    let studentNo = b.studentNo?.trim() || '';
+    if (!studentNo) {
+      // ★ 第 4 期第 3 批：`maxStudentNo` 签名改为收「已路由的 builder」，
+      //   原代码这里传的是写死的 `db('t_class_student')`（切读时会读老表 → 新建的学号
+      //   会和种子数据撞号）。第 6 批（咨询域）起改为传 `STU()`，跟着开关走。
+      const max = await maxStudentNo(STU(), `S${new Date().getFullYear()}%`);
+      studentNo = buildStudentNo(seqOfStudentNo(max) + 1);
+    } else {
+      const dup = await notDeleted(STU()).where('student_no', studentNo).first();
+      if (dup) throw Errors.studentNoExists(studentNo);
+    }
+
+    // 床位占用校验
+    if (b.dormId && b.bedNo) {
+      const taken = (await notDeleted(STU())
+        .where({ dorm_id: b.dormId, bed_no: b.bedNo })
+        .first()) as Record<string, unknown> | undefined;
+      if (taken) {
+        throw Errors.param(
+          `床位 ${b.dormNo ?? ''}-${b.bedNo} 已被 ${String(taken.student_name)}（${String(taken.student_no)}）占用，请更换床位`,
+        );
+      }
+    }
+
+    const studentId = uuid();
+    await db.transaction(async (trx) => {
+      await tblInsTrx(trx, SRC, STU_T, STAGE, {
+        ...baseInsert(user, studentId),
+        source_system: 'consult',
+        source_id: push.consult_no as string,
+        source_batch_no: 'CONSULT',
+        source_update_time: now(),
+        sync_status: 2,
+        student_no: studentNo,
+        student_name: push.student_name as string,
+        gender: (push.gender as number) ?? 1,
+        age: (b.age as number) ?? ((push.age as number) ?? null),
+        dept_code: deptCode,
+        student_status: b.studentStatus ?? StudentStatus.TRIAL,
+        stage,
+        phone: b.phone ?? ((push.phone as string) ?? null),
+        parent_phone: b.parentPhone ?? ((push.parent_phone as string) ?? null),
+        education: b.education ?? ((push.education as string) ?? null),
+        enroll_date: b.enrollDate ?? null,
+        repeat_count: 0,
+        remark: b.remark ?? ((push.remark as string) ?? null),
+        class_id: classId,
+        class_name: className,
+        head_teacher_id: headTeacherId,
+        head_teacher_name: headTeacherName,
+        teacher_id: teacherId,
+        teacher_name: teacherName,
+        assistant_id: assistantId,
+        assistant_name: assistantName,
+        dorm_id: b.dormId ?? null,
+        dorm_no: b.dormNo ?? null,
+        bed_no: b.bedNo ?? null,
+        origin: (push.origin as string) ?? null,
+        graduate_school: (push.graduate_school as string) ?? null,
+        home_address: (push.home_address as string) ?? null,
+      } as never);
+
+      await PUSH_TRX(trx).where({ id: b.id }).update({
+        apply_status: ConsultStatus.RECEIVED,
+        receiver_id: user.userId,
+        receiver_name: user.userName,
+        receive_time: now(),
+        student_id: studentId,
+        student_no: studentNo,
+        ...baseUpdate(user),
+      });
+
+      if (classId) {
+        await CLS_TRX(trx).where({ id: classId }).increment('student_count', 1);
+      }
+    });
+
+    return ok(res, { studentId, studentNo }, `已接收「${String(push.student_name)}」并建档，学号 ${studentNo}`);
+  }),
+);
+
+/* ------------------------------ 驳回 ------------------------------ */
+
+const rejectSchema = z.object({
+  id: z.string().min(1, '缺少咨询单ID'),
+  /**
+   * 驳回原因：语义上必填，但这里放宽为可选，改在 handler 里用 Errors.required 显式抛「必填缺失 40002」。
+   * 若用 z.string().min(1)，zod 校验失败会被错误中间件统一归到 40000（参数错），
+   * 与「驳回必须填原因」这一业务语义的 40002 不一致（对齐 suspend/refund 驳回的既有写法）。
+   */
+  rejectReason: z.string().optional().nullable(),
+});
+
+/**
+ * @openapi
+ * /api/class/consult/reject:
+ *   post:
+ *     tags: [咨询推送]
+ *     summary: 班主任驳回咨询推送（必填原因，回传咨询模块）
+ */
+consultRouter.post(
+  '/reject',
+  // ★ 2026-10-06：同「接收」—— 驳回也是审批动作，学管要能办
+  requirePerm('consultApprove', PermAction.APPROVE),
+  validate({ body: rejectSchema }),
+  wrap(async (req, res) => {
+    const user = req.user!;
+    const b = req.body as z.infer<typeof rejectSchema>;
+    const push = (await notDeleted(PUSH()).where('id', b.id).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!push) throw Errors.param('咨询推送单不存在');
+    if (Number(push.apply_status) !== ConsultStatus.PENDING) {
+      throw Errors.param('只有「待接收」的咨询单可以驳回');
+    }
+    // ★ 2026-10-06：与「接收」同口径 —— 本班班主任 / 校长 / 学管
+    if (!canHandlePush(user, push)) {
+      throw Errors.noOperationPermission('只有该班班主任、校长或学管可以驳回');
+    }
+    // 驳回必填原因 → 40002（必填缺失），与 suspend / refund 的驳回保持一致
+    if (!b.rejectReason || !b.rejectReason.trim()) throw Errors.required('驳回原因');
+    await PUSH().where({ id: b.id }).update({
+      apply_status: ConsultStatus.REJECTED,
+      receiver_id: user.userId,
+      receiver_name: user.userName,
+      receive_time: now(),
+      reject_reason: b.rejectReason.trim(),
+      ...baseUpdate(user),
+    });
+    return ok(res, { id: b.id }, '已驳回，原因将回传咨询模块');
+  }),
+);

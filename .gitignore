@@ -1,0 +1,33 @@
+# Local secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies and generated builds
+**/node_modules/
+**/dist/
+/web-job/dist-*/
+**/.vite/
+**/coverage/
+
+# Local database data, exports, and uploaded documents
+/数据库备份/
+/数据库导出/
+/server-job/uploads/
+**/*.sql
+
+# Local runtime logs and environment backups
+**/*.log
+**/*.bak
+/server-job/_p12-backup-env-*
+
+# Temporary diagnostics and test output
+/.workbuddy/
+/README-先看我.md
+**/_p4-regress/
+**/_p4-schema-dump/
+**/_schema-raw.json
+/tools/_out/
+/release/
+/输出/
+/server-job/tessdata/*.traineddata.gz

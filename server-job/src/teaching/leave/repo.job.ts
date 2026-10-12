@@ -1,0 +1,292 @@
+/**
+ * 学籍异动仓储 · 实训（sms_job）· 表 `t_job_student_leave`
+ * ============================================================
+ *
+ * 【它为什么是「蓝本」】
+ *   审批链统一采用实训那一套，所以这个仓储是另外两个学段对齐的目标：
+ *   · `biz_type` 1休学/2退学/3复学 —— **就是统一码**
+ *   · `approval_status` = `ApprovalStatus` —— **恒等**（仍走映射函数保持三套同构）
+ *   · 审批单在**本库** `t_job_approval`
+ *   · ★ 副作用最全：改学生主档 + **跨库同步到 sms_class.t_class_student** + 复学班
+ */
+
+import { randomUUID } from 'crypto';
+import { StudentStatus } from 'shared-types';
+import { db } from '../../utils/db';
+import type { LeaveListQuery, LeaveRow } from '../shared/dto';
+import { LEAVE_BIZ_TYPE_NAME, LEAVE_STATUS_NAME } from '../shared/dto';
+import {
+  toRawLeaveBiz,
+  toRawLeaveStatus,
+  toUnifiedLeaveBiz,
+  toUnifiedLeaveStatus,
+} from '../shared/conf';
+import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
+import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
+import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { buildApplyNo } from '../shared/conf';
+
+const T = 't_job_student_leave';
+const S = 't_student_base';
+const STAGE = 'job' as const;
+/** ★ 老表所在库（切读路由层 tbl() 的第一个参数） */
+const SRC = 'sms_job';
+/** ★ 老表所在库（切读路由层 tbl() 需要「库名.表名」） */
+const WT = 'sms_job.t_job_student_leave';
+
+/** ★ 班级库（大学部）学生表 —— 跨库全限定名（与实训原实现同款做法） */
+const CLASS_DB_STUDENT = 'sms_class.t_class_student';
+
+async function decorate(row: Record<string, any>): Promise<LeaveRow> {
+  const biz = (await toUnifiedLeaveBiz(STAGE, row.biz_type)) ?? 0;
+  const st = (await toUnifiedLeaveStatus(STAGE, row.approval_status)) ?? 0;
+
+  return {
+    stage: STAGE,
+    stageName: '实训',
+    id: String(row.id),
+    bizType: biz,
+    bizTypeName: LEAVE_BIZ_TYPE_NAME[biz] || '',
+    studentId: String(row.student_id || ''),
+    studentNo: String(row.student_no || ''),
+    studentName: String(row.student_name || ''),
+    gender: row.gender || null,
+    idCard: row.id_card || null,
+    phone: row.phone || null,
+    parentPhone: row.parent_phone || null,
+    classId: row.class_id ? String(row.class_id) : null,
+    className: row.class_name || null,
+    deptName: row.dept_name || null,
+    headTeacherName: row.head_teacher_name || null,
+    leaveDate: fmtDate(row.leave_date) || null,
+    expectResumeDate: null, // 实训表无此列
+    newClassId: row.new_class_id ? String(row.new_class_id) : null,
+    newClassName: row.new_class_name || null,
+    leaveReason: String(row.leave_reason || ''),
+    attendedHours: row.attended_hours != null ? Number(row.attended_hours) : null,
+    relatedRefundNo: row.related_refund_no || null,
+    approvalStatus: st,
+    approvalStatusName: LEAVE_STATUS_NAME[st] || '',
+    currentHandlerHint: null,
+    createTime: fmtDateTime(row.create_time),
+    canApprove: false,
+    canCancel: false,
+    canSubmit: false,
+  };
+}
+
+/** 学生下拉 */
+export async function studentOptions(keyword: string, limit: number): Promise<StudentOption[]> {
+  const q = tbl(db, 'sms_job', S, STAGE).where('is_deleted', 0);
+  if (keyword) {
+    q.andWhere((b) => {
+      b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);
+    });
+  }
+  const rows = (await q.limit(limit)) as Array<Record<string, any>>;
+  return rows.map((r) => ({
+    id: String(r.id),
+    no: String(r.student_no || ''),
+    name: String(r.student_name || ''),
+    classId: r.class_id ? String(r.class_id) : null,
+    className: r.class_name || null,
+  }));
+}
+
+/** 取一个学生的快照 */
+export async function findStudent(id: string): Promise<StudentSnapshot | null> {
+  const r = (await tbl(db, 'sms_job', S, STAGE).where({ id, is_deleted: 0 }).first()) as Record<string, any> | undefined;
+  if (!r) return null;
+  return {
+    no: String(r.student_no || ''),
+    name: String(r.student_name || ''),
+    gender: r.gender || null,
+    idCard: r.id_card || null,
+    phone: r.phone || null,
+    parentPhone: r.parent_phone || null,
+    classId: r.class_id ? String(r.class_id) : null,
+    className: r.class_name || null,
+    deptCode: r.dept_code != null ? Number(r.dept_code) : null,
+    studentStatus: r.student_status != null ? Number(r.student_status) : null,
+  };
+}
+
+/** 分页 */
+export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total: number }> {
+  const base = tbl(db, SRC, T, STAGE).where('is_deleted', 0);
+  if (q.keyword) {
+    base.andWhere((b) => {
+      b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
+    });
+  }
+  if (q.classId) base.andWhere('class_id', q.classId);
+  if (q.startDate) base.andWhere('leave_date', '>=', q.startDate);
+  if (q.endDate) base.andWhere('leave_date', '<=', q.endDate);
+  if (q.bizType) base.andWhere('biz_type', await toRawLeaveBiz(STAGE, q.bizType));
+  if (q.status) base.andWhere('approval_status', q.status);
+
+  const [{ total }] = (await base.clone().count({ total: '*' })) as Array<{ total: number }>;
+  const rows = (await base
+    .clone()
+    .orderBy('create_time', 'desc')
+    .limit(q.size)
+    .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
+  return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
+}
+
+export async function detail(id: string): Promise<LeaveRow | null> {
+  const row = (await tbl(db, SRC, T, STAGE).where({ id, is_deleted: 0 }).first()) as
+    | Record<string, any>
+    | undefined;
+  return row ? decorate(row) : null;
+}
+
+/** 汇总 */
+export async function aggregate(): Promise<LeaveAggregate> {
+  const rows = (await tbl(db, SRC, T, STAGE)
+    .where('is_deleted', 0)
+    .select('biz_type', 'approval_status')
+    .count({ c: '*' })
+    .groupBy('biz_type', 'approval_status')) as Array<Record<string, any>>;
+
+  const out: LeaveAggregate = {
+    total: 0,
+    suspendCount: 0,
+    quitCount: 0,
+    resumeCount: 0,
+    pendingCount: 0,
+    approvedCount: 0,
+  };
+  for (const r of rows) {
+    const n = Number(r.c || 0);
+    out.total += n;
+    const biz = Number(r.biz_type);
+    if (biz === 1) out.suspendCount += n;
+    if (biz === 2) out.quitCount += n;
+    if (biz === 3) out.resumeCount += n;
+    const st = Number(r.approval_status);
+    if (st === 2 || st === 3) out.pendingCount += n;
+    if (st === 4) out.approvedCount += n;
+  }
+  return out;
+}
+
+/**
+ * 新建申请单（`input.bizType` 是统一码 → 本库恒等，仍走翻译保持同构）
+ *
+ * ⚠️ 只落「待提交」，**审批单由 service 在同一事务里建**。
+ */
+export async function insert(conn: any, input: LeaveWriteInput): Promise<string> {
+  const id = randomUUID();
+  const now = new Date();
+  const rawBiz = await toRawLeaveBiz(STAGE, input.bizType);
+
+  await tblInsTrx(conn, SRC, T, STAGE, {
+    id,
+    create_time: now,
+    create_by: input.initiatorId,
+    is_deleted: false,
+
+    // ★ 第4期第2批：统一表 uk_approval(apply_no, edu_stage) 要求单号唯一。
+    //   ⚠️ 但实训老表 `t_job_student_leave` 实测**没有 apply_no 这一列**，
+    //   直接写会 `Unknown column 'apply_no' in 'field list'`（老表模式直接挂）。
+    //   → 靠 `stripUniOnlyCols` 兜底：它按**目标表真实列清单**剔，不在清单里才剔。
+    //   切读时这一列会真写进 t_uni_approval，老表模式下自动被剥掉。
+    apply_no: buildApplyNo(),
+    biz_type: rawBiz,
+    student_id: input.studentId,
+    student_no: input.studentNo || null,
+    student_name: input.studentName || null,
+    gender: input.gender,
+    id_card: input.idCard,
+    phone: input.phone,
+    parent_phone: input.parentPhone,
+
+    class_id: input.classId,
+    class_name: input.className,
+    dept_name: input.deptName,
+    dept_code: input.deptCode,
+
+    head_teacher_id: input.headTeacherId,
+    head_teacher_name: input.headTeacherName,
+
+    attended_hours: input.attendedHours,
+    leave_date: input.leaveDate || todayStr(),
+    leave_reason: input.leaveReason,
+    remark: null,
+
+    new_class_id: input.newClassId,
+    new_class_name: input.newClassName,
+
+    approval_status: 1, // 待提交（统一码 = 本库码）
+  });
+  return id;
+}
+
+/** 改状态（`unifiedStatus` 是统一码 → 本库恒等；仍走映射函数保持三套同构） */
+export async function setStatus(
+  conn: any,
+  id: string,
+  unifiedStatus: number,
+  patch: Record<string, any> = {},
+): Promise<void> {
+  const raw = await toRawLeaveStatus(STAGE, unifiedStatus);
+  await tblTrx(conn, SRC, T, STAGE)
+    .where({ id })
+    .update({ approval_status: raw, update_time: new Date(), ...patch });
+}
+
+/** 写入复学班（审批通过时学管选定） */
+export async function setResumeClass(
+  conn: any,
+  id: string,
+  classId: string,
+  className: string,
+): Promise<void> {
+  await tblTrx(conn, SRC, T, STAGE).where({ id }).update({ new_class_id: classId, new_class_name: className });
+}
+
+/**
+ * ★ 审批通过后的动作（各学段各不相同）
+ *   休学 → SUSPENDED · 退学 → QUIT · 复学 → TRAINING（并回到复学班）
+ *   + **跨库同步**到 sms_class.t_class_student（按学号匹配）
+ */
+export async function afterApproved(conn: any, id: string, operatorId: string): Promise<void> {
+  const row = (await tblTrx(conn, SRC, T, STAGE).where({ id }).first()) as Record<string, any> | undefined;
+  if (!row) return;
+  await applyStudentStatus(conn, row, operatorId);
+}
+
+/** 把学生状态写回主档 + 跨库同步（供 afterApproved 复用） */
+async function applyStudentStatus(conn: any, row: Record<string, any>, operatorId: string): Promise<void> {
+  const biz = Number(row.biz_type);
+  const newStatus =
+    biz === 3 ? StudentStatus.TRAINING : biz === 1 ? StudentStatus.SUSPENDED : StudentStatus.QUIT;
+
+  const patch: Record<string, any> = {
+    student_status: newStatus,
+    update_time: new Date(),
+    update_by: operatorId,
+  };
+  if (biz === 3) {
+    patch.class_id = row.new_class_id;
+    patch.class_name = row.new_class_name;
+  }
+  await tblTrx(conn, SRC, S, STAGE).where({ id: row.student_id }).update(patch);
+
+  // ★ 跨库同步（同一事务，要么都成要么都滚）
+  if (row.student_no) {
+    await conn(CLASS_DB_STUDENT)
+      .where({ student_no: row.student_no, is_deleted: false })
+      .update({ student_status: newStatus, update_time: new Date(), update_by: operatorId });
+  }
+}
+
+/** 该学生是否有进行中的申请 */
+export async function hasPending(studentId: string): Promise<boolean> {
+  const row = await tbl(db, SRC, T, STAGE)
+    .where({ student_id: studentId, is_deleted: 0 })
+    .whereIn('approval_status', [2, 3])
+    .first();
+  return !!row;
+}
