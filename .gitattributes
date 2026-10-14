@@ -1,0 +1,63 @@
+# ============================================================
+# 换行符与文本处理规则
+# ============================================================
+#
+# 【为什么需要这个文件】
+#   本项目主要在 Windows 上开发（Vite / Express / MariaDB），而 Git 在
+#   Windows 上默认会把 LF 换成 CRLF。没有这份声明时，「谁改了什么」会被
+#   一大堆看不见的换行符差异淹没 —— 每次提交都提示
+#   `LF will be replaced by CRLF`，diff 里混着真假改动。
+#
+# 【本项目的选择】
+#   仓库内统一用 **LF** 存储与检出（`eol=lf`），任何平台 clone 下来内容一致。
+#   Windows 上的编辑器、Node、Vite、tsc 都能正常处理 LF，不受影响。
+#
+#   ⚠️ 唯一的例外是 Windows 批处理（.bat / .cmd）—— cmd.exe 对 LF 结尾的
+#      批处理文件处理不稳定（尤其是 goto / label 跳转），必须保持 CRLF。
+
+# 默认：自动识别文本文件，仓库内与检出都用 LF
+* text=auto eol=lf
+
+# ---------- Windows 批处理必须 CRLF ----------
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# ---------- 二进制文件：禁止任何换行符转换 ----------
+# （不加这些，Git 可能把二进制内容当成文本去「转换换行」，直接损坏文件）
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.webp   binary
+*.bmp    binary
+*.zip    binary
+*.gz     binary
+*.rar    binary
+*.7z     binary
+*.tar    binary
+*.xlsx   binary
+*.xls    binary
+*.docx   binary
+*.doc    binary
+*.pdf    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.eot    binary
+
+# ---------- 文本类型显式标注（GitHub 语言统计与 diff 高亮更准）----------
+*.ts     text
+*.tsx    text
+*.vue    text
+*.js     text
+*.mjs    text
+*.cjs    text
+*.json   text
+*.md     text
+*.sql    text
+*.yml    text
+*.yaml   text
+*.css    text
+*.scss   text
+*.html   text
