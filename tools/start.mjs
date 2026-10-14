@@ -352,12 +352,29 @@ async function ensureDatabases() {
 
   // 5c) 导入 4 个库的演示数据（仅当该库没有业务表时才导）
   const DEMO = ['sms_portal', 'sms_consult', 'sms_finance', 'sms_perm'];
-  const exportDir = path.join(ROOT, '数据库导出');
+
+  /**
+   * ★ 2026-10-14：SQL 目录改为「优先仓库自带，回退本机导出」
+   *
+   * 【为什么】
+   *   原来只读根目录 `数据库导出/`，而那个目录被 .gitignore 排除了。
+   *   于是「斌哥本地能跑、同事 clone 后登录就报『数据表不存在』」——
+   *   四个模块库（portal/consult/finance/perm）压根建不出来。
+   *
+   *   现在把脱敏后的初始化 SQL 放进 `server-job/sql/init/`（随 git 分发），
+   *   先找它、找不到再回退到本机的 `数据库导出/`。
+   *   两个目录都在时以仓库自带的为准（它才是有版本管理的那份）。
+   */
+  const sqlDirs = [
+    path.join(ROOT, 'server-job', 'sql', 'init'), // 随仓库分发（推荐）
+    path.join(ROOT, '数据库导出'),                  // 本机导出（回退）
+  ];
+  const findSql = (name) => sqlDirs.map((d) => path.join(d, name)).find((p) => fs.existsSync(p));
 
   for (const db of DEMO) {
-    const sqlFile = path.join(exportDir, `${db}.sql`);
-    if (!fs.existsSync(sqlFile)) {
-      warn(`没找到 数据库导出/${db}.sql，跳过`);
+    const sqlFile = findSql(`${db}.sql`);
+    if (!sqlFile) {
+      warn(`没找到 ${db}.sql（找过 server-job/sql/init/ 与 数据库导出/），跳过`);
       continue;
     }
     // 判空：库里有几张表？有就不是空库，别导（导出文件含 DROP，会冲掉已有数据）
@@ -369,6 +386,29 @@ async function ensureDatabases() {
     const imported = await importSql(sqlFile, db);
     if (imported) ok(`${db} 导入完成`);
     else warn(`${db} 导入失败（不影响其它模块，可稍后手动导入）`);
+  }
+
+  /**
+   * 5d) 补统一表（sms_common 的 43 张 t_uni_*）
+   *
+   * 【为什么必须单独补】
+   *   `npm run migrate` 的 5 个迁移目录里，只有 `20261009_010_create_uni_tables_p3.js`
+   *   建了 8 张统一表，其余 35 张**没有任何迁移创建它们**（当初是用一次性脚本 + SQL 建库的）。
+   *   → 只跑 migrate 的话，同事本地只有 8/43 张，切读模式各页面会大面积缺表。
+   *
+   * 【为什么可以无条件跑】
+   *   uni-tables.sql 全篇是 `CREATE TABLE IF NOT EXISTS`，**不含 DROP / INSERT**，
+   *   跑一遍只是把缺的建出来，已有的跳过，不动任何数据 → 完全幂等，每次启动跑都安全。
+   *   放在 migrate **之后**：migrate 建好的表保持不动，只补齐缺的。
+   */
+  const uniSql = findSql('uni-tables.sql');
+  if (uniSql) {
+    console.log('    正在补齐统一表（sms_common.t_uni_*，幂等）...');
+    const uOk = await importSql(uniSql, 'sms_common');
+    if (uOk) ok('统一表已就绪');
+    else warn('统一表导入失败（切读模式下各业务页可能缺表，可手动导入 sql/init/uni-tables.sql）');
+  } else {
+    warn('没找到 uni-tables.sql，跳过统一表补齐');
   }
 
   async function tableCount(db) {

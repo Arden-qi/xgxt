@@ -11,10 +11,16 @@
 **/coverage/
 
 # Local database data, exports, and uploaded documents
+#
+# ★ 2026-10-14：本机的数据库导出/备份含真实业务数据，一律不提交；
+#   但 server-job/sql/init/ 里那份是**脱敏后的初始化 SQL**（纯演示数据），
+#   必须随仓库分发 —— 否则别人 clone 后四个模块库和 43 张统一表都建不出来，
+#   登录直接报「数据表不存在」。所以下面用 ! 单独放行。
 /数据库备份/
 /数据库导出/
 /server-job/uploads/
 **/*.sql
+!server-job/sql/init/*.sql
 
 # Local runtime logs and environment backups
 **/*.log
