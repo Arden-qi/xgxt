@@ -20,6 +20,8 @@ import { getUserOperationPermissions } from '../utils/pagePermissionSource';
 // ★ 2026-10-08：加载「自建角色 → 内置角色」等价声明（自建角色能发起/审批单据的前提）
 import { ensureRoleEquivLoaded } from '../utils/roleEquiv';
 import { config } from '../config';
+// ★ 2026-10-14：跨服务调用统一走公共 axios 封装（技术选型表：跨服务调用 = axios）
+import { remoteGet } from '../shared/http';
 
 /** 把用户信息挂到 req 上，方便路由里用 */
 export interface AuthUser {
@@ -415,13 +417,19 @@ async function resolveAccountProfile(account: string): Promise<AccountProfile> {
   const EMPTY: AccountProfile = { roles: [], permUserId: '' };
   if (!account) return EMPTY;
   try {
-    const base = config.services.perm || `http://localhost:${config.port}`;
-    const resp = await fetch(
-      `${base}/api/perm/remote/account-profile?account=${encodeURIComponent(account)}`,
-      { signal: AbortSignal.timeout(2500) },
+    /**
+     * ★ 2026-10-14：底层从原生 fetch 换成公共 axios 封装（src/shared/http.ts）。
+     *   · 地址不再手拼 `config.services.perm`，统一由封装按模块取（同源 config.services）
+     *   · 超时从 `AbortSignal.timeout(2500)` 改成封装的 `timeout: 2500`（等价）
+     *   · 判据不变：拿不到有效档案就返回空档案（roles 空、permUserId 空），
+     *     **绝不抛错** —— 业务角色查不到时上层按「无映射」处理
+     *   · 用 raw: true 自己取 body.data（这里的成功码口径由本文件掌握）
+     */
+    const body: any = await remoteGet(
+      'perm',
+      `/api/perm/remote/account-profile?account=${encodeURIComponent(account)}`,
+      { timeout: 2500, raw: true },
     );
-    if (!resp.ok) return EMPTY;
-    const body: any = await resp.json();
     const roles = body?.data?.roles;
     return {
       roles: Array.isArray(roles) ? roles.filter((r: any) => typeof r === 'string') : [],

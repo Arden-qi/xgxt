@@ -36,6 +36,8 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { authMiddleware } from '../middleware/auth';
+// ★ 2026-10-14：跨服务调用统一走公共 axios 封装（技术选型表：跨服务调用 = axios）
+import { remoteGet, isRemoteTimeout } from '../shared/http';
 import { today } from '../utils/date';
 // ★ 2026-10-05：内部服务令牌统一从 config 读（原来这里是第三个不同的默认值）
 import { config } from '../config';
@@ -314,26 +316,35 @@ async function carryStudentBed(
  * 工具：跨模块调用（5 秒超时 + 兜底，不许白屏）
  * ============================================================ */
 
-const CLASS_URL = (process.env.CLASS_URL || 'http://localhost:8003').replace(/\/+$/, '');
 // ★ 2026-10-05：与 config.internalToken 同源，避免「推的人用 A、收的人认 B」
 const INTERNAL_TOKEN = config.internalToken;
 
+/**
+ * 调班级模块（读接口）
+ *
+ * ★ 2026-10-14：底层从原生 fetch 换成公共 axios 封装（src/shared/http.ts）。
+ *   语义逐条保持：
+ *     · 地址不再手拼 `CLASS_URL`（那个兜底还写着独立进程时代的 8003），
+ *       改由封装按 `config.services.class` 取（合并后已指向本进程端口）
+ *     · **不抛错**，统一返回 `{ok, data?/message?}`，调用方按 ok 决定兜底
+ *     · 超时提示文案不变（axios 超时应判 ECONNABORTED，用 isRemoteTimeout 统一判）
+ */
 async function callClass<T = any>(path: string): Promise<{ ok: boolean; data?: T; message?: string }> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 5000);
+  let j: any;
   try {
-    const r = await fetch(`${CLASS_URL}${path}`, {
+    j = await remoteGet('class', path, {
+      timeout: 5000,
       headers: { 'x-internal-token': INTERNAL_TOKEN, 'Content-Type': 'application/json' },
-      signal: ctrl.signal,
+      raw: true,
     });
-    const j: any = await r.json();
-    if (j && j.code === 200) return { ok: true, data: j.data };
-    return { ok: false, message: j?.message || `班级管理返回 code=${j?.code}` };
   } catch (e: any) {
-    return { ok: false, message: e?.name === 'AbortError' ? '班级管理接口超时（5秒）' : String(e?.message || e) };
-  } finally {
-    clearTimeout(timer);
+    return {
+      ok: false,
+      message: isRemoteTimeout(e) ? '班级管理接口超时（5秒）' : String(e?.message || e),
+    };
   }
+  if (j && j.code === 200) return { ok: true, data: j.data };
+  return { ok: false, message: j?.message || `班级管理返回 code=${j?.code}` };
 }
 
 /* ============================================================

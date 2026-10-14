@@ -20,6 +20,8 @@ import type { FinanceStandardView, FinanceStandardBatchResult } from 'shared-typ
 import { config } from '../config';
 import { BizError } from '../middleware/errorHandler';
 import { getServiceToken } from './service-token';
+// ★ 2026-10-14：跨服务调用统一走公共 axios 封装（技术选型表：跨服务调用 = axios）
+import { remoteRequest, remoteGet, isRemoteTimeout } from '../../shared/http';
 
 /** 调用财务接口的超时时间（毫秒）—— 超过就放弃，走兜底 */
 const TIMEOUT_MS = 3000;
@@ -34,22 +36,22 @@ interface FinanceResponse<T> {
 /**
  * 基础请求：带超时、带鉴权、自动解包
  *
- * ⚠️ 用 AbortController 做超时，因为 Node 18+ 的 fetch 支持 signal
+ * ★ 2026-10-14：底层 HTTP 由原生 fetch 换成公共 axios 封装（src/shared/http.ts）。
+ *   ⚠️ 这里**必须显式把 RemoteError 转成本模块（consult）的 BizError** ——
+ *   因为 consult 的 errorHandler 只认自己的 BizError（`instanceof`），
+ *   直接抛 RemoteError 会被当成未知异常、变成 500，用户看不到中文提示。
+ *   错误码与文案均与改造前逐字一致。
  */
 async function request<T>(
   path: string,
   options: { method?: 'GET' | 'POST'; body?: any } = {},
 ): Promise<T> {
   const { method = 'GET', body } = options;
-  const url = `${config.services.finance}${path}`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-  let res: Response;
+  let json: FinanceResponse<T>;
   try {
-    res = await fetch(url, {
-      method,
+    json = await remoteRequest<FinanceResponse<T>>('finance', method, path, {
+      timeout: TIMEOUT_MS,
       headers: {
         'Content-Type': 'application/json',
         // ⚠️⚠️ 2026-10-02：不能再用固定的 'test' 了。
@@ -58,13 +60,12 @@ async function request<T>(
         //    改用「服务身份」JWT（见 services/service-token.ts）。
         Authorization: `Bearer ${getServiceToken()}`,
       },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
+      body,
+      raw: true,
     });
   } catch (err: any) {
-    clearTimeout(timer);
     // ---- 超时 ----
-    if (err?.name === 'AbortError') {
+    if (isRemoteTimeout(err)) {
       throw new BizError(
         BizCode.DOWNSTREAM_TIMEOUT,
         `财务模块响应超时（超过 ${TIMEOUT_MS / 1000} 秒），请稍后重试。如持续失败请联系财务模块负责人（周铭）确认服务是否启动。`,
@@ -73,16 +74,11 @@ async function request<T>(
     // ---- 连不上（服务没起 / 端口不通）----
     throw new BizError(
       BizCode.DOWNSTREAM_ERROR,
-      `无法连接财务模块（${config.services.finance}）。请确认财务服务已启动（端口 8005）。`,
+      `无法连接财务模块（${config.services.finance}）。请确认财务服务已启动。`,
     );
-  } finally {
-    clearTimeout(timer);
   }
 
-  let json: FinanceResponse<T>;
-  try {
-    json = (await res.json()) as FinanceResponse<T>;
-  } catch {
+  if (!json || typeof json !== 'object') {
     throw new BizError(
       BizCode.DOWNSTREAM_ERROR,
       '财务模块返回了无法解析的内容，请联系财务模块负责人排查。',
@@ -287,11 +283,9 @@ export const financeClient = {
    */
   async health(): Promise<boolean> {
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1500);
-      const res = await fetch(`${config.services.finance}/health`, { signal: controller.signal });
-      clearTimeout(timer);
-      return res.ok;
+      // 判据与改造前的 `res.ok` 一致：HTTP 2xx 即健康（axios 只在 2xx 时 resolve）
+      await remoteGet('finance', '/health', { timeout: 1500, raw: true });
+      return true;
     } catch {
       return false;
     }

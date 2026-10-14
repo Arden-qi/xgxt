@@ -1,4 +1,10 @@
 import { config } from '../config';
+/**
+ * ★ 2026-10-14：底层 HTTP 从原生 fetch 换成公共 axios 封装（src/shared/http.ts）。
+ *   《技术选型表》约定「跨服务调用 = axios」。本文件的改造还顺带删掉了手写的
+ *   AbortController 超时、以及「自己判 code≠200」这两段样板 —— 统一封装里已经有了。
+ */
+import { remoteGet } from '../../shared/http';
 
 /**
  * 跨模块调用（本模块 → 其他模块）
@@ -20,30 +26,27 @@ export interface RemoteUser {
 const CACHE_TTL = 60_000;
 const cache = new Map<string, { at: number; value: RemoteUser[] }>();
 
-interface ApiResp<T> {
-  code: number;
-  message: string;
-  data: T | null;
-}
-
-async function getJson<T>(url: string): Promise<T | null> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), config.crossModuleTimeout);
+/**
+ * 调登录模块的 internal 接口，拿对象里的 data
+ *
+ * 语义与改造前逐条一致：
+ *   · 失败一律 **不抛出**，只 warn + 返回 null（通知类调用不该拖垮主流程）
+ *   · 对方返回 code≠200 → 走「业务失败」这条日志，提示文案用对方给的 message
+ *   · 超时/连不上 → 走「调用失败」日志
+ *   （axios 版的业务码判断与解包都在统一封装里做了，此处不必再手写）
+ */
+async function getJson<T>(path: string): Promise<T | null> {
   try {
-    const r = await fetch(url, { signal: ctrl.signal });
-    const body = (await r.json()) as ApiResp<T>;
-    if (body.code !== 200) {
+    return await remoteGet<T>('auth', path, { timeout: config.crossModuleTimeout });
+  } catch (e: any) {
+    if (e?.payload && typeof e.payload === 'object' && 'code' in e.payload) {
       // eslint-disable-next-line no-console
-      console.warn(`[upstream] ${url} 业务失败：${body.message}`);
-      return null;
+      console.warn(`[upstream] ${path} 业务失败：${e.payload.message}`);
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(`[upstream] ${path} 调用失败：${e?.message}`);
     }
-    return body.data;
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn(`[upstream] ${url} 调用失败：${(e as Error).message}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -59,11 +62,11 @@ function cached(key: string, loader: () => Promise<RemoteUser[]>): Promise<Remot
   });
 }
 
-/** 按角色编码找用户（登录模块 8001 的 internal 接口） */
+/** 按角色编码找用户（登录模块的 internal 接口） */
 export async function usersByRole(roleCode: string): Promise<RemoteUser[]> {
   return cached(`role:${roleCode}`, async () => {
     const data = await getJson<{ list: RemoteUser[] }>(
-      `${config.services.auth}/api/auth/internal/user/by-role?roleCode=${encodeURIComponent(roleCode)}`,
+      `/api/auth/internal/user/by-role?roleCode=${encodeURIComponent(roleCode)}`,
     );
     return data?.list ?? [];
   });
@@ -74,7 +77,7 @@ export async function usersByIds(ids: string[]): Promise<RemoteUser[]> {
   const clean = ids.filter(Boolean);
   if (!clean.length) return [];
   return getJson<{ list: RemoteUser[] }>(
-    `${config.services.auth}/api/auth/internal/user/by-ids?ids=${encodeURIComponent(clean.join(','))}`,
+    `/api/auth/internal/user/by-ids?ids=${encodeURIComponent(clean.join(','))}`,
   ).then((d) => d?.list ?? []);
 }
 

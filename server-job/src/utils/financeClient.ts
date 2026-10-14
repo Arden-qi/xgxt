@@ -30,10 +30,15 @@
  * ============================================================
  */
 
-import { config } from '../config';
 import { getServiceToken } from '../consult/services/service-token';
 import { BizError } from '../middleware/errorHandler';
 import type { BizCode } from 'shared-types';
+/**
+ * ★ 2026-10-14：底层 HTTP 从原生 fetch 换成公共 axios 封装（src/shared/http.ts）。
+ *   本文件用 `raw: true` —— 因为它的成功码口径特殊（0 与 200 都算成功，见下方
+ *   `request` 里的说明），需要自己判断，不能让统一拦截器代判。
+ */
+import { remoteGet, remotePost, isRemoteTimeout } from '../shared/http';
 
 /** 调用财务接口的超时时间（毫秒）—— 超过就放弃 */
 const TIMEOUT_MS = 3000;
@@ -58,51 +63,56 @@ interface FinanceResponse<T> {
 /**
  * 基础请求：带超时、带服务身份鉴权、自动解包
  *
+ * ★ 2026-10-14 改造：底层由原生 fetch 换成公共 axios 封装，语义逐条保持——
+ *   · 超时 / 连不上 / 对方拒绝 → 统一抛 `BizError(50004)`（错误码与改造前一致）
+ *   · **成功码 0 与 200 都算成功**（财务早期返回 0）→ 用 `raw: true` 自己判，
+ *     不让统一拦截器按「非 200 即失败」处理，否则会把对方的成功当业务错误抛出去
+ *
  * @param path  财务侧路径，如 `/api/finance/refund/apply`
  * @param body  POST 请求体
  */
 async function request<T>(path: string, body?: unknown): Promise<T> {
-  const url = `${config.services.finance}${path}`;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-  let res: Response;
+  let payload: FinanceResponse<T>;
   try {
-    res = await fetch(url, {
-      method: 'POST',
+    payload = await remotePost<FinanceResponse<T>>('finance', path, body, {
+      timeout: TIMEOUT_MS,
       headers: {
-        'Content-Type': 'application/json',
         // 服务身份 JWT：财务侧对 kind==='service' 放行，不再卡 modules
         // ⚠️ 传 'job' —— 让财务侧建单时 applicant_name 显示「就业模块（服务调用）」，
         //    而不是复用咨询身份导致显示成「市场咨询模块」（本轮实测踩过）。
         Authorization: `Bearer ${getServiceToken('job')}`,
       },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
+      raw: true,
     });
   } catch (err: any) {
-    clearTimeout(timer);
-    if (err?.name === 'AbortError') {
+    // ① 超时
+    if (isRemoteTimeout(err)) {
       throw new BizError(
         DOWNSTREAM_ERROR_CODE as unknown as BizCode,
         `财务模块响应超时（超过 ${TIMEOUT_MS / 1000} 秒）。请确认财务模块是否已启动。`,
       );
     }
+    // ② 对方明确返回了错误体（HTTP 4xx/5xx，响应体带 code/message）
+    const p = err?.payload;
+    if (p && typeof p === 'object' && 'code' in p) {
+      throw new BizError(
+        (p.code || DOWNSTREAM_ERROR_CODE) as unknown as BizCode,
+        `财务模块拒绝了本次请求：${p.message || '未知错误'}`,
+      );
+    }
+    // ③ 连不上 / 其他网络层错误
     throw new BizError(
       DOWNSTREAM_ERROR_CODE as unknown as BizCode,
       `无法连接财务模块：${err?.message || '网络错误'}`,
     );
   }
-  clearTimeout(timer);
 
-  let payload: FinanceResponse<T>;
-  try {
-    payload = (await res.json()) as FinanceResponse<T>;
-  } catch {
-    throw new BizError(DOWNSTREAM_ERROR_CODE as unknown as BizCode, `财务模块返回了非 JSON 内容（HTTP ${res.status}）`);
+  // 对方返回的不是 JSON（例如网关的 HTML 错误页）
+  if (!payload || typeof payload !== 'object') {
+    throw new BizError(DOWNSTREAM_ERROR_CODE as unknown as BizCode, '财务模块返回了非 JSON 内容');
   }
 
+  // ⚠️ 财务侧成功码历史上出现过 0，此处保留 0/200 双兼容（与改造前一致）
   if (payload.code !== 0 && payload.code !== 200) {
     throw new BizError(
       (payload.code || DOWNSTREAM_ERROR_CODE) as unknown as BizCode,
@@ -176,21 +186,21 @@ export async function applyRefundToFinance(
 export async function getFinanceRefundDetail(
   refundId: string,
 ): Promise<{ id: string; refundStatus: number } | null> {
-  const url = `${config.services.finance}/api/finance/refund/detail?id=${encodeURIComponent(refundId)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${getServiceToken('job')}` },
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    const payload = (await res.json()) as FinanceResponse<any>;
+    const payload = await remoteGet<FinanceResponse<any>>(
+      'finance',
+      `/api/finance/refund/detail?id=${encodeURIComponent(refundId)}`,
+      {
+        timeout: TIMEOUT_MS,
+        headers: { Authorization: `Bearer ${getServiceToken('job')}` },
+        raw: true,
+      },
+    );
+    if (!payload || typeof payload !== 'object') return null;
     if (payload.code !== 0 && payload.code !== 200) return null;
     return payload.data || null;
   } catch {
-    clearTimeout(timer);
+    // 回读失败不阻断主流程，与改造前一致（静默返回 null）
     return null;
   }
 }

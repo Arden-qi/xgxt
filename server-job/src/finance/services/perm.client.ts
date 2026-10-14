@@ -22,18 +22,28 @@
  */
 
 import {
-  DEFAULT_PERM_URL,
   PERM_ACCOUNT_PROFILE_PATH,
   type RemotePermProfile,
   type RemotePermResult,
 } from 'shared-types/finance';
+/**
+ * ★ 2026-10-14：底层 HTTP 从原生 fetch 换成公共 axios 封装（src/shared/http.ts）。
+ *   语义逐条保持：本文件【不抛错】，把「连不上」翻成 degraded 结果交给调用方兜底
+ *   （所以用 `raw: true` 自己拿完整响应体判 code，不让拦截器代判）。
+ */
+import { moduleUrl, remoteGet, isRemoteTimeout } from '../../shared/http';
 
 /** 调权限接口的超时时间（毫秒） */
 const TIMEOUT_MS = 2000;
 
-/** 权限模块地址（.env 的 PERM_URL 优先） */
+/**
+ * 权限模块地址（与统一封装的 config.services.perm 同源）
+ *
+ * ★ 2026-10-14：原来兜底用的是 shared-types 里的 DEFAULT_PERM_URL（独立进程时代的
+ *   8006）。合并成单进程后 config.services.perm 的默认值已指向本进程端口，更正确。
+ */
 function permBaseUrl(): string {
-  return (process.env.PERM_URL || DEFAULT_PERM_URL).replace(/\/$/, '');
+  return moduleUrl('perm').replace(/\/$/, '');
 }
 
 /** 权限模块统一响应包 */
@@ -56,31 +66,25 @@ export async function fetchPermProfile(account: string): Promise<RemotePermResul
     return { profile: null, degraded: true, degradeReason: '缺少登录名，无法取权限档案' };
   }
 
-  const url = `${permBaseUrl()}${PERM_ACCOUNT_PROFILE_PATH}?account=${encodeURIComponent(account)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-    });
-  } catch (err: any) {
-    const reason =
-      err?.name === 'AbortError'
-        ? `权限模块响应超时（超过 ${TIMEOUT_MS / 1000} 秒）`
-        : `无法连接权限模块（${permBaseUrl()}），请确认权限服务已启动（端口 8006）`;
-    return { profile: null, degraded: true, degradeReason: reason };
-  } finally {
-    clearTimeout(timer);
-  }
-
   let json: PermEnvelope<RemotePermProfile>;
   try {
-    json = (await res.json()) as PermEnvelope<RemotePermProfile>;
-  } catch {
+    json = await remoteGet<PermEnvelope<RemotePermProfile>>(
+      'perm',
+      `${PERM_ACCOUNT_PROFILE_PATH}?account=${encodeURIComponent(account)}`,
+      {
+        timeout: TIMEOUT_MS,
+        headers: { 'Content-Type': 'application/json' },
+        raw: true,
+      },
+    );
+  } catch (err: any) {
+    const reason = isRemoteTimeout(err)
+      ? `权限模块响应超时（超过 ${TIMEOUT_MS / 1000} 秒）`
+      : `无法连接权限模块（${permBaseUrl()}），请确认权限服务已启动`;
+    return { profile: null, degraded: true, degradeReason: reason };
+  }
+
+  if (!json || typeof json !== 'object') {
     return { profile: null, degraded: true, degradeReason: '权限模块返回了无法解析的内容' };
   }
 
@@ -108,12 +112,12 @@ export async function fetchPermProfile(account: string): Promise<RemotePermResul
 /** 健康检查（启动时探测，不在线只警告不阻断） */
 export async function permHealth(): Promise<boolean> {
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1500);
-    const res = await fetch(`${permBaseUrl()}/health`, { signal: controller.signal });
-    clearTimeout(timer);
-    return res.status < 500;
-  } catch {
+    await remoteGet('perm', '/health', { timeout: 1500, raw: true });
+    return true;
+  } catch (err: any) {
+    // 判据与改造前一致：HTTP 状态码 < 500 就算健康（服务在响应即可，401/403 也算）
+    const m = /^HTTP (\d+)$/.exec(String(err?.detail || ''));
+    if (m) return Number(m[1]) < 500;
     return false;
   }
 }

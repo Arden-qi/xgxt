@@ -27,6 +27,11 @@
  */
 
 import { config } from '../config';
+/**
+ * ★ 2026-10-14：底层 HTTP 从原生 fetch 换成公共 axios 封装（src/shared/http.ts）。
+ *   《技术选型表》约定「跨服务调用 = axios」，此文件原是实现者之一。
+ */
+import { remoteGet, remotePost, isRemoteTimeout } from '../shared/http';
 
 /** 调用班级模块的超时（毫秒）。它是本进程内的服务，5 秒足够 */
 const TIMEOUT_MS = 5000;
@@ -67,48 +72,48 @@ function classBaseUrl(): string {
   return String(process.env.CLASS_URL || config.services.class || '').replace(/\/+$/, '');
 }
 
-/** 基础 POST：带内部令牌 + 超时，永远不抛错，只回 SyncOutcome */
+/**
+ * 基础 POST：带内部令牌 + 超时，**永远不抛错**，只回 SyncOutcome
+ *
+ * ★ 2026-10-14 改造：底层由原生 fetch 换成公共 axios 封装，语义逐条保持——
+ *   · 仍然「不抛错、只回 SyncOutcome」（调用方决定阻断与否，见文件头说明）
+ *   · 仍然透出对方的中文提示与 data（业务失败时取 `err.payload` 里的原始响应体）
+ *   · 超时提示文案不变（axios 的超时应判 ECONNABORTED，用 isRemoteTimeout 统一判）
+ *   用 `raw: true` 拿完整 {code,message,data}，这样成功时还能用对方的 message 做提示。
+ */
 async function post(path: string, body: unknown): Promise<SyncOutcome> {
   const base = classBaseUrl();
   if (!base) {
     return { ok: false, message: '未配置班级模块地址（CLASS_URL）' };
   }
-  const url = `${base}${path}`;
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-internal-token': config.internalToken,
-      },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    });
-  } catch (e: any) {
-    clearTimeout(timer);
-    const reason =
-      e?.name === 'AbortError'
-        ? `班级模块响应超时（超过 ${TIMEOUT_MS / 1000} 秒）`
-        : `无法连接班级模块（${base}）`;
-    // eslint-disable-next-line no-console
-    console.warn(`[classSync] ${path} 调用失败：${reason}`);
-    return { ok: false, message: reason };
-  } finally {
-    clearTimeout(timer);
-  }
 
   let json: any;
   try {
-    json = await res.json();
-  } catch {
-    return { ok: false, message: '班级模块返回了无法解析的内容' };
+    json = await remotePost('class', path, body, {
+      timeout: TIMEOUT_MS,
+      headers: { 'x-internal-token': config.internalToken },
+      raw: true,
+    });
+  } catch (e: any) {
+    // ① 对方返回了业务错误（code ≠ 200）→ 原样透出它的 message / data
+    const payload = e?.payload;
+    if (payload && typeof payload === 'object' && 'code' in payload) {
+      const msg = payload.message || `班级模块返回 code=${payload.code}`;
+      // eslint-disable-next-line no-console
+      console.warn(`[classSync] ${path} 业务失败：${msg}`);
+      return { ok: false, message: msg, data: payload.data };
+    }
+    // ② 超时 / 连不上 / 响应体解析不了
+    const reason = isRemoteTimeout(e)
+      ? `班级模块响应超时（超过 ${TIMEOUT_MS / 1000} 秒）`
+      : `无法连接班级模块（${base}）`;
+    // eslint-disable-next-line no-console
+    console.warn(`[classSync] ${path} 调用失败：${reason}`);
+    return { ok: false, message: reason };
   }
 
-  // class 侧的响应体是 { code, message, data }
+  // ⚠️ 兜底再核对一次 code：响应拦截器只对「带 code 字段」的响应体做判断，
+  //    这段保证「对方返回的不是本系统统一结构」时的行为与改造前完全一致。
   if (json?.code !== 200) {
     const msg = json?.message || `班级模块返回 code=${json?.code}`;
     // eslint-disable-next-line no-console
@@ -124,35 +129,28 @@ async function get(path: string): Promise<SyncOutcome> {
   if (!base) {
     return { ok: false, message: '未配置班级模块地址（CLASS_URL）' };
   }
-  const url = `${base}${path}`;
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: 'GET',
-      headers: { 'x-internal-token': config.internalToken },
-      signal: ctrl.signal,
-    });
-  } catch (e: any) {
-    clearTimeout(timer);
-    const reason =
-      e?.name === 'AbortError'
-        ? `班级模块响应超时（超过 ${TIMEOUT_MS / 1000} 秒）`
-        : `无法连接班级模块（${base}）`;
-    // eslint-disable-next-line no-console
-    console.warn(`[classSync] GET ${path} 调用失败：${reason}`);
-    return { ok: false, message: reason };
-  } finally {
-    clearTimeout(timer);
-  }
 
   let json: any;
   try {
-    json = await res.json();
-  } catch {
-    return { ok: false, message: '班级模块返回了无法解析的内容' };
+    json = await remoteGet('class', path, {
+      timeout: TIMEOUT_MS,
+      headers: { 'x-internal-token': config.internalToken },
+      raw: true,
+    });
+  } catch (e: any) {
+    const payload = e?.payload;
+    if (payload && typeof payload === 'object' && 'code' in payload) {
+      const msg = payload.message || `班级模块返回 code=${payload.code}`;
+      // eslint-disable-next-line no-console
+      console.warn(`[classSync] GET ${path} 业务失败：${msg}`);
+      return { ok: false, message: msg, data: payload.data };
+    }
+    const reason = isRemoteTimeout(e)
+      ? `班级模块响应超时（超过 ${TIMEOUT_MS / 1000} 秒）`
+      : `无法连接班级模块（${base}）`;
+    // eslint-disable-next-line no-console
+    console.warn(`[classSync] GET ${path} 调用失败：${reason}`);
+    return { ok: false, message: reason };
   }
 
   if (json?.code !== 200) {
