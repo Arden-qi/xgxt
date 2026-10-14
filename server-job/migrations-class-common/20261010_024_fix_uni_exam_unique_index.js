@@ -56,7 +56,7 @@ const TABLE = 't_uni_exam';
 async function indexCols(knex, name) {
   const rows = await knex('information_schema.STATISTICS')
     .select('COLUMN_NAME as cn', 'SEQ_IN_INDEX as seq')
-    .where('TABLE_SCHEMA', 'sms_common')
+    .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
     .where('TABLE_NAME', TABLE)
     .where('INDEX_NAME', name)
     .orderBy('SEQ_IN_INDEX');
@@ -102,7 +102,7 @@ const up = async function (knex) {
   if (cur.join(',') === TARGET) {
     const nu = await knex('information_schema.STATISTICS')
       .select('NON_UNIQUE as nu')
-      .where('TABLE_SCHEMA', 'sms_common')
+      .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
       .where('TABLE_NAME', TABLE)
       .where('INDEX_NAME', 'uk_exam')
       .first();
@@ -159,7 +159,7 @@ const up = async function (knex) {
        别只信 SHOW CREATE TABLE 里的命令原文（原文长得一样，含义不同）。 */
   const after = await knex('information_schema.STATISTICS')
     .select('NON_UNIQUE as nu')
-    .where('TABLE_SCHEMA', 'sms_common')
+    .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
     .where('TABLE_NAME', TABLE)
     .where('INDEX_NAME', 'uk_exam')
     .first();

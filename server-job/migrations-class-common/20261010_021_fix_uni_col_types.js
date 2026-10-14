@@ -70,7 +70,7 @@ const up = async function (knex) {
     // ★ 走查询接口而非 raw()：raw 返回 [[行],[字段]] 两段结构，取值极易出错
     const r = await knex('information_schema.COLUMNS')
       .select('COLUMN_TYPE as ct', 'IS_NULLABLE as nl', 'COLUMN_DEFAULT as dv')
-      .where('TABLE_SCHEMA', 'sms_common')
+      .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
       .where('TABLE_NAME', table)
       .where('COLUMN_NAME', col)
       .first();
@@ -220,12 +220,35 @@ const up = async function (knex) {
       `t_uni_exam_field.field_type 仍有非数字值未搬到 field_type_text，无法改 int。已中止。`,
     );
   }
+  /**
+   * ★★★ 2026-10-14 变更：**不再把 field_type 改成 int**
+   *
+   * 【为什么去掉这段】
+   *   本迁移写于第 4 期**早期**，当时的设计是「field_type 改回 int（初高口径），
+   *   大学的中文口径另开 field_type_text 列」。
+   *   但**第 9 批的 `20261011_005_exam_domain_align` 已经推翻了这个决定**：
+   *   它把这列**改回 varchar(20) DEFAULT '数值'**，
+   *   理由是业务代码 `exam/route.ts` 的 zod schema 就是 `z.string().default('数值')`，
+   *   而大学侧（sms_class）老表也是 varchar —— 对齐它 = 代码零改动。
+   *
+   *   于是这条迁移链在新库上产生了**顺序副作用**：
+   *     ① SQL 建表   → varchar（与权威库一致）✅
+   *     ② 本迁移     → 改成 int        ❌ 把权威结构改坏
+   *     ③ 005 迁移   → 判断「已是 varchar(20) 就跳过」，此刻是 int，
+   *                    但实测 005 仍走了跳过分支 → **最终停在 int**
+   *     → 结果：新库这 1 张表与权威库不一致，切读模式新增考试字段会
+   *       报 `Truncated incorrect INTEGER value: '数值'`。
+   *
+   * 【为什么直接删掉这段是安全的】
+   *   · 已有环境：本迁移早已执行过（knex_migrations 有记录），不会重跑，改了不影响；
+   *   · 新环境：SQL 建的本来就是 varchar，本段不执行反而**结果正确**。
+   *   · 搬中文值到 field_type_text 的逻辑**保留**（见上方第 1 步），
+   *     那部分对空库是空操作、对老库是必要的数据搬迁。
+   */
   const ft = await colType('t_uni_exam_field', 'field_type');
-  if (ft && String(ft.t) !== 'int(11)') {
-    await knex.raw(
-      'ALTER TABLE `t_uni_exam_field` MODIFY `field_type` int(11) NOT NULL DEFAULT 1 ' +
-        "COMMENT '★初高口径字段类型码（1数值 2主观…）；大学中文口径在 field_type_text'",
-    );
+  if (ft && String(ft.t) !== 'varchar(20)' && String(ft.t) !== 'int(11)') {
+    // 只做提示，不改类型：类型口径由 20261011_005 负责（varchar(20)）
+    console.log(`  · t_uni_exam_field.field_type 当前类型 ${ft.t}，保持不动（口径由 005 迁移统一为 varchar(20)）`);
   }
 
   /* ==========================================================
@@ -274,7 +297,7 @@ const up = async function (knex) {
     //     拿到的就是干净的字段对象，不受 raw 的两段结构影响。
     const tsRows = await knex('information_schema.COLUMNS')
       .select('COLUMN_NAME as cn')
-      .where('TABLE_SCHEMA', 'sms_common')
+      .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
       .where('TABLE_NAME', tb)
       .where('DATA_TYPE', 'timestamp');
     for (const r of tsRows) {

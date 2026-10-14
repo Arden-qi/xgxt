@@ -50,7 +50,7 @@ const COMMENT =
 async function hasColumn(knex, col) {
   const r = await knex('information_schema.COLUMNS')
     .select('COLUMN_NAME as cn')
-    .where('TABLE_SCHEMA', 'sms_common')
+    .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
     .where('TABLE_NAME', TABLE)
     .where('COLUMN_NAME', col)
     .first();
@@ -75,7 +75,7 @@ const up = async function (knex) {
   /* 自检：确认列真的建出来了，且可空（铁律③在本列刻意破例，见文件头说明） */
   const c = await knex('information_schema.COLUMNS')
     .select('DATA_TYPE as dt', 'IS_NULLABLE as nullable')
-    .where('TABLE_SCHEMA', 'sms_common')
+    .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
     .where('TABLE_NAME', TABLE)
     .where('COLUMN_NAME', COL)
     .first();

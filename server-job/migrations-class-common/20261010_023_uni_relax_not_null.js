@@ -104,7 +104,7 @@ const up = async function (knex) {
     /* 统一表列清单 */
     const uniCols = await knex('information_schema.COLUMNS')
       .select('COLUMN_NAME as cn', 'COLUMN_TYPE as ct', 'IS_NULLABLE as nl')
-      .where('TABLE_SCHEMA', 'sms_common')
+      .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
       .where('TABLE_NAME', uni);
 
     /* 各源表的列名集合 */

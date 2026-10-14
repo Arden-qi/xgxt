@@ -344,32 +344,49 @@ async function ensureDatabases() {
     await conn.end().catch(() => {});
   }
 
-  // 5b) migrate：建 5 个库的表（job / edu / class / class-common / class-jh）
-  console.log('    正在建表（knex migrate，覆盖就业/教务/班级/公共/初高 5 个库）...');
-  const mOk = await runNpm(path.join(ROOT, 'server-job'), ['run', 'migrate'], 'migrate');
-  if (mOk) ok('表结构已就绪');
-  else warn('建表过程有报错。若只是「已是最新」可以忽略，否则看上面的报错原文。');
-
-  // 5c) 导入 4 个库的演示数据（仅当该库没有业务表时才导）
-  const DEMO = ['sms_portal', 'sms_consult', 'sms_finance', 'sms_perm'];
-
   /**
-   * ★ 2026-10-14：SQL 目录改为「优先仓库自带，回退本机导出」
+   * 5b) ★ 先导入「权威统一表 SQL」—— 必须排在 migrate 之前
    *
-   * 【为什么】
-   *   原来只读根目录 `数据库导出/`，而那个目录被 .gitignore 排除了。
-   *   于是「斌哥本地能跑、同事 clone 后登录就报『数据表不存在』」——
-   *   四个模块库（portal/consult/finance/perm）压根建不出来。
+   * 【为什么把顺序反过来】
+   *   class-common 里有 7 个迁移是改**统一表**的
+   *   （026 改 `t_uni_dorm_bed`、20261011_001~005 各改一张 `t_uni_*`、
+   *     20261012_006 改 `t_uni_attendance_detail`），
+   *   而 8 张统一主表的**建表职责**已经从迁移 010 移交给
+   *   `server-job/sql/init/uni-tables.sql`（从权威库导出的 43 张，结构 100% 与生产一致）。
    *
-   *   现在把脱敏后的初始化 SQL 放进 `server-job/sql/init/`（随 git 分发），
-   *   先找它、找不到再回退到本机的 `数据库导出/`。
-   *   两个目录都在时以仓库自带的为准（它才是有版本管理的那份）。
+   *   所以正确顺序是：**先把统一表建好 → 再跑 migrate**。
+   *   反过来（先 migrate）会出两种坏情况：
+   *     ① 010 按第 3 期旧约定建表（带 src_* 溯源列）→ 与权威库结构分叉，
+   *        而 uni-tables.sql 是 IF NOT EXISTS，见表已存在就跳过 → 结构永远修不回来；
+   *     ② 就算跳过 010，那 7 个迁移也会因「表不存在」直接报错。
+   *
+   *   SQL 全篇 `CREATE TABLE IF NOT EXISTS`、不含 DROP/INSERT，重复跑安全。
    */
   const sqlDirs = [
     path.join(ROOT, 'server-job', 'sql', 'init'), // 随仓库分发（推荐）
     path.join(ROOT, '数据库导出'),                  // 本机导出（回退）
   ];
   const findSql = (name) => sqlDirs.map((d) => path.join(d, name)).find((p) => fs.existsSync(p));
+
+  const uniSql = findSql('uni-tables.sql');
+  if (uniSql) {
+    console.log('    正在导入统一表（sms_common 的 43 张 t_uni_*，幂等）...');
+    const uOk = await importSql(uniSql, 'sms_common');
+    if (uOk) ok('统一表已就绪');
+    else warn('统一表导入失败（各业务页会缺表，可手动导入 sql/init/uni-tables.sql）');
+  } else {
+    warn('没找到 uni-tables.sql —— 跳过统一表导入，后面的 migrate 会因缺表报错');
+  }
+
+  // 5c) migrate：建 5 个库的表（job / edu / class / class-common / class-jh）
+  console.log('    正在建表（knex migrate，覆盖就业/教务/班级/公共/初高 5 个库）...');
+  const mOk = await runNpm(path.join(ROOT, 'server-job'), ['run', 'migrate'], 'migrate');
+  if (mOk) ok('表结构已就绪');
+  else warn('建表有报错，请看上面的原文。');
+
+  // 5d) 导入 4 个模块库的演示数据（仅当该库没有业务表时才导）
+  //      注：sqlDirs / findSql 已在 5b 定义，这里直接用
+  const DEMO = ['sms_portal', 'sms_consult', 'sms_finance', 'sms_perm'];
 
   for (const db of DEMO) {
     const sqlFile = findSql(`${db}.sql`);
@@ -386,29 +403,6 @@ async function ensureDatabases() {
     const imported = await importSql(sqlFile, db);
     if (imported) ok(`${db} 导入完成`);
     else warn(`${db} 导入失败（不影响其它模块，可稍后手动导入）`);
-  }
-
-  /**
-   * 5d) 补统一表（sms_common 的 43 张 t_uni_*）
-   *
-   * 【为什么必须单独补】
-   *   `npm run migrate` 的 5 个迁移目录里，只有 `20261009_010_create_uni_tables_p3.js`
-   *   建了 8 张统一表，其余 35 张**没有任何迁移创建它们**（当初是用一次性脚本 + SQL 建库的）。
-   *   → 只跑 migrate 的话，同事本地只有 8/43 张，切读模式各页面会大面积缺表。
-   *
-   * 【为什么可以无条件跑】
-   *   uni-tables.sql 全篇是 `CREATE TABLE IF NOT EXISTS`，**不含 DROP / INSERT**，
-   *   跑一遍只是把缺的建出来，已有的跳过，不动任何数据 → 完全幂等，每次启动跑都安全。
-   *   放在 migrate **之后**：migrate 建好的表保持不动，只补齐缺的。
-   */
-  const uniSql = findSql('uni-tables.sql');
-  if (uniSql) {
-    console.log('    正在补齐统一表（sms_common.t_uni_*，幂等）...');
-    const uOk = await importSql(uniSql, 'sms_common');
-    if (uOk) ok('统一表已就绪');
-    else warn('统一表导入失败（切读模式下各业务页可能缺表，可手动导入 sql/init/uni-tables.sql）');
-  } else {
-    warn('没找到 uni-tables.sql，跳过统一表补齐');
   }
 
   async function tableCount(db) {

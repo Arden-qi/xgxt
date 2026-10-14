@@ -19,37 +19,38 @@
  *   没有 `src_table` 就无法回答「这条记录原来在哪张表」，溯源链断一半。
  *
  * 【幂等】列已存在就跳过，所以可以重复跑。
+ *
+ * ★★★ 2026-10-14 变更：本迁移**整段停用**（up 不再加列）
+ * ============================================================
+ * 【为什么停用】
+ *   第 4 期的建表约定已改为**不加 src_* 三件套**，
+ *   权威库（sms_common）实测 8 张统一表**都没有** src_db / src_table / src_id。
+ *   而本迁移会在空库上把这列**加回来** → 新环境的结构又跟权威库分叉。
+ *
+ *   （配合 20261009_010 一起改：那个迁移不再建表，本迁移不再加列，
+ *     两者共同保证「新库的 8 张统一表结构 = 权威库结构」。）
+ *
+ * 【为什么保留文件而不是删掉】
+ *   · 迁移文件已被历史环境执行过，删掉会让「迁移记录对不上文件名」；
+ *   · 保留为**空迁移**（记录在案、但不改结构）最安全。
+ *   · down 也相应改为空操作。
+ * ============================================================
  */
 
-const TABLES = [
-  't_uni_student',
-  't_uni_class',
-  't_uni_class_student',
-  't_uni_attendance',
-  't_uni_exam',
-  't_uni_exam_field',
-  't_uni_repeat',
-  't_uni_dorm_apply',
-];
+// 保留原表清单（仅作历史记录，up/down 已不再使用）
+// const TABLES = [
+//   't_uni_student', 't_uni_class', 't_uni_class_student', 't_uni_attendance',
+//   't_uni_exam', 't_uni_exam_field', 't_uni_repeat', 't_uni_dorm_apply',
+// ];
 
-const up = async function (knex) {
-  for (const t of TABLES) {
-    const exists = await knex.schema.hasColumn(t, 'src_table');
-    if (exists) continue;
-    await knex.schema.alterTable(t, (tb) => {
-      tb.string('src_table', 64).comment('★来源表名（阶段 B 首版漏建，阶段 C 实测发现后补）');
-    });
-  }
+const up = async function () {
+  // ★ 停用：src_* 三件套已按第 4 期约定废弃，权威库不含这三列。
+  //    加回去会让新环境与权威库结构分叉，故本迁移不做任何结构变更。
+  console.log('  ⏭  已停用（第 4 期起不再使用 src_* 溯源列），跳过');
 };
 
-const down = async function (knex) {
-  for (const t of TABLES) {
-    const exists = await knex.schema.hasColumn(t, 'src_table');
-    if (!exists) continue;
-    await knex.schema.alterTable(t, (tb) => {
-      tb.dropColumn('src_table');
-    });
-  }
+const down = async function () {
+  // 与 up 对应，同样不做任何事（原本是删列）
 };
 
 module.exports = { up, down };

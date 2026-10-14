@@ -89,7 +89,7 @@ async function addCols(knex, table, cols) {
     (
       await knex('information_schema.COLUMNS')
         .select('COLUMN_NAME as cn')
-        .where('TABLE_SCHEMA', 'sms_common')
+        .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
         .where('TABLE_NAME', table)
     ).map((r) => r.cn),
   );
@@ -112,7 +112,7 @@ async function addCols(knex, table, cols) {
 async function indexCols(knex, name, table) {
   const rows = await knex('information_schema.STATISTICS')
     .select('COLUMN_NAME as cn', 'SEQ_IN_INDEX as seq')
-    .where('TABLE_SCHEMA', 'sms_common')
+    .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
     .where('TABLE_NAME', table)
     .where('INDEX_NAME', name)
     .orderBy('SEQ_IN_INDEX');
@@ -167,7 +167,7 @@ const up = async function (knex) {
    */
   const nu = await knex('information_schema.STATISTICS')
     .select('NON_UNIQUE as nu')
-    .where('TABLE_SCHEMA', 'sms_common')
+    .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
     .where('TABLE_NAME', T_ROOM)
     .where('INDEX_NAME', 'uk_dorm_room')
     .first();

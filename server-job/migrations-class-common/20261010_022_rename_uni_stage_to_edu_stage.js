@@ -56,7 +56,7 @@ const up = async function (knex) {
   async function hasCol(table, col) {
     const r = await knex('information_schema.COLUMNS')
       .select('COLUMN_NAME as cn')
-      .where('TABLE_SCHEMA', 'sms_common')
+      .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
       .where('TABLE_NAME', table)
       .where('COLUMN_NAME', col)
       .first();
@@ -88,7 +88,7 @@ const down = async function (knex) {
   for (const t of TABLES) {
     const r = await knex('information_schema.COLUMNS')
       .select('COLUMN_NAME as cn')
-      .where('TABLE_SCHEMA', 'sms_common')
+      .where('TABLE_SCHEMA', knex.client.config.connection.database || 'sms_common')
       .where('TABLE_NAME', t)
       .where('COLUMN_NAME', 'edu_stage')
       .first();
