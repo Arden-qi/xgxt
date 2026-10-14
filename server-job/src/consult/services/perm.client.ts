@@ -111,7 +111,8 @@ export async function fetchAuthProfile(account: string): Promise<{
       headers: {
         'Content-Type': 'application/json',
         // ⚠️ 开发期用固定内部密钥；正式环境应换成服务间凭证
-        Authorization: `Bearer ${(config as any).internalToken || 'sms-internal-token'}`,
+        // ★ 2026-10-14：兜底值与 config 默认值同步改为占位符（公开仓库不写死令牌）
+        Authorization: `Bearer ${(config as any).internalToken || 'CHANGE_ME_INTERNAL_TOKEN'}`,
       },
       signal: controller.signal,
     });

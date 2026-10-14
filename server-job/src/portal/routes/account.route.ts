@@ -173,7 +173,15 @@ router.post(
       create_by_name: req.user!.userName,
       is_deleted: false,
       account: b.account,
-      password: b.password || '123456',
+      /**
+       * ★ 2026-10-14：新增账号时未填密码的默认值。
+       *
+       *   这是**演示便利**（管理员建号时可以不填密码），默认值与 README 里
+       *   公开的演示账号一致。但它毕竟是个「公开可猜的初始密码」，
+       *   所以现在允许用 .env 的 `DEFAULT_ACCOUNT_PASSWORD` 覆盖；
+       *   生产环境建议：要么在 .env 里换掉它，要么让前端把密码设为必填。
+       */
+      password: b.password || process.env.DEFAULT_ACCOUNT_PASSWORD || '123456',
       user_name: b.userName,
       kind: b.kind,
       title: b.title || null,

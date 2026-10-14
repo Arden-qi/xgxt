@@ -292,12 +292,12 @@ async function mkChild(dbCls, uniDb, table, tag, studentId, extra) {
 
   /* ---------- ⑧ 升学同步（t_class_upgrade_apply / t_class_transfer 双写） ----------
      ★ /sync 与 /upgrade/sync 是**服务对服务**接口，走 authAllowSync：
-       必须带 `x-internal-token: sms-internal-token`（config.internalToken），
+       必须带 `x-internal-token: <INTERNAL_TOKEN>`（取 config.internalToken），
        带普通登录 token 会被40101「内部服务凭证无效」挡掉。
      */
   const r8 = await req(`${API}/upgrade/sync`, {
     token: tHead, method: 'POST',
-    headers: { 'x-internal-token': 'sms-internal-token' },
+    headers: { 'x-internal-token': process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN' },
     body: {
       sourceSystem: 'EDU', syncMode: 'INCREMENT', batchNo: `ZJ${Date.now().toString().slice(-8)}`,
       items: [{
@@ -334,7 +334,7 @@ async function mkChild(dbCls, uniDb, table, tag, studentId, extra) {
   });
   const r9a = await req(`${API}/sync`, {
     token: tHead, method: 'POST',
-    headers: { 'x-internal-token': 'sms-internal-token' },
+    headers: { 'x-internal-token': process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN' },
     body: payload(sid, '自检同步甲'),
   });
   check(`⑨ /sync 首次入库（${WHERE}）`, r9a.json?.code === 200, `code=${r9a.json?.code} msg=${r9a.json?.message ?? ''}`);
@@ -345,7 +345,7 @@ async function mkChild(dbCls, uniDb, table, tag, studentId, extra) {
   }
   const r9b = await req(`${API}/sync`, {
     token: tHead, method: 'POST',
-    headers: { 'x-internal-token': 'sms-internal-token' },
+    headers: { 'x-internal-token': process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN' },
     body: payload(sid, '自检同步甲改名'),
   });
   check(

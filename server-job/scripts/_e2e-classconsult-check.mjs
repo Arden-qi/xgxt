@@ -73,12 +73,12 @@ const reg = (dbName, table, id) => {
 
 /**
  * ★ `/push` 是**服务对服务接口**（走 authAllowSync），必须带内部凭证：
- *   `x-internal-token: sms-internal-token`（config.internalToken 默认值）。
+ *   `x-internal-token: <INTERNAL_TOKEN>`（值取 config.internalToken；未配 .env 时为占位符）。
  *   带普通登录 token 会被40101「内部服务凭证无效」挡掉。
  *   —— 实测踩过：登录明明成功（token 601 位），push 却一直40101，
  *   症状是「自检第一段全挂 + data 为 null」，很容易误判成业务 bug。
  */
-const INTERNAL = process.env.INTERNAL_TOKEN || 'sms-internal-token';
+const INTERNAL = process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN';
 
 const rnd = Math.random().toString(36).slice(2, 8);
 const TAG = `E2E-CONSULT-${rnd}`;

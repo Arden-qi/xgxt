@@ -74,7 +74,7 @@ const RID = USE_UNI ? 'room_id' : 'dorm_id';
 const RNO = USE_UNI ? 'room_no' : 'dorm_no';
 
 /** 服务对服务接口的内部凭证（config.internalToken 默认值，见 src/config.ts:93） */
-const INTERNAL = process.env.INTERNAL_TOKEN || 'sms-internal-token';
+const INTERNAL = process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN';
 
 const rnd = Math.random().toString(36).slice(2, 8);
 const SRC_ID = `E2E-DORM-${rnd}`;

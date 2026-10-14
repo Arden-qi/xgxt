@@ -42,7 +42,7 @@ const DB = {
   host: env.DB_HOST || 'localhost',
   port: Number(env.DB_PORT || 3306),
   user: env.DB_USER || 'root',
-  password: env.DB_PASSWORD || '123456',
+  password: env.DB_PASSWORD || '',
   multipleStatements: false,
 };
 const D = {

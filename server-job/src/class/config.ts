@@ -16,7 +16,11 @@ export const config = {
     host: process.env.DB_HOST || '127.0.0.1',
     port: num(process.env.DB_PORT, 3306),
     user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '123456',
+    // ★ 2026-10-14：去掉 `|| '123456'` 兜底。公开仓库里写死一个可用密码，
+    //   等于「本机漏配 .env 时自动用公开密码连库」。改成空串，
+    //   与其他模块（src/config.ts / portal / finance / consult / perm）保持一致，
+    //   漏配时连接会被明确拒绝，而不是静默用一个公开密码连上。
+    password: process.env.DB_PASSWORD || '',
     /** 业务库：本模块自己的表 */
     nameClass: process.env.DB_NAME_CLASS || 'sms_class',
     /** 共享库：同步自外部模块的只读副本 */
@@ -49,8 +53,11 @@ export const config = {
    *   原来本模块是「读 process.env.INTERNAL_TOKEN，**没配就跳过校验**」——
    *   一台机器漏配 .env 就等于 /sync 接口对外完全免鉴权。
    *   现在默认值非空 → 校验永远生效、且与调用方一致。
+   *
+   * ★ 2026-10-14：默认值由 `'sms-internal-token'` 改成 `'CHANGE_ME_INTERNAL_TOKEN'`，
+   *   原因见 src/config.ts 同名处注释（公开仓库不该写死真实令牌的默认值）。
    */
-  internalToken: process.env.INTERNAL_TOKEN || 'sms-internal-token',
+  internalToken: process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN',
 
   business: {
     /**

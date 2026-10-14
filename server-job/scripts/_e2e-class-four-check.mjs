@@ -405,7 +405,8 @@ async function main() {
   );
 
   /* ================= ④ 催费域 ================= */
-  const U = { 'x-internal-token': 'sms-internal-token' };
+  // ★ 2026-10-14：改成读 .env（脚本已 dotenv.config），兜底与 config 默认值一致
+  const U = { 'x-internal-token': process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN' };
   const syncBody = (sourceId) => ({
     batchNo: `${TAG}-B1`,
     syncMode: 'full',

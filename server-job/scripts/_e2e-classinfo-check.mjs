@@ -161,7 +161,7 @@ async function mkStudent(dbCls, uniDb, tag, cls, headTeacherId) {
        要带 x-internal-token，带普通登录 token 会被 40101 挡掉。
      */
   const r3 = await req(`${API}/open-options`, {
-    token: tHead, headers: { 'x-internal-token': 'sms-internal-token' },
+    token: tHead, headers: { 'x-internal-token': process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN' },
   });
   check(
     `③ /open-options 能拿到班级下拉（${WHERE}）`,

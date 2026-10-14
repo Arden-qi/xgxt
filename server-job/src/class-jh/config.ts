@@ -44,7 +44,9 @@ export const config = {
     host: process.env.DB_HOST || '127.0.0.1',
     port: num(process.env.DB_PORT, 3306),
     user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD ?? '123456',
+    // ★ 2026-10-14：去掉 `?? '123456'` 兜底（公开仓库不写死可用密码），
+    //   与其他模块统一为 `|| ''`。详见 src/class/config.ts 同名处注释。
+    password: process.env.DB_PASSWORD ?? '',
     /** ⭐ 本模块自己的库（初高部），与大学部的 sms_class 分开 */
     database: process.env.DB_NAME_CLASS_JH || 'sms_class_jh',
     charset: 'utf8mb4',
@@ -74,8 +76,8 @@ export const config = {
 
   crossModuleTimeout: num(process.env.CROSS_MODULE_TIMEOUT, 5000),
 
-  /** 内部服务令牌（与主工程同默认值） */
-  internalToken: process.env.INTERNAL_TOKEN || 'sms-internal-token',
+  /** 内部服务令牌（与主工程同默认值；★ 2026-10-14 默认值改为占位符，见 src/config.ts） */
+  internalToken: process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN',
 } as const;
 
 export type AppConfig = typeof config;

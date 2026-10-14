@@ -77,8 +77,11 @@ export const config = {
    * ★ 2026-10-05 合并：默认值从 'test' 改成与主 config 一致的 'sms-internal-token'。
    *   原来默认 'test' 而班级侧默认「不校验」，两边对不上时链路会静默断掉；
    *   现在三处（本文件 / src/config.ts / class/config.ts）默认值一致。
+   *
+   * ★ 2026-10-14：默认值改为 `'CHANGE_ME_INTERNAL_TOKEN'`（三处同步改），
+   *   理由见 src/config.ts 同名处：公开仓库不该写死真实令牌的默认值。
    */
-  internalToken: process.env.INTERNAL_TOKEN || 'sms-internal-token',
+  internalToken: process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN',
 
   /**
    * 其他服务的地址（跨模块调用用）

@@ -186,7 +186,7 @@ async function main() {
     host: ENV.DB_HOST || '127.0.0.1',
     port: Number(ENV.DB_PORT || 3306),
     user: ENV.DB_USER || 'root',
-    password: ENV.DB_PASSWORD || '123456',
+    password: ENV.DB_PASSWORD || '',
     charset: 'utf8mb4',
   });
   const q = async (sql, args = []) => (await db.query(sql, args))[0];

@@ -88,9 +88,15 @@ export const config = {
    *   而且报错信息完全指不到原因。
    *
    * 【现在的行为】默认值非空 → 校验【永远生效】；双方都读这一处 → 永远一致。
-   *   生产环境请在 .env 里把它改成随机串。
+   *
+   * ★ 2026-10-14：默认值由 `'sms-internal-token'` 改成 `'CHANGE_ME_INTERNAL_TOKEN'`。
+   *   原因是这个仓库是公开的 —— 原来那个默认值等于把「内部服务令牌」写在
+   *   任何人都能看到的地方，一旦某台机器漏配 .env，就等于用公开的令牌在跑。
+   *   新默认值仍然「非空且全局一致」（校验照常生效、各模块互相匹配），
+   *   但字面意思明确告诉人：这是占位符，必须配置。
+   *   **生产环境请在 .env 里设成随机串。**
    */
-  internalToken: process.env.INTERNAL_TOKEN || 'sms-internal-token',
+  internalToken: process.env.INTERNAL_TOKEN || 'CHANGE_ME_INTERNAL_TOKEN',
 
   /**
    * 其他服务的地址（跨模块调用用）
