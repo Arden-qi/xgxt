@@ -103,7 +103,7 @@ function pwdScore(v: string): number {
   if (/[^A-Za-z0-9]/.test(v)) s++;
   return s;
 }
-const PWD_COLORS = ['#e5e9f0', '#d93025', '#e8890c', '#2f7ff5', '#0f9d58'];
+const PWD_COLORS = ['#EFE9E4', '#B22A23', '#C9852E', '#CD3A33', '#4E9A6C'];
 const PWD_TEXTS = ['', '弱', '中', '强', '很强'];
 
 /** 取某角色已配权限动作总数（优先用列表里的 permCount，兜底用已缓存的权限映射） */
@@ -1337,7 +1337,7 @@ async function doExport(): Promise<void> {
                 </td>
                 <td>
                   <code
-                    style="font-size: 11.5px; background: #f4f7fc; padding: 1px 6px; border-radius: 4px"
+                    style="font-size: 11.5px; background: #FBF7F4; padding: 1px 6px; border-radius: 4px"
                   >{{ u.account }}</code>
                 </td>
                 <td class="num">{{ u.phone }}</td>
@@ -1492,7 +1492,7 @@ async function doExport(): Promise<void> {
                   v-for="i in 4"
                   :key="i"
                   style="flex: 1; height: 4px; border-radius: 2px"
-                  :style="{ background: i <= pwScore ? pwColor : '#e5e9f0' }"
+                  :style="{ background: i <= pwScore ? pwColor : '#EFE9E4' }"
                 ></div>
                 <span
                   style="font-size: 11px; margin-left: 5px; white-space: nowrap"
@@ -1588,7 +1588,7 @@ async function doExport(): Promise<void> {
                 border: 1px solid var(--line);
                 border-radius: 9px;
                 padding: 10px 12px;
-                background: #fbfcfe;
+                background: #FBF8F5;
                 min-height: 120px;
               "
             >
@@ -1704,7 +1704,7 @@ async function doExport(): Promise<void> {
           <span class="cnt">{{ r.deptName }} · {{ r.permCount }}项</span>
         </div>
       </div>
-      <div class="mt12" style="border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; background: #fbfcfe">
+      <div class="mt12" style="border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; background: #FBF8F5">
         <div v-if="!assignRoleIds.length" class="empty" style="padding: 18px">
           <div class="ic">🎭</div>
           尚未选择角色，账号将无任何权限
@@ -1760,7 +1760,7 @@ async function doExport(): Promise<void> {
               v-for="i in 4"
               :key="i"
               style="flex: 1; height: 4px; border-radius: 2px"
-              :style="{ background: i <= resetPwScore ? resetPwColor : '#e5e9f0' }"
+              :style="{ background: i <= resetPwScore ? resetPwColor : '#EFE9E4' }"
             ></div>
             <span
               style="font-size: 11px; margin-left: 5px; white-space: nowrap"

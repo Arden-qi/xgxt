@@ -79,14 +79,14 @@ const stageTagType = computed(() => {
 
 .ph-icon {
   font-size: 48px;
-  color: #409eff;
+  color: #CD3A33;
   margin-bottom: 12px;
 }
 
 .ph-title {
   font-size: 20px;
   font-weight: 600;
-  color: #303133;
+  color: #443432;
   margin-bottom: 14px;
 }
 
@@ -100,13 +100,13 @@ const stageTagType = computed(() => {
 
 .ph-desc {
   font-size: 14px;
-  color: #606266;
+  color: #7A6C67;
   line-height: 1.7;
   margin-bottom: 20px;
 }
 
 .ph-hint {
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 6px;
   padding: 14px 18px;
   margin-bottom: 24px;
@@ -116,7 +116,7 @@ const stageTagType = computed(() => {
 .ph-hint p {
   margin: 0 0 6px;
   font-size: 13px;
-  color: #909399;
+  color: #A2938E;
   line-height: 1.6;
 }
 

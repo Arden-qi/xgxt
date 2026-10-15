@@ -859,36 +859,36 @@ onMounted(async () => {
   gap: 8px;
   flex-wrap: wrap;
   padding: 12px 16px;
-  border-bottom: 1px solid #f4f6fa;
+  border-bottom: 1px solid #F6F3EF;
 }
 
 .count-hint {
   font-size: 12px;
-  color: #8a94a6;
+  color: #9C8D88;
 }
 
 /* 「条件变更即筛选」的浅色提示，让用户知道不用点查询 */
 .live-hint {
   font-size: 12px;
-  color: #a0aec0;
+  color: #B3A69F;
   margin-left: 4px;
   user-select: none;
 }
 
 .amount {
   font-weight: 600;
-  color: #1f2937;
+  color: #443432;
 }
 
 .reject-text {
-  color: #b91c1c;
+  color: #B22A23;
 }
 
 /* ---------- 缴费凭证区块 ---------- */
 
 .voucher-block {
   margin-top: 16px;
-  border: 1px solid #ebeef5;
+  border: 1px solid #F1EAE5;
   border-radius: 6px;
   overflow: hidden;
 }
@@ -898,14 +898,14 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background: #fafafa;
-  border-bottom: 1px solid #ebeef5;
+  background: #FAF7F4;
+  border-bottom: 1px solid #F1EAE5;
 }
 
 .voucher-title {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 
 .voucher-body {
@@ -923,21 +923,21 @@ onMounted(async () => {
 .voucher-thumb {
   width: 150px;
   height: 200px;
-  border: 1px solid #ebeef5;
+  border: 1px solid #F1EAE5;
   border-radius: 6px;
   cursor: zoom-in;
-  background: #f5f7fa;
+  background: #F6F3EF;
   transition: border-color 0.2s;
 }
 
 .voucher-thumb:hover {
-  border-color: #409eff;
+  border-color: #CD3A33;
 }
 
 .thumb-tip {
   margin-top: 6px;
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .thumb-loading,
@@ -948,7 +948,7 @@ onMounted(async () => {
   justify-content: center;
   gap: 6px;
   height: 100%;
-  color: #c0c4cc;
+  color: #C4B8B2;
   font-size: 12px;
 }
 
@@ -961,7 +961,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   padding: 8px 0;
-  border-bottom: 1px dashed #f0f2f5;
+  border-bottom: 1px dashed #F1EBE7;
   font-size: 13px;
 }
 
@@ -972,13 +972,13 @@ onMounted(async () => {
 .info-label {
   flex-shrink: 0;
   width: 76px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .info-value {
   flex: 1;
   min-width: 0;
-  color: #303133;
+  color: #443432;
   word-break: break-all;
 }
 

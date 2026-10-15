@@ -733,22 +733,22 @@ onMounted(load);
 
 .stat-label {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .stat-value {
   font-size: 20px;
   font-weight: 700;
   margin-top: 4px;
-  color: #303133;
+  color: #443432;
 }
 
 .stat-value.ok {
-  color: #67c23a;
+  color: #5FA36F;
 }
 
 .stat-value.warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 
 .toolbar-row {
@@ -768,12 +768,12 @@ onMounted(load);
 
 .stu-name {
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 
 .stu-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .std-preview {
@@ -794,7 +794,7 @@ onMounted(load);
   display: flex;
   gap: 20px;
   padding: 10px 12px;
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 6px;
   font-size: 13px;
 }
@@ -806,7 +806,7 @@ onMounted(load);
 .preview img {
   max-width: 220px;
   max-height: 220px;
-  border: 1px solid #dcdfe6;
+  border: 1px solid #DCD2CB;
   border-radius: 6px;
 }
 

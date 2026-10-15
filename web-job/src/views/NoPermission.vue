@@ -44,7 +44,7 @@ function goHome() {
   padding: 60px 0;
 }
 .tips {
-  color: #909399;
+  color: #A2938E;
   font-size: 13px;
   line-height: 1.9;
   margin-bottom: 16px;
@@ -54,7 +54,7 @@ function goHome() {
 }
 .roles {
   margin-top: 8px !important;
-  color: #606266;
+  color: #7A6C67;
 }
 .btns {
   margin-top: 8px;

@@ -326,7 +326,7 @@ function loadSample(): void {
 }
 .gid-exam {
   margin-left: 8px;
-  color: var(--brand, #4f6ef7);
+  color: var(--brand, #CD3A33);
 }
 .gid-actions {
   display: flex;
@@ -345,10 +345,10 @@ function loadSample(): void {
   margin-top: 6px;
 }
 .gid-ok {
-  color: var(--green, #16a34a);
+  color: var(--green, #4E9A6C);
 }
 .gid-err {
-  color: var(--red, #dc2626);
+  color: var(--red, #CD3A33);
   font-size: 12px;
 }
 .mono {
@@ -356,6 +356,6 @@ function loadSample(): void {
   font-size: 12px;
 }
 :deep(.gid-bad-row) {
-  background: #fff5f5;
+  background: #FDF4F2;
 }
 </style>

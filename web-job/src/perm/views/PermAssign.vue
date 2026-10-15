@@ -675,7 +675,7 @@ async function openRoleUsers(): Promise<void> {
                   :key="m.key"
                   style="border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; overflow: hidden"
                 >
-                  <div style="padding: 8px 11px; background: #f8fafd; display: flex; align-items: center; gap: 8px">
+                  <div style="padding: 8px 11px; background: #FAF7F4; display: flex; align-items: center; gap: 8px">
                     <span style="font-size: 13px">{{ m.icon }}</span>
                     <b style="font-size: 12.5px">{{ m.name }}</b>
                     <span class="tag" :class="m.tagClass">{{ m.hit }}/{{ m.total }}</span>

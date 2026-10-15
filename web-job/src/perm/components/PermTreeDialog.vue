@@ -107,7 +107,7 @@ function confirm() {
   justify-content: space-between;
   gap: 12px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #eef1f5;
+  border-bottom: 1px solid #F4EEE9;
   margin-bottom: 10px;
 }
 
@@ -121,8 +121,8 @@ function confirm() {
 .sub-name {
   font-size: 13px;
   font-weight: 600;
-  color: #3a7afe;
-  background: #eef4ff;
+  color: #CD3A33;
+  background: #FBEFED;
   border-radius: 6px;
   padding: 2px 8px;
   white-space: nowrap;
@@ -130,7 +130,7 @@ function confirm() {
 
 .sub-tip {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .search {
@@ -153,11 +153,11 @@ function confirm() {
 
 .stat {
   font-size: 13px;
-  color: #606266;
+  color: #7A6C67;
 }
 
 .stat b {
-  color: #3a7afe;
+  color: #CD3A33;
   font-size: 15px;
   margin: 0 2px;
 }

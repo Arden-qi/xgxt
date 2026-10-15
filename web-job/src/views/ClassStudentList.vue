@@ -571,16 +571,16 @@ onMounted(() => {
 .cls-title {
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 
 .head-stat {
   font-size: 14px;
-  color: #606266;
+  color: #7A6C67;
 }
 
 .head-stat b {
-  color: #409eff;
+  color: #CD3A33;
   font-size: 16px;
 }
 
@@ -613,21 +613,21 @@ onMounted(() => {
 }
 
 .repeat-warn {
-  color: #f56c6c;
+  color: #CD3A33;
   font-weight: 600;
 }
 
 .add-tip {
   margin-top: 12px;
   font-size: 13px;
-  color: #606266;
+  color: #7A6C67;
 }
 
 .add-tip b {
-  color: #409eff;
+  color: #CD3A33;
 }
 
 .tip-warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 </style>

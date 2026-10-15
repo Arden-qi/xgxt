@@ -104,7 +104,7 @@ onMounted(loadData);
 .page-title {
   font-size: 18px;
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 .kpi-row {
   display: flex;
@@ -118,24 +118,24 @@ onMounted(loadData);
   text-align: center;
 }
 .kpi-label {
-  color: #909399;
+  color: #A2938E;
   font-size: 14px;
   margin-bottom: 10px;
 }
 .kpi-value {
   font-size: 30px;
   font-weight: 600;
-  color: #409eff;
+  color: #CD3A33;
 }
 .kpi-value.danger {
-  color: #f56c6c;
+  color: #CD3A33;
 }
 .kpi-value.warning {
-  color: #e6a23c;
+  color: #C9852E;
 }
 .kpi-sub {
   margin-top: 8px;
-  color: #c0c4cc;
+  color: #C4B8B2;
   font-size: 12px;
 }
 .todo-card {
@@ -151,17 +151,17 @@ onMounted(loadData);
   align-items: center;
   gap: 10px;
   padding: 12px 18px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid #E2D7D1;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
 }
 .todo-item:hover {
-  border-color: #409eff;
-  background: #ecf5ff;
+  border-color: #CD3A33;
+  background: #FDF4F2;
 }
 .todo-title {
   font-size: 14px;
-  color: #303133;
+  color: #443432;
 }
 </style>

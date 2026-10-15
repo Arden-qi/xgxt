@@ -72,7 +72,7 @@
         </el-table-column>
         <el-table-column label="" width="40" align="center">
           <template #default>
-            <el-icon color="#909399"><Right /></el-icon>
+            <el-icon color="#A2938E"><Right /></el-icon>
           </template>
         </el-table-column>
         <el-table-column label="新负责人" width="200" align="center">
@@ -653,15 +653,15 @@ onMounted(() => {
 }
 .toolbar-tip {
   margin-left: 12px;
-  color: #909399;
+  color: #A2938E;
   font-size: 12px;
 }
 .sub-text {
-  color: #909399;
+  color: #A2938E;
   font-size: 12px;
 }
 .hl {
-  color: #409eff;
+  color: #CD3A33;
   font-weight: 500;
 }
 .pager {
@@ -671,13 +671,13 @@ onMounted(() => {
 }
 .preview-box {
   padding: 12px;
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 6px;
 }
 .preview-title {
   font-size: 13px;
   font-weight: 500;
-  color: #606266;
+  color: #7A6C67;
   margin-bottom: 8px;
 }
 </style>

@@ -412,21 +412,21 @@ onMounted(loadData);
 
 .range-split {
   margin: 0 6px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .strong {
   font-weight: 600;
-  color: #409eff;
+  color: #CD3A33;
 }
 
 .muted {
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 .detail-text {
   white-space: pre-wrap;
   line-height: 1.7;
-  color: #606266;
+  color: #7A6C67;
 }
 </style>

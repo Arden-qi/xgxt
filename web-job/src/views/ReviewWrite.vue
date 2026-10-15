@@ -347,7 +347,7 @@ async function askConfirmEmploy(studentId: string, studentName: string): Promise
   try {
     await ElMessageBox.confirm(
       `复盘结论为「已签约入职」。<br/>要把 <b>${studentName}</b> 的状态从「待就业」改为「已就业」吗？<br/><br/>` +
-        `<span style="color:#8f959e">确认后会同时写一条就业日志（入职记录）。</span>`,
+        `<span style="color:#9C8D88">确认后会同时写一条就业日志（入职记录）。</span>`,
       '确认就业',
       {
         type: 'warning',
@@ -732,11 +732,11 @@ onMounted(loadData);
 
 .range-split {
   margin: 0 6px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .muted {
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 .audio-box {
@@ -747,7 +747,7 @@ onMounted(loadData);
 
 .tip {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .audio-file {
@@ -759,7 +759,7 @@ onMounted(loadData);
 
 .audio-file-name {
   font-size: 13px;
-  color: #606266;
+  color: #7A6C67;
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -769,13 +769,13 @@ onMounted(loadData);
 .audio-name {
   margin-top: 6px;
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .detail-text {
   white-space: pre-wrap;
   line-height: 1.7;
-  color: #606266;
+  color: #7A6C67;
 }
 
 .mt8 {
@@ -788,10 +788,10 @@ onMounted(loadData);
   margin-top: 2px;
   font-size: 11.5px;
   line-height: 1.5;
-  color: #a8abb2;
+  color: #B3A69F;
 }
 /* 被规则锁住时的提示（面试结论 = 已发 offer） */
 .tip-lock {
-  color: #e6a23c;
+  color: #C9852E;
 }
 </style>

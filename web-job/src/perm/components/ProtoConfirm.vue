@@ -112,7 +112,7 @@ function cancel(): void {
             style="text-align: center; font-size: 12.5px; color: var(--tx2); line-height: 1.7"
             v-html="desc"
           ></div>
-          <div v-if="detail && detail.length" style="background: #f8fafd; border-radius: 8px; padding: 11px 13px; margin-top: 14px">
+          <div v-if="detail && detail.length" style="background: #FAF7F4; border-radius: 8px; padding: 11px 13px; margin-top: 14px">
             <div
               v-for="(d, i) in detail"
               :key="i"

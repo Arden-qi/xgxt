@@ -796,10 +796,10 @@ interface StatsCard {
 }
 
 const totalStatsCards = computed<StatsCard[]>(() => [
-  { key: 'all', label: '缴费总记录', value: totalStats.total, icon: '💰', bg: '#e6f0ff', color: '#4668F2' },
-  { key: 'normal', label: '正常', value: totalStats.normal, icon: '✓', bg: '#e8f8e8', color: '#52c41a' },
-  { key: 'frozen', label: '已冻结', value: totalStats.frozen, icon: '❄', bg: '#f0f0f0', color: '#888888' },
-  { key: 'expiring', label: '临期记录', value: totalStats.expiring, icon: '⏰', bg: '#fff3e0', color: '#fa8c16' },
+  { key: 'all', label: '缴费总记录', value: totalStats.total, icon: '💰', bg: '#FDF4F2', color: '#CD3A33' },
+  { key: 'normal', label: '正常', value: totalStats.normal, icon: '✓', bg: '#EBF5EF', color: '#5FA36F' },
+  { key: 'frozen', label: '已冻结', value: totalStats.frozen, icon: '❄', bg: '#F1EBE7', color: '#A2938E' },
+  { key: 'expiring', label: '临期记录', value: totalStats.expiring, icon: '⏰', bg: '#FBF3E5', color: '#C9852E' },
 ]);
 
 /** 当前高亮哪张卡：和状态筛选保持同步 */
@@ -899,7 +899,7 @@ function buildBatchConfirmText(frozen: boolean): string {
 
   return locked > 0
     ? `确认解冻已勾选的 ${n} 条${feeTab.value}记录？<br/>
-       <span style="color:#e6a23c">其中 ${locked} 条属于学生休学/退学的系统冻结，不会被解冻</span>`
+       <span style="color:#C9852E">其中 ${locked} 条属于学生休学/退学的系统冻结，不会被解冻</span>`
     : `确认解冻已勾选的 ${n} 条${feeTab.value}记录？`;
 }
 
@@ -980,11 +980,11 @@ const expStats = reactive<PaymentExpiringStats>({
 });
 
 const expStatsCards = computed(() => [
-  { label: '临期总记录', value: expStats.total, icon: '📋', bg: '#e6f0ff', color: '#4668F2' },
-  { label: '已缴', value: expStats.paid, icon: '✓', bg: '#e8f8e8', color: '#52c41a' },
-  { label: '未缴', value: expStats.unpaid, icon: '⏳', bg: '#f0f0f0', color: '#888888' },
-  { label: '凭证已传', value: expStats.certUploaded, icon: '📎', bg: '#e6f7ff', color: '#1890ff' },
-  { label: '凭证被打回', value: expStats.certRejected, icon: '⚠', bg: '#ffe8e8', color: '#ff4d4f' },
+  { label: '临期总记录', value: expStats.total, icon: '📋', bg: '#FDF4F2', color: '#CD3A33' },
+  { label: '已缴', value: expStats.paid, icon: '✓', bg: '#EBF5EF', color: '#5FA36F' },
+  { label: '未缴', value: expStats.unpaid, icon: '⏳', bg: '#F1EBE7', color: '#A2938E' },
+  { label: '凭证已传', value: expStats.certUploaded, icon: '📎', bg: '#FDF4F2', color: '#CD3A33' },
+  { label: '凭证被打回', value: expStats.certRejected, icon: '⚠', bg: '#F9E4E1', color: '#CD3A33' },
 ]);
 
 /**
@@ -1451,7 +1451,7 @@ onMounted(() => {
   height: 18px;
   line-height: 18px;
   border-radius: 9px;
-  background: #f0f2f5;
+  background: #F1EBE7;
   color: var(--el-text-color-secondary);
   font-size: 12px;
   text-align: center;
@@ -1463,7 +1463,7 @@ onMounted(() => {
 }
 
 .empty-text {
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 /* === 统计卡片 === */
@@ -1586,7 +1586,7 @@ onMounted(() => {
 
 /* 备注列配色：≤7 天红色预警，其余橙色 */
 .urgent-text {
-  color: #ff4d4f;
+  color: #CD3A33;
   font-weight: 500;
 }
 
@@ -1598,11 +1598,11 @@ onMounted(() => {
 }
 
 .warn-text {
-  color: #fa8c16;
+  color: #C9852E;
 }
 
 .done-text {
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 /* 状态列上的「系统」标记 */
@@ -1621,14 +1621,14 @@ onMounted(() => {
 
 /* 系统冻结记录的解冻入口：置灰不可点，hover 由 tooltip 说明原因 */
 .btn-disabled {
-  color: #c0c4cc;
+  color: #C4B8B2;
   cursor: not-allowed;
   font-size: 14px;
 }
 
 .upload-info {
   padding: 10px 12px;
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 4px;
   font-size: 14px;
   line-height: 1.8;

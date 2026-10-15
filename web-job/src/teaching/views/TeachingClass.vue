@@ -716,7 +716,7 @@ onMounted(() => load(1));
   margin-bottom: 10px;
 }
 .muted {
-  color: #909399;
+  color: #A2938E;
   font-weight: normal;
 }
 .tcv-cards {
@@ -727,14 +727,14 @@ onMounted(() => load(1));
 }
 .tcv-card {
   background: #fff;
-  border: 1px solid #ebeef5;
+  border: 1px solid #F1EAE5;
   border-radius: 6px;
   padding: 10px 14px;
   min-width: 190px;
 }
 .tcv-card__k {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 .tcv-card__v {
   font-size: 22px;
@@ -743,7 +743,7 @@ onMounted(() => load(1));
 }
 .tcv-card__x {
   font-size: 12px;
-  color: #606266;
+  color: #7A6C67;
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -758,16 +758,16 @@ onMounted(() => load(1));
   justify-content: flex-end;
 }
 .link {
-  color: #409eff;
+  color: #CD3A33;
   cursor: pointer;
 }
 .ok {
-  color: #67c23a;
+  color: #5FA36F;
 }
 .warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 .danger {
-  color: #f56c6c;
+  color: #CD3A33;
 }
 </style>

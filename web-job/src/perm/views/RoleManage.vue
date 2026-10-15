@@ -1407,7 +1407,7 @@ async function doExport(): Promise<void> {
                   <span v-if="r.isSys" class="tag n" style="margin-left: 4px">预置</span>
                 </td>
                 <td>
-                  <code style="font-size: 11.5px; background: #f4f7fc; padding: 1px 6px; border-radius: 4px">{{ r.roleCode }}</code>
+                  <code style="font-size: 11.5px; background: #FBF7F4; padding: 1px 6px; border-radius: 4px">{{ r.roleCode }}</code>
                 </td>
                 <td>{{ r.deptName || '—' }}</td>
                 <td><span class="tag" :class="typeTag(r.roleType)">{{ r.roleType }}</span></td>
@@ -1477,7 +1477,7 @@ async function doExport(): Promise<void> {
         <div class="f">
           <label>角色编码</label>
           <div>
-            <code style="background: #f4f7fc; padding: 2px 7px; border-radius: 4px">{{ detail?.roleCode || '—' }}</code>
+            <code style="background: #FBF7F4; padding: 2px 7px; border-radius: 4px">{{ detail?.roleCode || '—' }}</code>
           </div>
         </div>
         <div class="f">
@@ -1746,7 +1746,7 @@ async function doExport(): Promise<void> {
         <button class="btn sm" type="button" @click="applyRoleTpl('all')">🔓 全部权限</button>
         <button class="btn sm" type="button" @click="applyRoleTpl('none')">🔒 清空</button>
       </div>
-      <div style="border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; background: #fbfcfe">
+      <div style="border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; background: #FBF8F5">
         <div class="flex" style="justify-content: space-between; margin-bottom: 8px">
           <div style="font-size: 12.5px">
             当前勾选：<b style="color: var(--brand)">{{ draftActionCount }}</b> 项动作 ·

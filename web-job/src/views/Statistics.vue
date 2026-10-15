@@ -112,7 +112,7 @@ const DONUT_C = 2 * Math.PI * DONUT_R;
 
 const donutTotal = computed(() => statusData.value.reduce((sum, i) => sum + i.value, 0));
 
-const DONUT_COLORS = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#909399'];
+const DONUT_COLORS = ['#CD3A33', '#5FA36F', '#C9852E', '#CD3A33', '#A2938E'];
 
 /** 每个扇区的起止长度（stroke-dasharray / dashoffset 用） */
 const donutSegments = computed(() => {
@@ -203,7 +203,7 @@ function maxOf(list: any[]) {
 const classMax = computed(() => maxOf(classTop.value));
 
 function progressColor(p: number) {
-  return p >= 100 ? '#67c23a' : p >= 60 ? '#409eff' : '#e6a23c';
+  return p >= 100 ? '#5FA36F' : p >= 60 ? '#CD3A33' : '#C9852E';
 }
 
 onMounted(loadAll);
@@ -364,29 +364,29 @@ onMounted(loadAll);
             :y1="g.y"
             :x2="CHART_W - CHART_PAD_R"
             :y2="g.y"
-            stroke="#ebeef5"
+            stroke="#F1EAE5"
             stroke-width="1"
           />
-          <text :x="CHART_PAD_L - 8" :y="g.y + 4" text-anchor="end" font-size="11" fill="#909399">
+          <text :x="CHART_PAD_L - 8" :y="g.y + 4" text-anchor="end" font-size="11" fill="#A2938E">
             {{ g.label }}
           </text>
         </g>
 
         <!-- 柱状：投递简历数 -->
         <g v-for="b in bars" :key="b.month">
-          <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" rx="3" fill="#409eff" />
-          <text :x="b.labelX" :y="b.y - 6" text-anchor="middle" font-size="11" fill="#606266">
+          <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" rx="3" fill="#CD3A33" />
+          <text :x="b.labelX" :y="b.y - 6" text-anchor="middle" font-size="11" fill="#7A6C67">
             {{ b.resume }}
           </text>
-          <text :x="b.labelX" :y="CHART_H - 12" text-anchor="middle" font-size="11" fill="#909399">
+          <text :x="b.labelX" :y="CHART_H - 12" text-anchor="middle" font-size="11" fill="#A2938E">
             {{ b.month }}
           </text>
         </g>
 
         <!-- 折线：新增就业人数 -->
-        <polyline :points="linePoints" fill="none" stroke="#67c23a" stroke-width="2" />
+        <polyline :points="linePoints" fill="none" stroke="#5FA36F" stroke-width="2" />
         <g v-for="d in lineDots" :key="d.x">
-          <circle :cx="d.x" :cy="d.y" r="4" fill="#fff" stroke="#67c23a" stroke-width="2" />
+          <circle :cx="d.x" :cy="d.y" r="4" fill="#fff" stroke="#5FA36F" stroke-width="2" />
         </g>
       </svg>
       <el-empty v-else description="暂无趋势数据" :image-size="80" />
@@ -401,7 +401,7 @@ onMounted(loadAll);
           </template>
           <div v-if="donutSegments.length" class="donut-wrap">
             <svg viewBox="0 0 200 200" class="donut">
-              <circle cx="100" cy="100" :r="DONUT_R" fill="none" stroke="#f5f7fa" :stroke-width="DONUT_STROKE" />
+              <circle cx="100" cy="100" :r="DONUT_R" fill="none" stroke="#F6F3EF" :stroke-width="DONUT_STROKE" />
               <g transform="rotate(-90 100 100)">
                 <circle
                   v-for="s in donutSegments"
@@ -416,8 +416,8 @@ onMounted(loadAll);
                   :stroke-dashoffset="s.offset"
                 />
               </g>
-              <text x="100" y="95" text-anchor="middle" font-size="24" fill="#303133">{{ donutTotal }}</text>
-              <text x="100" y="115" text-anchor="middle" font-size="12" fill="#909399">学生总数</text>
+              <text x="100" y="95" text-anchor="middle" font-size="24" fill="#443432">{{ donutTotal }}</text>
+              <text x="100" y="115" text-anchor="middle" font-size="12" fill="#A2938E">学生总数</text>
             </svg>
             <div class="donut-legend">
               <div v-for="s in donutSegments" :key="s.name" class="donut-legend-item">
@@ -484,36 +484,36 @@ onMounted(loadAll);
 
 .metric-card {
   background: #fff;
-  border: 1px solid #ebeef5;
+  border: 1px solid #F1EAE5;
   border-radius: 8px;
   padding: 14px 16px;
   height: 100%;
 }
 
 .kpi-card {
-  border-color: #409eff;
+  border-color: #CD3A33;
 }
 
 .metric-label {
   font-size: 13px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .metric-value {
   font-size: 26px;
   font-weight: 600;
-  color: #303133;
+  color: #443432;
   margin: 6px 0;
   line-height: 1.2;
 }
 
 .kpi-value {
-  color: #409eff;
+  color: #CD3A33;
 }
 
 .metric-sub {
   font-size: 12px;
-  color: #a8abb2;
+  color: #B3A69F;
 }
 
 /* 「获得 offer」卡片的「去填写」入口与口径说明（2026-10-02 新增） */
@@ -527,14 +527,14 @@ onMounted(loadAll);
   margin-top: 4px;
   font-size: 11px;
   line-height: 1.5;
-  color: #b6bac2;
+  color: #C4B8B2;
 }
 
 /* KPI 达成情况里的小字说明 */
 .kpi-note {
   margin-top: 6px;
   font-size: 11.5px;
-  color: #a8abb2;
+  color: #B3A69F;
 }
 
 .metric-bar {
@@ -561,7 +561,7 @@ onMounted(loadAll);
   gap: 20px;
   margin-bottom: 8px;
   font-size: 12px;
-  color: #606266;
+  color: #7A6C67;
 }
 
 .legend-item {
@@ -574,14 +574,14 @@ onMounted(loadAll);
   width: 12px;
   height: 12px;
   border-radius: 2px;
-  background: #409eff;
+  background: #CD3A33;
   display: inline-block;
 }
 
 .legend-line {
   width: 16px;
   height: 3px;
-  background: #67c23a;
+  background: #5FA36F;
   display: inline-block;
 }
 
@@ -598,12 +598,12 @@ onMounted(loadAll);
   display: flex;
   justify-content: space-between;
   font-size: 13px;
-  color: #606266;
+  color: #7A6C67;
   margin-bottom: 8px;
 }
 
 .kpi-num {
-  color: #303133;
+  color: #443432;
 }
 
 .donut-wrap {
@@ -638,17 +638,17 @@ onMounted(loadAll);
 }
 
 .dl-name {
-  color: #606266;
+  color: #7A6C67;
   min-width: 60px;
 }
 
 .dl-value {
-  color: #303133;
+  color: #443432;
   font-weight: 600;
 }
 
 .dl-percent {
-  color: #a8abb2;
+  color: #B3A69F;
   margin-left: auto;
 }
 
@@ -666,34 +666,34 @@ onMounted(loadAll);
 .bar-name {
   width: 90px;
   font-size: 13px;
-  color: #606266;
+  color: #7A6C67;
   flex-shrink: 0;
 }
 
 .bar-track {
   flex: 1;
   height: 12px;
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 6px;
   overflow: hidden;
 }
 
 .bar-fill {
   height: 100%;
-  background: #409eff;
+  background: #CD3A33;
   border-radius: 6px;
   transition: width 0.3s;
 }
 
 .bar-fill.green {
-  background: #67c23a;
+  background: #5FA36F;
 }
 
 .bar-value {
   width: 60px;
   text-align: right;
   font-size: 13px;
-  color: #303133;
+  color: #443432;
   flex-shrink: 0;
 }
 </style>

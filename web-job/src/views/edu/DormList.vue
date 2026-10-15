@@ -902,10 +902,10 @@ const roomTotal = ref(0);
 
 const listStats = reactive({ totalDorms: 0, maleDorms: 0, femaleDorms: 0, vacantBeds: 0 });
 const listStatsCards = computed(() => [
-  { label: '宿舍总数', value: listStats.totalDorms, icon: '🏠', bg: '#e6f0ff', color: '#409eff' },
-  { label: '男寝', value: listStats.maleDorms, icon: '♂', bg: '#e8f3ff', color: '#409eff' },
-  { label: '女寝', value: listStats.femaleDorms, icon: '♀', bg: '#fdeff5', color: '#e4699a' },
-  { label: '空余床位', value: listStats.vacantBeds, icon: '🛏', bg: '#e8f8e8', color: '#67c23a' },
+  { label: '宿舍总数', value: listStats.totalDorms, icon: '🏠', bg: '#FDF4F2', color: '#CD3A33' },
+  { label: '男寝', value: listStats.maleDorms, icon: '♂', bg: '#FDF4F2', color: '#CD3A33' },
+  { label: '女寝', value: listStats.femaleDorms, icon: '♀', bg: '#F7E9EF', color: '#C2668C' },
+  { label: '空余床位', value: listStats.vacantBeds, icon: '🛏', bg: '#EBF5EF', color: '#5FA36F' },
 ]);
 
 const roomQuery = reactive({
@@ -1350,10 +1350,10 @@ const approvalStats = reactive({
   approvedQuit: 0,
 });
 const approvalStatsCards = computed(() => [
-  { label: '换宿待审核', value: approvalStats.pendingChange, icon: '⏳', bg: '#fff7e6', color: '#e6a23c' },
-  { label: '退宿待审核', value: approvalStats.pendingQuit, icon: '⏳', bg: '#fff7e6', color: '#e6a23c' },
-  { label: '换宿已同意', value: approvalStats.approvedChange, icon: '✓', bg: '#e8f8e8', color: '#67c23a' },
-  { label: '退宿已同意', value: approvalStats.approvedQuit, icon: '✓', bg: '#e8f8e8', color: '#67c23a' },
+  { label: '换宿待审核', value: approvalStats.pendingChange, icon: '⏳', bg: '#FBF3E5', color: '#C9852E' },
+  { label: '退宿待审核', value: approvalStats.pendingQuit, icon: '⏳', bg: '#FBF3E5', color: '#C9852E' },
+  { label: '换宿已同意', value: approvalStats.approvedChange, icon: '✓', bg: '#EBF5EF', color: '#5FA36F' },
+  { label: '退宿已同意', value: approvalStats.approvedQuit, icon: '✓', bg: '#EBF5EF', color: '#5FA36F' },
 ]);
 
 const applyQuery = reactive({
@@ -1616,10 +1616,10 @@ const assignStats = ref<DormAssignStats>({
 const assignBuildingOptions = computed(() => allBuildings.value);
 
 const assignStatsCards = computed(() => [
-  { label: '已分派班级', value: assignStats.value.assignedClasses, icon: '班', bg: '#ecf5ff', color: '#409eff' },
-  { label: '已分派宿舍', value: assignStats.value.assignedRooms, icon: '舍', bg: '#f0f9eb', color: '#67c23a' },
-  { label: '未分派宿舍', value: assignStats.value.unassignedRooms, icon: '闲', bg: '#fdf6ec', color: '#e6a23c' },
-  { label: '已分派床位', value: assignStats.value.capacity, icon: '床', bg: '#fef0f0', color: '#f56c6c' },
+  { label: '已分派班级', value: assignStats.value.assignedClasses, icon: '班', bg: '#FDF4F2', color: '#CD3A33' },
+  { label: '已分派宿舍', value: assignStats.value.assignedRooms, icon: '舍', bg: '#EBF5EF', color: '#5FA36F' },
+  { label: '未分派宿舍', value: assignStats.value.unassignedRooms, icon: '闲', bg: '#FBF3E5', color: '#C9852E' },
+  { label: '已分派床位', value: assignStats.value.capacity, icon: '床', bg: '#FDF4F2', color: '#CD3A33' },
 ]);
 
 async function loadAssign() {
@@ -1908,22 +1908,22 @@ onMounted(() => {
    副标题（学号 / 性别 / 床位）、宿舍变动的 旧→新 箭头配色 —— 与就业侧保持一致 */
 .sub-text {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 2px;
 }
 
 .dorm-from {
-  color: #909399;
+  color: #A2938E;
 }
 
 .dorm-to {
-  color: #409eff;
+  color: #CD3A33;
   font-weight: 600;
 }
 
 .arrow {
   margin: 0 6px;
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 .toolbar {
@@ -1936,7 +1936,7 @@ onMounted(() => {
 
 /* 空床位：灰底 + 斜体 + 虚线上边框（对应原型 emptyStyle） */
 .table-card :deep(.empty-bed-cell) {
-  background: #f5f5f7;
+  background: #F6F3EF;
   color: #aaa;
   font-style: italic;
 }

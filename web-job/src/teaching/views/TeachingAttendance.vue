@@ -529,22 +529,22 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
-  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border: 1px solid var(--el-border-color-lighter, #F1EAE5);
   border-radius: 8px;
   background: var(--el-fill-color-blank, #fff);
 }
 .ta-bar-title {
   font-size: 15px;
   font-weight: 500;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--el-text-color-primary, #443432);
 }
 .ta-bar-tag {
   font-size: 12px;
   line-height: 18px;
   padding: 0 6px;
   border-radius: 4px;
-  color: #185fa5;
-  background: #e6f1fb;
+  color: #B22A23;
+  background: #F9E4E1;
 }
 .ta-stage {
   margin-left: auto;
@@ -556,7 +556,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
   gap: 10px;
 }
 .ta-card {
-  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border: 1px solid var(--el-border-color-lighter, #F1EAE5);
   border-radius: 8px;
   padding: 10px 14px;
   background: var(--el-fill-color-blank, #fff);
@@ -569,11 +569,11 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 .ta-card-stage {
   font-size: 14px;
   font-weight: 500;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--el-text-color-primary, #443432);
 }
 .ta-card-sub {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
 }
 .ta-card-b {
   display: flex;
@@ -588,11 +588,11 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 }
 .ta-card-label {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
 }
 .ta-card-f {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
 }
 
 .ta-filter {
@@ -606,7 +606,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 }
 
 .ta-bad {
-  color: #a32d2d;
+  color: #8C201B;
   font-weight: 500;
 }
 .ta-pager {
@@ -622,7 +622,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 }
 .ta-board-tip {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
   margin: 6px 0;
 }
 </style>

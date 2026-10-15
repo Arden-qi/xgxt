@@ -243,12 +243,12 @@ onMounted(load);
 
 .head-title {
   font-weight: 700;
-  color: #303133;
+  color: #443432;
 }
 
 .head-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 2px;
 }
 
@@ -260,13 +260,13 @@ onMounted(load);
 
 .rate-label {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .rate-value {
   font-size: 26px;
   font-weight: 700;
-  color: #f56c6c;
+  color: #CD3A33;
 }
 
 .stats {
@@ -278,29 +278,29 @@ onMounted(load);
 
 .stat {
   text-align: center;
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 8px;
   padding: 10px;
 }
 
 .stat-label {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .stat-value {
   font-size: 18px;
   font-weight: 700;
   margin-top: 4px;
-  color: #303133;
+  color: #443432;
 }
 
 .stat-value.danger {
-  color: #f56c6c;
+  color: #CD3A33;
 }
 
 .stat-value.warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 
 .toolbar-row {
@@ -320,12 +320,12 @@ onMounted(load);
 
 .stu-name {
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 
 .stu-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 2px;
 }
 

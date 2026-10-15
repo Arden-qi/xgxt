@@ -317,7 +317,7 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
             width: 54px;
             height: 54px;
             border-radius: 13px;
-            background: linear-gradient(135deg, #60a5fa, #2563eb);
+            background: linear-gradient(135deg, #E6A99C, #CD3A33);
             color: #fff;
             display: grid;
             place-items: center;
@@ -359,7 +359,7 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
         <div class="f">
           <label>登录账号</label>
           <div>
-            <code style="background: #f4f7fc; padding: 2px 7px; border-radius: 4px">{{ detail.account }}</code>
+            <code style="background: #FBF7F4; padding: 2px 7px; border-radius: 4px">{{ detail.account }}</code>
           </div>
         </div>
         <div class="f"><label>手机号</label><div class="num">{{ detail.phone }}</div></div>

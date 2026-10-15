@@ -151,7 +151,7 @@ async function submit(): Promise<void> {
 .emp-alert-tip {
   font-size: 12.5px;
   line-height: 1.6;
-  color: #8f959e;
+  color: #9C8D88;
 }
 .emp-form {
   margin-top: 4px;
@@ -159,6 +159,6 @@ async function submit(): Promise<void> {
 .emp-unit {
   margin-left: 8px;
   font-size: 13px;
-  color: #8f959e;
+  color: #9C8D88;
 }
 </style>

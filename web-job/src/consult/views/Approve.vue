@@ -177,10 +177,10 @@ onMounted(load);
 }
 
 .ok {
-  color: #67c23a;
+  color: #5FA36F;
 }
 
 .warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 </style>

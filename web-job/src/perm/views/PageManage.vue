@@ -651,7 +651,7 @@ const currentBoardName = computed(
                     {{ isTreeOpen(b.moduleKey) ? '▾' : '▸' }}
                   </span>
                   <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-                    <b v-if="boardCards.find((c) => c.moduleKey === b.moduleKey)?.dirty" style="color: #c2410c">●</b>
+                    <b v-if="boardCards.find((c) => c.moduleKey === b.moduleKey)?.dirty" style="color: #A66A1F">●</b>
                     {{ b.moduleIcon }} {{ b.moduleName }}
                   </span>
                   <span class="cnt">
@@ -673,7 +673,7 @@ const currentBoardName = computed(
                       style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
                       :title="`${r.roleName}（${r.roleCode}）· ${r.deptName}`"
                     >
-                      <b v-if="roleDirty(r.roleId)" style="color: #c2410c">●</b>
+                      <b v-if="roleDirty(r.roleId)" style="color: #A66A1F">●</b>
                       {{ r.roleName }}
                       <span v-if="r.configured" class="tag p" style="margin-left: 3px">已配置</span>
                     </span>
@@ -700,7 +700,7 @@ const currentBoardName = computed(
                   >
                     <span class="rl-avatar">{{ r.roleName.slice(0, 1) }}</span>
                     <span>
-                      <b v-if="roleDirty(r.roleId)" style="color: #c2410c">●</b>
+                      <b v-if="roleDirty(r.roleId)" style="color: #A66A1F">●</b>
                       {{ r.roleName }}
                     </span>
                     <span class="cnt">{{ r.enabledCount }}/{{ r.total }}</span>
@@ -748,7 +748,7 @@ const currentBoardName = computed(
                 </template>
               </div>
               <div style="margin-left: auto; text-align: right; flex: none">
-                <div style="font-size: 19px; font-weight: 700; color: #2f5bff">
+                <div style="font-size: 19px; font-weight: 700; color: #CD3A33">
                   {{ globalStat.enabled }}/{{ globalStat.total }}
                 </div>
                 <div class="desc">已启用页面</div>
@@ -909,7 +909,7 @@ const currentBoardName = computed(
       v-model="roleResetOpen"
       title="恢复默认页面可见性"
       icon="↩"
-      icon-bg="#FFF7ED"
+      icon-bg="#FBF3E5"
       :msg="`确认清除「${activeRole?.roleName || ''}」的全部页面可见性配置？`"
       desc="清除后该角色回到系统既有口径（就业/教务/班级/初高按角色页面权限、咨询财务按功能点换算、权限管理只给系统管理员与校长）。"
       :detail="[
@@ -929,7 +929,7 @@ const currentBoardName = computed(
       v-model="resetOpen"
       title="全部恢复启用"
       icon="↩"
-      icon-bg="#FFF7ED"
+      icon-bg="#FBF3E5"
       msg="确认把所有板块的页面恢复为启用？"
       desc="用于演示结束后一键还原 —— 所有板块的页面都会重新出现在菜单里。"
       :detail="[
@@ -969,13 +969,13 @@ const currentBoardName = computed(
   gap: 10px;
   margin-bottom: 12px;
   padding-bottom: 11px;
-  border-bottom: 1px solid #eef2f7;
+  border-bottom: 1px solid #F1EAE5;
 }
 .pg-ic {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: #eff6ff;
+  background: #FDF4F2;
   display: grid;
   place-items: center;
   font-size: 17px;
@@ -990,7 +990,7 @@ const currentBoardName = computed(
   width: 12px;
   flex: none;
   font-size: 10px;
-  color: #94a3b8;
+  color: #B3A69F;
   cursor: pointer;
   user-select: none;
 }
@@ -1010,27 +1010,27 @@ const currentBoardName = computed(
   height: 18px;
   flex: none;
   border-radius: 50%;
-  background: #eef2f7;
-  color: #475569;
+  background: #F1EAE5;
+  color: #6B5C58;
   display: grid;
   place-items: center;
   font-size: 10px;
   font-weight: 600;
 }
 .rl-sub.on .rl-avatar {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: #F9E4E1;
+  color: #B22A23;
 }
 .rl-none {
   margin-left: 14px;
   padding: 5px 8px 7px;
   font-size: 11.5px;
-  color: #9aa3b2;
+  color: #B3A69F;
 }
 
 /* ---- 板块卡片（对应「角色-权限分配」里每个板块的一组） ---- */
 .pg-board {
-  border: 1px solid #e9edf3;
+  border: 1px solid #EFE7E2;
   border-radius: 9px;
   margin-bottom: 10px;
   overflow: hidden;
@@ -1038,8 +1038,8 @@ const currentBoardName = computed(
   transition: 0.15s;
 }
 .pg-board.on {
-  border-color: #bfd3f9;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.07);
+  border-color: #F2C8C3;
+  box-shadow: 0 0 0 3px rgba(205, 58, 51, 0.07);
 }
 .pg-bh {
   display: flex;
@@ -1047,8 +1047,8 @@ const currentBoardName = computed(
   gap: 7px;
   flex-wrap: wrap;
   padding: 8px 11px;
-  background: #f8fafd;
-  border-bottom: 1px solid #eef2f7;
+  background: #FAF7F4;
+  border-bottom: 1px solid #F1EAE5;
 }
 .pg-board.dirty .pg-bh {
   background: #fffaf5;
@@ -1067,9 +1067,9 @@ const currentBoardName = computed(
 .pg-note {
   padding: 7px 11px;
   font-size: 11.5px;
-  color: #92400e;
-  background: #fffbeb;
-  border-bottom: 1px solid #fde68a;
+  color: #8A5A1E;
+  background: #FBF6E9;
+  border-bottom: 1px solid #F0DCA8;
 }
 .pg-board .pg-list {
   padding: 9px 11px;
@@ -1084,37 +1084,37 @@ const currentBoardName = computed(
   align-items: flex-start;
   gap: 10px;
   padding: 9px 11px;
-  border: 1px solid #e9edf3;
+  border: 1px solid #EFE7E2;
   border-radius: 9px;
   background: #fff;
   cursor: pointer;
   transition: 0.15s;
 }
 .pg-item:hover {
-  border-color: #bfd3f9;
-  background: #f8fbff;
+  border-color: #F2C8C3;
+  background: #FDF4F2;
 }
 .pg-item.off {
-  background: #fafbfd;
+  background: #FAF6F2;
 }
 .pg-item.off .pg-t {
-  color: #9aa3b2;
+  color: #B3A69F;
 }
 .pg-item.lock {
   cursor: default;
-  background: #f8fbff;
+  background: #FDF4F2;
   border-style: dashed;
 }
 .pg-item.lock:hover {
-  border-color: #e9edf3;
-  background: #f8fbff;
+  border-color: #EFE7E2;
+  background: #FDF4F2;
 }
 .pg-item .ck {
   margin-top: 2px;
   flex: none;
   width: 14px;
   height: 14px;
-  accent-color: #2563eb;
+  accent-color: #CD3A33;
   cursor: pointer;
 }
 .pg-item.lock .ck {
@@ -1127,7 +1127,7 @@ const currentBoardName = computed(
   flex-wrap: wrap;
   font-size: 12.5px;
   font-weight: 600;
-  color: #1f2937;
+  color: #443432;
   line-height: 1.5;
 }
 .pg-item .desc {

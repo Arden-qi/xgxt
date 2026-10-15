@@ -203,22 +203,22 @@ onMounted(loadData);
 
 .stat-label {
   font-size: 13px;
-  color: #909399;
+  color: #A2938E;
   margin-bottom: 8px;
 }
 
 .stat-value {
   font-size: 24px;
   font-weight: 700;
-  color: #303133;
+  color: #443432;
 }
 
 .stat-value.blue {
-  color: #409eff;
+  color: #CD3A33;
 }
 
 .stat-value.red {
-  color: #f56c6c;
+  color: #CD3A33;
 }
 
 .table-card :deep(.el-card__body) {
@@ -236,7 +236,7 @@ onMounted(loadData);
 
 .toolbar-tip {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .num {
@@ -244,44 +244,44 @@ onMounted(loadData);
 }
 
 .num.strong {
-  color: #409eff;
+  color: #CD3A33;
 }
 
 .num.green {
-  color: #67c23a;
+  color: #5FA36F;
 }
 
 .num.red {
-  color: #f56c6c;
+  color: #CD3A33;
 }
 
 .total-row {
   margin-top: 14px;
   padding: 12px 16px;
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 4px;
   display: flex;
   gap: 28px;
   flex-wrap: wrap;
   align-items: center;
   font-size: 13px;
-  color: #606266;
+  color: #7A6C67;
 }
 
 .total-label {
   font-weight: 700;
-  color: #303133;
+  color: #443432;
 }
 
 .total-item b {
-  color: #303133;
+  color: #443432;
 }
 
 .total-item b.blue {
-  color: #409eff;
+  color: #CD3A33;
 }
 
 .total-item b.red {
-  color: #f56c6c;
+  color: #CD3A33;
 }
 </style>

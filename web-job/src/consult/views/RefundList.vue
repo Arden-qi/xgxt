@@ -546,7 +546,7 @@ onMounted(load);
 
 .stat-label {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .stat-value {
@@ -556,11 +556,11 @@ onMounted(load);
 }
 
 .stat-value.ok {
-  color: #67c23a;
+  color: #5FA36F;
 }
 
 .stat-value.warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 
 .toolbar-row {
@@ -580,21 +580,21 @@ onMounted(load);
 
 .stu-name {
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 
 .stu-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 2px;
 }
 
 .ok {
-  color: #67c23a;
+  color: #5FA36F;
 }
 
 .warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 
 .dd-item {
@@ -606,13 +606,13 @@ onMounted(load);
 
 .rule-card {
   font-size: 12px;
-  color: #606266;
+  color: #7A6C67;
   line-height: 1.7;
 }
 
 .rule-title {
   font-weight: 600;
-  color: #303133;
+  color: #443432;
   margin-bottom: 4px;
 }
 
@@ -624,7 +624,7 @@ onMounted(load);
 
 .calc-box {
   width: 100%;
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 6px;
   padding: 10px 12px;
   min-height: 48px;
@@ -643,13 +643,13 @@ onMounted(load);
 
 .calc-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 6px;
   padding: 3px 0;
 }
 
 .calc-sub-empty {
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 .deduct-wrap {
@@ -658,20 +658,20 @@ onMounted(load);
 
 .deduct-tip {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   line-height: 1.6;
   margin-bottom: 6px;
 }
 
 .calc-detail {
-  color: #606266;
+  color: #7A6C67;
   padding-left: 12px;
 }
 
 .calc-formula {
   font-style: normal;
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-left: 6px;
 }
 
