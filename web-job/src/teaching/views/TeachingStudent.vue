@@ -331,9 +331,9 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="学历">
-              <!-- 2026-10-15 二次改版：学历固定为下拉，选项随部门联动 -->
+              <!-- 2026-10-15 三次调整：学历固定下拉，不随部门联动，单独选择 -->
               <el-select v-model="form.education" clearable filterable style="width: 100%">
-                <el-option v-for="e in educationOptions" :key="e" :label="e" :value="e" />
+                <el-option v-for="e in EDUCATION_OPTIONS" :key="e" :label="e" :value="e" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -680,16 +680,8 @@ const agePreview = computed<number | ''>(() => {
 
 /** 初高部可选阶段：初中部1期 ~ 高中部3期（批注口径，不含预科与大学阶段码） */
 const JH_PHASE_CODES = [102, 103, 104, 105, 106, 107];
-/**
- * 学历下拉选项（2026-10-15 二次改版：学历固定下拉，随部门联动）
- *   初高部 → 初中 / 高中
- *   大学部 → 专科 / 本科 / 研究生
- *   未选部门（就业/教务等）→ 两者并集兜底
- */
-const EDUCATION_OPTIONS: Record<number, string[]> = {
-  [DeptCode.JUNIOR_SENIOR]: ['初中', '高中'],
-  [DeptCode.UNIVERSITY]: ['专科', '本科', '研究生'],
-};
+/** 学历下拉选项（2026-10-15 三次调整：固定选项，不随部门联动，单独选择） */
+const EDUCATION_OPTIONS = ['初中', '高中', '专科', '本科', '研究生'];
 /** 部门变化 → 自动判定学段（初高部 → 初高；大学部 → 大学）。
  * 就业/教务学段没有部门概念，编辑这两类学生时不改学段。
  */
@@ -773,11 +765,6 @@ const formPhaseOptions = computed(() => {
   const list = meta.value.find((m) => m.stage === form.stage)?.phaseOptions || [];
   if (form.stage === 'jh') return list.filter((p) => JH_PHASE_CODES.includes(p.value));
   return list;
-});
-/** 表单里学历下拉：按部门联动（见 EDUCATION_OPTIONS） */
-const educationOptions = computed(() => {
-  const list = form.deptCode ? EDUCATION_OPTIONS[form.deptCode] : undefined;
-  return list ?? ['初中', '高中', '专科', '本科', '研究生'];
 });
 /** 表单里状态下拉：按该学段允许的状态 */
 const formStatusOptions = computed(() => {
