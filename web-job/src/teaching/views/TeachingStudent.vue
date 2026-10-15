@@ -331,11 +331,10 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="学历">
-              <!-- 部门=初高部时改为下拉（初中 / 高中），其余学段保留自由输入 -->
-              <el-select v-if="form.deptCode === DeptCode.JUNIOR_SENIOR" v-model="form.education" clearable style="width: 100%">
-                <el-option v-for="e in EDUCATION_JH_OPTIONS" :key="e" :label="e" :value="e" />
+              <!-- 2026-10-15 二次改版：学历固定为下拉，选项随部门联动 -->
+              <el-select v-model="form.education" clearable filterable style="width: 100%">
+                <el-option v-for="e in educationOptions" :key="e" :label="e" :value="e" />
               </el-select>
-              <el-input v-else v-model="form.education" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -681,11 +680,17 @@ const agePreview = computed<number | ''>(() => {
 
 /** 初高部可选阶段：初中部1期 ~ 高中部3期（批注口径，不含预科与大学阶段码） */
 const JH_PHASE_CODES = [102, 103, 104, 105, 106, 107];
-/** 部门=初高部时「学历」改为下拉，选项只有初中 / 高中 */
-const EDUCATION_JH_OPTIONS = ['初中', '高中'];
-
 /**
- * 部门变化 → 自动判定学段（初高部 → 初高；大学部 → 大学）。
+ * 学历下拉选项（2026-10-15 二次改版：学历固定下拉，随部门联动）
+ *   初高部 → 初中 / 高中
+ *   大学部 → 专科 / 本科 / 研究生
+ *   未选部门（就业/教务等）→ 两者并集兜底
+ */
+const EDUCATION_OPTIONS: Record<number, string[]> = {
+  [DeptCode.JUNIOR_SENIOR]: ['初中', '高中'],
+  [DeptCode.UNIVERSITY]: ['专科', '本科', '研究生'],
+};
+/** 部门变化 → 自动判定学段（初高部 → 初高；大学部 → 大学）。
  * 就业/教务学段没有部门概念，编辑这两类学生时不改学段。
  */
 function onFormDeptChange(v: number | undefined) {
@@ -769,6 +774,11 @@ const formPhaseOptions = computed(() => {
   if (form.stage === 'jh') return list.filter((p) => JH_PHASE_CODES.includes(p.value));
   return list;
 });
+/** 表单里学历下拉：按部门联动（见 EDUCATION_OPTIONS） */
+const educationOptions = computed(() => {
+  const list = form.deptCode ? EDUCATION_OPTIONS[form.deptCode] : undefined;
+  return list ?? ['初中', '高中', '专科', '本科', '研究生'];
+});
 /** 表单里状态下拉：按该学段允许的状态 */
 const formStatusOptions = computed(() => {
   const allow = STATUS_BY_STAGE[form.stage] || [];
@@ -783,7 +793,11 @@ function openCreate() {
   Object.assign(form, emptyForm());
   // 表单已没有「学段」选择器：默认取筛选中的学段（就业/教务从对应页签进入仍可新增），
   // 选了部门后会由 onFormDeptChange 自动改判为 初高/大学
-  form.stage = (query.stage || stageOptions.value[0]?.value || 'jh') as StudentStage;
+  const st = (query.stage || stageOptions.value[0]?.value || 'jh') as StudentStage;
+  form.stage = st;
+  // 2026-10-15 二次改版：部门默认选中 —— 初高部（学段筛选为大学时默认大学部；就业/教务不预选）
+  if (st === 'class') form.deptCode = DeptCode.UNIVERSITY;
+  else if (st === 'jh') form.deptCode = DeptCode.JUNIOR_SENIOR;
   formAge.value = null;
   editVisible.value = true;
 }
