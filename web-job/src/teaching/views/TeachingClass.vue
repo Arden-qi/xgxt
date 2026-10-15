@@ -231,13 +231,8 @@
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
         <el-row :gutter="12">
-          <el-col :span="8">
-            <el-form-item label="学段">
-              <el-select v-model="form.stage" :disabled="!!form.id" style="width: 100%" @change="onFormStageChange">
-                <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
-              </el-select>
-            </el-form-item>
-          </el-col>
+          <!-- 2026-10-15 按批注：删除「学段」选择器，学段由「部门」自动判定
+               （初高部 → 初高；大学部 → 大学；实训从实训页签进入仍可新增） -->
           <el-col :span="8">
             <el-form-item label="班级名称">
               <el-input v-model="form.className" maxlength="50" placeholder="留空自动生成占位名" />
@@ -255,7 +250,7 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="部门">
-              <el-select v-model="form.deptCode" style="width: 100%">
+              <el-select v-model="form.deptCode" clearable style="width: 100%" @change="onFormDeptChange">
                 <el-option v-for="d in DEPT_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
               </el-select>
             </el-form-item>
@@ -459,6 +454,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { isReadOnlyUser } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
+import { DeptCode } from 'shared-types';
 import { userApi } from '@/perm/api/perm';
 import type { PermUserListItem } from 'shared-types/perm';
 import {
@@ -615,8 +611,24 @@ function emptyForm(stage: ClassStage): ClassSaveBody {
 }
 const form = reactive<ClassSaveBody>(emptyForm('jh'));
 
-/** 表单里的阶段选项（按表单当前学段取，不是筛选的） */
-const formPhaseOptions = computed(() => metaList.value.find((m) => m.stage === form.stage)?.phaseOptions || []);
+/** 表单里的阶段选项（按表单当前学段取；初高按批注只给 初中部1期~高中部3期，不含预科） */
+const JH_PHASE_CODES = [102, 103, 104, 105, 106, 107];
+const formPhaseOptions = computed(() => {
+  const list = metaList.value.find((m) => m.stage === form.stage)?.phaseOptions || [];
+  if (form.stage === 'jh') return list.filter((p) => JH_PHASE_CODES.includes(p.value));
+  return list;
+});
+
+/* ============ 2026-10-15 改版：删除「学段」选择器，学段由部门判定 ============ */
+
+/** 部门变化 → 自动判定学段（初高部 → 初高；大学部 → 大学）；实训学段不选部门时保持原值 */
+function onFormDeptChange(v: number | undefined) {
+  if (v === DeptCode.JUNIOR_SENIOR) form.stage = 'jh';
+  else if (v === DeptCode.UNIVERSITY) form.stage = 'class';
+  // 学段变了：阶段按新学段重选（onFormStageChange 会清编号/交棒/备注等学段特有字段）
+  if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
+  onFormStageChange();
+}
 
 /* ============ 2026-10-15 改版：班主任/教员/助教接入「权限管理」用户列表 ============ */
 
