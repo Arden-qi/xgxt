@@ -21,6 +21,7 @@ import {
   ConsultRefundStatus as CRS,
   CONSULT_REFUND_STATUS_NAME,
   TRIAL_DAILY_RATE_CENT,
+  FeeType,
   nameOf,
 } from 'shared-types/consult';
 import type {
@@ -420,27 +421,44 @@ async function reportToFinance(
   if (!row) return;
 
   try {
+    /**
+     * ⚠️ 2026-10-15 修复：入参原先缺 `refundItems` / `refundReason`，
+     *    财务的 applySchema 里这两个是**必填**，zod 校验直接 400：
+     *      「参数「refundItems」类型不正确」
+     *    → 咨询退费单永远进不了财务（用户反馈的正是这个现象）。
+     *
+     * ⚠️ 同时补 deptCode：财务退费列表按「部门」分 Tab，
+     *    不传部门的话这张单在财务的部门筛选下根本看不到。
+     */
+    const stu = await findStudent(row.consult_student_id).catch(() => null);
+    const deptCode = stu?.dept_code != null ? Number(stu.dept_code) : undefined;
+
     const res = await financeClient.applyRefund({
       studentId: row.consult_student_id,
       studentNo: row.student_no || undefined,
       studentName: row.student_name || undefined,
       className: row.class_name || undefined,
+      deptCode,
+      /** 咨询退费只针对「试学费」（试学阶段流失），退费项目固定为 TRIAL_FEE */
+      refundItems: [FeeType.TRIAL_FEE],
       refundAmount: row.refund_amount,
-      reason: row.remark || '试学阶段流失退费',
-      sourceNo: row.refund_no,
+      refundReason: row.remark || '试学阶段流失退费',
+      sourceType: 1, // 1 = 咨询来源
       remark: `咨询模块退费单 ${row.refund_no}（试学 ${row.trial_days} 天，扣减 ¥${centToYuan(row.deduct_total)}）`,
     });
 
     await db(REFUND_TABLE).where({ id: refundId }).update({
       finance_refund_id: res.id,
-      finance_refund_no: res.refundNo || null,
+      // ⚠️ 财务返回的字段是 `orderNo`（TF 单号），不是 refundNo ——
+      //    原先读 refundNo 拿到 undefined，finance_refund_no 永远是空
+      finance_refund_no: res.orderNo || null,
       update_time: new Date(),
     });
 
     await addHistory(
       row.consult_student_id,
       operator.name,
-      `退费单已上报财务（财务单号 ${res.refundNo || res.id}），等待财务出款 ¥${centToYuan(row.refund_amount)}`,
+      `退费单已上报财务（财务单号 ${res.orderNo || res.id}），等待财务出款 ¥${centToYuan(row.refund_amount)}`,
       operator.title,
       'REFUND_REPORT',
     );

@@ -108,7 +108,6 @@ export enum PayStatus {
   UNPAID = 1,   // 待缴
   PAID = 2,     // 已缴
   VERIFIED = 3, // 已核对
-  OVERDUE = 4,  // 逾期
   FROZEN = 5,   // 冻结（冻结期间不可进班/就餐）
 }
 
