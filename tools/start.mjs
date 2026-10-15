@@ -28,6 +28,49 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
 // ---------------------------------------------------------------------------
+// ★ 2026-10-15 加固：PATH 自愈 + 系统命令绝对路径
+//
+// 起因（已取证）：这台机器的机器级 PATH 被写坏了 ——
+//   %SystemRoot%\system32      实际存的是  %S  +  stemRoot%\system32
+//   C:\Program Files\nodejs\   实际存的是  C   +  \Program Files\nodejs\
+// 一个多余的分号把变量名劈成两半，于是 C:\Windows\System32 不再生效。
+// 而 System32 一丢，这些系统命令就集体「消失」，且失败是静默的：
+//   · where.exe    → 启动器 `where node` 探不到 → 误报「没有找到 Node.js」
+//   · netstat.exe  → 端口占用检测永远返回空，冲突时提示看不懂
+//   · taskkill.exe → 旧进程杀不掉，端口一直被占
+// 下面在进程内把缺失的关键目录补回 PATH（幂等），并随 process.env 同步给所有
+// 子进程（npm / vite 等）；同时给系统工具一个绝对路径兜底。
+// ---------------------------------------------------------------------------
+const SYS_ROOT = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+const REQUIRED_PATH_DIRS = [
+  path.dirname(process.execPath),                       // node.exe 所在目录（npm.cmd / npx.cmd 同目录）
+  path.join(SYS_ROOT, 'System32'),
+  SYS_ROOT,
+  path.join(SYS_ROOT, 'System32', 'Wbem'),
+  path.join(SYS_ROOT, 'System32', 'WindowsPowerShell', 'v1.0'),
+];
+
+/** 修复前系统 PATH 是否已经坏掉（必须在补之前判定，补完就看不出问题了） */
+let SYS32_WAS_MISSING = false;
+{
+  const norm = (s) => s.trim().replace(/[\\/]+$/, '').toLowerCase();
+  const current = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const have = new Set(current.map(norm));
+  const missing = REQUIRED_PATH_DIRS.filter((d) => !have.has(norm(d)));
+  SYS32_WAS_MISSING = missing.some((d) => norm(d) === norm(path.join(SYS_ROOT, 'System32')));
+  if (missing.length) {
+    process.env.PATH = [...missing, ...current].join(path.delimiter);
+  }
+}
+
+/** 系统自带工具（where / netstat / taskkill ...）的绝对路径，PATH 坏掉也能调 */
+function sysTool(name) {
+  if (process.platform !== 'win32') return name;
+  const exe = path.join(SYS_ROOT, 'System32', `${name}.exe`);
+  return fs.existsSync(exe) ? exe : name;
+}
+
+// ---------------------------------------------------------------------------
 // 参数 & 输出
 // ---------------------------------------------------------------------------
 const argv = process.argv.slice(2);
@@ -91,7 +134,7 @@ function pidsOnPort(port) {
   const pids = new Set();
   try {
     if (process.platform === 'win32') {
-      const out = spawnSync('netstat', ['-ano'], { encoding: 'utf8', windowsHide: true }).stdout || '';
+      const out = spawnSync(sysTool('netstat'), ['-ano'], { encoding: 'utf8', windowsHide: true }).stdout || '';
       for (const line of out.split(/\r?\n/)) {
         // TCP    0.0.0.0:8004    0.0.0.0:0    LISTENING    39120
         const m = line.match(/^\s*TCP\s+\S*:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
@@ -111,7 +154,7 @@ function killPids(pids) {
   for (const pid of pids) {
     try {
       if (process.platform === 'win32') {
-        spawnSync('taskkill', ['/PID', pid, '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        spawnSync(sysTool('taskkill'), ['/PID', pid, '/T', '/F'], { stdio: 'ignore', windowsHide: true });
       } else {
         spawnSync('kill', ['-9', pid], { stdio: 'ignore' });
       }
@@ -123,8 +166,13 @@ function killPids(pids) {
 
 function which(cmd) {
   const exe = process.platform === 'win32' ? `${cmd}.cmd` : cmd;
+  // node.exe 同目录里就带着 npm.cmd / npx.cmd —— 优先用它，完全不依赖 PATH
+  if (process.platform === 'win32') {
+    const local = path.join(path.dirname(process.execPath), `${cmd}.cmd`);
+    if (fs.existsSync(local)) return local;
+  }
   try {
-    const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], {
+    const r = spawnSync(process.platform === 'win32' ? sysTool('where') : 'which', [cmd], {
       encoding: 'utf8', windowsHide: true,
     });
     if (r.status === 0 && r.stdout.trim()) return r.stdout.trim().split(/\r?\n/)[0];
@@ -196,6 +244,20 @@ if (major < 18) {
   process.exit(1);
 }
 ok(`Node ${process.versions.node}`);
+
+// ---- 0b) 系统 PATH 体检 --------------------------------------------------
+// 这台机器反复出现「PATH 里 C:\Windows\System32 被写坏」的情况，症状就是
+// where / netstat / taskkill 集体消失，而启动器却误报「没有找到 Node.js」。
+// 上面已经把缺失目录补回进程内 PATH（所以本次启动一定能跑），
+// 这里只负责把这件「看不见的事」说出来。
+if (SYS32_WAS_MISSING) {
+  warn(`系统 PATH 已被改坏：${path.join(SYS_ROOT, 'System32')} 不在里面。`);
+  note('本次启动已在进程内自动补回，可以正常继续；');
+  note('但其它程序（git、mysql 命令行、where 等）仍会受影响，建议修一次：');
+  note('双击桌面「修复PATH工具」文件夹里的「一键修复PATH.bat」。');
+} else {
+  ok('系统 PATH 正常');
+}
 
 // ---- 1) 环境自检（调 check-env.mjs）--------------------------------------
 step('1/6', '环境自检');
