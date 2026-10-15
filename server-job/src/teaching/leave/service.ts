@@ -207,6 +207,28 @@ function withActions(
  * 列表 / 详情
  * ============================================================ */
 
+/**
+ * 列表
+ *
+ * 【筛选条件分两类，必须区别对待】
+ *   ① **能下推到 SQL 的**：学段 / 类型 / 状态 / 关键字 / 班级 / 日期区间
+ *      —— 仓储直接拼进 where，分页与 total 都是数据库算的，天然正确。
+ *   ② **只能算出来的**：`onlyMine`（只看待我审批）
+ *      —— 它取决于「审批单当前节点 + 当前操作人的角色」，由 withActions() 判定，
+ *      SQL 里表达不了。
+ *
+ * 【所以有两条路径】
+ *   · 快路径：单学段 + 不开 onlyMine → 直接交给仓储分页（数据库分页，快且准）
+ *   · 慢路径：跨学段合并 或 开了 onlyMine → **取全量池 → 补审批单 → 算出 canApprove
+ *     → 过滤 → 排序 → 最后才分页**
+ *
+ * ★★ 顺序绝不能反（这是本页「筛选不生效」的真正原因）
+ *   旧实现是「先按页切片，再对切片做 onlyMine 过滤」，后果：
+ *     · size=20 时，数据库给回 20 条，其中只有 2 条待我审批 → 页面显示 2 条；
+ *       真正的第 3 条其实在后面几页里，用户翻页也看不到（因为每页都只过滤本页）
+ *     · total 取的是**过滤前**的总数 → 分页器显示「共 47 条」，翻到第 3 页却是空的
+ *   用户视角就是「筛选不生效 / 数据丢了」。
+ */
 export async function list(
   q: LeaveListQuery,
   user: any,
@@ -215,36 +237,56 @@ export async function list(
   const stages: TeachingStage[] = q.stage ? [q.stage] : await visibleStages(user);
   if (!stages.length) return { rows: [], total: 0 };
 
-  if (stages.length === 1) {
-    const stage = stages[0];
-    await assertStageView(user, stage);
-    const { rows, total } = await REPOS[stage].list(q);
-    const ap = await loadApprovals(rows.map((r) => r.id));
-    let out = rows.map((r) => withActions(r, ap[r.id], op));
-    if (q.onlyMine) out = out.filter((r) => r.canApprove);
-    return { rows: out, total: q.onlyMine ? out.length : total };
+  // ★ 指定了学段：先确认有权限，再确认「该学段支持这个类型」
+  //   不兼容时**明确报错**，因为旧实现会走 toRawLeaveBiz → null →
+  //   `where biz_type = NULL` → 恒不成立 → 静默返回空列表（用户以为「没数据」）。
+  if (q.stage) {
+    await assertStageView(user, q.stage);
+    if (q.bizType && !LEAVE_STAGE_BIZ[q.stage].includes(q.bizType)) {
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        `「${TEACHING_STAGE_NAME[q.stage]}」不支持「${LEAVE_BIZ_TYPE_NAME[q.bizType] || '该类型'}」`,
+      );
+    }
   }
 
-  const per = Math.max(q.size, 20);
+  // ---------- 快路径：单学段、且不需要按「待我审批」过滤 ----------
+  if (stages.length === 1 && !q.onlyMine) {
+    const { rows, total } = await REPOS[stages[0]].list(q);
+    const ap = await loadApprovals(rows.map((r) => r.id));
+    return { rows: rows.map((r) => withActions(r, ap[r.id], op)), total };
+  }
+
+  /**
+   * ---------- 慢路径：取全量池后在内存里过滤 / 排序 / 分页 ----------
+   *
+   * ⚠️ 抓取上限 `MERGE_FETCH_LIMIT`：池子是按「单学段最多 500 条」抓的。
+   *    单校规模（在办单据几十条）远够用；真到了某学段未办结单据超过 500 条，
+   *    这里要改成「按审批节点把 onlyMine 下推到 SQL」——已在注释里留记号，
+   *    别让这个上限悄悄变成「数据看不全」。
+   */
+  const MERGE_FETCH_LIMIT = 500;
   const all: LeaveRow[] = [];
-  let total = 0;
   for (const stage of stages) {
+    // 类型与学段不兼容的学段直接不查（如「复学」不存在于大学）
+    if (q.bizType && !LEAVE_STAGE_BIZ[stage].includes(q.bizType)) continue;
     try {
       await assertStageView(user, stage);
-      const { rows, total: t } = await REPOS[stage].list({ ...q, page: 1, size: per });
-      total += t;
+      const { rows } = await REPOS[stage].list({ ...q, page: 1, size: MERGE_FETCH_LIMIT });
       all.push(...rows);
     } catch {
-      /* 没权限的学段跳过 */
+      /* 没权限的学段跳过（与 summary 同口径） */
     }
   }
   all.sort((a, b) => String(b.createTime || '').localeCompare(String(a.createTime || '')));
+
+  const ap = await loadApprovals(all.map((r) => r.id));
+  let pool = all.map((r) => withActions(r, ap[r.id], op));
+  if (q.onlyMine) pool = pool.filter((r) => r.canApprove);
+
+  // ★ 过滤之后才分页，且 total 就是过滤后的池子长度 —— 分页器与内容永远自洽
   const start = (q.page - 1) * q.size;
-  const slice = all.slice(start, start + q.size);
-  const ap = await loadApprovals(slice.map((r) => r.id));
-  let out = slice.map((r) => withActions(r, ap[r.id], op));
-  if (q.onlyMine) out = out.filter((r) => r.canApprove);
-  return { rows: out, total };
+  return { rows: pool.slice(start, start + q.size), total: pool.length };
 }
 
 export async function detail(id: string, user: any): Promise<LeaveDetail> {

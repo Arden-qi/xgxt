@@ -26,14 +26,32 @@
     </div>
 
     <!-- 筛选 -->
+    <!--
+      ★ 所有筛选项都是「选完即查」（@change → load(1)），不用再点一次「查询」。
+        本项目其它列表页确实有「选完必须点查询」的惯例，但用户在这个模块
+        明确要求「所有筛选要生效」——选完不动、必须再点按钮，在用户视角
+        就是「筛选没生效」。改下拉一定带上 load(1)，新加筛选项也一样。
+    -->
     <el-form class="tlv-filter" inline>
       <el-form-item label="学段">
-        <el-select v-model="query.stage" clearable placeholder="全部学段" style="width: 130px">
+        <el-select
+          v-model="query.stage"
+          clearable
+          placeholder="全部学段"
+          style="width: 130px"
+          @change="onFilterStageChange"
+        >
           <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="类型">
-        <el-select v-model="query.bizType" clearable placeholder="全部" style="width: 110px">
+        <el-select
+          v-model="query.bizType"
+          clearable
+          placeholder="全部"
+          style="width: 110px"
+          @change="load(1)"
+        >
           <el-option
             v-for="(n, v) in LEAVE_BIZ_NAME"
             :key="v"
@@ -44,7 +62,13 @@
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
-        <el-select v-model="query.status" clearable placeholder="全部" style="width: 140px">
+        <el-select
+          v-model="query.status"
+          clearable
+          placeholder="全部"
+          style="width: 140px"
+          @change="load(1)"
+        >
           <el-option v-for="(n, v) in LEAVE_STATUS_NAME" :key="v" :label="n" :value="Number(v)" />
         </el-select>
       </el-form-item>
@@ -55,10 +79,11 @@
           clearable
           style="width: 170px"
           @keyup.enter="load(1)"
+          @clear="load(1)"
         />
       </el-form-item>
       <el-form-item>
-        <el-checkbox v-model="query.onlyMine">只看待我审批</el-checkbox>
+        <el-checkbox v-model="query.onlyMine" @change="load(1)">只看待我审批</el-checkbox>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" @click="load(1)">查询</el-button>
@@ -317,6 +342,8 @@
  * ★ 异动日期（复学时叫「复学日期」）**只能选今天 ± 10 天**：picker 用 disabled-date
  *   禁掉窗口外的日期，天数由 `/meta.leaveDateWindowDays` 下发（与后端校验同源）。
  *   ⚠️ 「预计复学」是未来计划（可能几个月后），**不受**这个窗口限制。
+ * ★ 列表筛选（学段/类型/状态/关键字/只看待我审批）**全部选完即查**，不需要点「查询」；
+ *   学段切换时若类型不兼容（大学的复学）会自动清掉类型，避免「静默空列表」。
  * ⚠️ 大学没有「复学」—— 类型选项按 `/meta` 的 stageBizTypes 过滤
  * ⚠️ 列表的「学段」筛选/列保留不动：那是查看维度（跨学段合并后的筛选项）
  */
@@ -446,6 +473,22 @@ async function loadMeta() {
   } catch {
     allClasses.value = [];
   }
+}
+
+/**
+ * 学段筛选变了：顺手把「与学段不兼容的类型」清掉，再查
+ *
+ * 例：类型选了「复学」→ 学段切到「大学」（大学没有复学）。
+ * 不清的话会出现两种坏结果：
+ *   · 前端：类型下拉显示「复学」，但选项被置灰、用户以为还在筛复学
+ *   · 后端：不兼容的组合会被明确拒绝（40000），页面直接弹错
+ * 清掉 = 回到「全部类型」，这是用户在这一步唯一能预期的行为。
+ */
+function onFilterStageChange() {
+  if (query.bizType && query.stage && !bizAllowed(query.stage, query.bizType)) {
+    query.bizType = undefined;
+  }
+  load(1);
 }
 
 function reset() {
