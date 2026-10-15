@@ -38,17 +38,17 @@
         </el-select>
       </el-form-item>
       <el-form-item label="部门">
-        <el-select v-model="query.deptCode" clearable placeholder="全部部门" style="width: 120px">
+        <el-select v-model="query.deptCode" clearable placeholder="全部部门" style="width: 120px" @change="load(1)">
           <el-option v-for="d in DEPT_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
         </el-select>
       </el-form-item>
       <el-form-item v-if="phaseOptions.length" label="阶段">
-        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 140px">
+        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 140px" @change="load(1)">
           <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
-        <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px">
+        <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px" @change="load(1)">
           <el-option v-for="(n, v) in CLASS_STATUS_NAME" :key="v" :label="n" :value="Number(v)" />
         </el-select>
       </el-form-item>
@@ -69,73 +69,74 @@
     </el-form>
 
     <!-- 列表 -->
+    <!-- ★ 列宽纪律：内容大多只有 2~4 个字，一律用 min-width 让浏览器按需收缩/伸展，
+         不要拍固定 width —— 之前 17 列固定宽度合计约 1800px，屏幕装不下，
+         每列一大片空白（学生档案页 12 列约 1215px，是对照基准）。 -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
-      <el-table-column v-if="!query.stage" label="学段" width="70" align="center">
+      <el-table-column v-if="!query.stage" label="学段" width="72" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain">{{ row.stageName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="班级名称" min-width="130">
+      <el-table-column label="班级名称" min-width="110">
         <template #default="{ row }">
           <a class="link" @click="openDetail(row)">{{ row.className }}</a>
         </template>
       </el-table-column>
       <!-- ★ 只有实训有这一列 -->
-      <el-table-column v-if="hasClassCodeCol" label="班级编号" width="130">
+      <el-table-column v-if="hasClassCodeCol" label="班级编号" min-width="105">
         <template #default="{ row }">{{ row.classCode || '—' }}</template>
       </el-table-column>
-      <el-table-column v-if="!query.stage" label="部门" width="90" align="center">
-        <template #default="{ row }">{{ row.deptName || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="阶段" width="110" align="center">
+      <!-- 部门列已去掉：dept(1初高部/2大学部) 完全由学段决定，与「学段」标签重复 -->
+      <el-table-column label="阶段" min-width="90" align="center">
         <template #default="{ row }">{{ row.phaseName || '—' }}</template>
       </el-table-column>
-      <el-table-column label="班主任" width="100">
+      <el-table-column label="班主任" min-width="70">
         <template #default="{ row }">{{ row.headTeacherName || '—' }}</template>
       </el-table-column>
-      <el-table-column label="教员" width="90">
+      <el-table-column label="教员" min-width="70">
         <template #default="{ row }">{{ row.teacherName || '—' }}</template>
       </el-table-column>
-      <el-table-column label="助教" width="90">
+      <el-table-column label="助教" min-width="70">
         <template #default="{ row }">{{ row.assistantName || '—' }}</template>
       </el-table-column>
       <!-- ★ 只有大学/实训有交棒岗位（初高没有） -->
-      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="项目经理" width="100">
+      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="项目经理" min-width="80">
         <template #default="{ row }">{{ row.projectManagerName || '—' }}</template>
       </el-table-column>
-      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="就业老师" width="100">
+      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="就业老师" min-width="80">
         <template #default="{ row }">{{ row.employmentTeacherName || '—' }}</template>
       </el-table-column>
-      <el-table-column label="人数" width="70" align="center">
+      <el-table-column label="人数" width="55" align="center">
         <template #default="{ row }">
           <b>{{ row.studentCount }}</b>
         </template>
       </el-table-column>
       <!-- ★ 列头按学段口径动态改字：初高是「今日」出勤率，别写成「出勤率」 -->
-      <el-table-column :label="rateLabel" width="100" align="center">
+      <el-table-column :label="rateLabel" min-width="92" align="center">
         <template #default="{ row }">
           <span v-if="row.attendanceRate === null">—</span>
           <span v-else :class="rateClass(row)">{{ row.attendanceRate }}%</span>
         </template>
       </el-table-column>
-      <el-table-column label="教室" width="130">
+      <el-table-column label="教室" min-width="95">
         <template #default="{ row }">{{ row.classroom || '—' }}</template>
       </el-table-column>
-      <el-table-column label="开班日期" width="110" align="center">
+      <el-table-column label="开班日期" min-width="100" align="center">
         <template #default="{ row }">{{ row.openDate || '—' }}</template>
       </el-table-column>
       <!-- ★ 只有实训有结业日期 -->
-      <el-table-column v-if="hasCloseDateCol" label="结业日期" width="110" align="center">
+      <el-table-column v-if="hasCloseDateCol" label="结业日期" min-width="100" align="center">
         <template #default="{ row }">{{ row.closeDate || '—' }}</template>
       </el-table-column>
-      <el-table-column label="状态" width="90" align="center">
+      <el-table-column label="状态" width="70" align="center">
         <template #default="{ row }">
           <el-tag :type="tagType(row.classStatus)" size="small">{{ row.classStatusName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right" align="center">
+      <!-- 「花名册」按钮已去掉：班级名称本身就是链接，点开就是花名册抽屉 -->
+      <el-table-column label="操作" width="172" fixed="right" align="center">
         <template #default="{ row }">
-          <el-button link type="primary" @click="openDetail(row)">花名册</el-button>
           <el-button v-if="!isReadOnlyUser" link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button v-if="!isReadOnlyUser && row.canChangeStatus" link type="warning" @click="openStatus(row)">
             改状态

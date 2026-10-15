@@ -45,7 +45,9 @@
         </el-select>
       </el-form-item>
       <el-form-item label="班级">
-        <el-select v-model="query.classId" clearable filterable placeholder="全部班级" style="width: 180px">
+        <!-- ★ 选完即查：之前这里没有 @change，选了班级列表不动，
+             用户会以为「按班级筛选」没实现（必须再点一次查询才生效） -->
+        <el-select v-model="query.classId" clearable filterable placeholder="全部班级" style="width: 180px" @change="load(1)">
           <el-option
             v-for="c in classSelectOptions"
             :key="c.id"
@@ -55,12 +57,12 @@
         </el-select>
       </el-form-item>
       <el-form-item v-if="phaseOptions.length" label="阶段">
-        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 130px">
+        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 130px" @change="load(1)">
           <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
-        <el-select v-model="query.studentStatus" clearable placeholder="全部" style="width: 130px">
+        <el-select v-model="query.studentStatus" clearable placeholder="全部" style="width: 130px" @change="load(1)">
           <el-option
             v-for="(n, v) in STUDENT_STATUS_NAME"
             :key="v"
@@ -77,10 +79,11 @@
           clearable
           style="width: 170px"
           @keyup.enter="load(1)"
+          @clear="load(1)"
         />
       </el-form-item>
       <el-form-item>
-        <el-checkbox v-model="query.unassigned">只看未分配宿舍</el-checkbox>
+        <el-checkbox v-model="query.unassigned" @change="load(1)">只看未分配宿舍</el-checkbox>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" @click="load(1)">查询</el-button>
