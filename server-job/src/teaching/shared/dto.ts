@@ -689,6 +689,21 @@ export interface LeaveRow {
   /** 关联的退费单号（退学联动） */
   relatedRefundNo: string | null;
 
+  /**
+   * ★ 学生**当前**状态（实时读学生表，不是建单时的快照）
+   *
+   * 【为什么列表要带它】
+   *   单据状态 ≠ 学生现状。比如「休学单已通过」，但如果这个人之后又办过复学，
+   *   他现在是「正式在读」，不会出现在「复学」的候选名单里。
+   *   列表上不显示这一列时，用户会看到「一堆已通过的休学单 → 复学时却没人可选」，
+   *   直接判定成 bug（2026-10-15 用户就是这么报上来的）。
+   *   ⚠️ 由 service 在分页**之后**批量补（见 attachStudentStatus），
+   *      仓储的 decorate 不负责它（那是快照字段，语义不同）。
+   */
+  studentStatus?: number | null;
+  /** 学生当前状态中文名（'休学' / '正式在读' …） */
+  studentStatusName?: string;
+
   approvalStatus: number;
   approvalStatusName: string;
   currentHandlerHint: string | null;

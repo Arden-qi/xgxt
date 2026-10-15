@@ -87,6 +87,9 @@ export interface LeaveRow {
   leaveReason: string;
   attendedHours: number | null;
   relatedRefundNo: string | null;
+  /** ★ 学生**当前**状态（实时读，与单据状态是两回事：休学单已通过 ≠ 学生现在在休学） */
+  studentStatus?: number | null;
+  studentStatusName?: string;
   approvalStatus: number;
   approvalStatusName: string;
   currentHandlerHint: string | null;

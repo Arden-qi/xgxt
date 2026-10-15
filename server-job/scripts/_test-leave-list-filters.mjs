@@ -158,6 +158,30 @@ const TODAY = (() => {
       `ids=${ids(kw).length}`,
     );
 
+    /* ================= A2. ★ 每行都带「学生现状」（实时值） ================= */
+    {
+      const all = await q({ stage: 'jh' });
+      const rows = all.json?.data?.list || [];
+      check(
+        '★ 列表每行都带「学生现状」（studentStatus + 中文名）——与「单据状态」区分开',
+        rows.length > 0 && rows.every((x) => x.studentStatus != null && x.studentStatusName),
+        `共 ${rows.length} 行，缺字段 ${rows.filter((x) => x.studentStatus == null).length} 行`,
+      );
+      // 交叉核对：接口给的状态必须与直接读学生表一致（不能是编出来的）
+      const idsAll = rows.map((x) => x.studentId);
+      const dbRows = await (USE_UNI
+        ? uniDb('t_uni_student').whereIn('id', idsAll)
+        : dbJh('t_class_student').whereIn('id', idsAll)
+      ).select('id', 'student_status');
+      const dbMap = new Map(dbRows.map((r) => [String(r.id), Number(r.student_status)]));
+      const mismatched = rows.filter((x) => dbMap.get(String(x.studentId)) !== Number(x.studentStatus));
+      check(
+        '★ 「学生现状」与库里 student_status 逐行一致（不是快照、也不是编的）',
+        mismatched.length === 0,
+        `不一致 ${mismatched.length} 行`,
+      );
+    }
+
     /* ================= B. 类型 ================= */
     const b1 = await q({ stage: 'jh', bizType: String(BIZ.SUSPEND) });
     check(

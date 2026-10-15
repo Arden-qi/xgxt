@@ -109,6 +109,8 @@ type Repo = {
   setResumeClass: (conn: any, id: string, classId: string, className: string) => Promise<void>;
   afterApproved: (conn: any, id: string, operatorId: string) => Promise<void>;
   hasPending: (studentId: string) => Promise<boolean>;
+  /** ★ 批量取学生**当前**状态（列表的「学生现状」列用） */
+  studentStatuses: (ids: string[]) => Promise<Record<string, number>>;
 };
 
 const REPOS: Record<TeachingStage, Repo> = {
@@ -254,7 +256,9 @@ export async function list(
   if (stages.length === 1 && !q.onlyMine) {
     const { rows, total } = await REPOS[stages[0]].list(q);
     const ap = await loadApprovals(rows.map((r) => r.id));
-    return { rows: rows.map((r) => withActions(r, ap[r.id], op)), total };
+    const out = rows.map((r) => withActions(r, ap[r.id], op));
+    await attachStudentStatus(out);
+    return { rows: out, total };
   }
 
   /**
@@ -286,7 +290,38 @@ export async function list(
 
   // ★ 过滤之后才分页，且 total 就是过滤后的池子长度 —— 分页器与内容永远自洽
   const start = (q.page - 1) * q.size;
-  return { rows: pool.slice(start, start + q.size), total: pool.length };
+  const page = pool.slice(start, start + q.size);
+  await attachStudentStatus(page); // 只给这一页补「学生现状」，不必给整池补
+  return { rows: page, total: pool.length };
+}
+
+/**
+ * ★ 给列表行补上「学生**当前**状态」（实时值，不是建单快照）
+ *
+ * 【为什么要在分页之后、由 service 统一补】
+ *   · 这是**实时**值：读学生表，和异动单上的快照字段语义不同，不该混进仓储的 decorate；
+ *   · 跨学段合并时 rows 来自不同库 → 必须按 stage 分组，各自用本学段的连接查；
+ *   · 按页批量 whereIn（不是每行一次），避免跨学段池子几百行时打几百次查询。
+ *
+ * 查不到（学生被物理删掉 / id 不匹配）时留 `null`，前端显示 '—'，不能编一个状态出来。
+ */
+async function attachStudentStatus(rows: LeaveRow[]): Promise<void> {
+  if (!rows.length) return;
+  for (const stage of [...new Set(rows.map((r) => r.stage))]) {
+    const ids = rows.filter((r) => r.stage === stage).map((r) => r.studentId);
+    let map: Record<string, number> = {};
+    try {
+      map = await REPOS[stage].studentStatuses(ids);
+    } catch {
+      /* 学生表查不到就留空，不影响列表本身 */
+    }
+    for (const r of rows) {
+      if (r.stage !== stage) continue;
+      const st = map[r.studentId];
+      r.studentStatus = st === undefined ? null : st;
+      r.studentStatusName = st === undefined ? '' : STUDENT_STATUS_NAME[st] || '';
+    }
+  }
 }
 
 export async function detail(id: string, user: any): Promise<LeaveDetail> {
@@ -315,7 +350,9 @@ export async function detail(id: string, user: any): Promise<LeaveDetail> {
       time: l.create_time ? String(l.create_time).replace('T', ' ').slice(0, 19) : null,
     }));
   }
-  return { record: withActions(row, approval, op), logs };
+  const record = withActions(row, approval, op);
+  await attachStudentStatus([record]); // 详情也显示「学生现状」，与列表同一口径
+  return { record, logs };
 }
 
 const ACTION_NAME: Record<number, string> = { 1: '提交', 2: '同意', 3: '驳回', 4: '撤回' };

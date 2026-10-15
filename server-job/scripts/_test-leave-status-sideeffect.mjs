@@ -177,6 +177,38 @@ const STAGE_CONF = {
         String(now?.class_id) === String(cls.id),
         `class_id=${now?.class_id}`,
       );
+
+      /* ★★ 用户报的那个场景，正面钉住：
+         「休学单已通过」的人一旦复学，就**不该**再出现在复学下拉里；
+          而列表必须能一眼看出来（「学生现状」= 正式在读），
+          并且他的**休学单和复学单两条记录都在**，不会看不到复学记录。 */
+      const optsAfter = await req(
+        `${API}/student-options?stage=jh&bizType=${BIZ.RESUME}&keyword=${stu.student_no}`,
+        { token: tDean },
+      );
+      check(
+        '★[jh] 已复学的人不再出现在「复学」的学生下拉里（候选 = 当前休学中）',
+        !(optsAfter.json?.data || []).some((o) => o.id === stu.id),
+        `命中 ${(optsAfter.json?.data || []).length} 人`,
+      );
+
+      const listed = await req(`${API}/list?stage=jh&keyword=${stu.student_no}&size=50`, {
+        token: tDean,
+      });
+      const rows = listed.json?.data?.list || [];
+      const suspendRow = rows.find((r) => r.bizType === BIZ.SUSPEND);
+      check(
+        '★[jh] 列表「学生现状」= 正式在读（休学单虽已通过，人早就复学了）',
+        !!suspendRow &&
+          Number(suspendRow.studentStatus) === SS.STUDYING &&
+          suspendRow.studentStatusName === '正式在读',
+        `休学单行 studentStatus=${suspendRow?.studentStatus}/${suspendRow?.studentStatusName}`,
+      );
+      check(
+        '★[jh] 同一学生的「休学单」与「复学单」都能查到（复学记录不会丢）',
+        rows.some((r) => r.bizType === BIZ.SUSPEND) && rows.some((r) => r.bizType === BIZ.RESUME),
+        `共 ${rows.length} 条：${rows.map((r) => r.bizTypeName).join('/')}`,
+      );
     }
 
     /* ================= 实训：休学 → 6，复学 → 8（别被上面那刀改坏） ================= */

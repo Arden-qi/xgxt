@@ -145,6 +145,25 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
   return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
 }
 
+/**
+ * ★ 批量取「学生当前状态」：`{ 学生id: student_status }`
+ *
+ * 列表要显示「学生现状」（区别于单据状态），但这是**实时值**、
+ * 不是异动单上的快照列，所以在 service 分页之后按页批量补，
+ * 一次 whereIn 拿完（不是每行查一次 —— 跨学段合并时可能有几百行）。
+ *
+ * ⚠️ 不过滤 `is_deleted`：软删的学生也要能看到状态，否则列表出现空白。
+ */
+export async function studentStatuses(ids: string[]): Promise<Record<string, number>> {
+  if (!ids.length) return {};
+  const rows = (await tbl(db, SRC, S, STAGE)
+    .whereIn('id', ids)
+    .select('id', 'student_status')) as Array<Record<string, any>>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[String(r.id)] = Number(r.student_status ?? 0);
+  return out;
+}
+
 export async function detail(id: string): Promise<LeaveRow | null> {
   const row = (await tbl(db, SRC, T, STAGE).where({ id, is_deleted: 0 }).first()) as
     | Record<string, any>

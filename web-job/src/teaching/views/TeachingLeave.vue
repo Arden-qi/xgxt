@@ -110,6 +110,20 @@
           <span class="muted">{{ row.studentNo }}</span>
         </template>
       </el-table-column>
+      <!--
+        ★ 学生**当前**状态（实时值，不是这张单子的状态）
+        没有这一列时最容易误判：一堆「休学·已通过」的单子 + 复学时选不到人，
+        看起来像 bug，其实那些学生早就办过复学、现在是在读。
+        「状态」列是**单据**状态，两列并排就不会再混。
+      -->
+      <el-table-column label="学生现状" width="95" align="center">
+        <template #default="{ row }">
+          <el-tag v-if="row.studentStatusName" size="small" :type="tagStudentStatus(row.studentStatus)">
+            {{ row.studentStatusName }}
+          </el-tag>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="班级" min-width="120">
         <template #default="{ row }">{{ row.className || '—' }}</template>
       </el-table-column>
@@ -306,6 +320,17 @@
           <el-descriptions-item label="学生">
             {{ detail.record.studentName }}（{{ detail.record.studentNo }}）
           </el-descriptions-item>
+          <!-- ★ 学生**当前**状态（实时值）：与下面那条「单据状态」并排，避免两者混淆 -->
+          <el-descriptions-item label="学生现状">
+            <el-tag
+              v-if="detail.record.studentStatusName"
+              size="small"
+              :type="tagStudentStatus(detail.record.studentStatus)"
+            >
+              {{ detail.record.studentStatusName }}
+            </el-tag>
+            <span v-else class="muted">—</span>
+          </el-descriptions-item>
           <el-descriptions-item label="班级">{{ detail.record.className || '—' }}</el-descriptions-item>
           <el-descriptions-item label="异动日期">{{ detail.record.leaveDate || '—' }}</el-descriptions-item>
           <el-descriptions-item label="预计复学">{{ detail.record.expectResumeDate || '—' }}</el-descriptions-item>
@@ -420,6 +445,17 @@ function tagType(s: number) {
   if (s === 4) return 'success';
   if (s === 5) return 'danger';
   if (s === 2 || s === 3) return 'warning';
+  return 'info';
+}
+
+/**
+ * 「学生现状」标签色（与单据状态区分开）
+ * 休学=warning（需要关注）、退学/流失=danger、正式在读=success、其余=info
+ */
+function tagStudentStatus(s?: number | null) {
+  if (s === 6) return 'warning'; // 休学
+  if (s === 7 || s === 11) return 'danger'; // 退学 / 流失
+  if (s === 5) return 'success'; // 正式在读
   return 'info';
 }
 
