@@ -81,30 +81,28 @@ feeRouter.get(
     const [{ total }] = await query.clone().count({ total: '*' });
 
     /**
-     * ⭐ 排序（2026-10-04 用户指令）：「优先显示未核对的信息」
+     * ⭐ 排序（2026-10-15 用户指令）：「待核对 → 已缴 → 已打回」
      *
      * 为什么：
      *   缴费管理是财务的【核对工作台】，财务进来第一眼要看到的是
      *   「还有哪些单等着我核对」，而不是最新的单。
-     *   只按 create_time 排的话，刚建的新单会把待办淹下去。
      *
-     * 怎么排（两级）：
-     *   ① 待核对优先 —— 用 CASE 折成一个 0/1 排序键：
-     *        未核对（未打回）→ 0（排前面）
-     *        其余（已核对/已打回）→ 1（排后面）
-     *      ⚠️ 这里用 is_verified / is_rejected 而不是 pay_status：
-     *         「已打回」的单 pay_status 仍是 PAID(2)，用 pay_status 会把
-     *         打回单误当成待核对排到最前面，反而干扰财务。
-     *   ② 同组内仍按 create_time desc（新单在前，保留原来的体感）。
+     * 怎么排（三级）：
+     *   ① 待核对（未核对 + 未打回）→ 0，排最前
+     *   ② 已缴（已核对）           → 1
+     *   ③ 已打回（等上游重传凭证）  → 2，排最后
+     *   同组内仍按 create_time desc（新单在前）。
      *
-     * 💡 为什么用 raw CASE 而不是 orderBy('is_verified')：
-     *    is_verified 是 0/1，直接 asc 排序恰好也是「未核对在前」，
-     *    但语义不自明、且没法同时排除打回单。写 CASE 让意图一眼可见。
+     * ⚠️ 判断用的是 is_verified / is_rejected 而不是 pay_status：
+     *    打回单的 pay_status 仍是 PAID(2)，用 pay_status 会把打回单
+     *    误当成待核对排到最前面，反而干扰财务。
+     *
+     * ⚠️ 冻结单据已由 buildFeeQuery 硬性排除，不会进入本列表。
      */
     const rows = await query
       .clone()
       .select('*')
-      .orderByRaw('CASE WHEN is_verified = 0 AND is_rejected = 0 THEN 0 ELSE 1 END ASC')
+      .orderByRaw('CASE WHEN is_rejected = 1 THEN 2 WHEN is_verified = 1 THEN 1 ELSE 0 END ASC')
       .orderBy('create_time', 'desc')
       .limit(q.size)
       .offset((q.page - 1) * q.size);

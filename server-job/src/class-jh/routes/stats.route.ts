@@ -54,7 +54,7 @@ statsRouter.get(
     const remindDays = await getNumberSetting('feeRemindDays');
     const feeRows = await db(FEE_TABLE)
       .where('is_deleted', false)
-      .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.OVERDUE, PayStatus.FROZEN])
+      .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.FROZEN])
       .select('expire_date');
     const todayZero = new Date();
     todayZero.setHours(0, 0, 0, 0);

@@ -109,7 +109,7 @@ export const PAY_STATUS_FROZEN = '已冻结';
  * 缴费状态：这笔费用缴了没有
  *
  * ⚠️ 不叫 PayStatus —— enums.ts 里已经有一个给财务模块用的数字枚举 PayStatus
- *    （待缴/已缴/已核对/逾期/冻结），这里是中文字符串，命名要区分开。
+ *    （待缴/待核对/已缴/冻结），这里是中文字符串，命名要区分开。
  */
 export enum PayPaidStatus {
   PAID = '已缴',
