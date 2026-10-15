@@ -133,6 +133,9 @@ export interface StudentSaveBody {
   dormId?: string | null;
   dormNo?: string | null;
   bedNo?: string | null;
+  /** 校园网账号（初高表有列；留空时系统自动生成） */
+  netAccount?: string | null;
+  netInitPassword?: string | null;
   remark?: string | null;
   extra?: Record<string, unknown> | null;
 }
@@ -141,6 +144,42 @@ export interface StudentSaveResult {
   id: string;
   frozenCount?: number;
   unfrozenCount?: number;
+}
+
+/** 详情扩展区块（2026-10-15 详情分签改版）：考试信息 / 调宿记录 / 宿舍长 */
+export interface StudentExtras {
+  scores: Array<{
+    id: string;
+    examId: string;
+    examName: string;
+    examDate: string | null;
+    examType?: number | null;
+    examTypeName?: string | null;
+    studentId: string;
+    studentNo: string | null;
+    studentName: string | null;
+    writtenScore: number | null;
+    machineScore: number | null;
+    interviewScore: number | null;
+    totalScore: number | null;
+    remark: string | null;
+  }>;
+  dormChanges: Array<{
+    changeId: string;
+    bizType: number;
+    bizTypeName: string;
+    studentId: string;
+    oldDormNo: string | null;
+    oldBedNo: string | null;
+    newDormNo: string | null;
+    newBedNo: string | null;
+    changeDate: string;
+    changeReason: string;
+    approvalStatus: number;
+    approvalStatusName: string;
+  }>;
+  dormOwnerName: string | null;
+  dormClassName: string | null;
 }
 
 export interface StudentStageMeta {
@@ -169,6 +208,11 @@ export function listStudents(params: StudentListParams) {
 
 export function getStudentDetail(stage: StudentStage, id: string) {
   return http.get<StudentDetail>('/api/teaching/student/detail', { stage, id });
+}
+
+/** 详情扩展区块：考试信息 / 调宿记录 / 宿舍长（2026-10-15 详情分签改版） */
+export function getStudentExtras(stage: StudentStage, id: string) {
+  return http.get<StudentExtras>('/api/teaching/student/extras', { stage, id });
 }
 
 export function saveStudent(body: StudentSaveBody) {

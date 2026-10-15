@@ -106,7 +106,18 @@ teachingStudentRouter.get(
   }),
 );
 
-/** 3. 保存（新增 / 修改） */
+/** 3. 详情扩展区块（考试信息 / 调宿记录 / 宿舍长 —— 2026-10-15 详情分签改版） */
+teachingStudentRouter.get(
+  '/extras',
+  wrap(async (req, res) => {
+    const stage = reqStage(req.query.stage);
+    const id = str(req.query.id);
+    if (!id) throw new BizError(BizCode.PARAM_ERROR, '缺少学生ID');
+    res.json(ok(await svc.getStudentExtras(stage, id, req.user)));
+  }),
+);
+
+/** 4. 保存（新增 / 修改） */
 teachingStudentRouter.post(
   '/save',
   wrap(async (req, res) => {
@@ -131,6 +142,7 @@ teachingStudentRouter.post(
         graduateSchool: strOrNull(b.graduateSchool),
         enrollDate: dateStr(b.enrollDate),
         phone: strOrNull(b.phone),
+        parentName: strOrNull(b.parentName),
         parentPhone: strOrNull(b.parentPhone),
         homeAddress: strOrNull(b.homeAddress),
         idCard: strOrNull(b.idCard),
@@ -141,6 +153,8 @@ teachingStudentRouter.post(
         dormId: strOrNull(b.dormId),
         dormNo: strOrNull(b.dormNo),
         bedNo: strOrNull(b.bedNo),
+        netAccount: strOrNull(b.netAccount),
+        netInitPassword: strOrNull(b.netInitPassword),
         remark: strOrNull(b.remark),
         extra: b.extra && typeof b.extra === 'object' ? b.extra : null,
         syncFreeze: b.syncFreeze === undefined ? undefined : boolTrue(b.syncFreeze),

@@ -916,6 +916,9 @@ export interface StudentSaveBody {
   dormId?: string | null;
   dormNo?: string | null;
   bedNo?: string | null;
+  /** 校园网账号（初高表有列；留空时系统自动生成） */
+  netAccount?: string | null;
+  netInitPassword?: string | null;
   remark?: string | null;
   /** 学段特有字段（综合素质 / 校园网 / 简历…）原样透传 */
   extra?: Record<string, unknown> | null;
@@ -930,6 +933,23 @@ export interface StudentSaveResult {
   frozenCount?: number;
   /** 教务：本次自动解冻的条数 */
   unfrozenCount?: number;
+}
+
+/**
+ * 学生档案详情「扩展区块」数据（2026-10-15 详情页分签改版）
+ *
+ * 【为什么单独一个接口】成绩 / 调宿记录分别来自成绩域、宿舍域，
+ * 每次打开详情才按需拉取，不塞进 /detail（老接口保持轻、老页面不受影响）。
+ */
+export interface StudentExtras {
+  /** 该生全部考试成绩（examType/examDate/examTypeName 由适配器按考试表回填） */
+  scores: Array<ScoreRow & { examType?: number | null; examTypeName?: string | null }>;
+  /** 该生调宿 / 退宿申请单（含审批状态） */
+  dormChanges: DormChangeRow[];
+  /** 所在宿舍的宿舍长 / 负责人（宿舍管理同步） */
+  dormOwnerName: string | null;
+  /** 所在宿舍的班级（宿舍管理同步，只有初高有） */
+  dormClassName: string | null;
 }
 
 /** 元信息：某学段支持哪些筛选项 / 能不能写 / 有哪些特有区块 */

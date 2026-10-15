@@ -150,87 +150,229 @@
       @current-change="(p: number) => load(p)"
     />
 
-    <!-- 详情 -->
-    <el-dialog v-model="detailVisible" title="学生档案详情" width="760px" top="6vh">
+    <!-- 详情（2026-10-15 分签改版：基础信息 / 市场信息 / 末班记录 / 宿舍 / 考试信息 / 校园网账号） -->
+    <el-dialog v-model="detailVisible" width="860px" top="5vh">
+      <template #header>
+        <div class="tsv-dhead" v-if="detail">
+          <b>{{ detail.base.studentName }} · 学员详情</b>
+          <span class="muted">
+            {{ detail.base.studentNo }}<template v-if="detail.base.className"> | {{ detail.base.className }}</template> |
+            {{ detail.base.studentStatusName }}
+          </span>
+        </div>
+      </template>
       <template v-if="detail">
-        <el-descriptions :column="3" border size="small" title="基础信息">
-          <el-descriptions-item label="学段">{{ detail.base.stageName }}</el-descriptions-item>
-          <el-descriptions-item label="学号">{{ detail.base.studentNo }}</el-descriptions-item>
-          <el-descriptions-item label="姓名">{{ detail.base.studentName }}</el-descriptions-item>
-          <el-descriptions-item label="性别">{{ detail.base.genderName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="年龄">{{ detail.base.age ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item label="身份证">{{ detail.profile.idCard || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="部门">{{ detail.base.deptName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="班级">{{ detail.base.className || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="阶段">{{ detail.base.phaseName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="状态">
-            <el-tag :type="statusTag(detail.base.studentStatus)" size="small">
-              {{ detail.base.studentStatusName }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="入学日期">{{ detail.base.enrollDate || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="出生日期">{{ detail.profile.birthDate || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="手机号">{{ detail.base.phone || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="家长姓名">{{ detail.base.parentName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="家长手机">{{ detail.base.parentPhone || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="学历">{{ detail.base.education || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="籍贯">{{ detail.profile.nativePlace || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="毕业学校">{{ detail.profile.graduateSchool || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="家庭住址" :span="1">
-            {{ detail.profile.homeAddress || '—' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="班主任">{{ detail.base.headTeacherName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="教员">{{ detail.base.teacherName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="助教">{{ detail.base.assistantName || '—' }}</el-descriptions-item>
-        </el-descriptions>
+        <el-tabs v-model="detailTab">
+          <!-- ① 基础信息（按现有界面） -->
+          <el-tab-pane label="基础信息" name="base">
+            <el-descriptions :column="3" border size="small">
+              <el-descriptions-item label="学段">{{ detail.base.stageName }}</el-descriptions-item>
+              <el-descriptions-item label="学号">{{ detail.base.studentNo }}</el-descriptions-item>
+              <el-descriptions-item label="姓名">{{ detail.base.studentName }}</el-descriptions-item>
+              <el-descriptions-item label="性别">{{ detail.base.genderName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="年龄">{{ detail.base.age ?? '—' }}</el-descriptions-item>
+              <el-descriptions-item label="身份证">{{ detail.profile.idCard || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="部门">{{ detail.base.deptName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="班级">{{ detail.base.className || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="阶段">{{ detail.base.phaseName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="状态">
+                <el-tag :type="statusTag(detail.base.studentStatus)" size="small">
+                  {{ detail.base.studentStatusName }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="入学日期">{{ detail.base.enrollDate || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="出生日期">{{ detail.profile.birthDate || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="手机号">{{ detail.base.phone || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="家长姓名">{{ detail.base.parentName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="家长手机">{{ detail.base.parentPhone || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="学历">{{ detail.base.education || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="籍贯">{{ detail.profile.nativePlace || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="毕业学校">{{ detail.profile.graduateSchool || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="家庭住址" :span="2">
+                {{ detail.profile.homeAddress || '—' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="班主任">{{ detail.base.headTeacherName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="教员">{{ detail.base.teacherName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="助教">{{ detail.base.assistantName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="备注" :span="3">{{ detail.base.remark || '—' }}</el-descriptions-item>
+            </el-descriptions>
 
-        <el-descriptions :column="3" border size="small" title="市场信息" class="tsv-sec">
-          <el-descriptions-item label="招生老师">{{ detail.market.recruitTeacherName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="招生电话">{{ detail.market.recruitTeacherPhone || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="咨询老师">{{ detail.market.consultTeacherName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="咨询电话" :span="3">{{ detail.market.consultTeacherPhone || '—' }}</el-descriptions-item>
-        </el-descriptions>
+            <!-- 学段特有区块：有数据才显示（综合素质=大学 / 简历=就业） -->
+            <el-descriptions v-if="detail.quality" :column="3" border size="small" title="综合素质" class="tsv-sec">
+              <el-descriptions-item label="学习">{{ detail.quality.studyStatus || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="纪律">{{ detail.quality.discipline || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="能力">{{ detail.quality.ability || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="理解">{{ detail.quality.comprehension || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="表达">{{ detail.quality.expression || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="社交">{{ detail.quality.social || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="综合评语" :span="3">{{ detail.quality.note || '—' }}</el-descriptions-item>
+            </el-descriptions>
 
-        <el-descriptions v-if="detail.dorm" :column="3" border size="small" title="宿舍" class="tsv-sec">
-          <el-descriptions-item label="宿舍号">{{ detail.dorm.dormNo || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="床位">{{ detail.dorm.bedLabel || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="楼栋">{{ detail.dorm.building || '—' }}</el-descriptions-item>
-        </el-descriptions>
+            <el-descriptions v-if="detail.resume" :column="1" border size="small" title="简历" class="tsv-sec">
+              <el-descriptions-item label="简历文件">{{ detail.resume.resumeName || '（无）' }}</el-descriptions-item>
+            </el-descriptions>
 
-        <el-descriptions v-if="detail.net" :column="3" border size="small" title="校园网（初高）" class="tsv-sec">
-          <el-descriptions-item label="上网账号">{{ detail.net.netAccount || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="初始密码" :span="2">{{ detail.net.netInitPassword || '—' }}</el-descriptions-item>
-        </el-descriptions>
+            <el-descriptions v-if="flowRows.length" :column="1" border size="small" title="学籍异动记录" class="tsv-sec">
+              <el-descriptions-item v-for="(f, i) in flowRows" :key="i" :label="String(f.flowTypeName || '异动')">
+                {{ f.applyTime || '—' }} · {{ f.currentNodeName || '' }} {{ f.rejectReason || '' }}
+              </el-descriptions-item>
+            </el-descriptions>
+          </el-tab-pane>
 
-        <el-descriptions v-if="detail.quality" :column="3" border size="small" title="综合素质（大学）" class="tsv-sec">
-          <el-descriptions-item label="学习">{{ detail.quality.studyStatus || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="纪律">{{ detail.quality.discipline || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="能力">{{ detail.quality.ability || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="理解">{{ detail.quality.comprehension || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="表达">{{ detail.quality.expression || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="社交">{{ detail.quality.social || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="综合评语" :span="3">{{ detail.quality.note || '—' }}</el-descriptions-item>
-        </el-descriptions>
+          <!-- ② 市场信息（同步自市场咨询入班记录，只读） -->
+          <el-tab-pane label="市场信息" name="market">
+            <el-descriptions :column="3" border size="small">
+              <el-descriptions-item label="招生老师">{{ detail.market.recruitTeacherName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="招生电话">{{ detail.market.recruitTeacherPhone || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="咨询老师">{{ detail.market.consultTeacherName || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="咨询电话" :span="3">
+                {{ detail.market.consultTeacherPhone || '—' }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <el-alert
+              class="tsv-sec"
+              type="info"
+              :closable="false"
+              show-icon
+              title="招生老师 / 咨询老师来自市场咨询入班时同步的记录，此处只读"
+            />
+          </el-tab-pane>
 
-        <el-descriptions v-if="detail.resume" :column="1" border size="small" title="简历（就业）" class="tsv-sec">
-          <el-descriptions-item label="简历文件">{{ detail.resume.resumeName || '（无）' }}</el-descriptions-item>
-        </el-descriptions>
+          <!-- ③ 末班记录（成绩管理「末班」动作落库，此处只读） -->
+          <el-tab-pane label="末班记录" name="repeat">
+            <el-table :data="repeatRows" border size="small" empty-text="暂无末班记录（由成绩管理的末班功能记录）">
+              <el-table-column label="姓名" width="90">
+                <template #default="{ row }">{{ row._studentName || detail.base.studentName }}</template>
+              </el-table-column>
+              <el-table-column label="学号" width="120">
+                <template #default="{ row }">{{ row._studentNo || detail.base.studentNo }}</template>
+              </el-table-column>
+              <el-table-column prop="repeatTime" label="末班时间" width="110">
+                <template #default="{ row }">{{ row.repeatTime || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="fromClassName" label="原班级" min-width="120">
+                <template #default="{ row }">{{ row.fromClassName || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="toClassName" label="末班班级" min-width="120">
+                <template #default="{ row }">{{ row.toClassName || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="repeatCount" label="末班次数" width="90" align="center">
+                <template #default="{ row }">{{ row.repeatCount ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="repeatReason" label="末班原因" min-width="120">
+                <template #default="{ row }">{{ row.repeatReason || '—' }}</template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
 
-        <el-descriptions v-if="flowRows.length" :column="1" border size="small" title="学籍异动记录" class="tsv-sec">
-          <el-descriptions-item v-for="(f, i) in flowRows" :key="i" :label="String(f.flowTypeName || '异动')">
-            {{ f.applyTime || '—' }} · {{ f.currentNodeName || '' }} {{ f.rejectReason || '' }}
-          </el-descriptions-item>
-        </el-descriptions>
+          <!-- ④ 宿舍（同步宿舍管理 + 调宿记录） -->
+          <el-tab-pane label="宿舍" name="dorm">
+            <template v-if="detail.dorm">
+              <el-descriptions :column="3" border size="small" title="宿舍信息">
+                <el-descriptions-item label="姓名">{{ detail.base.studentName }}</el-descriptions-item>
+                <el-descriptions-item label="学号">{{ detail.base.studentNo }}</el-descriptions-item>
+                <el-descriptions-item label="宿舍号">{{ detail.dorm.dormNo || '—' }}</el-descriptions-item>
+                <el-descriptions-item label="床位号">{{ detail.dorm.bedNo || '—' }}</el-descriptions-item>
+                <el-descriptions-item label="楼栋 / 班级">
+                  {{ detail.dorm.building || detailExtras?.dormClassName || '—' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="宿舍负责人">{{ detailExtras?.dormOwnerName || '—' }}</el-descriptions-item>
+              </el-descriptions>
+              <el-alert
+                class="tsv-sec"
+                type="warning"
+                :closable="false"
+                show-icon
+                title="床位号展示规则：宿舍号-床位号（如 301-1）。此数据与「宿舍管理」是同一份床位表，任意一侧变更都会同步。"
+              />
+            </template>
+            <el-empty v-else description="未分配宿舍" :image-size="60" />
+            <div class="tsv-sec tsv-sub">调宿记录</div>
+            <el-table :data="dormChangeRows" border size="small" empty-text="暂无调宿记录">
+              <el-table-column prop="changeDate" label="时间" width="110">
+                <template #default="{ row }">{{ row.changeDate || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="原床位" min-width="130">
+                <template #default="{ row }">
+                  {{ row.bizType === 2 ? '—' : bedJoin(row.oldDormNo, row.oldBedNo) }}
+                </template>
+              </el-table-column>
+              <el-table-column label="现床位" min-width="130">
+                <template #default="{ row }">
+                  {{ row.bizType === 2 ? '已退宿' : bedJoin(row.newDormNo, row.newBedNo) }}
+                </template>
+              </el-table-column>
+              <el-table-column label="类型" width="100" align="center">
+                <template #default="{ row }">{{ row.bizTypeName }}</template>
+              </el-table-column>
+              <el-table-column prop="changeReason" label="调整原因" min-width="140">
+                <template #default="{ row }">{{ row.changeReason || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="approvalStatusName" label="状态" width="90" align="center" />
+            </el-table>
+          </el-tab-pane>
 
-        <el-descriptions v-if="repeatRows.length" :column="1" border size="small" title="末班 / 留级记录" class="tsv-sec">
-          <el-descriptions-item v-for="(r, i) in repeatRows" :key="i" :label="String(r.repeatTime || '记录')">
-            {{ r.fromClassName || '—' }} → {{ r.toClassName || '—' }}（{{ r.repeatReason || '无原因' }}）
-          </el-descriptions-item>
-        </el-descriptions>
+          <!-- ⑤ 考试信息（成绩管理同步：技术考试 / 质素考核） -->
+          <el-tab-pane label="考试信息" name="exam">
+            <div class="tsv-sub">技术考试</div>
+            <el-table :data="techScoreRows" border size="small" empty-text="暂无技术考试成绩（由成绩管理同步）">
+              <el-table-column label="姓名 / 学号" min-width="140">
+                <template #default="{ row }">{{ row.studentName }} / {{ row.studentNo || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="examName" label="考试名称" min-width="110" />
+              <el-table-column prop="examDate" label="考试时间" width="105">
+                <template #default="{ row }">{{ row.examDate || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="totalScore" label="综合成绩" width="90" align="center">
+                <template #default="{ row }">{{ row.totalScore ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="writtenScore" label="笔试分数" width="90" align="center">
+                <template #default="{ row }">{{ row.writtenScore ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="machineScore" label="机试分数" width="90" align="center">
+                <template #default="{ row }">{{ row.machineScore ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="interviewScore" label="面试分数" width="90" align="center">
+                <template #default="{ row }">{{ row.interviewScore ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="remark" label="素质分析（非必填）" min-width="150">
+                <template #default="{ row }">{{ row.remark || '—' }}</template>
+              </el-table-column>
+            </el-table>
 
-        <el-descriptions :column="1" border size="small" title="备注" class="tsv-sec">
-          <el-descriptions-item label="备注">{{ detail.base.remark || '—' }}</el-descriptions-item>
-        </el-descriptions>
+            <div class="tsv-sec tsv-sub">质素考核</div>
+            <el-table :data="qualityScoreRows" border size="small" empty-text="暂无质素考核成绩（由成绩管理同步）">
+              <el-table-column label="姓名 / 学号" min-width="140">
+                <template #default="{ row }">{{ row.studentName }} / {{ row.studentNo || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="examName" label="考试内容" min-width="120" />
+              <el-table-column prop="totalScore" label="考核分数" width="90" align="center">
+                <template #default="{ row }">{{ row.totalScore ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="examDate" label="考试时间" width="105">
+                <template #default="{ row }">{{ row.examDate || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="remark" label="素质分析（非必填）" min-width="180">
+                <template #default="{ row }">{{ row.remark || '—' }}</template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+
+          <!-- ⑥ 校园网账号（系统生成，可修改） -->
+          <el-tab-pane v-if="detail.net" label="校园网账号" name="net">
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="上网账号">{{ detail.net.netAccount || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="初始密码">{{ detail.net.netInitPassword || '—' }}</el-descriptions-item>
+            </el-descriptions>
+            <el-alert
+              class="tsv-sec"
+              type="info"
+              :closable="false"
+              show-icon
+              title="账号由系统按学号自动生成（密码为 8 位随机码），可在「编辑学生」中修改"
+            />
+          </el-tab-pane>
+        </el-tabs>
       </template>
     </el-dialog>
 
@@ -371,24 +513,15 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8">
-            <el-form-item label="招生老师">
-              <el-input v-model="form.recruitTeacherName" />
+          <el-col :span="8" v-if="form.stage === 'jh'">
+            <!-- 2026-10-15 分签改版：校园网账号由系统按学号生成，此处可手改 -->
+            <el-form-item label="上网账号">
+              <el-input v-model="form.netAccount" placeholder="留空保存时自动生成" />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
-            <el-form-item label="招生电话">
-              <el-input v-model="form.recruitTeacherPhone" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="咨询老师">
-              <el-input v-model="form.consultTeacherName" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="咨询电话">
-              <el-input v-model="form.consultTeacherPhone" />
+          <el-col :span="8" v-if="form.stage === 'jh'">
+            <el-form-item label="初始密码">
+              <el-input v-model="form.netInitPassword" placeholder="留空保存时自动生成" />
             </el-form-item>
           </el-col>
           <el-col :span="24">
@@ -446,11 +579,13 @@ import { fetchDormList } from '@/api/edu/dorm';
 import {
   listStudents,
   getStudentDetail,
+  getStudentExtras,
   saveStudent,
   deleteStudent,
   getStudentMeta,
   getStudentSummary,
   type StudentDetail,
+  type StudentExtras,
   type StudentRow,
   type StudentStage,
   type StudentStageMeta,
@@ -570,15 +705,43 @@ function statusTag(s: number): 'success' | 'warning' | 'danger' | 'info' | 'prim
   return 'info';
 }
 
-/* ---------------- 详情 ---------------- */
+/* ---------------- 详情（2026-10-15 分签改版） ---------------- */
 const detailVisible = ref(false);
 const detail = ref<StudentDetail | null>(null);
+const detailTab = ref('base');
+const detailExtras = ref<StudentExtras | null>(null);
 const flowRows = computed(() => (detail.value?.flows || []) as Array<Record<string, unknown>>);
+/** 末班 / 留级记录（来自成绩管理「末班」动作落库的 t_*_repeat） */
 const repeatRows = computed(() => (detail.value?.repeats || []) as Array<Record<string, unknown>>);
 
 async function openDetail(row: StudentRow) {
   detail.value = await getStudentDetail(row.stage, row.studentId);
+  detailTab.value = 'base';
+  detailExtras.value = null;
   detailVisible.value = true;
+  // 扩展区块（考试信息 / 调宿记录 / 宿舍长）按需二次拉取，失败不影响详情展示
+  try {
+    detailExtras.value = await getStudentExtras(row.stage, row.studentId);
+  } catch {
+    detailExtras.value = null;
+  }
+}
+
+/** 调宿 / 退宿记录（宿舍签） */
+const dormChangeRows = computed(() => detailExtras.value?.dormChanges || []);
+/** 技术考试成绩（examType ≠ 2 质素考核） */
+const techScoreRows = computed(
+  () => (detailExtras.value?.scores || []).filter((s) => s.examType !== 2),
+);
+/** 质素考核成绩（examType = 2） */
+const qualityScoreRows = computed(
+  () => (detailExtras.value?.scores || []).filter((s) => s.examType === 2),
+);
+/** 床位展示规则：宿舍号-床位号（如 301-1） */
+function bedJoin(dormNo: string | null | undefined, bedNo: string | null | undefined): string {
+  if (!dormNo) return bedNo || '—';
+  if (!bedNo) return dormNo;
+  return `${dormNo}-${bedNo}`;
 }
 
 /* ---------------- 新增 / 编辑 ---------------- */
@@ -614,6 +777,8 @@ const emptyForm = () => ({
   dormId: '',
   dormNo: '',
   bedNo: '',
+  netAccount: '',
+  netInitPassword: '',
   remark: '',
 });
 const form = reactive(emptyForm());
@@ -829,6 +994,8 @@ async function openEdit(row: StudentRow) {
     dormId: b.dormId || dormRoomOptions.value.find((r) => r.label === b.dormNo)?.roomId || '',
     dormNo: b.dormNo || '',
     bedNo: b.bedNo || '',
+    netAccount: d.net?.netAccount || '',
+    netInitPassword: d.net?.netInitPassword || '',
     remark: b.remark || '',
   });
   formAge.value = b.age ?? null;
@@ -880,6 +1047,8 @@ async function doSave() {
       dormId: form.dormId || null,
       dormNo: form.dormNo || null,
       bedNo: showBed.value ? normalizeBedNo() : undefined,
+      netAccount: form.stage === 'jh' ? form.netAccount || null : undefined,
+      netInitPassword: form.stage === 'jh' ? form.netInitPassword || null : undefined,
       remark: form.remark || null,
     });
     let tip = form.id ? '已保存' : '已新增';
@@ -971,6 +1140,18 @@ onMounted(async () => {
 }
 .tsv-sec {
   margin-top: 12px;
+}
+.tsv-dhead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.tsv-sub {
+  font-weight: 600;
+  font-size: 13px;
+  border-left: 3px solid var(--el-color-primary);
+  padding-left: 8px;
+  margin: 10px 0 8px;
 }
 .muted {
   color: var(--el-text-color-secondary);

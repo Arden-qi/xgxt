@@ -266,10 +266,14 @@ export const repo: StudentRepo = {
     set('dorm_id', body.dormId);
     set('dorm_no', body.dormNo);
     set('bed_no', body.bedNo);
+    // ★ 校园网账号（可手填；留空时保存后由系统自动生成，见 ensureNetAccount）
+    set('net_account', body.netAccount);
+    set('net_init_password', body.netInitPassword);
     set('remark', body.remark);
 
     if (body.id) {
       await tbl(db, 'sms_class_jh', T, STAGE).where({ id: body.id }).update(payload);
+      await ensureNetAccount(String(body.id));
       return { id: body.id };
     }
 
@@ -296,6 +300,7 @@ export const repo: StudentRepo = {
       create_time: now,
       create_by: userId,
     });
+    await ensureNetAccount(id);
     return { id };
   },
 
@@ -314,8 +319,26 @@ export const repo: StudentRepo = {
 };
 
 
-/** 学号生成：S + 年份 + 4 位流水（初高口径） */
-async function generateStudentNo(): Promise<string> {
+/**
+ * 校园网账号自动生成（2026-10-15 详情分签改版）：
+ * 账号 = 学号；密码 = 8 位随机字母数字。只在「账号为空」时生成，
+ * 已有账号（含用户手填）一律不动。
+ */
+async function ensureNetAccount(studentId: string): Promise<void> {
+  const row = (await tbl(db, 'sms_class_jh', T, STAGE).where({ id: studentId }).first()) as
+    | Record<string, any>
+    | undefined;
+  if (!row || str(row.net_account)) return;
+  const account = str(row.student_no) || `NET${Date.now()}`;
+  const password = Math.random().toString(36).slice(2, 10).toUpperCase();
+  await tbl(db, 'sms_class_jh', T, STAGE).where({ id: studentId }).update({
+    net_account: account,
+    net_init_password: password,
+    update_time: new Date(),
+  });
+}
+
+/** 学号生成：S + 年份 + 4 位流水（初高口径） */async function generateStudentNo(): Promise<string> {
   const year = new Date().getFullYear();
   const prefix = `S${year}`;
   const rows = (await tbl(db, 'sms_class_jh', T, STAGE).where('student_no', 'like', `${prefix}%`).select('student_no')) as Array<{

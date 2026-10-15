@@ -166,6 +166,77 @@ export async function getStudentDetail(
   return d;
 }
 
+/**
+ * 详情页「扩展区块」：考试信息 / 宿舍（含调宿记录）/ 数据来源聚合
+ *
+ * 2026-10-15 详情分签改版：成绩来自成绩域、调宿单来自宿舍域、
+ * 宿舍长来自宿舍管理 —— 各域**单独 try/catch**，某个域没权限/没数据
+ * 不影响整包返回（校长全权限是主场景，但要兜住学管等受限账号）。
+ */
+export async function getStudentExtras(stage: StudentStage, id: string, user: any) {
+  const d = await getStudentDetail(stage, id, user);
+  const out = {
+    scores: [] as Array<
+      import('../shared/dto').ScoreRow & {
+        examType?: number | null;
+        examTypeName?: string | null;
+      }
+    >,
+    dormChanges: [] as import('../shared/dto').DormChangeRow[],
+    dormOwnerName: null as string | null,
+    dormClassName: null as string | null,
+  };
+
+  /* 1. 考试成绩（成绩域）—— 成绩/宿舍/考试域只覆盖 jh/class/job 三学段 */
+  if (stage !== 'edu') {
+    try {
+      const { listScores } = await import('../score/service');
+      const r = await listScores({ stage, studentId: String(id), page: 1, size: 200 }, user);
+      // 考试类型/日期在考试表里，成绩表只有 exam_id —— 拉一次本学段考试清单回填
+      const { listExams } = await import('../exam/service');
+      const exams = await listExams({ stage, page: 1, size: 9999 }, user);
+      const emap = new Map((exams.list || []).map((e: any) => [String(e.id), e]));
+      out.scores = r.list.map((s) => {
+        const e = emap.get(String(s.examId));
+        return {
+          ...s,
+          examType: e?.examType ?? null,
+          examTypeName: e?.examTypeName ?? '',
+          examDate: s.examDate || e?.examDate || null,
+        };
+      });
+    } catch {
+      /* 没有成绩权限：考试签显示空态 */
+    }
+
+    /* 2. 调宿 / 退宿记录（宿舍域） */
+    try {
+      const { listDormChanges } = await import('../dorm/service');
+      const changes = await listDormChanges(
+        { stage, keyword: d.base.studentNo || undefined, page: 1, size: 9999 } as any,
+        user,
+      );
+      out.dormChanges = (changes || []).filter((c) => c.studentId === String(id));
+    } catch {
+      /* 没有宿舍权限：调宿记录显示空态 */
+    }
+
+    /* 3. 宿舍负责人 / 班级（宿舍管理同步） */
+    if (d.dorm?.dormId) {
+      try {
+        const { getDormDetail } = await import('../dorm/service');
+        const room = await getDormDetail(stage, d.dorm.dormId, user);
+        out.dormOwnerName = room?.ownerName ?? null;
+        out.dormClassName = room?.className ?? null;
+      } catch {
+        /* 宿舍详情查不到就留空 */
+      }
+    }
+  }
+
+  return out;
+}
+
 export async function saveStudent(body: StudentSaveBody, user: any): Promise<StudentSaveResult> {
   await assertStageView(user, body.stage);
   if (!body.studentName?.trim()) throw new BizError(BizCode.PARAM_ERROR, '姓名必填');
