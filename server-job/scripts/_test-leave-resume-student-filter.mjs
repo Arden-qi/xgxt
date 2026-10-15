@@ -46,6 +46,14 @@ const API = `${BASE}/api/teaching/leave`;
 const BIZ = { SUSPEND: 1, QUIT: 2, RESUME: 3 };
 const STATUS = { STUDYING: 5, SUSPENDED: 6 };
 
+/** 异动日期一律用「今天」：后端有「今天 ± 10 天」的窗口校验（见 shared/format.ts） */
+const TODAY = (() => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
+})();
+
 const { check, summary } = makeChecker();
 const fixtures = [];
 /** 夹具登记：切读模式下数据落在统一表，清理必须跟着改指向，否则一行都删不掉 */
@@ -173,7 +181,7 @@ const reg = (dbName, table, id) => {
           stage,
           studentId: jhOn.id, // ★ 在读生
           bizType: BIZ.RESUME,
-          leaveDate: '2026-10-15',
+          leaveDate: TODAY,
           leaveReason: '自检RSF-给在读生办复学（应被拒）',
           submit: false,
         },
@@ -192,7 +200,7 @@ const reg = (dbName, table, id) => {
           stage,
           studentId: jhSus.id, // ★ 休学生
           bizType: BIZ.RESUME,
-          leaveDate: '2026-10-15',
+          leaveDate: TODAY,
           leaveReason: '自检RSF-休学生复学（应放行）',
           submit: false,
         },
@@ -241,7 +249,7 @@ const reg = (dbName, table, id) => {
           stage,
           studentId: jobOn.id,
           bizType: BIZ.RESUME,
-          leaveDate: '2026-10-15',
+          leaveDate: TODAY,
           leaveReason: '自检RSF-实训给在读生办复学（应被拒）',
           submit: false,
         },

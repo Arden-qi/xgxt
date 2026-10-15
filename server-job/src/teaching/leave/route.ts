@@ -15,6 +15,7 @@ import { BizCode } from 'shared-types';
 import { ok, page } from '../../utils/response';
 import { wrap } from '../../utils/wrap';
 import { BizError } from '../../middleware/errorHandler';
+import { LEAVE_DATE_WINDOW_DAYS } from '../shared/format';
 import {
   LEAVE_BIZ_TYPE_NAME,
   LEAVE_CHAIN_STEPS,
@@ -159,6 +160,8 @@ teachingLeaveRouter.get(
         })),
         stageBizTypes: LEAVE_STAGE_BIZ,
         departments: LEAVE_DEPARTMENTS,
+        /** ★ 异动日期可选窗口（今天 ± N 天）：前端 picker 的 disabled-date 用它 */
+        leaveDateWindowDays: LEAVE_DATE_WINDOW_DAYS,
       }),
     );
   }),

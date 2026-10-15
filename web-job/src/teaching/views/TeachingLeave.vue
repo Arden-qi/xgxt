@@ -180,8 +180,19 @@
           </div>
         </el-form-item>
         <el-form-item :label="form.bizType === 3 ? '复学日期' : '异动日期'">
-          <el-date-picker v-model="form.leaveDate" type="date" value-format="YYYY-MM-DD" style="width: 180px" />
+          <el-date-picker
+            v-model="form.leaveDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            :disabled-date="disabledLeaveDate"
+            :placeholder="`只能选今天前后 ${leaveDateWindowDays} 天`"
+            style="width: 220px"
+          />
+          <div class="muted muted--block">
+            可选范围：{{ dateWindowHint }}
+          </div>
         </el-form-item>
+        <!-- ⚠️ 「预计复学」是**未来计划**（可能几个月后），不受上面的 10 天窗口限制 -->
         <el-form-item v-if="form.bizType === 1" label="预计复学">
           <el-date-picker
             v-model="form.expectResumeDate"
@@ -303,6 +314,9 @@
  *   部门 → 学段（jh/class/job）由 `/meta` 的 departments 下发，页面不另抄一份。
  *   「就业」暂无学籍异动业务 → 选中即提示 + 置灰（类型/学生/保存全禁用），
  *   而不是让它填完再在提交时报错。
+ * ★ 异动日期（复学时叫「复学日期」）**只能选今天 ± 10 天**：picker 用 disabled-date
+ *   禁掉窗口外的日期，天数由 `/meta.leaveDateWindowDays` 下发（与后端校验同源）。
+ *   ⚠️ 「预计复学」是未来计划（可能几个月后），**不受**这个窗口限制。
  * ⚠️ 大学没有「复学」—— 类型选项按 `/meta` 的 stageBizTypes 过滤
  * ⚠️ 列表的「学段」筛选/列保留不动：那是查看维度（跨学段合并后的筛选项）
  */
@@ -311,6 +325,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   LEAVE_BIZ_NAME,
   LEAVE_CHAIN_STEPS,
+  LEAVE_DATE_WINDOW_DAYS_DEFAULT,
   LEAVE_DEPARTMENTS_DEFAULT,
   LEAVE_STAGE_BIZ_DEFAULT,
   LEAVE_STATUS_NAME,
@@ -343,6 +358,12 @@ const stageOptions = ref<Array<{ value: TeachingStage; label: string }>>([]);
 const stageBiz = ref<Record<string, number[]>>({ ...LEAVE_STAGE_BIZ_DEFAULT });
 /** 部门下拉（以后端 `/meta` 为准，取不到时用本地默认值，页面不至于空白） */
 const departments = ref<LeaveDepartment[]>([...LEAVE_DEPARTMENTS_DEFAULT]);
+/**
+ * 异动日期的可选窗口：**今天 ± N 天**（业务要求）
+ * ★ N 由后端 `/meta.leaveDateWindowDays` 下发（与后端 create 的校验同源），
+ *   这里只是兜底默认值。改窗口天数请改后端 `LEAVE_DATE_WINDOW_DAYS`。
+ */
+const leaveDateWindowDays = ref(LEAVE_DATE_WINDOW_DAYS_DEFAULT);
 const allClasses = ref<Array<{ stage: TeachingStage; stageName: string; id: string; name: string }>>([]);
 
 const query = reactive({
@@ -415,6 +436,8 @@ async function loadMeta() {
     if (meta?.stageBizTypes) stageBiz.value = meta.stageBizTypes;
     // 部门列表以后端为准（「就业」的 stage 是否为 null 也由后端说了算）
     if (meta?.departments?.length) departments.value = meta.departments;
+    // 异动日期窗口同理：后端校验多少天，前端就禁多少天（两处不同步就成了「能选不能交」）
+    if (meta?.leaveDateWindowDays) leaveDateWindowDays.value = meta.leaveDateWindowDays;
   } catch {
     /* 用默认值 */
   }
@@ -480,6 +503,37 @@ const deptUnsupported = computed(() => !form.stage);
 function stageOfDept(code: string): TeachingStage | undefined {
   return departments.value.find((d) => d.code === code)?.stage ?? undefined;
 }
+
+/* -------- 异动日期窗口：今天 ± N 天 -------- */
+
+const fmtDay = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** 窗口起止（本地时间的当天零点 / 末日 23:59:59，两端都含） */
+function dateWindowBounds() {
+  const n = leaveDateWindowDays.value;
+  const now = new Date();
+  return {
+    start: new Date(now.getFullYear(), now.getMonth(), now.getDate() - n),
+    end: new Date(now.getFullYear(), now.getMonth(), now.getDate() + n, 23, 59, 59, 999),
+  };
+}
+
+/**
+ * el-date-picker 的 disabled-date：窗口外的日期**不可选**
+ * ⚠️ 只禁前端是不够的（表单可绕过）——后端 create 有同一套校验，
+ *    两边的天数都来自 `/meta.leaveDateWindowDays`，不会各说各话。
+ */
+function disabledLeaveDate(d: Date): boolean {
+  const { start, end } = dateWindowBounds();
+  return d.getTime() < start.getTime() || d.getTime() > end.getTime();
+}
+
+/** 给用户看的具体范围（例：2026-10-05 ～ 2026-10-25） */
+const dateWindowHint = computed(() => {
+  const { start, end } = dateWindowBounds();
+  return `${fmtDay(start)} ～ ${fmtDay(end)}`;
+});
 
 /** 打开对话框：默认停在「列表筛选的学段」对应部门，否则第一个可用部门 */
 function openCreate() {

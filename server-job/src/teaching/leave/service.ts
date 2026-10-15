@@ -56,6 +56,11 @@ import {
   TEACHING_STAGES,
 } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
+import {
+  LEAVE_DATE_WINDOW_DAYS,
+  daysFromToday,
+  isWithinLeaveDateWindow,
+} from '../shared/format';
 import { classNameOf, listClassesOfStages } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption } from './types';
 import * as repoJh from './repo.classJh';
@@ -346,6 +351,24 @@ export async function create(body: LeaveSaveBody, user: any): Promise<{ id: stri
     throw new BizError(
       BizCode.PARAM_ERROR,
       `只有「休学」中的学生才能办复学：${stu.name} 当前是「${STUDENT_STATUS_NAME[cur] || '未知'}」`,
+    );
+  }
+
+  /**
+   * ★ 异动日期必须落在「今天 ± 10 天」内
+   *
+   * 前端 picker 已经用 disabled-date 禁掉了窗口外的日期，但**表单可以被绕过**
+   * （直接 POST /create）→ 服务端必须再拦一次。
+   * 这个窗口不是防坏人，是防手滑：把 2026-10-09 写成 2025-10-09 这种错，
+   * 列表上完全看不出来，却会让出勤 / 按天退费 / 宿舍退宿整体错位。
+   * 窗口天数与前端同源：`LEAVE_DATE_WINDOW_DAYS`（由 /meta 下发）。
+   */
+  if (body.leaveDate && !isWithinLeaveDateWindow(body.leaveDate)) {
+    const diff = daysFromToday(body.leaveDate);
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `异动日期只能选今天前后 ${LEAVE_DATE_WINDOW_DAYS} 天内的日期：` +
+        `填的 ${body.leaveDate} 距今天 ${diff === null ? '无法识别（需 YYYY-MM-DD）' : `${Math.abs(diff)} 天`}`,
     );
   }
 

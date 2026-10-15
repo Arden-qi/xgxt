@@ -35,6 +35,21 @@ const API = `${BASE}/api/teaching/leave`;
 const BIZ = { SUSPEND: 1, QUIT: 2, RESUME: 3 };
 const ALL_BIZ_TYPES = ['suspend', 'quit', 'resume'];
 
+/**
+ * ★ 异动日期用「今天」，不要写死日期
+ *
+ * 后端已加「异动日期只能是今天 ± 10 天」的校验（防手滑把 2026 写成 2025 之类，
+ * 见 shared/format.ts 的 LEAVE_DATE_WINDOW_DAYS）。写死的 '2026-10-09'
+ * 当天跑没问题，过几天再跑就会被这条校验拦下 —— 那是**测试自己过期**，
+ * 不是业务坏了，会浪费大量排查时间。所以统一取当天。
+ */
+const TODAY = (() => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
+})();
+
 const { check, summary } = makeChecker();
 const fixtures = [];
 // ★ 第4期步骤2：切读时数据落在统一表，登记必须跟着改指向，否则清理删不掉
@@ -179,7 +194,7 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
         stage: 'job',
         studentId: jobStu.id,
         bizType: BIZ.QUIT,
-        leaveDate: '2026-10-09',
+        leaveDate: TODAY,
         leaveReason: '自检-实训退学',
         submit: true,
       },
@@ -245,7 +260,7 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
         stage: 'jh',
         studentId: jhStu.id,
         bizType: BIZ.QUIT,
-        leaveDate: '2026-10-09',
+        leaveDate: TODAY,
         leaveReason: '自检-初高退学',
         submit: true,
       },
@@ -301,7 +316,7 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
         stage: 'class',
         studentId: clsStu.id,
         bizType: BIZ.SUSPEND,
-        leaveDate: '2026-10-09',
+        leaveDate: TODAY,
         leaveReason: '自检-大学休学',
         submit: true,
       },
@@ -349,7 +364,7 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
         stage: 'job',
         studentId: rStu.id,
         bizType: BIZ.RESUME,
-        leaveDate: '2026-10-09',
+        leaveDate: TODAY,
         leaveReason: '自检-复学',
         submit: true,
       },

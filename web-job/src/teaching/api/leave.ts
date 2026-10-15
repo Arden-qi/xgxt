@@ -152,12 +152,21 @@ export const LEAVE_DEPARTMENTS_DEFAULT: LeaveDepartment[] = [
   { code: 'employ', name: '就业', stage: null },
 ];
 
+/**
+ * 异动日期可选窗口的**兜底值**（今天 ± N 天）
+ * ★ 权威值由后端 `/meta.leaveDateWindowDays` 下发（与后端 create 的校验同源），
+ *   改窗口天数请改后端 `LEAVE_DATE_WINDOW_DAYS`。
+ */
+export const LEAVE_DATE_WINDOW_DAYS_DEFAULT = 10;
+
 export interface LeaveMeta {
   bizTypes: Array<{ value: number; label: string; steps: number }>;
   statuses: Array<{ value: number; label: string }>;
   stageBizTypes: Record<string, number[]>;
   /** ★ 部门下拉（初高中 / 大学 / 实训 / 就业） */
   departments?: LeaveDepartment[];
+  /** ★ 异动日期可选窗口：今天 ± N 天 */
+  leaveDateWindowDays?: number;
 }
 
 export function listLeaves(p: {
