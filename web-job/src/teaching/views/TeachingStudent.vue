@@ -704,8 +704,18 @@ const dormRooms = ref<DormRoomItem[]>([]);
 async function loadDormRooms() {
   dormLoading.value = true;
   try {
-    const data = await fetchDormList({ page: 1, size: 500 });
-    dormRooms.value = data.list || [];
+    // ⚠️ /api/edu/dorm/list 的 size 上限是 200（zod 校验），一次拉 500 会被
+    //   「参数 size 超出允许范围」400 拒掉 —— 这里按 200/页自动翻页拉全量
+    const out: DormRoomItem[] = [];
+    const size = 200;
+    const first = await fetchDormList({ page: 1, size });
+    out.push(...(first.list || []));
+    const pages = Math.ceil((first.total || 0) / size);
+    for (let p = 2; p <= Math.min(pages, 10); p++) {
+      const d = await fetchDormList({ page: p, size });
+      out.push(...(d.list || []));
+    }
+    dormRooms.value = out;
   } catch {
     dormRooms.value = [];
   } finally {
