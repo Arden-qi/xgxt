@@ -367,19 +367,44 @@ export function applyRefund(payload: ConsultRefundApplyPayload): Promise<{ id: s
   return http.post<{ id: string; refundNo: string }>('/api/consult/refund/apply', payload);
 }
 
-/** 经理审批通过 */
-export function approveRefund(id: string, remark?: string): Promise<null> {
-  return http.post<null>('/api/consult/refund/approve', { id, remark });
+/**
+ * 经理审批通过
+ *
+ * ⚠️⚠️ 2026-10-15 修复：入参字段名原本发的是 `id`，而后端
+ *   `POST /api/consult/refund/approve` 的 zod schema 要的是 **`refundId`**
+ *   （`z.object({ refundId: z.string().min(1) })`）。
+ *   字段名对不上 → 校验直接拒掉：
+ *     400「参数「refundId」类型不正确」
+ *   **经理点「审批通过」永远失败**（用户 2026-10-15 反馈的现象）。
+ *
+ * ⚠️ 同批修掉的还有 rejectRefund / payRefund —— 三个接口都是同一个字段名问题，
+ *    改的时候一定要三个一起改（少改一个就还有一个按钮点不动）。
+ */
+export function approveRefund(refundId: string): Promise<null> {
+  return http.post<null>('/api/consult/refund/approve', { refundId });
 }
 
-/** 经理驳回 */
-export function rejectRefund(id: string, rejectReason: string): Promise<null> {
-  return http.post<null>('/api/consult/refund/reject', { id, rejectReason });
+/**
+ * 经理驳回
+ *
+ * ⚠️ 同上：字段名必须是 `refundId`（不是 id），且 `rejectReason` 必填。
+ */
+export function rejectRefund(refundId: string, rejectReason: string): Promise<null> {
+  return http.post<null>('/api/consult/refund/reject', { refundId, rejectReason });
 }
 
-/** 财务打款（演示：财务角色或手工标记） */
-export function payRefund(id: string, payVoucherNo?: string): Promise<null> {
-  return http.post<null>('/api/consult/refund/pay', { id, payVoucherNo });
+/**
+ * 财务打款（演示：财务角色或手工标记）
+ *
+ * ⚠️ 同上：字段名必须是 `refundId`。
+ *   另外后端 `/pay` 收的是 `payMethod / payRef / payTo`，
+ *   原先前端发的是 `payVoucherNo` —— 名字不存在，即使字段名对了也会丢参数。
+ */
+export function payRefund(
+  refundId: string,
+  payload: { payMethod?: string; payRef?: string; payTo?: string } = {},
+): Promise<null> {
+  return http.post<null>('/api/consult/refund/pay', { refundId, ...payload });
 }
 
 /** 从财务同步退费状态 */
