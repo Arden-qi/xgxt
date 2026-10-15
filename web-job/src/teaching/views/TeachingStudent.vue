@@ -795,9 +795,7 @@ function openCreate() {
   // 选了部门后会由 onFormDeptChange 自动改判为 初高/大学
   const st = (query.stage || stageOptions.value[0]?.value || 'jh') as StudentStage;
   form.stage = st;
-  // 2026-10-15 二次改版：部门默认选中 —— 初高部（学段筛选为大学时默认大学部；就业/教务不预选）
-  if (st === 'class') form.deptCode = DeptCode.UNIVERSITY;
-  else if (st === 'jh') form.deptCode = DeptCode.JUNIOR_SENIOR;
+  // 2026-10-15 按用户要求：部门不预选默认值，由用户自己选（未选部门时学历下拉显示并集）
   formAge.value = null;
   editVisible.value = true;
 }
