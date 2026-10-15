@@ -99,10 +99,10 @@
           <el-tag size="small" effect="plain">{{ row.stageName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="学号" width="120">
+      <el-table-column label="学号" min-width="100">
         <template #default="{ row }">{{ row.studentNo }}</template>
       </el-table-column>
-      <el-table-column label="姓名" width="100">
+      <el-table-column label="姓名" min-width="80">
         <template #default="{ row }">{{ row.studentName }}</template>
       </el-table-column>
       <el-table-column label="性别" width="60" align="center">
@@ -114,7 +114,7 @@
       <el-table-column label="班级" min-width="120">
         <template #default="{ row }">{{ row.className || '—' }}</template>
       </el-table-column>
-      <el-table-column label="阶段" width="110">
+      <el-table-column label="阶段" min-width="95">
         <template #default="{ row }">{{ row.phaseName || '—' }}</template>
       </el-table-column>
       <el-table-column label="状态" width="90" align="center">
@@ -122,16 +122,16 @@
           <el-tag :type="statusTag(row.studentStatus)" size="small">{{ row.studentStatusName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="手机号" width="120">
+      <el-table-column label="手机号" min-width="105">
         <template #default="{ row }">{{ row.phone || '—' }}</template>
       </el-table-column>
-      <el-table-column label="宿舍" width="110">
+      <el-table-column label="宿舍" min-width="100">
         <template #default="{ row }">{{ row.bedLabel || row.dormNo || '—' }}</template>
       </el-table-column>
-      <el-table-column label="入学时间" width="105" align="center">
+      <el-table-column label="入学时间" min-width="100" align="center">
         <template #default="{ row }">{{ row.enrollDate || '—' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="150" fixed="right" align="center">
+      <el-table-column label="操作" width="170" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
           <el-button v-if="!isReadOnlyUser" link type="primary" size="small" @click="openEdit(row)">
