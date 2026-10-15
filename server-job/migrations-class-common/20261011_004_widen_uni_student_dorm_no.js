@@ -23,11 +23,15 @@
  *   up 先查 information_schema，已是目标宽度就跳过；改完回查类型。
  */
 
-const DB = 'sms_common';
+/**
+ * 5f53524d8fde63a57684771f5b9e5e93540dFf084e0d51996b7bFf1a63625e93540d90e87f7265f64e0d4f1a67e595195e93Ff09
+ * 2605 2026-10-15 539f4e3a51996b7b7684 'sms_common'
+ */
+const dbOf = (knex) => knex.client.config.connection.database || 'sms_common';
 
 async function columnType(knex, table, column) {
   const r = await knex('information_schema.COLUMNS')
-    .where({ TABLE_SCHEMA: DB, TABLE_NAME: table, COLUMN_NAME: column })
+    .where({ TABLE_SCHEMA: dbOf(knex), TABLE_NAME: table, COLUMN_NAME: column })
     .first();
   return r ? String(r.COLUMN_TYPE) : null;
 }
