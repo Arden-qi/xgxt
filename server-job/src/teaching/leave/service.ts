@@ -19,6 +19,8 @@ import {
   ApprovalBizType,
   ApprovalStatus,
   BizCode,
+  STUDENT_STATUS_NAME,
+  StudentStatus,
   canApprove,
   canInitiate,
   isMyApproval,
@@ -74,7 +76,11 @@ function bizToApproval(bizType: number): string {
 type Repo = {
   list: (q: LeaveListQuery) => Promise<{ rows: LeaveRow[]; total: number }>;
   detail: (id: string) => Promise<LeaveRow | null>;
-  studentOptions: (keyword: string, limit: number) => Promise<StudentOption[]>;
+  studentOptions: (
+    keyword: string,
+    limit: number,
+    opts?: { onlySuspended?: boolean },
+  ) => Promise<StudentOption[]>;
   findStudent: (id: string) => Promise<{
     no: string;
     name: string;
@@ -271,14 +277,27 @@ const ACTION_NAME: Record<number, string> = { 1: '提交', 2: '同意', 3: '驳�
  * 下拉
  * ============================================================ */
 
+/**
+ * 学生下拉
+ *
+ * ★ 复学（`bizType = 3`）**只能挑当前处于休学的学生**：
+ *   复学 = 把休学的人接回来，若下拉里混进在读/退学的人，用户很容易选错，
+ *   而错误直到审批通过（改学生状态那一刻）才暴露，已经晚了。
+ *   → 在下拉这一层就把名单收窄到 `student_status = 休学(6)`。
+ *
+ * ⚠️ 只收窄下拉是**不够的**：下拉是可以绕过的（直接调接口）。
+ *   所以 `create()` 里还有一道同样的校验，两处口径必须一致。
+ */
 export async function studentOptions(
   stage: TeachingStage,
   keyword: string,
   limit: number,
   user: any,
+  bizType?: number,
 ): Promise<StudentOption[]> {
   await assertStageView(user, stage);
-  return REPOS[stage].studentOptions(keyword, limit);
+  const onlySuspended = bizType === LEAVE_BIZ_TYPE.RESUME;
+  return REPOS[stage].studentOptions(keyword, limit, { onlySuspended });
 }
 
 export async function classOptions(user: any) {
@@ -314,6 +333,21 @@ export async function create(body: LeaveSaveBody, user: any): Promise<{ id: stri
   const repo = REPOS[stage];
   const stu = await repo.findStudent(body.studentId);
   if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
+
+  /**
+   * ★ 复学：只有「当前处于休学」的学生办得通
+   *
+   * 下拉里已经过滤了，但**下拉可以被绕过**（直接 POST /create），
+   * 所以这里必须再拦一次 —— 否则能给在读生/退学生开出复学单，
+   * 审批通过时会把学生状态直接改成「实训中」，把在册学生改坏。
+   */
+  if (body.bizType === LEAVE_BIZ_TYPE.RESUME && stu.studentStatus !== StudentStatus.SUSPENDED) {
+    const cur = stu.studentStatus ?? -1;
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `只有「休学」中的学生才能办复学：${stu.name} 当前是「${STUDENT_STATUS_NAME[cur] || '未知'}」`,
+    );
+  }
 
   if (await repo.hasPending(body.studentId)) {
     throw new BizError(BizCode.STUDENT_LEAVE_DUPLICATE, '该学生已有进行中的申请，请勿重复提交');

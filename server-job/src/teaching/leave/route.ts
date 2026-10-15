@@ -94,7 +94,9 @@ teachingLeaveRouter.get(
 );
 
 /* ============================================================
- * 3. 学生下拉  GET /api/teaching/leave/student-options?stage=
+ * 3. 学生下拉  GET /api/teaching/leave/student-options?stage=&bizType=
+ *    ★ bizType=3（复学）时后端只返回**当前处于休学**的学生 ——
+ *      复学是「把休学的人接回来」，下拉里就不该出现在读/退学的人。
  * ============================================================ */
 
 teachingLeaveRouter.get(
@@ -102,7 +104,10 @@ teachingLeaveRouter.get(
   wrap(async (req, res) => {
     const stage = mustStage(req.query.stage);
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
-    res.json(ok(await svc.studentOptions(stage, str(req.query.keyword) || '', limit, req.user)));
+    const bizType = optInt(req.query.bizType, 1, 3);
+    res.json(
+      ok(await svc.studentOptions(stage, str(req.query.keyword) || '', limit, req.user, bizType)),
+    );
   }),
 );
 

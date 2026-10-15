@@ -157,8 +157,18 @@ export function getLeaveDetail(id: string) {
   return http.get<LeaveDetail>('/api/teaching/leave/detail', { id });
 }
 
-export function listStudentOptions(stage: TeachingStage, keyword?: string) {
-  return http.get<StudentOption[]>('/api/teaching/leave/student-options', { stage, keyword });
+/**
+ * 学生下拉
+ *
+ * ★ 传 `bizType = 3`（复学）时，后端**只返回当前处于休学的学生** ——
+ *   复学是「把休学的人接回来」，下拉里就不该出现在读/退学的人。
+ */
+export function listStudentOptions(stage: TeachingStage, keyword?: string, bizType?: number) {
+  return http.get<StudentOption[]>('/api/teaching/leave/student-options', {
+    stage,
+    keyword,
+    bizType,
+  });
 }
 
 export function listClasses() {

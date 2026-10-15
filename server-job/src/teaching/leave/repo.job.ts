@@ -75,9 +75,20 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
   };
 }
 
-/** 学生下拉 */
-export async function studentOptions(keyword: string, limit: number): Promise<StudentOption[]> {
+/**
+ * 学生下拉
+ *
+ * ★ `opts.onlySuspended` = 只挑「当前处于休学」的学生（`student_status = 6`）。
+ *   复学申请必须从休学名单里挑人，否则会出现「给在读生办复学」这种脏数据。
+ *   ⚠️ 「哪种类型要限状态」是**业务规则**，判定在 service 一处；仓储只负责过滤。
+ */
+export async function studentOptions(
+  keyword: string,
+  limit: number,
+  opts: { onlySuspended?: boolean } = {},
+): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_job', S, STAGE).where('is_deleted', 0);
+  if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
   if (keyword) {
     q.andWhere((b) => {
       b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);

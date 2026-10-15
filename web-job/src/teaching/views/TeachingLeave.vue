@@ -135,7 +135,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="类型" required>
-          <el-radio-group v-model="form.bizType">
+          <el-radio-group v-model="form.bizType" @change="onBizTypeChange">
             <el-radio-button
               v-for="b in allowedBiz(form.stage)"
               :key="b"
@@ -152,10 +152,13 @@
             filterable
             remote
             reserve-keyword
-            placeholder="输入姓名 / 学号搜索"
+            :placeholder="
+              form.bizType === 3 ? '仅可搜索「休学中」的学生（姓名 / 学号）' : '输入姓名 / 学号搜索'
+            "
             :remote-method="searchStudents"
             :loading="stuLoading"
             style="width: 100%"
+            @visible-change="(v: boolean) => v && searchStudents('')"
           >
             <el-option
               v-for="s in students"
@@ -164,6 +167,9 @@
               :value="s.id"
             />
           </el-select>
+          <div v-if="form.bizType === 3" class="muted muted--block">
+            复学只能从「当前处于休学」的学生里选（名单已按此过滤）
+          </div>
         </el-form-item>
         <el-form-item :label="form.bizType === 3 ? '复学日期' : '异动日期'">
           <el-date-picker v-model="form.leaveDate" type="date" value-format="YYYY-MM-DD" style="width: 180px" />
@@ -276,6 +282,8 @@
  * ★ 一个页面取代原来三套（初高「通用流程引擎」/ 大学「休学退学」/ 实训「学籍异动」）
  * ★ 审批链统一采用实训那套（休学/复学 1 步；退学 2 步）—— 与后端 service.ts 口径一致
  * ★ 复学：审批通过时必须选「复学班」（对话框里有班级下拉，未选不允许通过）
+ * ★ 复学：**发起时的学生下拉只列「当前处于休学的学生」**（后端按 bizType=3 过滤），
+ *   切换类型会清空已选并重搜；后端 create 另有一道同样的校验（下拉可被绕过）
  * ⚠️ 大学没有「复学」—— 类型选项按 `/meta` 的 stageBizTypes 过滤
  */
 import { computed, onMounted, reactive, ref } from 'vue';
@@ -446,11 +454,25 @@ function onStageChange() {
   searchStudents('');
 }
 
+/**
+ * ★ 切换异动类型必须重搜学生
+ *
+ * 复学（3）的候选名单和休学/退学**不是同一批人**：
+ * 复学只能挑「当前处于休学」的学生（后端按 bizType 过滤）。
+ * 不重搜的话，切到复学后列表里还留着刚才搜出来的在读生 →
+ * 用户选中 → 后端直接报错，体验上就是「点了没反应/莫名报错」。
+ */
+function onBizTypeChange() {
+  form.studentId = '';
+  students.value = [];
+  searchStudents('');
+}
+
 async function searchStudents(kw: string) {
   if (!form.stage) return;
   stuLoading.value = true;
   try {
-    students.value = (await listStudentOptions(form.stage, kw)) || [];
+    students.value = (await listStudentOptions(form.stage, kw, form.bizType)) || [];
   } catch {
     students.value = [];
   } finally {
@@ -624,5 +646,12 @@ async function doCancel(row: LeaveRow) {
   color: var(--el-text-color-secondary);
   font-size: 12px;
   margin-left: 4px;
+}
+.muted--block {
+  display: block;
+  margin-left: 0;
+  margin-top: 4px;
+  line-height: 1.4;
+  width: 100%;
 }
 </style>

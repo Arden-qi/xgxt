@@ -82,9 +82,22 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
   };
 }
 
-/** 学生下拉 */
-export async function studentOptions(keyword: string, limit: number): Promise<StudentOption[]> {
+/**
+ * 学生下拉
+ *
+ * ★ `opts.onlySuspended` = 只挑「当前处于休学」的学生（`student_status = 6`）。
+ *   ⚠️ 大学目前**没有复学**（`LEAVE_STAGE_BIZ.class = [1,2]`），所以这个开关
+ *      在大学这条链上暂时用不到；仍然实现，是为了让三个仓储**签名一致**
+ *      （service 按 stage 一致分派，缺参数会编译不过）。哪天大学开出复学，
+ *      这里已经是对的。
+ */
+export async function studentOptions(
+  keyword: string,
+  limit: number,
+  opts: { onlySuspended?: boolean } = {},
+): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_class', S, STAGE).where('is_deleted', 0);
+  if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
   if (keyword) {
     q.andWhere((b) => {
       b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);
