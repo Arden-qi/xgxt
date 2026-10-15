@@ -30,7 +30,6 @@ import { ROLE_CODE_NAME } from 'shared-types';
 import type { ModuleDef } from 'shared-types/portal';
 import * as ElementPlusIconsVue from '@element-plus/icons-vue';
 import {
-  myPages,
   myRoles,
   permissionLoaded,
   loadMyPermissions,
@@ -283,23 +282,35 @@ onMounted(() => {
 <template>
   <RouterView v-if="isLoginPage" />
   <el-container v-else class="layout">
-    <!-- ============ 顶部栏 ============ -->
+    <!-- ============ 顶部栏（2026-10-15 改版：良志红暖色主题，LOGO 左上角） ============ -->
     <el-header class="header">
       <div class="header-left">
+        <img class="header-logo" src="/logo.png" alt="良志教育" />
+        <span class="header-div"></span>
         <span class="header-title">学管系统</span>
-        <el-tag size="small" effect="dark" class="header-tag">统一门户</el-tag>
+        <el-tag size="small" effect="light" round class="header-tag">统一门户</el-tag>
       </div>
+      <el-input
+        class="header-search"
+        placeholder="搜索学员、班级、功能…"
+        :prefix-icon="getIcon('Search')"
+      />
       <div class="header-user">
-        <span>{{ userNameText }}</span>
-        <el-tag size="small" type="info" effect="plain">{{ roleText }}</el-tag>
-        <el-tag
-          size="small"
-          effect="plain"
-          :type="myPages.length ? 'success' : 'danger'"
-          class="perm-tag"
-        >
-          {{ myPages.length }} 个页面权限
-        </el-tag>
+        <el-badge is-dot class="header-badge">
+          <el-button circle class="header-icbtn" title="消息通知">
+            <el-icon><component :is="getIcon('Bell')" /></el-icon>
+          </el-button>
+        </el-badge>
+        <el-button circle class="header-icbtn" title="刷新权限" @click="loadMyPermissions">
+          <el-icon><component :is="getIcon('Refresh')" /></el-icon>
+        </el-button>
+        <div class="header-me">
+          <div class="header-avatar">{{ (userNameText || 'U').slice(0, 1) }}</div>
+          <div class="header-me-txt">
+            <span class="header-uname">{{ userNameText }}</span>
+            <span class="header-urole">{{ roleText }}</span>
+          </div>
+        </div>
         <el-button size="small" text class="switch-role" @click="doLogout">退出登录</el-button>
       </div>
     </el-header>
@@ -411,59 +422,151 @@ onMounted(() => {
   min-height: 0;
 }
 
+/* ============================================================
+ * 2026-10-15 顶栏改版（良志红暖色主题）
+ *   LOGO 左上角 + 白底 + 暖灰边框 + 搜索框 + 头像身份区
+ *   配色与 ui-preview 设计稿一致：红 #CD3A33 只做点缀
+ * ============================================================ */
 .header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  background: var(--el-color-primary, #2563eb);
-  color: #fff;
+  gap: 18px;
+  background: #fff;
+  border-bottom: 1px solid #efe7e2;
+  color: #443432;
   flex: none;
+  height: 62px;
+  padding: 0 18px;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 13px;
+  flex: none;
+}
+
+.header-logo {
+  height: 34px;
+  width: auto;
+}
+
+.header-div {
+  width: 1px;
+  height: 22px;
+  background: #e2d7d1;
 }
 
 .header-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
+  letter-spacing: 0.5px;
 }
 
 .header-tag {
-  background: rgba(255, 255, 255, 0.22);
-  border-color: transparent;
-  color: #fff;
+  background: #fdf4f2;
+  border-color: #f9e4e1;
+  color: #cd3a33;
+}
+
+.header-search {
+  width: 280px;
+  margin-left: 8px;
+}
+
+/* 搜索框：胶囊形 + 暖底，聚焦变白 + 红边柔光 */
+.header-search :deep(.el-input__wrapper) {
+  border-radius: 18px;
+  background: #f6f3ef;
+  box-shadow: 0 0 0 1px #efe7e2 inset;
+}
+
+.header-search :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 0 0 1px #f2c8c3 inset;
+}
+
+.header-search :deep(.el-input__wrapper.is-focus) {
+  background: #fff;
+  box-shadow: 0 0 0 1px #cd3a33 inset, 0 0 0 3px rgba(205, 58, 51, 0.12);
 }
 
 .header-user {
+  margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   font-size: 14px;
 }
 
-/* 顶栏在蓝色底上，「退出登录」按钮要显白色才看得清 */
-.switch-role {
+.header-icbtn {
+  border: 1px solid #efe7e2;
+  color: #6b5c58;
+  background: #fff;
+}
+
+.header-icbtn:hover {
+  border-color: #f2c8c3;
+  color: #cd3a33;
+  background: #fdf4f2;
+}
+
+.header-me {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 12px;
+  border-left: 1px solid #efe7e2;
+}
+
+.header-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #dc7568, #b22a23);
   color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  flex: none;
+  box-shadow: 0 2px 8px rgba(205, 58, 51, 0.3);
+}
+
+.header-me-txt {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.header-uname {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.header-urole {
+  font-size: 11px;
+  color: #9c8d88;
+}
+
+/* 顶栏白底，「退出登录」用暖灰描边按钮，悬停转红 */
+.switch-role {
+  color: #6b5c58;
+  border: 1px solid #efe7e2;
+  padding: 6px 10px;
+  height: auto;
+  border-radius: 8px;
 }
 
 .switch-role:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.18);
-  border-color: #fff;
-}
-
-.perm-tag {
-  background: rgba(255, 255, 255, 0.9);
+  color: #cd3a33;
+  background: #fdf4f2;
+  border-color: #f2c8c3;
 }
 
 .aside {
   background: #fff;
-  border-right: 1px solid #e4e7ed;
+  border-right: 1px solid #E2D7D1;
   /* 高度由 flex 撑满 body-wrap；自己不再溢出，交给内部 el-scrollbar 滚 */
   overflow: hidden;
 }
@@ -489,7 +592,7 @@ onMounted(() => {
 }
 
 .main {
-  background: #f5f7fa;
+  background: #F6F3EF;
   padding: 0;
   overflow: auto;
   /* 右侧内容区独立滚动（与左侧导航互不影响） */

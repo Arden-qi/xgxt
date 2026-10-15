@@ -156,26 +156,26 @@ const unified = computed(() => def.value?.unified || null);
   gap: 10px;
   padding: 10px 16px;
   margin-bottom: 10px;
-  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border: 1px solid var(--el-border-color-lighter, #F1EAE5);
   border-radius: 8px;
   background: var(--el-fill-color-blank, #fff);
 }
 .td-bar-title {
   font-size: 15px;
   font-weight: 500;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--el-text-color-primary, #443432);
 }
 .td-bar-tag {
   font-size: 12px;
   line-height: 18px;
   padding: 0 6px;
   border-radius: 4px;
-  color: #185fa5;
-  background: #e6f1fb;
+  color: #B22A23;
+  background: #F9E4E1;
 }
 .td-bar-hint {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
   margin-left: auto;
 }
 

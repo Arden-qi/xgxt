@@ -599,11 +599,11 @@ onMounted(loadData);
 
 .tip {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .muted {
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 .resume-box {
@@ -618,6 +618,6 @@ onMounted(loadData);
 
 .resume-name {
   font-size: 13px;
-  color: #606266;
+  color: #7A6C67;
 }
 </style>

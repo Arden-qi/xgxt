@@ -284,11 +284,11 @@ onMounted(loadData);
 
 .period {
   font-size: 12px;
-  color: #4b5563;
+  color: #6B5C58;
 }
 
 .muted {
-  color: #b3bccb;
+  color: #C4B8B2;
   font-size: 12px;
 }
 </style>

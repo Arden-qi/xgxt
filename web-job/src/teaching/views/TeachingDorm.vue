@@ -936,31 +936,31 @@ defineExpose({ openChangeList, openChangeEntry });
 
 <style scoped>
 .tdv-tip { margin-bottom: 12px; }
-.tdv-tip :deep(.muted) { color: #909399; font-weight: normal; }
+.tdv-tip :deep(.muted) { color: #A2938E; font-weight: normal; }
 
 .tdv-cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .tdv-card {
   min-width: 190px;
   padding: 12px 14px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid #E2D7D1;
   border-radius: 6px;
   background: #fff;
 }
-.tdv-card__k { font-size: 13px; color: #909399; }
+.tdv-card__k { font-size: 13px; color: #A2938E; }
 .tdv-card__v { font-size: 22px; font-weight: 600; margin: 4px 0 6px; }
-.tdv-card__x { font-size: 12px; color: #606266; display: flex; gap: 10px; flex-wrap: wrap; }
-.tdv-card__x .ok { color: #67c23a; }
-.tdv-card__x .warn { color: #e6a23c; }
-.tdv-card__x .danger { color: #f56c6c; }
+.tdv-card__x { font-size: 12px; color: #7A6C67; display: flex; gap: 10px; flex-wrap: wrap; }
+.tdv-card__x .ok { color: #5FA36F; }
+.tdv-card__x .warn { color: #C9852E; }
+.tdv-card__x .danger { color: #CD3A33; }
 
 .tdv-filter { margin-bottom: 8px; }
 
-.link { color: #409eff; cursor: pointer; text-decoration: none; }
+.link { color: #CD3A33; cursor: pointer; text-decoration: none; }
 .link:hover { text-decoration: underline; }
-.ok { color: #67c23a; }
-.warn { color: #e6a23c; }
-.danger { color: #f56c6c; }
-.muted { color: #909399; font-size: 12px; }
+.ok { color: #5FA36F; }
+.warn { color: #C9852E; }
+.danger { color: #CD3A33; }
+.muted { color: #A2938E; font-size: 12px; }
 
 .tdv-page { margin-top: 12px; justify-content: flex-end; }
 
@@ -972,13 +972,13 @@ defineExpose({ openChangeList, openChangeEntry });
   gap: 10px;
 }
 .tdv-bed {
-  border: 1px solid #e4e7ed;
+  border: 1px solid #E2D7D1;
   border-radius: 6px;
   padding: 8px 10px;
-  background: #fafafa;
+  background: #FAF7F4;
 }
-.tdv-bed.is-free { border-color: #c6e2ff; background: #ecf5ff; }
-.tdv-bed.is-used { border-color: #e1f3d8; background: #f0f9eb; }
+.tdv-bed.is-free { border-color: #F9E4E1; background: #FDF4F2; }
+.tdv-bed.is-used { border-color: #D9EDE0; background: #EBF5EF; }
 .tdv-bed__no { font-weight: 600; margin-bottom: 4px; }
 .tdv-bed__who { font-size: 12px; min-height: 18px; display: flex; gap: 6px; align-items: baseline; }
 .tdv-bed__ops { margin-top: 4px; }

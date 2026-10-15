@@ -1406,21 +1406,21 @@ onMounted(load);
 
 .stu-name {
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 
 .stu-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 2px;
 }
 
 .ok {
-  color: #67c23a;
+  color: #5FA36F;
 }
 
 .warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 
 .d-head {
@@ -1429,7 +1429,7 @@ onMounted(load);
   justify-content: space-between;
   gap: 12px;
   padding-bottom: 12px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid #F1EAE5;
 }
 
 .d-name {
@@ -1442,7 +1442,7 @@ onMounted(load);
 
 .d-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 4px;
 }
 
@@ -1458,13 +1458,13 @@ onMounted(load);
 
 .d-title {
   font-weight: 600;
-  color: #303133;
+  color: #443432;
   margin-bottom: 8px;
 }
 
 .h-action {
   font-size: 13px;
-  color: #303133;
+  color: #443432;
 }
 
 .mb {
@@ -1473,8 +1473,8 @@ onMounted(load);
 
 /* ---- 转正式 / 补缴弹窗 ---- */
 .plan-box {
-  background: #f7f9fc;
-  border: 1px solid #e4e9f2;
+  background: #FBF7F4;
+  border: 1px solid #EFE9E4;
   border-radius: 6px;
   padding: 12px 14px;
 }
@@ -1484,7 +1484,7 @@ onMounted(load);
   align-items: baseline;
   justify-content: space-between;
   font-size: 13px;
-  color: #606266;
+  color: #7A6C67;
   padding: 3px 0;
 }
 
@@ -1507,11 +1507,11 @@ onMounted(load);
   gap: 5px;
   margin-top: 8px;
   padding: 7px 9px;
-  background: #fdf6ec;
-  border: 1px solid #f5dab1;
+  background: #FBF3E5;
+  border: 1px solid #EFD9B5;
   border-radius: 4px;
   font-size: 12px;
-  color: #b88230;
+  color: #A66A1F;
   line-height: 1.6;
 }
 </style>

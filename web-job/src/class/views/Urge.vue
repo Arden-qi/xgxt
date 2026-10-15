@@ -373,7 +373,7 @@ onMounted(async () => {
 }
 .money {
   font-variant-numeric: tabular-nums;
-  color: var(--red, #d93025);
+  color: var(--red, #B22A23);
 }
 .phone-cell {
   display: flex;

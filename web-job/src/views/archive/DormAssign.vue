@@ -271,9 +271,9 @@ async function handleDormDelete(row: any) {
 /** 床位进度条颜色：快满了变橙，满了变红 */
 function bedColor(row: any) {
   const rate = row.bedTotal > 0 ? row.bedUsed / row.bedTotal : 0;
-  if (rate >= 1) return '#f56c6c';
-  if (rate >= 0.7) return '#e6a23c';
-  return '#409eff';
+  if (rate >= 1) return '#CD3A33';
+  if (rate >= 0.7) return '#C9852E';
+  return '#CD3A33';
 }
 
 function bedPercent(row: any) {

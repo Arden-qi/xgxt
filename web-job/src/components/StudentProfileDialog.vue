@@ -993,7 +993,7 @@ function onDetailClosed(): void {
 .class-name {
   font-size: 17px;
   font-weight: 600;
-  color: #1f2329;
+  color: #3E3230;
 }
 
 .stats {
@@ -1003,7 +1003,7 @@ function onDetailClosed(): void {
 }
 
 .stat {
-  background: #f7f9fc;
+  background: #FBF7F4;
   border-radius: 8px;
   padding: 12px 16px;
 }
@@ -1011,16 +1011,16 @@ function onDetailClosed(): void {
 .stat-num {
   font-size: 24px;
   font-weight: 600;
-  color: #2563eb;
+  color: #CD3A33;
   line-height: 1.2;
 }
 
 .stat-num.warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 
 .stat-num.danger {
-  color: #f56c6c;
+  color: #CD3A33;
 }
 
 .unit {
@@ -1032,11 +1032,11 @@ function onDetailClosed(): void {
 .stat-label {
   margin-top: 4px;
   font-size: 12.5px;
-  color: #8f959e;
+  color: #9C8D88;
 }
 
 .sub {
-  color: #a5a9b0;
+  color: #B3A69F;
 }
 
 .filter-card :deep(.el-card__body) {
@@ -1058,11 +1058,11 @@ function onDetailClosed(): void {
   margin-top: 6px;
   font-size: 12.5px;
   line-height: 1.9;
-  color: #b88230;
+  color: #A66A1F;
 }
 
 .empty-hint strong {
-  color: #8a6d1f;
+  color: #8A6A24;
 }
 
 .pager {
@@ -1071,7 +1071,7 @@ function onDetailClosed(): void {
 }
 
 .repeat-warn {
-  color: #e6a23c;
+  color: #C9852E;
   font-weight: 600;
 }
 
@@ -1081,7 +1081,7 @@ function onDetailClosed(): void {
 .profile-dialog :deep(.el-dialog__header) {
   padding: 14px 20px;
   margin-right: 0;
-  border-bottom: 1px solid #eceef2;
+  border-bottom: 1px solid #F1EAE5;
 }
 
 .profile-dialog :deep(.el-dialog__body) {
@@ -1093,7 +1093,7 @@ function onDetailClosed(): void {
 
 .profile-dialog :deep(.el-dialog__footer) {
   padding: 10px 20px;
-  border-top: 1px solid #eceef2;
+  border-top: 1px solid #F1EAE5;
 }
 
 .pf-head {
@@ -1105,12 +1105,12 @@ function onDetailClosed(): void {
 .pf-name {
   font-size: 16px;
   font-weight: 600;
-  color: #1f2329;
+  color: #3E3230;
 }
 
 .pf-meta {
   font-size: 12.5px;
-  color: #8f959e;
+  color: #9C8D88;
 }
 
 .pf-body {
@@ -1128,7 +1128,7 @@ function onDetailClosed(): void {
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: #3E3230;
   margin: 6px 0 12px;
 }
 
@@ -1136,7 +1136,7 @@ function onDetailClosed(): void {
   width: 3px;
   height: 14px;
   border-radius: 2px;
-  background: #e6a23c;
+  background: #C9852E;
 }
 
 .sec-action {
@@ -1147,7 +1147,7 @@ function onDetailClosed(): void {
   margin-left: 10px;
   font-size: 12.5px;
   font-weight: 400;
-  color: #8f959e;
+  color: #9C8D88;
 }
 
 /* 字段卡片（4 列网格，仿参考页） */
@@ -1158,7 +1158,7 @@ function onDetailClosed(): void {
 }
 
 .field {
-  background: #f7f8fa;
+  background: #FAF7F4;
   border-radius: 6px;
   padding: 10px 12px;
   min-height: 58px;
@@ -1170,13 +1170,13 @@ function onDetailClosed(): void {
 
 .fl {
   font-size: 12px;
-  color: #8f959e;
+  color: #9C8D88;
   margin-bottom: 5px;
 }
 
 .fv {
   font-size: 14px;
-  color: #1f2329;
+  color: #3E3230;
   font-weight: 500;
   word-break: break-all;
 }
@@ -1199,15 +1199,15 @@ function onDetailClosed(): void {
 .resume-stu {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 .resume-class-tip {
   font-size: 13px;
-  color: #909399;
+  color: #A2938E;
   line-height: 1.6;
 }
 .resume-class-tip b {
-  color: #409eff;
+  color: #CD3A33;
 }
 .resume-stu .sub-text {
   font-weight: 400;
@@ -1216,11 +1216,11 @@ function onDetailClosed(): void {
 .edit-tip {
   margin-top: 4px;
   padding: 8px 12px;
-  background: #fdf6ec;
+  background: #FBF3E5;
   border-radius: 6px;
   font-size: 12.5px;
   line-height: 1.7;
-  color: #b88230;
+  color: #A66A1F;
 }
 
 /* 照片区 */
@@ -1233,9 +1233,9 @@ function onDetailClosed(): void {
 
 .photo-box {
   height: 110px;
-  border: 1px dashed #d5d8dd;
+  border: 1px dashed #D4C9C3;
   border-radius: 6px;
-  background: #fafbfc;
+  background: #FAF7F4;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1245,24 +1245,24 @@ function onDetailClosed(): void {
 }
 
 .photo-box:hover {
-  border-color: #a8b3c5;
-  background: #f4f6f9;
+  border-color: #C4B8B2;
+  background: #F6F3EF;
 }
 
 .photo-ph {
   font-size: 14px;
-  color: #a5a9b0;
+  color: #B3A69F;
 }
 
 .photo-hint {
   margin-top: 4px;
   font-size: 12px;
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 /* 成绩高亮 */
 .score-blue {
-  color: #2563eb;
+  color: #CD3A33;
   font-weight: 600;
 }
 
@@ -1274,7 +1274,7 @@ function onDetailClosed(): void {
   margin-top: 12px;
   font-size: 12.5px;
   line-height: 1.7;
-  color: #8f959e;
+  color: #9C8D88;
 }
 
 /* ============ ★ 2026-10-06 缴费记录 Tab：汇总 KPI ============ */
@@ -1319,21 +1319,21 @@ function onDetailClosed(): void {
   gap: 10px;
 }
 .emp-card {
-  border: 1px solid #ebeef5;
+  border: 1px solid #F1EAE5;
   border-radius: 6px;
   padding: 10px 14px;
-  background: #fafbfc;
+  background: #FAF7F4;
 }
 .ec-head {
   font-size: 12.5px;
   font-weight: 600;
-  color: #5a6b85;
+  color: #8A7B76;
   margin-bottom: 5px;
 }
 .ec-body {
   font-size: 13px;
   line-height: 1.75;
-  color: #3f4753;
+  color: #5F5350;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1346,7 +1346,7 @@ function onDetailClosed(): void {
 
 .foot-tip {
   font-size: 12.5px;
-  color: #a5a9b0;
+  color: #B3A69F;
 }
 
 /* ============================================================
@@ -1370,7 +1370,7 @@ function onDetailClosed(): void {
 .grad-tip {
   font-size: 13px;
   line-height: 1.9;
-  color: #5f5e5a;
+  color: #6B5C58;
 }
 
 .grad-row {
@@ -1382,7 +1382,7 @@ function onDetailClosed(): void {
 
 .grad-label {
   font-size: 13px;
-  color: #5f5e5a;
+  color: #6B5C58;
 }
 
 .grad-stat {
@@ -1392,7 +1392,7 @@ function onDetailClosed(): void {
 }
 
 .grad-stat .gs {
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 8px;
   padding: 12px 8px;
   text-align: center;
@@ -1402,31 +1402,31 @@ function onDetailClosed(): void {
   font-size: 22px;
   font-weight: 500;
   line-height: 1.2;
-  color: #303133;
+  color: #443432;
 }
 
 .gs-num.ok {
-  color: #1d9e75;
+  color: #4E9A6C;
 }
 
 .gs-num.warn {
-  color: #ba7517;
+  color: #A66A1F;
 }
 
 .gs-num.danger {
-  color: #e24b4a;
+  color: #CD3A33;
 }
 
 .gs-label {
   font-size: 12px;
-  color: #8f959e;
+  color: #9C8D88;
   margin-top: 4px;
 }
 
 .grad-skipped {
   margin-top: 14px;
   font-size: 13px;
-  color: #5f5e5a;
+  color: #6B5C58;
   line-height: 1.9;
 }
 
@@ -1437,7 +1437,7 @@ function onDetailClosed(): void {
 .gs-item {
   display: inline-block;
   margin-right: 8px;
-  color: #ba7517;
+  color: #A66A1F;
 }
 
 </style>
