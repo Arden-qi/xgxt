@@ -278,14 +278,24 @@ export async function setResumeClass(
 
 /**
  * ★ 审批通过后：改 `t_class_student.student_status`
- *   休学 → 6 · 退学 → 7 · 复学 → 8（并回到复学班）
+ *   休学 → 6（休学）· 退学 → 7（退学）· 复学 → 5（正式在读），并回到复学班
+ *
+ * 【★ 2026-10-15 修：复学的目标状态原来错写成 8（实训中）】
+ *   统一三学段时这里**照抄了实训那一套**（实训的复学 = 回到实训 → 8 实训中），
+ *   但初高的复学是「回到正式在读」→ 5，与初高老流程 `class-jh/routes/flow.route.ts`
+ *   的 `FlowType.RESUME → StudentStatus.STUDYING` 口径一致。
+ *
+ *   为什么这个错必须修：`student_status` 是全系统的主状态字段，
+ *   出勤的「应到名单」、宿舍在住校验、各类统计都按它过滤 ——
+ *   初高学生一复学就被标成「实训中」，那些地方会跟着错，而且页面不报错、极难发现。
+ *   实测（2026-10-15）：走真实流程复学后学生状态 = 8，确认就是这个映射写的。
  */
 export async function afterApproved(conn: any, id: string, operatorId: string): Promise<void> {
   const row = (await tblTrx(conn, SRC, T, STAGE).where({ id }).first()) as Record<string, any> | undefined;
   if (!row) return;
   const biz = (await toUnifiedLeaveBiz(STAGE, Number(row.flow_type))) ?? 0;
   const newStatus =
-    biz === 3 ? StudentStatus.TRAINING : biz === 1 ? StudentStatus.SUSPENDED : StudentStatus.QUIT;
+    biz === 3 ? StudentStatus.STUDYING : biz === 1 ? StudentStatus.SUSPENDED : StudentStatus.QUIT;
 
   const patch: Record<string, any> = {
     student_status: newStatus,

@@ -203,6 +203,19 @@
           <div v-if="form.bizType === 3 && form.stage" class="muted muted--block">
             复学只能从「当前处于休学」的学生里选（名单已按此过滤）
           </div>
+          <!--
+            空名单提示：复学的候选人是「**学生状态 = 休学**」的人，而
+            「休学单已通过、但之后又办过复学」的学生其实已经回到在读，
+            「休学单还没批准」的学生也还不是休学 —— 这两种情况都会让下拉是空的。
+            没有这句提示时，用户看到「列表里有休学单、这里却一个学生都没有」，
+            会直接判定成 bug（2026-10-15 用户就是这么报上来的）。
+          -->
+          <div
+            v-if="form.bizType === 3 && form.stage && !stuLoading && !students.length"
+            class="muted muted--block warn"
+          >
+            当前没有「休学中」的学生：休学单还没批准、或休学后又已办过复学的学生，都不算休学中
+          </div>
         </el-form-item>
         <el-form-item :label="form.bizType === 3 ? '复学日期' : '异动日期'">
           <el-date-picker
