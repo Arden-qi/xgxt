@@ -90,3 +90,39 @@ export function calcAge(birth: unknown): number | null {
   if (m < 0 || (m === 0 && now.getDate() < b.getDate())) age -= 1;
   return age >= 0 && age < 150 ? age : null;
 }
+
+/**
+ * 从身份证号提取出生日期（YYYY-MM-DD）；提取不出返回 null
+ *
+ * 【为什么要有它】2026-10-15 学生档案改版：表单里「出生日期」输入框取消，
+ * 改为录身份证号 → 系统按身份证号里的出生日期自动回填 birth_date，
+ * 年龄由 birth_date 实时计算（见 calcAge），实现「每年自动更新」。
+ *
+ * 支持 18 位（第 7~14 位 YYYYMMDD）与 15 位（第 7~12 位 YYMMDD，补 19）。
+ */
+export function birthFromIdCard(idCard: unknown): string | null {
+  const s = String(idCard ?? '').trim();
+  if (/^\d{17}[\dXx]$/.test(s)) {
+    const y = Number(s.slice(6, 10));
+    const m = Number(s.slice(10, 12));
+    const d = Number(s.slice(12, 14));
+    return validDate(y, m, d);
+  }
+  if (/^\d{15}$/.test(s)) {
+    const y = 1900 + Number(s.slice(6, 8));
+    const m = Number(s.slice(8, 10));
+    const d = Number(s.slice(10, 12));
+    return validDate(y, m, d);
+  }
+  return null;
+}
+
+/** 年月日合法性校验（1970-01-01 ~ 当前之后一天内都放行，只挡明显非法值） */
+function validDate(y: number, m: number, d: number): string | null {
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+  if (y < 1900 || y > new Date().getFullYear() || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${y}-${pad(m)}-${pad(d)}`;
+}

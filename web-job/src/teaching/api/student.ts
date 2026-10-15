@@ -36,6 +36,8 @@ export interface StudentRow {
   studentStatus: number;
   studentStatusName: string;
   phone: string | null;
+  /** 家长姓名（2026-10-15 学生档案改版新增） */
+  parentName: string | null;
   parentPhone: string | null;
   education: string | null;
   enrollDate: string | null;
@@ -119,6 +121,8 @@ export interface StudentSaveBody {
   graduateSchool?: string | null;
   enrollDate?: string | null;
   phone?: string | null;
+  /** 家长姓名（2026-10-15 学生档案改版新增） */
+  parentName?: string | null;
   parentPhone?: string | null;
   homeAddress?: string | null;
   idCard?: string | null;

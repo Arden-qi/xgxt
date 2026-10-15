@@ -26,7 +26,7 @@ import type {
   StudentSaveBody,
   StudentSaveResult,
 } from '../shared/dto';
-import { calcAge, fmtDate, fmtDateTime } from '../shared/format';
+import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 
@@ -60,7 +60,8 @@ function mapRow(r: Record<string, any>): StudentRow {
     studentName: String(r.student_name ?? ''),
     gender,
     genderName: GENDER_NAME[gender] ?? '',
-    age: numOrNull(r.age) ?? calcAge(r.birth_date),
+    // ★ 年龄优先按出生日期实时计算（每年自动更新），库里 age 仅作无出生日期时的兜底
+    age: calcAge(r.birth_date) ?? numOrNull(r.age),
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     classId: str(r.class_id),
@@ -76,6 +77,7 @@ function mapRow(r: Record<string, any>): StudentRow {
     studentStatus: status,
     studentStatusName: STUDENT_STATUS_NAME[status] ?? '',
     phone: str(r.phone),
+    parentName: str(r.parent_name),
     parentPhone: str(r.parent_phone),
     education: str(r.education),
     enrollDate: str(fmtDate(r.enroll_date)) || null,
@@ -237,8 +239,10 @@ export const repo: StudentRepo = {
     const set = (k: string, v: unknown) => {
       if (v !== undefined) payload[k] = v;
     };
-    set('birth_date', body.birthDate ?? undefined);
-    if (body.birthDate !== undefined) payload.age = calcAge(body.birthDate);
+    // ★ 出生日期：前端传了用前端的；没传则从身份证号自动提取（2026-10-15 表单改版）
+    const birth = body.birthDate || birthFromIdCard(body.idCard);
+    set('birth_date', birth ?? undefined);
+    if (birth) payload.age = calcAge(birth);
     else if (body.age !== undefined) payload.age = body.age;
     set('native_place', body.nativePlace);
     set('dept_code', body.deptCode);
@@ -250,6 +254,7 @@ export const repo: StudentRepo = {
     set('graduate_school', body.graduateSchool);
     set('enroll_date', body.enrollDate);
     set('phone', body.phone);
+    set('parent_name', body.parentName);
     set('parent_phone', body.parentPhone);
     set('home_address', body.homeAddress);
     // ★ 初高写 id_card_no

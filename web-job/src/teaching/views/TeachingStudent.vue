@@ -125,7 +125,7 @@
       <el-table-column label="宿舍" width="110">
         <template #default="{ row }">{{ row.bedLabel || row.dormNo || '—' }}</template>
       </el-table-column>
-      <el-table-column label="入学时间" width="105" align="center">
+      <el-table-column label="入学日期" width="105" align="center">
         <template #default="{ row }">{{ row.enrollDate || '—' }}</template>
       </el-table-column>
       <el-table-column label="操作" width="150" fixed="right" align="center">
@@ -168,9 +168,10 @@
               {{ detail.base.studentStatusName }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="入学时间">{{ detail.base.enrollDate || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="入学日期">{{ detail.base.enrollDate || '—' }}</el-descriptions-item>
           <el-descriptions-item label="出生日期">{{ detail.profile.birthDate || '—' }}</el-descriptions-item>
           <el-descriptions-item label="手机号">{{ detail.base.phone || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="家长姓名">{{ detail.base.parentName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="家长手机">{{ detail.base.parentPhone || '—' }}</el-descriptions-item>
           <el-descriptions-item label="学历">{{ detail.base.education || '—' }}</el-descriptions-item>
           <el-descriptions-item label="籍贯">{{ detail.profile.nativePlace || '—' }}</el-descriptions-item>
@@ -238,13 +239,6 @@
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <el-row :gutter="12">
           <el-col :span="8">
-            <el-form-item label="学段" required>
-              <el-select v-model="form.stage" :disabled="!!form.id" style="width: 100%">
-                <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
             <el-form-item label="学号">
               <el-input v-model="form.studentNo" placeholder="留空则自动生成" />
             </el-form-item>
@@ -263,15 +257,22 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="出生日期">
-              <el-date-picker v-model="form.birthDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+            <!-- 2026-10-15 改版：原「出生日期」输入框改为身份证号，出生日期/年龄由身份证号自动带出 -->
+            <el-form-item label="身份证号" prop="idCard">
+              <el-input v-model="form.idCard" maxlength="18" placeholder="录入后自动计算年龄" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <el-form-item label="部门">
-              <el-select v-model="form.deptCode" clearable placeholder="请选择" style="width: 100%">
+              <el-select v-model="form.deptCode" clearable placeholder="请选择" style="width: 100%" @change="onFormDeptChange">
                 <el-option v-for="(n, v) in DEPT_NAME" :key="v" :label="n" :value="Number(v)" />
               </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <!-- 2026-10-15 改版：原「身份证」字段改为「年龄」，按身份证号出生日期自动计算（每年自动更新） -->
+            <el-form-item label="年龄">
+              <el-input :model-value="agePreview" readonly placeholder="按身份证号自动计算" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -313,13 +314,14 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="家长手机">
-              <el-input v-model="form.parentPhone" />
+            <!-- 2026-10-15 改版：「手机号」后新增【家长姓名】字段 -->
+            <el-form-item label="家长姓名">
+              <el-input v-model="form.parentName" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="身份证">
-              <el-input v-model="form.idCard" />
+            <el-form-item label="家长手机">
+              <el-input v-model="form.parentPhone" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -329,7 +331,11 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="学历">
-              <el-input v-model="form.education" />
+              <!-- 部门=初高部时改为下拉（初中 / 高中），其余学段保留自由输入 -->
+              <el-select v-if="form.deptCode === DeptCode.JUNIOR_SENIOR" v-model="form.education" clearable style="width: 100%">
+                <el-option v-for="e in EDUCATION_JH_OPTIONS" :key="e" :label="e" :value="e" />
+              </el-select>
+              <el-input v-else v-model="form.education" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -338,18 +344,32 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="入学时间">
+            <el-form-item label="入学日期">
               <el-date-picker v-model="form.enrollDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <el-form-item label="宿舍号">
-              <el-input v-model="form.dormNo" />
+              <!-- 2026-10-15 改版：同步「宿舍管理」的宿舍号，下拉选择 -->
+              <el-select
+                v-model="form.dormId"
+                clearable
+                filterable
+                placeholder="同步宿舍管理，请选择"
+                :loading="dormLoading"
+                style="width: 100%"
+                @change="onFormDormChange"
+              >
+                <el-option v-for="r in dormRoomOptions" :key="r.roomId" :label="r.label" :value="r.roomId" />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8" v-if="showBed">
             <el-form-item label="床位号">
-              <el-input v-model="form.bedNo" />
+              <!-- 2026-10-15 改版：根据所选宿舍号同步「宿舍管理」的床位号 -->
+              <el-select v-model="form.bedNo" clearable placeholder="请先选择宿舍号" style="width: 100%" :disabled="!form.dormId">
+                <el-option v-for="b in formBedOptions" :key="b.value" :label="b.label" :value="b.value" />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -419,9 +439,11 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { DEPT_NAME, STUDENT_STATUS_NAME } from 'shared-types';
+import { DEPT_NAME, DeptCode, STUDENT_STATUS_NAME } from 'shared-types';
+import type { DormRoomItem } from 'shared-types/edu';
 import { isReadOnlyUser } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
+import { fetchDormList } from '@/api/edu/dorm';
 import {
   listStudents,
   getStudentDetail,
@@ -582,6 +604,7 @@ const emptyForm = () => ({
   graduateSchool: '',
   enrollDate: '' as string | null,
   phone: '',
+  parentName: '',
   parentPhone: '',
   homeAddress: '',
   idCard: '',
@@ -589,25 +612,163 @@ const emptyForm = () => ({
   recruitTeacherPhone: '',
   consultTeacherName: '',
   consultTeacherPhone: '',
+  dormId: '',
   dormNo: '',
   bedNo: '',
   remark: '',
 });
 const form = reactive(emptyForm());
+/** 编辑时带入的原年龄（身份证号算不出时的兜底展示） */
+const formAge = ref<number | null>(null);
 
 const rules: FormRules = {
   studentName: [{ required: true, message: '姓名必填', trigger: 'blur' }],
   gender: [{ required: true, message: '性别必填', trigger: 'change' }],
+  idCard: [
+    {
+      validator: (_r, v: string, cb) => {
+        if (!v || /^(\d{15}|\d{17}[\dXx])$/.test(v.trim())) cb();
+        else cb(new Error('身份证号格式不正确（15 或 18 位）'));
+      },
+      trigger: 'blur',
+    },
+  ],
 };
+
+/* ============ 2026-10-15 表单改版：身份证号 → 年龄 ============ */
+
+/** 从身份证号提取出生日期（YYYY-MM-DD），提取不出返回 null */
+function birthFromIdCard(idc: unknown): string | null {
+  const s = String(idc ?? '').trim();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (/^\d{17}[\dXx]$/.test(s)) {
+    const y = Number(s.slice(6, 10));
+    const m = Number(s.slice(10, 12));
+    const d = Number(s.slice(12, 14));
+    return validYmd(y, m, d) ? `${y}-${pad(m)}-${pad(d)}` : null;
+  }
+  if (/^\d{15}$/.test(s)) {
+    const y = 1900 + Number(s.slice(6, 8));
+    const m = Number(s.slice(8, 10));
+    const d = Number(s.slice(10, 12));
+    return validYmd(y, m, d) ? `${y}-${pad(m)}-${pad(d)}` : null;
+  }
+  return null;
+}
+function validYmd(y: number, m: number, d: number): boolean {
+  if (y < 1900 || y > new Date().getFullYear() || m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
+/** 由出生日期算周岁 */
+function calcAgeClient(birth: string): number | null {
+  const b = new Date(`${birth}T00:00:00`);
+  if (Number.isNaN(b.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - b.getFullYear();
+  const m = now.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < b.getDate())) age -= 1;
+  return age >= 0 && age < 150 ? age : null;
+}
+/** 表单「年龄」展示：优先按身份证号实时算，算不出回退原年龄 */
+const agePreview = computed<number | ''>(() => {
+  const birth = birthFromIdCard(form.idCard);
+  if (birth) return calcAgeClient(birth) ?? '';
+  return formAge.value ?? '';
+});
+
+/* ============ 2026-10-15 表单改版：部门驱动学段 / 阶段 / 学历 ============ */
+
+/** 初高部可选阶段：初中部1期 ~ 高中部3期（批注口径，不含预科与大学阶段码） */
+const JH_PHASE_CODES = [102, 103, 104, 105, 106, 107];
+/** 部门=初高部时「学历」改为下拉，选项只有初中 / 高中 */
+const EDUCATION_JH_OPTIONS = ['初中', '高中'];
+
+/**
+ * 部门变化 → 自动判定学段（初高部 → 初高；大学部 → 大学）。
+ * 就业/教务学段没有部门概念，编辑这两类学生时不改学段。
+ */
+function onFormDeptChange(v: number | undefined) {
+  if (v === DeptCode.JUNIOR_SENIOR) form.stage = 'jh';
+  else if (v === DeptCode.UNIVERSITY) form.stage = 'class';
+  // 学段变了：阶段 / 班级按新学段重选
+  if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
+  if (!formClassOptions.value.some((c) => c.id === form.classId)) {
+    form.classId = '';
+    form.className = '';
+  }
+}
+
+/* ============ 2026-10-15 表单改版：宿舍号 / 床位号同步宿舍管理 ============ */
+
+const dormLoading = ref(false);
+const dormRooms = ref<DormRoomItem[]>([]);
+
+async function loadDormRooms() {
+  dormLoading.value = true;
+  try {
+    const data = await fetchDormList({ page: 1, size: 500 });
+    dormRooms.value = data.list || [];
+  } catch {
+    dormRooms.value = [];
+  } finally {
+    dormLoading.value = false;
+  }
+}
+
+const dormRoomOptions = computed(() =>
+  dormRooms.value.map((r) => ({
+    roomId: r.roomId,
+    label: r.building ? `${r.building}-${r.room}` : r.room,
+  })),
+);
+
+/** 床位下拉：取所选宿舍的床位；老数据只有床位号没匹配到宿舍时，兜底展示原值 */
+const formBedOptions = computed(() => {
+  const room = dormRooms.value.find((r) => r.roomId === form.dormId);
+  if (room) {
+    return room.beds.map((b) => ({
+      value: b.bedNo,
+      label: b.studentName ? `${b.bedNo}（${b.studentName}）` : b.bedNo,
+    }));
+  }
+  return form.bedNo ? [{ value: form.bedNo, label: form.bedNo }] : [];
+});
+
+function onFormDormChange(roomId: string) {
+  const r = dormRooms.value.find((x) => x.roomId === roomId);
+  if (r) {
+    form.dormNo = r.building ? `${r.building}-${r.room}` : r.room;
+  }
+  form.bedNo = '';
+}
+
+/**
+ * 床位号入库口径：
+ *   初高表 bed_no 是字符串（'1-上' 可直接存）；
+ *   大学表 bed_no 是整数列 → 把床位号转成床位序号（1~8）再存。
+ */
+function normalizeBedNo(): string | null {
+  const bed = (form.bedNo || '').trim();
+  if (!bed) return null;
+  if (form.stage === 'class' && !/^\d+$/.test(bed)) {
+    const room = dormRooms.value.find((x) => x.roomId === form.dormId);
+    const b = room?.beds.find((x) => x.bedNo === bed);
+    if (b) return String(b.bedIndex);
+  }
+  return bed;
+}
 
 /** 表单里班级下拉：按当前表单学段过滤 */
 const formClassOptions = computed(() =>
   classOptions.value.filter((c) => c.stage === form.stage),
 );
-/** 表单里阶段下拉：按当前表单学段 */
-const formPhaseOptions = computed(
-  () => meta.value.find((m) => m.stage === form.stage)?.phaseOptions || [],
-);
+/** 表单里阶段下拉：按当前表单学段；初高只给 初中部1期 ~ 高中部3期（批注口径） */
+const formPhaseOptions = computed(() => {
+  const list = meta.value.find((m) => m.stage === form.stage)?.phaseOptions || [];
+  if (form.stage === 'jh') return list.filter((p) => JH_PHASE_CODES.includes(p.value));
+  return list;
+});
 /** 表单里状态下拉：按该学段允许的状态 */
 const formStatusOptions = computed(() => {
   const allow = STATUS_BY_STAGE[form.stage] || [];
@@ -620,7 +781,10 @@ const showBed = computed(() => form.stage === 'class' || form.stage === 'jh');
 
 function openCreate() {
   Object.assign(form, emptyForm());
+  // 表单已没有「学段」选择器：默认取筛选中的学段（就业/教务从对应页签进入仍可新增），
+  // 选了部门后会由 onFormDeptChange 自动改判为 初高/大学
   form.stage = (query.stage || stageOptions.value[0]?.value || 'jh') as StudentStage;
+  formAge.value = null;
   editVisible.value = true;
 }
 
@@ -645,6 +809,7 @@ async function openEdit(row: StudentRow) {
     graduateSchool: d.profile.graduateSchool || '',
     enrollDate: b.enrollDate || '',
     phone: b.phone || '',
+    parentName: b.parentName || '',
     parentPhone: b.parentPhone || '',
     homeAddress: d.profile.homeAddress || '',
     idCard: d.profile.idCard || '',
@@ -652,10 +817,12 @@ async function openEdit(row: StudentRow) {
     recruitTeacherPhone: d.market.recruitTeacherPhone || '',
     consultTeacherName: d.market.consultTeacherName || '',
     consultTeacherPhone: d.market.consultTeacherPhone || '',
+    dormId: b.dormId || dormRoomOptions.value.find((r) => r.label === b.dormNo)?.roomId || '',
     dormNo: b.dormNo || '',
     bedNo: b.bedNo || '',
     remark: b.remark || '',
   });
+  formAge.value = b.age ?? null;
   editVisible.value = true;
 }
 
@@ -674,13 +841,15 @@ async function doSave() {
   }
   saving.value = true;
   try {
+    // ★ 出生日期不再手工填：优先从身份证号提取，编辑老数据时保留原有出生日期兜底
+    const birth = birthFromIdCard(form.idCard) || form.birthDate || null;
     const r = await saveStudent({
       stage: form.stage,
       id: form.id,
       studentNo: form.studentNo || undefined,
       studentName: form.studentName,
       gender: form.gender,
-      birthDate: form.birthDate || null,
+      birthDate: birth,
       nativePlace: form.nativePlace || null,
       deptCode: form.deptCode ?? null,
       classId: form.classId || null,
@@ -691,6 +860,7 @@ async function doSave() {
       graduateSchool: form.graduateSchool || null,
       enrollDate: form.enrollDate || null,
       phone: form.phone || null,
+      parentName: form.parentName || null,
       parentPhone: form.parentPhone || null,
       homeAddress: form.homeAddress || null,
       idCard: form.idCard || null,
@@ -698,8 +868,9 @@ async function doSave() {
       recruitTeacherPhone: form.recruitTeacherPhone || null,
       consultTeacherName: form.consultTeacherName || null,
       consultTeacherPhone: form.consultTeacherPhone || null,
+      dormId: form.dormId || null,
       dormNo: form.dormNo || null,
-      bedNo: showBed.value ? form.bedNo || null : undefined,
+      bedNo: showBed.value ? normalizeBedNo() : undefined,
       remark: form.remark || null,
     });
     let tip = form.id ? '已保存' : '已新增';
@@ -742,6 +913,8 @@ async function loadAux() {
 
 onMounted(async () => {
   await loadAux();
+  // 宿舍号/床位号下拉的数据源（宿舍管理）；失败不阻塞页面
+  loadDormRooms();
   await load(1);
 });
 </script>
