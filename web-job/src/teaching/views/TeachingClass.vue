@@ -232,15 +232,15 @@
       <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
         <el-row :gutter="12">
           <el-col :span="8">
-            <el-form-item label="学段" required>
+            <el-form-item label="学段">
               <el-select v-model="form.stage" :disabled="!!form.id" style="width: 100%" @change="onFormStageChange">
                 <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="班级名称" required>
-              <el-input v-model="form.className" maxlength="50" />
+            <el-form-item label="班级名称">
+              <el-input v-model="form.className" maxlength="50" placeholder="留空自动生成占位名" />
             </el-form-item>
           </el-col>
           <!-- ★ 只有实训有班级编号（而且必填 + 唯一） -->
@@ -267,35 +267,66 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <!-- ★ 初高班主任是 NOT NULL，必须填 -->
-          <el-col :span="8">
-            <el-form-item label="班主任" :required="form.stage === 'jh'">
-              <el-input v-model="form.headTeacherId" placeholder="工号/ID" />
-            </el-form-item>
-          </el-col>
+          <!-- 2026-10-15 改版：删除「班主任/教员/助教」工号/ID 输入框，
+               姓名字段直接接入权限管理的用户列表，下拉选择（选人自动带 ID） -->
           <el-col :span="8">
             <el-form-item label="班主任姓名">
-              <el-input v-model="form.headTeacherName" placeholder="列表显示用" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="教员">
-              <el-input v-model="form.teacherId" placeholder="工号/ID" />
+              <el-select
+                v-model="form.headTeacherId"
+                clearable
+                filterable
+                placeholder="接入权限管理，请选择"
+                :loading="staffLoading"
+                style="width: 100%"
+                @change="onStaffChange('headTeacher', $event)"
+              >
+                <el-option
+                  v-for="u in withFallback(staffOptions, form.headTeacherId, form.headTeacherName)"
+                  :key="u.id"
+                  :label="u.userName"
+                  :value="u.id"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <el-form-item label="教员姓名">
-              <el-input v-model="form.teacherName" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="助教">
-              <el-input v-model="form.assistantId" placeholder="工号/ID" />
+              <el-select
+                v-model="form.teacherId"
+                clearable
+                filterable
+                placeholder="接入权限管理，请选择"
+                :loading="staffLoading"
+                style="width: 100%"
+                @change="onStaffChange('teacher', $event)"
+              >
+                <el-option
+                  v-for="u in withFallback(staffOptions, form.teacherId, form.teacherName)"
+                  :key="u.id"
+                  :label="u.userName"
+                  :value="u.id"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <el-form-item label="助教姓名">
-              <el-input v-model="form.assistantName" />
+              <el-select
+                v-model="form.assistantId"
+                clearable
+                filterable
+                placeholder="接入权限管理，请选择"
+                :loading="staffLoading"
+                style="width: 100%"
+                @change="onStaffChange('assistant', $event)"
+              >
+                <el-option
+                  v-for="u in withFallback(staffOptions, form.assistantId, form.assistantName)"
+                  :key="u.id"
+                  :label="u.userName"
+                  :value="u.id"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <!-- ★ 只有大学/实训有交棒岗位 -->
@@ -369,7 +400,7 @@
           type="info"
           :closable="false"
           show-icon
-          title="初高班级必须指定班主任；没有「项目经理 / 就业老师 / 大学学号」这些交棒字段"
+          title="班主任 / 教员 / 助教 均为可选，姓名来自「权限管理」的用户列表；没有「项目经理 / 就业老师 / 大学学号」这些交棒字段"
         />
       </el-form>
       <template #footer>
@@ -428,6 +459,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { isReadOnlyUser } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
+import { userApi } from '@/perm/api/perm';
+import type { PermUserListItem } from 'shared-types/perm';
 import {
   listClasses,
   getClassDetail,
@@ -553,6 +586,8 @@ async function openDetail(row: ClassRow) {
 const editVisible = ref(false);
 const saving = ref(false);
 const formRef = ref<FormInstance>();
+/** 2026-10-15 改版：学段/班级名称/部门/班主任/教员/阶段 全部不再必填 */
+const rules: FormRules = {};
 
 function emptyForm(stage: ClassStage): ClassSaveBody {
   return {
@@ -583,9 +618,54 @@ const form = reactive<ClassSaveBody>(emptyForm('jh'));
 /** 表单里的阶段选项（按表单当前学段取，不是筛选的） */
 const formPhaseOptions = computed(() => metaList.value.find((m) => m.stage === form.stage)?.phaseOptions || []);
 
-const rules: FormRules = {
-  className: [{ required: true, message: '班级名称必填', trigger: 'blur' }],
-};
+/* ============ 2026-10-15 改版：班主任/教员/助教接入「权限管理」用户列表 ============ */
+
+const staffLoading = ref(false);
+const staffOptions = ref<PermUserListItem[]>([]);
+
+async function loadStaff() {
+  staffLoading.value = true;
+  try {
+    // ⚠️ /api/perm/user/list 的 size 上限 100 —— 按 100/页自动翻页拉全量（≤5 页封顶）
+    const out: PermUserListItem[] = [];
+    const size = 100;
+    const first = await userApi.list({ page: 1, size });
+    out.push(...(first.list || []));
+    const pages = Math.ceil((first.total || 0) / size);
+    for (let p = 2; p <= Math.min(pages, 5); p++) {
+      const d = await userApi.list({ page: p, size });
+      out.push(...(d.list || []));
+    }
+    staffOptions.value = out;
+  } catch {
+    staffOptions.value = [];
+  } finally {
+    staffLoading.value = false;
+  }
+}
+
+/** 编辑老班级时，原工号/ID 可能不在权限用户列表里 —— 兜底补一个选项，避免显示成裸 ID */
+function withFallback(
+  list: PermUserListItem[],
+  id: string | null | undefined,
+  name: string | null | undefined,
+): PermUserListItem[] {
+  if (!id || list.some((u) => u.id === id)) return list;
+  return [{ id, userName: name || id } as PermUserListItem, ...list];
+}
+
+/** 选人自动带姓名；清空时姓名一并清掉 */
+function onStaffChange(kind: 'headTeacher' | 'teacher' | 'assistant', id: string) {
+  const u = staffOptions.value.find((x) => x.id === id);
+  const name = u?.userName || '';
+  if (kind === 'headTeacher') {
+    form.headTeacherName = name;
+  } else if (kind === 'teacher') {
+    form.teacherName = name;
+  } else {
+    form.assistantName = name;
+  }
+}
 
 function openCreate() {
   const stage = (query.stage || stageOptions.value[0]?.value || 'jh') as ClassStage;
@@ -700,7 +780,10 @@ async function doChangeStatus() {
   }
 }
 
-onMounted(() => load(1));
+onMounted(() => {
+  load(1);
+  loadStaff();
+});
 </script>
 
 <style scoped>

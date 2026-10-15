@@ -224,11 +224,16 @@ export const repo: ClassRepo = {
 
   async save(body, userId) {
     const now = new Date();
+    // ★ 2026-10-15 班级表单取消必填：班级名称留空时自动占位（表列 NOT NULL + 部门内不重复）
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const className =
+      String(body.className || '').trim() ||
+      `未命名班级-${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
     const payload: Record<string, any> = { update_time: now, update_by: userId };
     const set = (k: string, v: unknown) => {
       if (v !== undefined) payload[k] = v;
     };
-    set('class_name', body.className);
+    set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
     set(phaseCodeCol(), body.phaseCode);
     set('head_teacher_id', body.headTeacherId);
@@ -260,22 +265,18 @@ export const repo: ClassRepo = {
       return { id: body.id };
     }
 
-    // ★ 初高这几个字段是 NOT NULL（实测：head_teacher_id/name、
-    //   teacher_id/name 全部必填）—— 不提前拦的话 insert 直接报 ER_BAD_NULL_ERROR
-    if (!String(body.headTeacherId || '').trim()) throw new Error('班主任必填');
-    if (!String(body.headTeacherName || '').trim()) throw new Error('班主任姓名必填');
-    if (!String(body.teacherId || '').trim()) throw new Error('教工号必填');
-    if (!String(body.teacherName || '').trim()) throw new Error('教员姓名必填');
-    // 同部门内名称不重复
+    // ★ 2026-10-15 放宽：班主任/教员允许不选（列已迁改为可空），不再前置拦截。
+    //   同部门内名称不重复（用占位名也能过 —— 带秒级时间戳）
     const deptCode = Number(body.deptCode ?? 1);
     const dupName = (await tbl(db, 'sms_class_jh', T, STAGE)
-      .where({ class_name: body.className, dept_code: deptCode, is_deleted: false })
+      .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
-    if (dupName) throw new Error(`该部门下已有班级叫「${body.className}」`);
+    if (dupName) throw new Error(`该部门下已有班级叫「${className}」`);
 
     const id = randomUUID();
     await tblIns(db, 'sms_class_jh', T, STAGE, {
       id,
+      class_name: className, // ★ create 时名称可能被自动占位（见上）
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时给兜底值
       [phaseCodeCol()]: body.phaseCode ?? Number(Object.keys(PHASE_NAME)[0]),

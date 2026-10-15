@@ -172,11 +172,16 @@ export const repo: ClassRepo = {
 
   async save(body, userId) {
     const now = new Date();
+    // ★ 2026-10-15 班级表单取消必填：班级名称留空时自动占位（表列 NOT NULL）
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const className =
+      String(body.className || '').trim() ||
+      `未命名班级-${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
     const payload: Record<string, any> = { update_time: now, update_by: userId };
     const set = (k: string, v: unknown) => {
       if (v !== undefined) payload[k] = v;
     };
-    set('class_name', body.className);
+    set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
     set(phaseCodeCol(), body.phaseCode);
     set('head_teacher_id', body.headTeacherId);
@@ -216,13 +221,14 @@ export const repo: ClassRepo = {
     // 同部门内名称不重复（与实训一致的口径；但**没有编号唯一性检查** —— 那张表没编号列）
     const deptCode = Number(body.deptCode ?? 2);
     const dupName = (await tbl(db, 'sms_class', T, STAGE)
-      .where({ class_name: body.className, dept_code: deptCode, is_deleted: false })
+      .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
-    if (dupName) throw new Error(`该部门下已有班级叫「${body.className}」`);
+    if (dupName) throw new Error(`该部门下已有班级叫「${className}」`);
 
     const id = randomUUID();
     await tblIns(db, 'sms_class', T, STAGE, {
       id,
+      class_name: className, // ★ create 时名称可能被自动占位（见上）
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时必须给兜底值，
       //   否则 insert 直接报 ER_BAD_NULL_ERROR。取第一个可选阶段码更贴近业务。
