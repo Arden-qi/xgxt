@@ -6,6 +6,7 @@
  * 现在：一个页面 + 学段筛选器 + 一套接口（/api/teaching/exam/*）。
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Delete, EditPen, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import {
@@ -32,12 +33,16 @@ const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高', class: '大�
 const availableStages = computed(() => STAGE_ORDER.filter((s) => stageVisible('exam', s)));
 
 const query = reactive({
+
   stage: '' as '' | TeachingStage,
   classId: '',
   examType: undefined as number | undefined,
   dateRange: [] as string[],
   keyword: '',
 });
+
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 const page = reactive({ page: 1, size: 20, total: 0 });
 
 const loading = ref(false);

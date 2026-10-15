@@ -41,6 +41,8 @@ import { portalLogout, moduleAllowed, moduleOfPageCode } from '@/store/modules';
 /* ★ 2026-10-06 新增：板块 → 页面 台账（权限管理 → 页面管理）
  *   左侧菜单要按它过滤 —— 被取消勾选的页面 = 该板块没有这个页面。 */
 import { pageEnabled } from '@/store/pageConfig';
+/* 面包屑导航（内容区顶部的位置指示） */
+import BreadcrumbBar from '@/components/BreadcrumbBar.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -380,6 +382,8 @@ onMounted(() => {
 
       <!-- ============ 内容区 ============ -->
       <el-main class="main">
+        <!-- 面包屑：让用户随时知道自己在哪里（首页 / 分组 / 页面 / 学段） -->
+        <BreadcrumbBar />
         <RouterView />
       </el-main>
     </el-container>

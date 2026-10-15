@@ -494,6 +494,7 @@
  */
 
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { isReadOnlyUser } from '@/store/permission';
@@ -541,6 +542,7 @@ const residents = ref<DormResidentRow[]>([]);
 const changes = ref<DormChangeRow[]>([]);
 
 const query = reactive({
+
   stage: undefined as DormStage | undefined,
   building: undefined as string | undefined,
   dormType: undefined as number | undefined,
@@ -549,6 +551,9 @@ const query = reactive({
   page: 1,
   size: 20,
 });
+
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 
 /** ★ 只有空床的（不参与 query 对象，单独一个开关） */
 const onlyVacant = ref(false);

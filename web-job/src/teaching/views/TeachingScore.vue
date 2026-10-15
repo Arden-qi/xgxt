@@ -11,6 +11,7 @@
  *   所以列不是写死的，而是从后端 `/formula` 读出来渲染的 —— 这才是"配置化"。
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage } from 'element-plus';
 import { EditPen, Refresh, Search } from '@element-plus/icons-vue';
 import {
@@ -78,11 +79,15 @@ const formulaText = computed(() => {
 
 /* ================= 查询 ================= */
 const query = reactive({
+
   stage: '' as '' | TeachingStage,
   examId: '',
   classId: '',
   keyword: '',
 });
+
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 const page = reactive({ page: 1, size: 20, total: 0 });
 const loading = ref(false);
 const rows = ref<ScoreRow[]>([]);

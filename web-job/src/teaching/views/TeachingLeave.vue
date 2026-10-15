@@ -279,6 +279,7 @@
  * ⚠️ 大学没有「复学」—— 类型选项按 `/meta` 的 stageBizTypes 过滤
  */
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   LEAVE_BIZ_NAME,
@@ -314,6 +315,7 @@ const stageBiz = ref<Record<string, number[]>>({ ...LEAVE_STAGE_BIZ_DEFAULT });
 const allClasses = ref<Array<{ stage: TeachingStage; stageName: string; id: string; name: string }>>([]);
 
 const query = reactive({
+
   stage: undefined as TeachingStage | undefined,
   bizType: undefined as number | undefined,
   status: undefined as number | undefined,
@@ -322,6 +324,9 @@ const query = reactive({
   page: 1,
   size: 20,
 });
+
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 
 function tagType(s: number) {
   if (s === 4) return 'success';

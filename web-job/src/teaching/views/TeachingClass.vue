@@ -424,6 +424,7 @@
  *   「初高 G104」和「大学 G104」是两个不同的班，同名是常态。
  */
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { isReadOnlyUser } from '@/store/permission';
@@ -462,6 +463,7 @@ const summary = ref<ClassSummary[]>([]);
 const metaList = ref<ClassStageMeta[]>([]);
 
 const query = reactive({
+
   stage: undefined as ClassStage | undefined,
   deptCode: undefined as number | undefined,
   classStatus: undefined as number | undefined,
@@ -470,6 +472,9 @@ const query = reactive({
   page: 1,
   size: 20,
 });
+
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 
 /** 当前所选学段的 meta（列显隐/标签都靠它） */
 const curMeta = computed(() => metaList.value.find((m) => m.stage === query.stage) || null);

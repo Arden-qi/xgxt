@@ -16,10 +16,12 @@
  *   原页面里可能有大量本地状态（当前页、筛选条件…）。加 :key 强制重建组件，
  *   避免 A 学段的状态串到 B 学段上。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { findTeachingDomain } from '@/teaching/domainConfig';
 import { stageAccessible, stageVisible, type StageDomain } from '@/teaching/access';
+/* 页签模式下把当前学段同步给面包屑第 4 级（unified 模式下由统一页面自己上报） */
+import { setBreadcrumbStage } from '@/store/breadcrumb';
 
 const route = useRoute();
 
@@ -97,6 +99,12 @@ watch(
 
 const current = computed(() => stages.value.find((s) => s.stage === active.value) || null);
 const currentComp = computed(() => current.value?.comp);
+
+/* 页签模式下，当前学段变化时同步给面包屑（值本身是中文）。
+ * unified 模式下 active 恒为空 → 上报空 = 面包屑第 4 级由统一页面负责。
+ * 页面卸载时清空，避免学段残留到非教学页面。 */
+watch(active, (v) => setBreadcrumbStage(v || ''), { immediate: true });
+onUnmounted(() => setBreadcrumbStage(''));
 
 /**
  * ★ 第 2 期：这个业务域是否已经合并成「统一页面」

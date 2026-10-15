@@ -417,6 +417,7 @@
  *     都按「后端有没有给」来决定显不显示 —— 不写死学段判断
  */
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { DEPT_NAME, STUDENT_STATUS_NAME } from 'shared-types';
@@ -468,6 +469,7 @@ const summary = ref<StudentSummary>({
 });
 
 const query = reactive({
+
   stage: '' as '' | StudentStage,
   classId: '',
   phaseCode: undefined as number | undefined,
@@ -477,6 +479,9 @@ const query = reactive({
   page: 1,
   size: 20,
 });
+
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 
 const meta = ref<StudentStageMeta[]>([]);
 const classOptions = ref<Array<{ stage: StudentStage; stageName: string; id: string; name: string }>>([]);
