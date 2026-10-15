@@ -129,10 +129,35 @@ export interface StudentOption {
   className: string | null;
 }
 
+/**
+ * 部门（发起申请时的下拉，取代原来的「学段」）
+ *
+ * ★ 权威来源是后端 `/meta.departments`，下面这份只是**兜底默认值**
+ *   （meta 请求失败时页面不至于空白）。改这里也要同步后端
+ *   `server-job/src/teaching/shared/dto.ts` 的 `LEAVE_DEPARTMENTS`。
+ */
+export interface LeaveDepartment {
+  /** 部门码（jh/class/job 与学段同码，employ = 就业） */
+  code: string;
+  /** 部门中文名 */
+  name: string;
+  /** 对应学段；null = 该部门暂不办理学籍异动（如「就业」） */
+  stage: TeachingStage | null;
+}
+
+export const LEAVE_DEPARTMENTS_DEFAULT: LeaveDepartment[] = [
+  { code: 'jh', name: '初高中', stage: 'jh' },
+  { code: 'class', name: '大学', stage: 'class' },
+  { code: 'job', name: '实训', stage: 'job' },
+  { code: 'employ', name: '就业', stage: null },
+];
+
 export interface LeaveMeta {
   bizTypes: Array<{ value: number; label: string; steps: number }>;
   statuses: Array<{ value: number; label: string }>;
   stageBizTypes: Record<string, number[]>;
+  /** ★ 部门下拉（初高中 / 大学 / 实训 / 就业） */
+  departments?: LeaveDepartment[];
 }
 
 export function listLeaves(p: {

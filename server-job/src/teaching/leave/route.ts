@@ -18,6 +18,7 @@ import { BizError } from '../../middleware/errorHandler';
 import {
   LEAVE_BIZ_TYPE_NAME,
   LEAVE_CHAIN_STEPS,
+  LEAVE_DEPARTMENTS,
   LEAVE_STAGE_BIZ,
   LEAVE_STATUS_NAME,
   TEACHING_STAGES,
@@ -134,9 +135,12 @@ teachingLeaveRouter.get(
 );
 
 /* ============================================================
- * 6. 元信息（类型 / 状态 / 各学段支持哪些类型 / 走几步）
+ * 6. 元信息（类型 / 状态 / 各学段支持哪些类型 / 走几步 / 部门）
  *    GET /api/teaching/leave/meta
  *    —— 前端据此隐藏"该学段不支持的类型"，而不是给个点不动的按钮
+ *    —— ★ departments：发起申请时的「部门」下拉（初高中/大学/实训/就业）。
+ *       「就业」的 stage 是 null = 暂不办理学籍异动（前端据此置灰 + 提示），
+ *       前端不要再抄一份列表。
  * ============================================================ */
 
 teachingLeaveRouter.get(
@@ -154,6 +158,7 @@ teachingLeaveRouter.get(
           label: v,
         })),
         stageBizTypes: LEAVE_STAGE_BIZ,
+        departments: LEAVE_DEPARTMENTS,
       }),
     );
   }),

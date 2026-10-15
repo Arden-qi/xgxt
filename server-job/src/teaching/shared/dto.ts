@@ -615,6 +615,37 @@ export const LEAVE_STAGE_BIZ: Record<TeachingStage, number[]> = {
   job: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
 };
 
+/**
+ * ★ 部门（业务口径）—— 发起申请时那个下拉，**取代**原来的「学段」
+ *
+ * 【为什么要有这一层】
+ *   用户口径里公司有 4 个部门：初高中 / 大学 / 实训 / 就业；
+ *   而技术上只有 3 个学段（jh / class / job），且「实训」与「就业」共用同一个库
+ *   （`sms_job`，就是启动日志里的「就业管理」）。
+ *
+ * 【就业为什么没有 stage】
+ *   学籍异动（休学/退学/复学）只在 3 个学段有库表与仓储实现，**就业部门暂无**。
+ *   按业务确认：选项仍然展示（用户能看到完整部门列表），但选它就提示
+ *   「该部门暂不办理学籍异动」，学生下拉置空 —— 而不是给它一个假学段、
+ *   让用户填完表单再在提交时报错。
+ *   → `stage = null` 就是这个「占位、不可用」的机器可读表示。
+ *
+ * ⚠️ 前端**不要在页面里另抄一份**：本数组由 `/meta` 下发，改这里就够了。
+ */
+export const LEAVE_DEPARTMENTS: Array<{
+  /** 部门码（jh/class/job 与学段同码，employ 是就业） */
+  code: string;
+  /** 部门中文名（页面显示，与用户口径一致：初高中 / 大学 / 实训 / 就业） */
+  name: string;
+  /** 对应学段；null = 该部门暂不办理学籍异动（选它就禁用） */
+  stage: TeachingStage | null;
+}> = [
+  { code: 'jh', name: '初高中', stage: 'jh' },
+  { code: 'class', name: '大学', stage: 'class' },
+  { code: 'job', name: '实训', stage: 'job' },
+  { code: 'employ', name: '就业', stage: null },
+];
+
 /** 审批链步数（供前端展示"本次走几步"） */
 export const LEAVE_CHAIN_STEPS: Record<number, number> = {
   [LEAVE_BIZ_TYPE.SUSPEND]: 1,

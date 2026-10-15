@@ -129,13 +129,16 @@
     <!-- 新建 -->
     <el-dialog v-model="createVisible" title="发起学籍异动申请" width="600px">
       <el-form label-width="100px">
-        <el-form-item label="学段" required>
-          <el-select v-model="form.stage" style="width: 160px" @change="onStageChange">
-            <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
+        <el-form-item label="部门" required>
+          <el-select v-model="form.dept" style="width: 160px" @change="onDeptChange">
+            <el-option v-for="d in departments" :key="d.code" :label="d.name" :value="d.code" />
           </el-select>
+          <div v-if="deptUnsupported" class="muted muted--block warn">
+            「{{ currentDept?.name }}」部门暂不办理学籍异动
+          </div>
         </el-form-item>
         <el-form-item label="类型" required>
-          <el-radio-group v-model="form.bizType" @change="onBizTypeChange">
+          <el-radio-group v-model="form.bizType" :disabled="!form.stage" @change="onBizTypeChange">
             <el-radio-button
               v-for="b in allowedBiz(form.stage)"
               :key="b"
@@ -152,8 +155,13 @@
             filterable
             remote
             reserve-keyword
+            :disabled="!form.stage"
             :placeholder="
-              form.bizType === 3 ? '仅可搜索「休学中」的学生（姓名 / 学号）' : '输入姓名 / 学号搜索'
+              !form.stage
+                ? '该部门暂不可选学生'
+                : form.bizType === 3
+                  ? '仅可搜索「休学中」的学生（姓名 / 学号）'
+                  : '输入姓名 / 学号搜索'
             "
             :remote-method="searchStudents"
             :loading="stuLoading"
@@ -167,7 +175,7 @@
               :value="s.id"
             />
           </el-select>
-          <div v-if="form.bizType === 3" class="muted muted--block">
+          <div v-if="form.bizType === 3 && form.stage" class="muted muted--block">
             复学只能从「当前处于休学」的学生里选（名单已按此过滤）
           </div>
         </el-form-item>
@@ -195,8 +203,15 @@
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
-        <el-button :loading="saving" @click="doCreate(false)">保存草稿</el-button>
-        <el-button type="primary" :loading="saving" @click="doCreate(true)">保存并提交</el-button>
+        <el-button :loading="saving" :disabled="deptUnsupported" @click="doCreate(false)">保存草稿</el-button>
+        <el-button
+          type="primary"
+          :loading="saving"
+          :disabled="deptUnsupported"
+          @click="doCreate(true)"
+        >
+          保存并提交
+        </el-button>
       </template>
     </el-dialog>
 
@@ -284,13 +299,19 @@
  * ★ 复学：审批通过时必须选「复学班」（对话框里有班级下拉，未选不允许通过）
  * ★ 复学：**发起时的学生下拉只列「当前处于休学的学生」**（后端按 bizType=3 过滤），
  *   切换类型会清空已选并重搜；后端 create 另有一道同样的校验（下拉可被绕过）
+ * ★ 发起申请第一项是「**部门**」（初高中 / 大学 / 实训 / 就业），取代原来的「学段」：
+ *   部门 → 学段（jh/class/job）由 `/meta` 的 departments 下发，页面不另抄一份。
+ *   「就业」暂无学籍异动业务 → 选中即提示 + 置灰（类型/学生/保存全禁用），
+ *   而不是让它填完再在提交时报错。
  * ⚠️ 大学没有「复学」—— 类型选项按 `/meta` 的 stageBizTypes 过滤
+ * ⚠️ 列表的「学段」筛选/列保留不动：那是查看维度（跨学段合并后的筛选项）
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   LEAVE_BIZ_NAME,
   LEAVE_CHAIN_STEPS,
+  LEAVE_DEPARTMENTS_DEFAULT,
   LEAVE_STAGE_BIZ_DEFAULT,
   LEAVE_STATUS_NAME,
   approveLeave,
@@ -304,6 +325,7 @@ import {
   listStudentOptions,
   rejectLeave,
   submitLeave,
+  type LeaveDepartment,
   type LeaveDetail,
   type LeaveRow,
   type LeaveSummary,
@@ -319,6 +341,8 @@ const total = ref(0);
 const summaries = ref<LeaveSummary[]>([]);
 const stageOptions = ref<Array<{ value: TeachingStage; label: string }>>([]);
 const stageBiz = ref<Record<string, number[]>>({ ...LEAVE_STAGE_BIZ_DEFAULT });
+/** 部门下拉（以后端 `/meta` 为准，取不到时用本地默认值，页面不至于空白） */
+const departments = ref<LeaveDepartment[]>([...LEAVE_DEPARTMENTS_DEFAULT]);
 const allClasses = ref<Array<{ stage: TeachingStage; stageName: string; id: string; name: string }>>([]);
 
 const query = reactive({
@@ -389,6 +413,8 @@ async function loadMeta() {
   try {
     const meta = await getLeaveMeta();
     if (meta?.stageBizTypes) stageBiz.value = meta.stageBizTypes;
+    // 部门列表以后端为准（「就业」的 stage 是否为 null 也由后端说了算）
+    if (meta?.departments?.length) departments.value = meta.departments;
   } catch {
     /* 用默认值 */
   }
@@ -419,15 +445,25 @@ const createVisible = ref(false);
 const students = ref<StudentOption[]>([]);
 const stuLoading = ref(false);
 
+/**
+ * 表单状态
+ *
+ * `dept` 是用户选的**部门**（初高中/大学/实训/就业）；
+ * `stage` 是它对应的**技术学段**（jh/class/job）—— 建单时要提交给后端（按学段分库）。
+ * 两者由 `/meta` 的 departments 关联，页面不再让用户看到「学段」这个词。
+ * 「就业」的对应 stage 是 null → 这一单做不了（见 deptUnsupported）。
+ */
 const form = reactive<{
-  stage: TeachingStage;
+  dept: string;
+  stage?: TeachingStage;
   bizType: number;
   studentId: string;
   leaveDate: string;
   expectResumeDate: string;
   leaveReason: string;
 }>({
-  stage: 'job',
+  dept: 'jh',
+  stage: 'jh',
   bizType: 1,
   studentId: '',
   leaveDate: '',
@@ -435,8 +471,24 @@ const form = reactive<{
   leaveReason: '',
 });
 
+/** 当前选中的部门 */
+const currentDept = computed(() => departments.value.find((d) => d.code === form.dept));
+/** 该部门暂不办理学籍异动（如「就业」）→ 类型/学生/保存全禁用 */
+const deptUnsupported = computed(() => !form.stage);
+
+/** 按部门码取学段（部门列表里没有的码 → undefined，等同于不可用） */
+function stageOfDept(code: string): TeachingStage | undefined {
+  return departments.value.find((d) => d.code === code)?.stage ?? undefined;
+}
+
+/** 打开对话框：默认停在「列表筛选的学段」对应部门，否则第一个可用部门 */
 function openCreate() {
-  form.stage = (query.stage || stageOptions.value[0]?.value || 'job') as TeachingStage;
+  const prefer = query.stage
+    ? departments.value.find((d) => d.stage === query.stage)?.code
+    : undefined;
+  const firstUsable = departments.value.find((d) => d.stage)?.code;
+  form.dept = prefer || firstUsable || departments.value[0]?.code || 'jh';
+  form.stage = stageOfDept(form.dept);
   form.bizType = allowedBiz(form.stage)[0] || 1;
   form.studentId = '';
   form.leaveDate = '';
@@ -444,10 +496,21 @@ function openCreate() {
   form.leaveReason = '';
   students.value = [];
   createVisible.value = true;
-  searchStudents('');
+  if (form.stage) searchStudents('');
 }
 
-function onStageChange() {
+/**
+ * 换部门 = 换学段：候选学生整体换了一批，所以
+ * ① 学段重算；② 类型收敛到该学段支持的（大学没有复学）；③ 清空已选并重搜
+ * 「就业」（stage = null）→ 不搜学生，页面提示「暂不办理学籍异动」并禁用保存。
+ */
+function onDeptChange() {
+  form.stage = stageOfDept(form.dept);
+  if (!form.stage) {
+    form.studentId = '';
+    students.value = [];
+    return;
+  }
   if (!bizAllowed(form.stage, form.bizType)) form.bizType = allowedBiz(form.stage)[0] || 1;
   form.studentId = '';
   students.value = [];
@@ -481,12 +544,15 @@ async function searchStudents(kw: string) {
 }
 
 async function doCreate(submit: boolean) {
+  if (deptUnsupported.value) {
+    return ElMessage.warning(`「${currentDept.value?.name || '该部门'}」部门暂不办理学籍异动`);
+  }
   if (!form.studentId) return ElMessage.warning('请选择学生');
   if (!form.leaveReason.trim()) return ElMessage.warning('请填写原因');
   saving.value = true;
   try {
     await createLeave({
-      stage: form.stage,
+      stage: form.stage!,
       studentId: form.studentId,
       bizType: form.bizType,
       leaveDate: form.leaveDate || undefined,
