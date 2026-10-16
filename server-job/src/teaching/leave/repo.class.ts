@@ -3,8 +3,9 @@
  * ============================================================
  *
  * 【与实训（蓝本）的差异 —— 实测】
- *   · **没有「复学」**：`ApplyType` 只有 1休学 2退学 3退费 4升学
- *     → 本仓储只处理 1/2（页面也会据此隐藏"复学"选项，而不是给个点不动的按钮）
+ *   · ★ 复学：老表 ApplyType 只有 1休学 2退学 3退费 4升学；
+ *     2026-10-16 起**新增原码 5 = 复学**（统一码 3，见 shared/conf.ts），
+ *     并给本表补了 `new_class_id` / `new_class_name` 两列（migrations-class/20261016_012）
  *   · 状态字段 `apply_status` 用大学自己的 `SuspendStatus`：
  *     1待提交 2待经理 3待校长 4已同意 5已驳回 —— **与统一码一一对应（恒等）**
  *     撤回原来是**软删单据**（`is_deleted=1`），本次补了 `WITHDRAWN=6` 改为记状态
@@ -41,8 +42,8 @@ const SRC = 'sms_class';
 const WT = 'sms_class.t_class_suspend_apply';
 const WS = 'sms_class.t_class_student';
 
-/** ★ 大学只有 休学(1) / 退学(2) */
-const IN_SCOPE = [1, 2];
+/** ★ 大学：休学(1) / 退学(2) / 复学(5)（5 = 2026-10-16 新增原码，统一码 3） */
+const IN_SCOPE = [1, 2, 5];
 
 async function decorate(row: Record<string, any>): Promise<LeaveRow> {
   const biz = (await toUnifiedLeaveBiz(STAGE, row.apply_type)) ?? 0;
@@ -67,8 +68,8 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
     headTeacherName: row.applicant_name || null,
     leaveDate: fmtDate(row.effect_date) || null,
     expectResumeDate: fmtDate(row.expect_resume_date) || null,
-    newClassId: null, // 大学无复学，也就没有复学班
-    newClassName: null,
+    newClassId: row.new_class_id ? String(row.new_class_id) : null,
+    newClassName: row.new_class_name || null,
     leaveReason: String(row.apply_reason || ''),
     attendedHours: null,
     relatedRefundNo: null,
@@ -108,10 +109,8 @@ async function pendingStudentIds(): Promise<string[]> {
  * 学生下拉
  *
  * ★ `opts.onlySuspended` = 只挑「当前处于休学」的学生（`student_status = 6`）。
- *   ⚠️ 大学目前**没有复学**（`LEAVE_STAGE_BIZ.class = [1,2]`），所以这个开关
- *      在大学这条链上暂时用不到；仍然实现，是为了让三个仓储**签名一致**
- *      （service 按 stage 一致分派，缺参数会编译不过）。哪天大学开出复学，
- *      这里已经是对的。
+ *   ★ 2026-10-16 起大学开放复学（`LEAVE_STAGE_BIZ.class` 含 RESUME），
+ *      复学（bizType=3）时 service 会传 `onlySuspended=true` —— 与初高/实训同口径。
  * ★ `opts.excludeStatuses` = 剔除这些状态的学生（service 传「终态」：
  *   退学 7 / 流失 11 / 已就业 10 —— 已经终结、不能再办任何学籍异动）。
  *   ⚠️ `NOT IN (...) OR IS NULL`：老数据里 `student_status` 可能为 NULL，
@@ -278,6 +277,10 @@ export async function insert(conn: any, input: LeaveWriteInput): Promise<string>
     effect_date: input.leaveDate || todayStr(),
     expect_resume_date: input.expectResumeDate,
 
+    // ★ 复学单：发起申请时必填的复学班（休学/退学单为 NULL）
+    new_class_id: input.newClassId,
+    new_class_name: input.newClassName,
+
     apply_status: 1, // 待提交
     applicant_id: input.initiatorId,
     applicant_name: input.initiatorName,
@@ -299,24 +302,45 @@ export async function setStatus(
     .update({ apply_status: raw, update_time: new Date(), ...patch });
 }
 
-/** 大学无复学 → 空实现（保持三仓储签名一致） */
-export async function setResumeClass(): Promise<void> {
-  /* 大学没有复学，不涉及 */
+/**
+ * ★ 写入复学班（审批通过那一刻由 service 调；学管审批时可改班）
+ *   名字快照一起落库 —— 与实训同款（列表展示不用再反查班级名）
+ */
+export async function setResumeClass(
+  conn: any,
+  id: string,
+  classId: string,
+  className: string,
+): Promise<void> {
+  await tblTrx(conn, SRC, T, STAGE)
+    .where({ id })
+    .update({ new_class_id: classId, new_class_name: className });
 }
 
 /**
  * ★ 审批通过后：改 `t_class_student.student_status`
- *   休学 → 6 · 退学 → 7（大学无复学）
+ *   休学 → 6（休学）· 退学 → 7（退学）· 复学 → 5（正式在读），并回到复学班
+ *
+ * 【复学目标状态 = 5 正式在读，不是 8 实训中】
+ *   大学与初高同理（见 repo.classJh 的 2026-10-15 修复注释）：
+ *   `student_status` 是全系统主状态字段，出勤「应到名单」、统计都按它过滤；
+ *   大学学生一复学就被标成「实训中」会全线跟着错、页面还不报错。
  */
 export async function afterApproved(conn: any, id: string, operatorId: string): Promise<void> {
   const row = (await tblTrx(conn, SRC, T, STAGE).where({ id }).first()) as Record<string, any> | undefined;
   if (!row) return;
   const biz = (await toUnifiedLeaveBiz(STAGE, Number(row.apply_type))) ?? 0;
-  const newStatus = biz === 1 ? StudentStatus.SUSPENDED : StudentStatus.QUIT;
+  const newStatus =
+    biz === 3 ? StudentStatus.STUDYING : biz === 1 ? StudentStatus.SUSPENDED : StudentStatus.QUIT;
 
-  await tblTrx(conn, SRC, S, STAGE)
-    .where({ id: row.student_id })
-    .update({ student_status: newStatus, update_time: new Date(), update_by: operatorId });
+  const patch: Record<string, any> = {
+    student_status: newStatus,
+    update_time: new Date(),
+    update_by: operatorId,
+  };
+  // ★ 复学：回到复学班（service 在调本函数前已把复学班写进单据）
+  if (biz === 3 && row.new_class_id) patch.class_id = row.new_class_id;
+  await tblTrx(conn, SRC, S, STAGE).where({ id: row.student_id }).update(patch);
 }
 
 /** 该学生是否有进行中的申请 */
