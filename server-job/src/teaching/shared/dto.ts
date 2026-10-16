@@ -19,8 +19,8 @@ export type TeachingStage = 'jh' | 'class' | 'job';
 export const TEACHING_STAGES: TeachingStage[] = ['jh', 'class', 'job'];
 
 export const TEACHING_STAGE_NAME: Record<TeachingStage, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '实训',
 };
 
@@ -752,8 +752,8 @@ export type StudentStage = 'jh' | 'class' | 'job' | 'edu';
 export const STUDENT_STAGES: StudentStage[] = ['jh', 'class', 'job', 'edu'];
 
 export const STUDENT_STAGE_NAME: Record<StudentStage, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '就业',
   edu: '教务',
 };

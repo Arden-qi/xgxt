@@ -135,7 +135,7 @@ export const MENU: MenuNode[] = [
         pageCode: 'classjh:dashboard:view',
         owner: '初高中部',
         stage: '已完成',
-        phase: '初高',
+        phase: '初高部',
         desc: '在读人数、今日出勤率、临期缴费与待办事项。',
       },
 
@@ -158,7 +158,7 @@ export const MENU: MenuNode[] = [
         pageCode: 'class:consult:view',
         owner: '大学部',
         stage: '已完成',
-        phase: '大学',
+        phase: '大学部',
         desc: '咨询端推来的待接收学员：接收 / 拒绝。',
       },
 
@@ -206,7 +206,7 @@ export const MENU: MenuNode[] = [
         pageCode: 'classjh:setting:view',
         owner: '初高中部',
         stage: '已完成',
-        phase: '初高',
+        phase: '初高部',
         desc: '出勤达标线与统计口径、催费提醒天数、封班可转入类型、学习阶段字典。',
       },
     ],

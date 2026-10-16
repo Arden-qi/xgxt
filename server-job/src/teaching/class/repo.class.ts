@@ -32,7 +32,7 @@ import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
 const STAGE = 'class' as const;
-const STAGE_NAME = '大学';
+const STAGE_NAME = '大学部';
 
 /** 大学阶段 201~206 */
 const PHASE_NAME: Record<number, string> = {

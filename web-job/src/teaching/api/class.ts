@@ -205,8 +205,8 @@ export const CLASS_STATUS_TAG: Record<number, string> = {
 };
 
 export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '实训',
 };
 

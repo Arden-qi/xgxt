@@ -49,7 +49,7 @@ async function mapRow(r: Record<string, any>, nameMap: Map<string, string>): Pro
   return {
     id: String(r.id),
     stage: STAGE,
-    stageName: '初高',
+    stageName: '初高部',
     examId: String(r.exam_id),
     examName: nameMap.get(String(r.exam_id)) ?? '',
     examDate: r.exam_date ? String(r.exam_date).slice(0, 10) : null,
@@ -114,7 +114,7 @@ export async function entry(examId: string, classId: string): Promise<ScoreEntry
 
   return {
     stage: STAGE,
-    stageName: '初高',
+    stageName: '初高部',
     examId,
     examName: String(exam.exam_name ?? ''),
     examDate: exam.exam_date ? String(exam.exam_date).slice(0, 10) : null,

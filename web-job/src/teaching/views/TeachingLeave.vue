@@ -2,7 +2,7 @@
   <div class="tlv">
     <el-alert class="tlv-chain" type="info" :closable="false" show-icon>
       <template #title>
-        本模块审批链（三学段统一）：
+        本模块审批链（三部门统一）：
         <b>休学 1 步（学管）· 复学 1 步（学管）· 退学 2 步（学管 → 校长）</b>
       </template>
     </el-alert>
@@ -22,13 +22,13 @@
           <span class="ok">已通过 <b>{{ s.approvedCount }}</b></span>
         </div>
       </div>
-      <el-empty v-if="!summaries.length" description="当前账号没有可访问的学段" :image-size="60" />
+      <el-empty v-if="!summaries.length" description="当前账号没有可访问的部门" :image-size="60" />
     </div>
 
     <!-- 筛选 -->
     <el-form class="tlv-filter" inline>
-      <el-form-item label="学段">
-        <el-select v-model="query.stage" clearable placeholder="全部学段" style="width: 130px">
+      <el-form-item label="部门">
+        <el-select v-model="query.stage" clearable placeholder="全部部门" style="width: 130px">
           <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>
@@ -69,7 +69,7 @@
 
     <!-- 列表 -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
-      <el-table-column v-if="!query.stage" label="学段" width="70" align="center">
+      <el-table-column v-if="!query.stage" label="部门" width="70" align="center">
         <template #default="{ row }">{{ row.stageName }}</template>
       </el-table-column>
       <el-table-column label="类型" width="80" align="center">
@@ -129,7 +129,7 @@
     <!-- 新建 -->
     <el-dialog v-model="createVisible" title="发起学籍异动申请" width="600px">
       <el-form label-width="100px">
-        <el-form-item label="学段" required>
+        <el-form-item label="部门" required>
           <el-select v-model="form.stage" style="width: 160px" @change="onStageChange">
             <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
           </el-select>
@@ -229,7 +229,7 @@
     <el-dialog v-model="detailVisible" title="申请单详情" width="680px">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="学段">{{ detail.record.stageName }}</el-descriptions-item>
+          <el-descriptions-item label="部门">{{ detail.record.stageName }}</el-descriptions-item>
           <el-descriptions-item label="类型">
             <el-tag size="small">{{ detail.record.bizTypeName }}</el-tag>
           </el-descriptions-item>

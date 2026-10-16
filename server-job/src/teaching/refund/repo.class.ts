@@ -67,7 +67,7 @@ async function decorate(
 
   return {
     stage: STAGE,
-    stageName: '大学',
+    stageName: '大学部',
     id: String(row.id),
     studentId: String(row.student_id || ''),
     studentNo: String(row.student_no || ''),

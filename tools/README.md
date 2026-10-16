@@ -55,3 +55,22 @@ node tools\e2e-merged.mjs
 
 > 浏览器路径是写死的几个常见安装位置，找不到会自动退出并提示。
 > 若你机器上浏览器装在别处，改脚本顶部的 `CAND` 数组即可。
+
+---
+
+## 3. `_verify-student-dept.mjs` / `_verify-teaching-dept.mjs` —— 「学段 → 部门」改名回归
+
+**前提**：前后端都在跑（5173 + 8004）。用校长账号 `qiansy` 真实登录（登录页有演示账号列表）。
+
+```bat
+node tools\_verify-student-dept.mjs      rem 学生档案（截图批注那一页）
+node tools\_verify-teaching-dept.mjs     rem 教学管理 9 个合并入口逐页扫
+```
+
+| 脚本 | 断言 |
+|---|---|
+| `_verify-student-dept` | 页面无「学段」字样；筛选标签是「部门」；列表显示「大学部」；部门下拉 = 初高部 / 大学部；选大学部查 1 条、选初高部查 0 条 |
+| `_verify-teaching-dept` | 9 个入口页（学生档案/班级/出勤/考试/成绩/宿舍/催费/退费/休学审批）都有内容、无「学段」、无未捕获异常 |
+
+> 与 `e2e-merged.mjs` 同一套路（CDP 直连本机 Edge/Chrome，零依赖）。
+> 改完教学管理页面的文案/筛选后，先跑这两个脚本再提交。

@@ -39,7 +39,7 @@ import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
 const STAGE = 'jh' as const;
-const STAGE_NAME = '初高';
+const STAGE_NAME = '初高部';
 
 /** 初高阶段 101~107 / 201~204（与 shared-types/class-jh 的 STAGE_NAME 一致） */
 const PHASE_NAME: Record<number, string> = {

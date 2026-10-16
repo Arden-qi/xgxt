@@ -3,7 +3,7 @@
     <!-- 说明条 -->
     <el-alert class="tdv-tip" type="info" :closable="false" show-icon>
       <template #title>
-        本页合并了 <b>3 个学段</b>的宿舍管理（初高 / 大学 / 实训）。
+        本页合并了 <b>3 个部门</b>的宿舍管理（初高部 / 大学部 / 实训）。
         <span class="muted">
           房间状态统一成 4 档（1 使用中 / 2 空置 / 3 维修 / 4 停用），床位状态统一成 3 档（1 空闲 / 2 已占用 / 3 停用）；
           <b>已住人数是实时统计的</b>，不信任表里的冗余列，所以改了床位立刻见效。
@@ -31,11 +31,11 @@
 
     <!-- 筛选 -->
     <el-form class="tdv-filter" inline>
-      <el-form-item label="学段">
+      <el-form-item label="部门">
         <el-select
           v-model="query.stage"
           clearable
-          placeholder="全部学段"
+          placeholder="全部部门"
           style="width: 130px"
           @change="onStageChange"
         >
@@ -89,7 +89,7 @@
 
     <!-- 房间列表 -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
-      <el-table-column v-if="!query.stage" label="学段" width="70" align="center">
+      <el-table-column v-if="!query.stage" label="部门" width="70" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain">{{ row.stageName }}</el-tag>
         </template>
@@ -179,7 +179,7 @@
           type="info"
           :closable="false"
           show-icon
-          title="该学段的宿舍数据由教务同步，不能在这里分派/退宿；请走「调宿/退宿申请」"
+          title="该部门的宿舍数据由教务同步，不能在这里分派/退宿；请走「调宿/退宿申请」"
         />
 
         <div class="tdv-bed-head">
@@ -257,7 +257,7 @@
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-row :gutter="12">
           <el-col :span="12">
-            <el-form-item label="学段" required>
+            <el-form-item label="部门" required>
               <el-select v-model="form.stage" :disabled="!!form.id" style="width: 100%" @change="onFormStageChange">
                 <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
               </el-select>
@@ -381,7 +381,7 @@
     <!-- ============ 调宿 / 退宿申请 ============ -->
     <el-dialog v-model="changeVisible" title="发起调宿 / 退宿申请" width="620px" top="8vh">
       <el-form label-width="100px">
-        <el-form-item label="学段" required>
+        <el-form-item label="部门" required>
           <el-select v-model="changeForm.stage" style="width: 100%" @change="onChangeStageChange">
             <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
           </el-select>
@@ -413,7 +413,7 @@
         type="info"
         :closable="false"
         show-icon
-        title="提交后进入审批流：班主任发起 → 教务老师 1 步审批。三个学段审批链已统一。"
+        title="提交后进入审批流：班主任发起 → 教务老师 1 步审批。三个部门审批链已统一。"
       />
       <template #footer>
         <el-button @click="changeVisible = false">取消</el-button>
@@ -424,7 +424,7 @@
     <!-- ============ 申请列表 ============ -->
     <el-dialog v-model="changeListVisible" title="调宿 / 退宿申请" width="900px" top="6vh">
       <el-table v-loading="changeLoading" :data="changes" border size="small">
-        <el-table-column label="学段" width="70" align="center">
+        <el-table-column label="部门" width="70" align="center">
           <template #default="{ row }">{{ row.stageName }}</template>
         </el-table-column>
         <el-table-column label="类型" width="100">
@@ -525,7 +525,7 @@ import {
 } from '@/teaching/api/dorm';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
-const STAGE_LABEL: Record<DormStage, string> = { jh: '初高', class: '大学', job: '实训' };
+const STAGE_LABEL: Record<DormStage, string> = { jh: '初高部', class: '大学部', job: '实训' };
 
 const DORM_STAGE_ORDER: DormStage[] = ['jh', 'class', 'job'];
 const stageOptions = computed(() => visibleStageOptions('dorm', DORM_STAGE_ORDER, STAGE_LABEL));
@@ -749,7 +749,7 @@ const form = reactive<Record<string, any>>({
 const formMeta = computed(() => metaList.value.find((m) => m.stage === form.stage) || null);
 
 const rules: FormRules = {
-  stage: [{ required: true, message: '请选择学段', trigger: 'change' }],
+  stage: [{ required: true, message: '请选择部门', trigger: 'change' }],
   buildingName: [{ required: true, message: '楼栋必填', trigger: 'blur' }],
   roomNo: [{ required: true, message: '房间号必填', trigger: 'blur' }],
 };

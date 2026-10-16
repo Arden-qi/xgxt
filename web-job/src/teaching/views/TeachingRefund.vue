@@ -3,7 +3,7 @@
     <!-- ★ 把"走哪几步"显式告诉用户（合并后审批链变了，不能让人猜） -->
     <el-alert class="trf-chain" type="info" :closable="false" show-icon>
       <template #title>
-        本模块审批链（三学段统一）：
+        本模块审批链（三部门统一）：
         <b>班主任 / 项目经理发起 → 学管审批 → 校长审批 → 通过后通知财务出款</b>
       </template>
     </el-alert>
@@ -20,13 +20,13 @@
         </div>
         <div class="trf-card__amt">已通过金额：¥{{ fmtCent(s.approvedAmount) }}</div>
       </div>
-      <el-empty v-if="!summaries.length" description="当前账号没有可访问的学段" :image-size="60" />
+      <el-empty v-if="!summaries.length" description="当前账号没有可访问的部门" :image-size="60" />
     </div>
 
     <!-- 筛选栏 -->
     <el-form class="trf-filter" inline>
-      <el-form-item label="学段">
-        <el-select v-model="query.stage" clearable placeholder="全部学段" style="width: 130px">
+      <el-form-item label="部门">
+        <el-select v-model="query.stage" clearable placeholder="全部部门" style="width: 130px">
           <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>
@@ -56,7 +56,7 @@
 
     <!-- 列表 -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
-      <el-table-column v-if="!query.stage" label="学段" width="70" align="center">
+      <el-table-column v-if="!query.stage" label="部门" width="70" align="center">
         <template #default="{ row }">{{ row.stageName }}</template>
       </el-table-column>
       <el-table-column label="学生" min-width="130">
@@ -137,7 +137,7 @@
     <!-- 新建对话框 -->
     <el-dialog v-model="createVisible" title="发起退费申请" width="640px">
       <el-form label-width="90px">
-        <el-form-item label="学段" required>
+        <el-form-item label="部门" required>
           <el-select v-model="form.stage" style="width: 160px" @change="onStageChange">
             <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
           </el-select>
@@ -205,7 +205,7 @@
     <el-dialog v-model="detailVisible" title="退费单详情" width="680px">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="学段">{{ detail.record.stageName }}</el-descriptions-item>
+          <el-descriptions-item label="部门">{{ detail.record.stageName }}</el-descriptions-item>
           <el-descriptions-item label="学生">
             {{ detail.record.studentName }}（{{ detail.record.studentNo }}）
           </el-descriptions-item>

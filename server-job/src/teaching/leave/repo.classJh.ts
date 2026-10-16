@@ -50,7 +50,7 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
 
   return {
     stage: STAGE,
-    stageName: '初高',
+    stageName: '初高部',
     id: String(row.id),
     bizType: biz,
     bizTypeName: LEAVE_BIZ_TYPE_NAME[biz] || '',

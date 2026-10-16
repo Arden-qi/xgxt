@@ -66,7 +66,7 @@ function mapRow(r: Record<string, any>): StudentRow {
   const bedNo = str(r.bed_no);
   return {
     stage: STAGE,
-    stageName: '大学',
+    stageName: '大学部',
     studentId: String(r.id),
     studentNo: String(r.student_no ?? ''),
     studentName: String(r.student_name ?? ''),

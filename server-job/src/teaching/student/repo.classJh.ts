@@ -54,7 +54,7 @@ function mapRow(r: Record<string, any>): StudentRow {
   const phase = readPhaseCode(r);
   return {
     stage: STAGE,
-    stageName: '初高',
+    stageName: '初高部',
     studentId: String(r.id),
     studentNo: String(r.student_no ?? ''),
     studentName: String(r.student_name ?? ''),

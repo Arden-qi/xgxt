@@ -3,10 +3,10 @@
     <!-- 说明条 -->
     <el-alert class="tcv-tip" type="info" :closable="false" show-icon>
       <template #title>
-        本页合并了 <b>3 个学段</b>的班级信息（初高 / 大学 / 实训）。
+        本页合并了 <b>3 个部门</b>的班级信息（初高部 / 大学部 / 实训）。
         <span class="muted">
           班级状态码三套一致（1 开放 / 2 封班 / 3 待结业 / 4 已结业）；
-          但「班级编号」「结业日期」只有实训有，「今日出勤率」只有初高有 —— 表单会按学段自动隐藏不适用的字段。
+          但「班级编号」「结业日期」只有实训有，「今日出勤率」只有初高有 —— 表单会按部门自动隐藏不适用的字段。
         </span>
       </template>
     </el-alert>
@@ -32,14 +32,13 @@
 
     <!-- 筛选 -->
     <el-form class="tcv-filter" inline>
-      <el-form-item label="学段">
-        <el-select v-model="query.stage" clearable placeholder="全部学段" style="width: 130px" @change="onStageChange">
-          <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
-        </el-select>
-      </el-form-item>
+      <!-- 2026-10-16 按批注：原「学段」筛选改名「部门」（选项 = 初高部 / 大学部 / 实训）。
+           原来紧挨着的那个 deptCode「部门」下拉是**没接上接口的死筛选**
+           （query.deptCode 既没进查询参数、也没进 load），批注口径下两者重名，
+           这里把死掉的那个删掉，只留一个真正生效的。 -->
       <el-form-item label="部门">
-        <el-select v-model="query.deptCode" clearable placeholder="全部部门" style="width: 120px">
-          <el-option v-for="d in DEPT_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
+        <el-select v-model="query.stage" clearable placeholder="全部部门" style="width: 130px" @change="onStageChange">
+          <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>
       <el-form-item v-if="phaseOptions.length" label="阶段">
@@ -70,9 +69,11 @@
 
     <!-- 列表 -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
-      <el-table-column v-if="!query.stage" label="学段" width="70" align="center">
+      <!-- 2026-10-16：原来「学段」与「部门」是两列（部门列取 row.deptName），
+           批注口径下重名，合并成一列 —— 取部门名，没部门就退回学段名 -->
+      <el-table-column v-if="!query.stage" label="部门" width="70" align="center">
         <template #default="{ row }">
-          <el-tag size="small" effect="plain">{{ row.stageName }}</el-tag>
+          <el-tag size="small" effect="plain">{{ row.deptName || row.stageName }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="班级名称" min-width="130">
@@ -83,9 +84,6 @@
       <!-- ★ 只有实训有这一列 -->
       <el-table-column v-if="hasClassCodeCol" label="班级编号" width="130">
         <template #default="{ row }">{{ row.classCode || '—' }}</template>
-      </el-table-column>
-      <el-table-column v-if="!query.stage" label="部门" width="90" align="center">
-        <template #default="{ row }">{{ row.deptName || '—' }}</template>
       </el-table-column>
       <el-table-column label="阶段" width="110" align="center">
         <template #default="{ row }">{{ row.phaseName || '—' }}</template>
@@ -160,7 +158,7 @@
     <el-drawer v-model="detailVisible" :title="`${detail?.base.className || ''} · 花名册`" size="560px">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="学段">{{ detail.base.stageName }}</el-descriptions-item>
+          <el-descriptions-item label="部门">{{ detail.base.stageName }}</el-descriptions-item>
           <el-descriptions-item label="班级名称">{{ detail.base.className }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.base.classCode" label="班级编号">
             {{ detail.base.classCode }}
@@ -479,7 +477,7 @@ import {
 } from '@/teaching/api/class';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
-const STAGE_LABEL: Record<ClassStage, string> = { jh: '初高', class: '大学', job: '实训' };
+const STAGE_LABEL: Record<ClassStage, string> = { jh: '初高部', class: '大学部', job: '实训' };
 
 const stageOptions = computed(() => visibleStageOptions('class', CLASS_STAGES, STAGE_LABEL));
 
@@ -491,8 +489,8 @@ const summary = ref<ClassSummary[]>([]);
 const metaList = ref<ClassStageMeta[]>([]);
 
 const query = reactive({
+  // 「部门」筛选复用 stage：初高部 = jh、大学部 = class、实训 = job
   stage: undefined as ClassStage | undefined,
-  deptCode: undefined as number | undefined,
   classStatus: undefined as number | undefined,
   phaseCode: undefined as number | undefined,
   keyword: '',
@@ -562,7 +560,6 @@ function onStageChange() {
 
 function reset() {
   query.stage = undefined;
-  query.deptCode = undefined;
   query.classStatus = undefined;
   query.phaseCode = undefined;
   query.keyword = '';
@@ -720,7 +717,7 @@ function onFormStageChange() {
 async function doGenCode() {
   const r = await genClassCode(form.stage);
   if (r?.classCode) form.classCode = r.classCode;
-  else ElMessage.info('该学段没有班级编号（只有实训有）');
+  else ElMessage.info('该部门没有班级编号（只有实训有）');
 }
 
 async function doSave() {

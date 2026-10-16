@@ -3,8 +3,8 @@
     <!-- 说明条 -->
     <el-alert class="tsv-tip" type="info" :closable="false" show-icon>
       <template #title>
-        本页合并了 <b>4 个学段</b>的学生档案（初高 / 大学 / 就业 / 教务）。
-        「全部」= 当前账号可见学段合并后<b>按学号去重</b>
+        学生按<b>部门</b>归类：初高部 / 大学部（另有实训 / 教务来源）。
+        「全部部门」= 当前账号可见数据合并后<b>按学号去重</b>
         <span class="muted">（同学号保留阶段更靠后的那条：就业 &gt; 大学 &gt; 初高 &gt; 教务）</span>
       </template>
     </el-alert>
@@ -39,9 +39,10 @@
 
     <!-- 筛选 -->
     <el-form class="tsv-filter" inline>
-      <el-form-item label="学段">
-        <el-select v-model="query.stage" clearable placeholder="全部学段" style="width: 130px" @change="onStageChange">
-          <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
+      <!-- 2026-10-16 按批注：「学段」改叫「部门」；初高 → 初高部、大学 → 大学部 -->
+      <el-form-item label="部门">
+        <el-select v-model="query.dept" clearable placeholder="全部部门" style="width: 130px" @change="onDeptChange">
+          <el-option v-for="d in deptFilterOptions" :key="d.value" :label="d.label" :value="d.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="班级">
@@ -66,7 +67,7 @@
             :key="v"
             :label="n"
             :value="Number(v)"
-            :disabled="query.stage ? !statusAllowed(query.stage, Number(v)) : false"
+            :disabled="activeStage ? !statusAllowed(activeStage, Number(v)) : false"
           />
         </el-select>
       </el-form-item>
@@ -91,9 +92,9 @@
 
     <!-- 列表 -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
-      <el-table-column v-if="!query.stage" label="学段" width="70" align="center">
+      <el-table-column v-if="!query.dept" label="部门" width="80" align="center">
         <template #default="{ row }">
-          <el-tag size="small" effect="plain">{{ row.stageName }}</el-tag>
+          <el-tag size="small" effect="plain">{{ deptLabelOf(row) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="学号" width="120">
@@ -166,13 +167,12 @@
           <!-- ① 基础信息（按现有界面） -->
           <el-tab-pane label="基础信息" name="base">
             <el-descriptions :column="3" border size="small">
-              <el-descriptions-item label="学段">{{ detail.base.stageName }}</el-descriptions-item>
+              <el-descriptions-item label="部门">{{ deptLabelOf(detail.base) }}</el-descriptions-item>
               <el-descriptions-item label="学号">{{ detail.base.studentNo }}</el-descriptions-item>
               <el-descriptions-item label="姓名">{{ detail.base.studentName }}</el-descriptions-item>
               <el-descriptions-item label="性别">{{ detail.base.genderName || '—' }}</el-descriptions-item>
               <el-descriptions-item label="年龄">{{ detail.base.age ?? '—' }}</el-descriptions-item>
               <el-descriptions-item label="身份证">{{ detail.profile.idCard || '—' }}</el-descriptions-item>
-              <el-descriptions-item label="部门">{{ detail.base.deptName || '—' }}</el-descriptions-item>
               <el-descriptions-item label="班级">{{ detail.base.className || '—' }}</el-descriptions-item>
               <el-descriptions-item label="阶段">{{ detail.base.phaseName || '—' }}</el-descriptions-item>
               <el-descriptions-item label="状态">
@@ -541,14 +541,14 @@
           type="warning"
           :closable="false"
           show-icon
-          title="教务学段：把状态改成「休学 / 退学」会自动冻结该生名下缴费记录；改回在读自动解冻（只解冻系统冻结的）"
+          title="教务来源：把状态改成「休学 / 退学」会自动冻结该生名下缴费记录；改回在读自动解冻（只解冻系统冻结的）"
         />
         <el-alert
           v-else
           type="info"
           :closable="false"
           show-icon
-          title="学段特有字段（综合素质 / 校园网 / 简历）目前在详情页只读展示，编辑留待下一批"
+          title="部门特有的字段（综合素质 / 校园网 / 简历）目前在详情页只读展示，编辑留待下一批"
         />
       </el-form>
       <template #footer>
@@ -593,11 +593,46 @@ import {
 } from '@/teaching/api/student';
 import { http } from '@/api/request';
 
-/* ---------------- 学段（第 3 期：判权不再依赖旧路由） ---------------- */
+/* ---------------- 部门（2026-10-16 批注：学段改叫部门，判权仍不依赖旧路由） ---------------- */
 const STAGE_ORDER: StudentStage[] = ['jh', 'class', 'job', 'edu'];
-const STAGE_LABEL: Record<StudentStage, string> = { jh: '初高', class: '大学', job: '就业', edu: '教务' };
+/** 部门名：初高 → 初高部、大学 → 大学部；就业 / 教务 不是部门，保持原名 */
+const STAGE_LABEL: Record<StudentStage, string> = {
+  jh: '初高部',
+  class: '大学部',
+  job: '就业',
+  edu: '教务',
+};
+
+/** 部门 code（与「新增/编辑学生」表单里的部门同一套：1 初高部 / 2 大学部） */
+const DEPT_CODE_OF_STAGE: Partial<Record<StudentStage, number>> = {
+  jh: DeptCode.JUNIOR_SENIOR,
+  class: DeptCode.UNIVERSITY,
+};
 
 const stageOptions = computed(() => visibleStageOptions('student', STAGE_ORDER, STAGE_LABEL));
+
+/**
+ * 部门筛选下拉
+ *   · 初高部 / 大学部 → 按 dept_code 过滤（后端 list / summary 都认这个参数）
+ *   · 就业 / 教务 没有部门概念 → 退回按学段来源过滤，别把它们从入口里弄丢
+ */
+type DeptFilter = '' | `d:${number}` | `s:${StudentStage}`;
+const deptFilterOptions = computed(() =>
+  stageOptions.value.map((s) => {
+    const code = DEPT_CODE_OF_STAGE[s.value as StudentStage];
+    return code
+      ? { value: `d:${code}` as DeptFilter, label: DEPT_NAME[code] || s.label }
+      : { value: `s:${s.value}` as DeptFilter, label: s.label };
+  }),
+);
+
+/**
+ * 行上的「部门」显示口径
+ *   优先取学生自己的部门字段；就业 / 教务来源没有部门，退回学段名，不留空白。
+ */
+function deptLabelOf(row: { deptName?: string | null; stageName?: string | null }): string {
+  return row.deptName || row.stageName || '—';
+}
 
 /** 各学段可见的状态（与后端 repo 的口径一致，只是用于筛选下拉禁用） */
 const STATUS_BY_STAGE: Record<StudentStage, number[]> = {
@@ -624,7 +659,8 @@ const summary = ref<StudentSummary>({
 });
 
 const query = reactive({
-  stage: '' as '' | StudentStage,
+  /** 部门筛选：'' = 全部；`d:1` 初高部 / `d:2` 大学部；`s:job` / `s:edu` = 就业 / 教务来源 */
+  dept: '' as DeptFilter,
   classId: '',
   phaseCode: undefined as number | undefined,
   studentStatus: undefined as number | undefined,
@@ -634,17 +670,25 @@ const query = reactive({
   size: 20,
 });
 
+/** 当前筛选对应的学段（班级 / 阶段 / 状态 都按它联动；未选部门 = 全部） */
+const activeStage = computed<StudentStage | ''>(() => {
+  const [kind, v] = String(query.dept || '').split(':');
+  if (kind === 'd') return Number(v) === DeptCode.JUNIOR_SENIOR ? 'jh' : 'class';
+  if (kind === 's') return v as StudentStage;
+  return '';
+});
+
 const meta = ref<StudentStageMeta[]>([]);
 const classOptions = ref<Array<{ stage: StudentStage; stageName: string; id: string; name: string }>>([]);
 
 const classSelectOptions = computed(() =>
-  query.stage ? classOptions.value.filter((c) => c.stage === query.stage) : classOptions.value,
+  activeStage.value ? classOptions.value.filter((c) => c.stage === activeStage.value) : classOptions.value,
 );
 
-/** 「阶段」筛选项：选了学段用该学段的；没选则取并集（去重） */
+/** 「阶段」筛选项：选了部门用该部门的；没选则取并集（去重） */
 const phaseOptions = computed(() => {
-  const list = query.stage
-    ? meta.value.filter((m) => m.stage === query.stage)
+  const list = activeStage.value
+    ? meta.value.filter((m) => m.stage === activeStage.value)
     : meta.value;
   const seen = new Map<number, string>();
   for (const m of list) for (const p of m.phaseOptions) if (!seen.has(p.value)) seen.set(p.value, p.label);
@@ -652,8 +696,12 @@ const phaseOptions = computed(() => {
 });
 
 function params() {
+  // 部门筛选：初高部 / 大学部 走 deptCode（后端 list 与 summary 都认）；
+  // 就业 / 教务 没有部门，仍按学段来源过滤。
+  const [kind, v] = String(query.dept || '').split(':');
   return {
-    stage: (query.stage || undefined) as StudentStage | undefined,
+    stage: kind === 's' ? (v as StudentStage) : undefined,
+    deptCode: kind === 'd' ? Number(v) : undefined,
     classId: query.classId || undefined,
     phaseCode: query.phaseCode,
     studentStatus: query.studentStatus,
@@ -680,7 +728,8 @@ async function load(p = query.page) {
   }
 }
 
-function onStageChange() {
+/** 切部门：阶段 / 状态 / 班级都是部门内口径，必须清掉再查 */
+function onDeptChange() {
   query.classId = '';
   query.phaseCode = undefined;
   query.studentStatus = undefined;
@@ -688,7 +737,7 @@ function onStageChange() {
 }
 
 function reset() {
-  query.stage = '';
+  query.dept = '';
   query.classId = '';
   query.phaseCode = undefined;
   query.studentStatus = undefined;
@@ -953,9 +1002,9 @@ const showBed = computed(() => form.stage === 'class' || form.stage === 'jh');
 
 function openCreate() {
   Object.assign(form, emptyForm());
-  // 表单已没有「学段」选择器：默认取筛选中的学段（就业/教务从对应页签进入仍可新增），
+  // 表单已没有「学段」选择器：默认取筛选中的部门对应学段（就业/教务从对应来源进入仍可新增），
   // 选了部门后会由 onFormDeptChange 自动改判为 初高/大学
-  const st = (query.stage || stageOptions.value[0]?.value || 'jh') as StudentStage;
+  const st = (activeStage.value || stageOptions.value[0]?.value || 'jh') as StudentStage;
   form.stage = st;
   // 2026-10-15 按用户要求：部门不预选默认值，由用户自己选（未选部门时学历下拉显示并集）
   formAge.value = null;
@@ -1012,7 +1061,7 @@ async function doSave() {
   const ok = await formRef.value.validate().catch(() => false);
   if (!ok) return;
   if (form.stage !== 'jh' && !form.deptCode) {
-    ElMessage.warning('该学段「部门」必填');
+    ElMessage.warning('「部门」必填');
     return;
   }
   saving.value = true;
@@ -1067,7 +1116,7 @@ async function doSave() {
 async function doDelete(row: StudentRow) {
   try {
     await ElMessageBox.confirm(
-      `确认删除「${row.stageName} · ${row.studentName}（${row.studentNo}）」？删除后为逻辑删除，可在数据库中找回。`,
+      `确认删除「${deptLabelOf(row)} · ${row.studentName}（${row.studentNo}）」？删除后为逻辑删除，可在数据库中找回。`,
       '删除确认',
       { type: 'warning' },
     );
