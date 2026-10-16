@@ -87,6 +87,9 @@ export interface LeaveRow {
   leaveReason: string;
   attendedHours: number | null;
   relatedRefundNo: string | null;
+  /** ★ 学生**当前**状态（实时读，与单据状态是两回事：休学单已通过 ≠ 学生现在在休学） */
+  studentStatus?: number | null;
+  studentStatusName?: string;
   approvalStatus: number;
   approvalStatusName: string;
   currentHandlerHint: string | null;
@@ -129,10 +132,44 @@ export interface StudentOption {
   className: string | null;
 }
 
+/**
+ * 部门（发起申请时的下拉，取代原来的「学段」）
+ *
+ * ★ 权威来源是后端 `/meta.departments`，下面这份只是**兜底默认值**
+ *   （meta 请求失败时页面不至于空白）。改这里也要同步后端
+ *   `server-job/src/teaching/shared/dto.ts` 的 `LEAVE_DEPARTMENTS`。
+ */
+export interface LeaveDepartment {
+  /** 部门码（jh/class/job 与学段同码，employ = 就业） */
+  code: string;
+  /** 部门中文名 */
+  name: string;
+  /** 对应学段；null = 该部门暂不办理学籍异动（如「就业」） */
+  stage: TeachingStage | null;
+}
+
+export const LEAVE_DEPARTMENTS_DEFAULT: LeaveDepartment[] = [
+  { code: 'jh', name: '初高中', stage: 'jh' },
+  { code: 'class', name: '大学', stage: 'class' },
+  { code: 'job', name: '实训', stage: 'job' },
+  { code: 'employ', name: '就业', stage: null },
+];
+
+/**
+ * 异动日期可选窗口的**兜底值**（今天 ± N 天）
+ * ★ 权威值由后端 `/meta.leaveDateWindowDays` 下发（与后端 create 的校验同源），
+ *   改窗口天数请改后端 `LEAVE_DATE_WINDOW_DAYS`。
+ */
+export const LEAVE_DATE_WINDOW_DAYS_DEFAULT = 10;
+
 export interface LeaveMeta {
   bizTypes: Array<{ value: number; label: string; steps: number }>;
   statuses: Array<{ value: number; label: string }>;
   stageBizTypes: Record<string, number[]>;
+  /** ★ 部门下拉（初高中 / 大学 / 实训 / 就业） */
+  departments?: LeaveDepartment[];
+  /** ★ 异动日期可选窗口：今天 ± N 天 */
+  leaveDateWindowDays?: number;
 }
 
 export function listLeaves(p: {
@@ -157,8 +194,22 @@ export function getLeaveDetail(id: string) {
   return http.get<LeaveDetail>('/api/teaching/leave/detail', { id });
 }
 
-export function listStudentOptions(stage: TeachingStage, keyword?: string) {
-  return http.get<StudentOption[]>('/api/teaching/leave/student-options', { stage, keyword });
+/**
+ * 学生下拉
+ *
+ * ★ 传 `bizType = 3`（复学）时，后端**只返回当前处于休学的学生** ——
+ *   复学是「把休学的人接回来」，下拉里就不该出现在读/退学的人。
+ * ★ 无论哪种类型，以下两类人都**不会返回**：
+ *   ① 终态学生（退学 7 / 流失 11 / 已就业 10）—— 已经终结，不能再办任何学籍异动；
+ *   ② **已有未办结申请**的学生（待提交 / 待学管 / 待校长）—— 避免重复申请。
+ *   （2026-10-16 起；② 与后端 create 的 hasPending 共用同一份「未办结状态」常量。）
+ */
+export function listStudentOptions(stage: TeachingStage, keyword?: string, bizType?: number) {
+  return http.get<StudentOption[]>('/api/teaching/leave/student-options', {
+    stage,
+    keyword,
+    bizType,
+  });
 }
 
 export function listClasses() {
@@ -175,6 +226,7 @@ export function getLeaveMeta() {
   return http.get<LeaveMeta>('/api/teaching/leave/meta');
 }
 
+/** ★ 复学：建单时 `newClassId`（复学班）必填；终审仍可改 */
 export function createLeave(body: {
   stage: TeachingStage;
   studentId: string;
