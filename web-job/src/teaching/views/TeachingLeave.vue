@@ -10,7 +10,7 @@
     <!-- 汇总 -->
     <div class="tlv-cards">
       <div v-for="s in summaries" :key="s.stage" class="tlv-card">
-        <div class="tlv-card__head">{{ s.stageName }}</div>
+        <div class="tlv-card__head">{{ deptNameOf(s.stage, s.stageName) }}</div>
         <div class="tlv-card__row">
           <span>共 <b>{{ s.total }}</b> 单</span>
           <span>休学 <b>{{ s.suspendCount }}</b></span>
@@ -22,7 +22,7 @@
           <span class="ok">已通过 <b>{{ s.approvedCount }}</b></span>
         </div>
       </div>
-      <el-empty v-if="!summaries.length" description="当前账号没有可访问的学段" :image-size="60" />
+      <el-empty v-if="!summaries.length" description="当前账号没有可访问的部门" :image-size="60" />
     </div>
 
     <!-- 筛选 -->
@@ -33,15 +33,29 @@
         就是「筛选没生效」。改下拉一定带上 load(1)，新加筛选项也一样。
     -->
     <el-form class="tlv-filter" inline>
-      <el-form-item label="学段">
+      <!--
+        ★ 这里原来是「学段」，2026-10-16 改成「部门」——
+          用户口径里只有 4 个部门（初高中 / 大学 / 实训 / 就业），
+          「学段」是内部技术词，不该出现在界面上（发起申请那张表单早就改成部门了）。
+          选项来源仍是 `/summary` 的**可见学段** → 翻成部门名：
+          只列当前账号有权限的部门。**不能**改成 /meta 的全量 4 个 ——
+          选了无权限的部门，后端 list 会直接 40302 报错（原来根本选不到）。
+          「就业」本来就没有 stage，故不出现在筛选项里（它也不办理学籍异动）。
+      -->
+      <el-form-item label="部门">
         <el-select
           v-model="query.stage"
           clearable
-          placeholder="全部学段"
+          placeholder="全部部门"
           style="width: 130px"
           @change="onFilterStageChange"
         >
-          <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
+          <el-option
+            v-for="d in deptFilterOptions"
+            :key="d.value"
+            :label="d.name"
+            :value="d.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="类型">
@@ -94,8 +108,14 @@
 
     <!-- 列表 -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
-      <el-table-column v-if="!query.stage" label="学段" width="70" align="center">
-        <template #default="{ row }">{{ row.stageName }}</template>
+      <!--
+        ★ 部门列**始终显示**（2026-10-16 用户要求）：
+          原来这里是 `v-if="!query.stage"` —— 用学段筛选之后这列就消失了，
+          用户以为「筛完数据没归属 / 部门被去掉了」。
+          现在不管筛没筛、筛到哪个部门，这一列都在。
+      -->
+      <el-table-column label="部门" width="80" align="center">
+        <template #default="{ row }">{{ deptNameOf(row.stage, row.stageName) }}</template>
       </el-table-column>
       <el-table-column label="类型" width="80" align="center">
         <template #default="{ row }">
@@ -336,7 +356,9 @@
     <el-dialog v-model="detailVisible" title="申请单详情" width="680px">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="学段">{{ detail.record.stageName }}</el-descriptions-item>
+          <el-descriptions-item label="部门">
+            {{ deptNameOf(detail.record.stage, detail.record.stageName) }}
+          </el-descriptions-item>
           <el-descriptions-item label="类型">
             <el-tag size="small">{{ detail.record.bizTypeName }}</el-tag>
           </el-descriptions-item>
@@ -406,10 +428,14 @@
  * ★ 异动日期（复学时叫「复学日期」）**只能选今天 ± 10 天**：picker 用 disabled-date
  *   禁掉窗口外的日期，天数由 `/meta.leaveDateWindowDays` 下发（与后端校验同源）。
  *   ⚠️ 「预计复学」是未来计划（可能几个月后），**不受**这个窗口限制。
- * ★ 列表筛选（学段/类型/状态/关键字/只看待我审批）**全部选完即查**，不需要点「查询」；
- *   学段切换时若类型不兼容（大学的复学）会自动清掉类型，避免「静默空列表」。
+ * ★ 列表筛选（部门 / 类型 / 状态 / 关键字 / 只看待我审批）**全部选完即查**，不需要点「查询」；
+ *   部门切换时若类型不兼容（大学的复学）会自动清掉类型，避免「静默空列表」。
+ * ★ 2026-10-16：**全页面统一叫「部门」**，不再出现「学段」（那是内部技术词）。
+ *   汇总卡片 / 部门筛选 / 列表「部门」列 / 详情 全都走 `deptNameOf()` 翻成部门名
+ *   （初高中 / 大学 / 实训），避免一处「初高」一处「初高中」。
+ *   ⚠️ 列表的「部门」列**始终显示**：它原来是 `v-if="!query.stage"`，
+ *      筛完部门这列就消失，用户以为「部门被去掉了」。现在筛不筛都在。
  * ⚠️ 大学没有「复学」—— 类型选项按 `/meta` 的 stageBizTypes 过滤
- * ⚠️ 列表的「学段」筛选/列保留不动：那是查看维度（跨学段合并后的筛选项）
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -445,7 +471,6 @@ const approving = ref(false);
 const rows = ref<LeaveRow[]>([]);
 const total = ref(0);
 const summaries = ref<LeaveSummary[]>([]);
-const stageOptions = ref<Array<{ value: TeachingStage; label: string }>>([]);
 const stageBiz = ref<Record<string, number[]>>({ ...LEAVE_STAGE_BIZ_DEFAULT });
 /** 部门下拉（以后端 `/meta` 为准，取不到时用本地默认值，页面不至于空白） */
 const departments = ref<LeaveDepartment[]>([...LEAVE_DEPARTMENTS_DEFAULT]);
@@ -472,6 +497,37 @@ function tagType(s: number) {
   if (s === 5) return 'danger';
   if (s === 2 || s === 3) return 'warning';
   return 'info';
+}
+
+/**
+ * ★ 部门筛选下拉的选项
+ *
+ * 【为什么由 `/summary` 派生，而不是直接用 `/meta` 的 4 个部门】
+ *   `/summary` 只返回**当前账号有权限**的学段（后端 visibleStages）。
+ *   用 /meta 的全量 4 项 → 低权限账号能选到没权限的部门 → 后端 list 直接 40302 报错，
+ *   而改之前它**根本选不到**。所以范围照旧，只把**名字**换成部门口径。
+ *   （某部门暂时没有单据也仍然可选 —— 它在 summary 里会出现，total=0。）
+ */
+const deptFilterOptions = computed(() =>
+  summaries.value.map((s) => ({
+    value: s.stage as TeachingStage,
+    name: deptNameOf(s.stage, s.stageName),
+  })),
+);
+
+/**
+ * ★ 学段码 → **部门名**（界面上不再出现「学段」这个词）
+ *
+ * 后端给的是技术学段 `jh/class/job` 与 `stageName`（初高/大学/实训）；
+ * 用户的业务口径是 4 个部门（初高中 / 大学 / 实训 / 就业）。
+ * 这里统一按 `/meta` 的 departments 翻成部门名 ——
+ * 汇总卡片、部门筛选、列表「部门」列、详情都用它，页面口径才一致
+ * （不然一处「初高」一处「初高中」）。
+ * ⚠️ 取不到时回落到后端给的 `stageName`，不要凭空编一个名字出来。
+ */
+function deptNameOf(stage?: TeachingStage | string | null, fallback = '') {
+  if (!stage) return fallback;
+  return departments.value.find((d) => d.stage === stage)?.name || fallback;
 }
 
 /**
@@ -535,9 +591,9 @@ async function load(p = query.page) {
 
 async function loadSummary() {
   try {
-    const list = await getLeaveSummary();
-    summaries.value = list || [];
-    stageOptions.value = (list || []).map((s) => ({ value: s.stage, label: s.stageName }));
+    summaries.value = (await getLeaveSummary()) || [];
+    // 部门筛选下拉**不再**由 summary 派生：改用 `/meta` 的 departments（见 loadMeta），
+    // 这样「有权限的部门」与「有数据的部门」不会互相牵制（某部门暂时没有单据也要能选中）。
   } catch {
     /* 忽略 */
   }
@@ -562,7 +618,7 @@ async function loadMeta() {
 }
 
 /**
- * 学段筛选变了：顺手把「与学段不兼容的类型」清掉，再查
+ * 部门筛选变了：顺手把「与该部门不兼容的类型」清掉，再查
  *
  * 例：类型选了「复学」→ 学段切到「大学」（大学没有复学）。
  * 不清的话会出现两种坏结果：
@@ -667,7 +723,7 @@ const dateWindowHint = computed(() => {
   return `${fmtDay(start)} ～ ${fmtDay(end)}`;
 });
 
-/** 打开对话框：默认停在「列表筛选的学段」对应部门，否则第一个可用部门 */
+/** 打开对话框：默认停在「列表筛选的部门」对应部门，否则第一个可用部门 */
 function openCreate() {
   const prefer = query.stage
     ? departments.value.find((d) => d.stage === query.stage)?.code
