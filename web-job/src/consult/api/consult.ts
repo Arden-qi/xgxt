@@ -68,7 +68,7 @@ export function fetchRoles(): Promise<Array<{ role: string; roleName: string; de
 /* ---- 账号管理（管理员）----
  *
  * ⚠️⚠️ 2026-10-03 用户指令：
- *   「账号管理和权限管理内的用户管理是同一个功能，权限管理内的用户管理是唯一的，
+ *   「账号管理和权限管理内的账号管理是同一个功能，权限管理内的账号管理是唯一的，
  *     账号管理删除，功能一致。」
  *   → 本模块的账号管理页（views/AccountList.vue）已删除，
  *     下面这 7 个账号维护接口（list / stats / add / update / reset-password /

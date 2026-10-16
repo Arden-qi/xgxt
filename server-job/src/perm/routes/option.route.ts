@@ -7,8 +7,8 @@
  *  GET /get   前端所有下拉框的取值集中在这里
  *
  * ⚠️ 为什么要有这个接口？
- *    如果每个页面各写一份「角色类型 → 中文」，改一次字典要改 7 个地方，
- *    迟早出现「A 页面叫管理角色、B 页面叫管理层」的脏数据。
+ *    如果每个页面各写一份「职位类型 → 中文」，改一次字典要改 7 个地方，
+ *    迟早出现「A 页面叫管理职位、B 页面叫管理层」的脏数据。
  *    统一在这里给出，前端只负责渲染。
  */
 
@@ -56,7 +56,7 @@ optionRouter.get(
   wrap(async (_req, res) => {
     res.json(
       ok({
-        roleTypes: ['业务角色', '管理角色', '职能角色', '系统角色'].map((v) => ({ value: v, label: v })),
+        roleTypes: ['业务职位', '管理职位', '职能职位', '系统职位'].map((v) => ({ value: v, label: v })),
 
         roleStatuses: [RoleStatus.ENABLED, RoleStatus.DISABLED].map((v) => ({ value: v, label: v })),
 

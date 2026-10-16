@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 角色-权限分配
+ * 职位权限分配
  *
  * DOM 结构 / class / 文案严格对齐原型《学管系统-权限体系高保真原型.html》：
  *   · 页面主体        → 原型第 2570~2631 行 renderAssign()
@@ -50,7 +50,7 @@ const ROLE_ICON: Record<string, string> = {
   R11: '📁',
   R12: '👑',
   R13: '🔧',
-  /* R14 已删除（2026-10-02 去掉「实训班主任」角色），断号不再复用 */
+  /* R14 已删除（2026-10-02 去掉「实训班主任」职位），断号不再复用 */
   R15: '📋',
 };
 
@@ -58,7 +58,7 @@ function roleIcon(id: string): string {
   return ROLE_ICON[id] || '👤';
 }
 
-/** 极简 HTML 转义（角色名 / 功能点名会进 v-html 的标题与明细） */
+/** 极简 HTML 转义（职位名 / 功能点名会进 v-html 的标题与明细） */
 function esc(s: string): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => {
     switch (c) {
@@ -103,11 +103,11 @@ const roles = ref<AssignRoleItem[]>([]);
 const currentRoleId = ref('');
 
 const modules = ref<PermModule[]>([]);
-/** 当前角色已保存的权限（key → 动作编码数组） */
+/** 当前职位已保存的权限（key → 动作编码数组） */
 const perms = ref<RolePermMap>({});
 const treeStats = ref<PermTreeStats>({ modCount: 0, itemCount: 0, actionCount: 0 });
 
-/** 角色详情（只为取「关联账号数」，与原型 roleUserCount 对应） */
+/** 职位详情（只为取「关联账号数」，与原型 roleUserCount 对应） */
 const detail = ref<PermRoleDetail | null>(null);
 
 const currentRole = computed(() => roles.value.find((r) => r.id === currentRoleId.value) || null);
@@ -261,7 +261,7 @@ async function selectRole(roleId: string): Promise<void> {
   await Promise.all([loadTree(roleId), loadDetail(roleId)]);
 }
 
-/** 保存 / 复制 / 重置后：角色列表 + 详细权限全部重取 */
+/** 保存 / 复制 / 重置后：职位列表 + 详细权限全部重取 */
 async function refresh(): Promise<void> {
   await loadRoles();
   if (!currentRoleId.value && roles.value.length) currentRoleId.value = roles.value[0].id;
@@ -341,7 +341,7 @@ const roStyle = computed<CSSProperties | undefined>(() =>
 /** 原型 openPermTree() */
 function openTree(mode: 'edit' | 'view'): void {
   if (!currentRoleId.value) {
-    toast('请先在左侧选择一个角色', 'warn');
+    toast('请先在左侧选择一个职位', 'warn');
     return;
   }
   // 草稿只按「树上真实存在的功能点」铺满（原型 TREE_DRAFT 同样只由 PERM_TREE 生成），
@@ -440,7 +440,7 @@ function treeSaveAsk(): void {
 }
 
 const saveDetail = computed<{ k: string; v: string }[]>(() => [
-  { k: '角色', v: `${esc(currentRoleName.value)} <span class="desc">${esc(currentRole.value?.roleCode || '')}</span>` },
+  { k: '职位', v: `${esc(currentRoleName.value)} <span class="desc">${esc(currentRole.value?.roleCode || '')}</span>` },
   { k: '勾选动作', v: `<b>${treeStat.value.n}</b> 项` },
   { k: '影响账号', v: `<b>${userCount.value}</b> 个账号` },
 ]);
@@ -467,7 +467,7 @@ async function doSaveTree(): Promise<void> {
 }
 
 /* ============================================================
- * 5. 从其他角色复制（原型 copyPermFrom / doCopyPerm）
+ * 5. 从其他职位复制（原型 copyPermFrom / doCopyPerm）
  * ============================================================ */
 
 const copyOpen = ref(false);
@@ -478,7 +478,7 @@ const copyCandidates = computed(() => roles.value.filter((r) => r.id !== current
 const copySource = computed(() => roles.value.find((r) => r.id === copySourceId.value) || null);
 
 const copyTitle = computed(
-  () => `从其他角色复制权限 <span class="tag n">目标：${esc(currentRoleName.value)}</span>`,
+  () => `从其他职位复制权限 <span class="tag n">目标：${esc(currentRoleName.value)}</span>`,
 );
 
 const copyDetail = computed<{ k: string; v: string }[]>(() => {
@@ -486,16 +486,16 @@ const copyDetail = computed<{ k: string; v: string }[]>(() => {
   const t = currentRole.value;
   if (!s || !t) return [];
   return [
-    { k: '来源角色', v: `${esc(s.roleName)} · ${s.permCount} 项` },
-    { k: '目标角色', v: `${esc(t.roleName)} · 现有 ${t.permCount} 项` },
-    { k: '复制后', v: `目标角色权限变为 <b>${s.permCount}</b> 项` },
+    { k: '来源职位', v: `${esc(s.roleName)} · ${s.permCount} 项` },
+    { k: '目标职位', v: `${esc(t.roleName)} · 现有 ${t.permCount} 项` },
+    { k: '复制后', v: `目标职位权限变为 <b>${s.permCount}</b> 项` },
     { k: '影响账号', v: `${userCount.value} 人` },
   ];
 });
 
 function openCopy(): void {
   if (!currentRoleId.value) {
-    toast('请先在左侧选择一个角色', 'warn');
+    toast('请先在左侧选择一个职位', 'warn');
     return;
   }
   copySourceId.value = '';
@@ -554,7 +554,7 @@ const usersOpen = ref(false);
 const usersLoading = ref(false);
 const roleUsers = ref<PermUserListItem[]>([]);
 
-const usersTitle = computed(() => `角色下人员 · <span class="em">${esc(currentRoleName.value)}</span>`);
+const usersTitle = computed(() => `职位下人员 · <span class="em">${esc(currentRoleName.value)}</span>`);
 
 async function openRoleUsers(): Promise<void> {
   if (!currentRoleId.value) return;
@@ -576,27 +576,27 @@ async function openRoleUsers(): Promise<void> {
     <!-- ==================== 主体（原型 #page-assign） ==================== -->
     <div class="card">
       <div class="card-h">
-        <div class="t"><span class="bar"></span>角色-权限分配</div>
+        <div class="t"><span class="bar"></span>职位权限分配</div>
         <div class="r">
-          <span class="desc">左侧选择角色 → 右侧勾选权限 → 保存生效</span>
+          <span class="desc">左侧选择职位 → 右侧勾选权限 → 保存生效</span>
           <button class="btn" type="button" @click="openTree('view')">全屏查看</button>
           <button class="btn" type="button" @click="resetOpen = true">重置为预置</button>
-          <button class="btn pri" type="button" @click="openTree('edit')">编辑该角色权限</button>
+          <button class="btn pri" type="button" @click="openTree('edit')">编辑该职位权限</button>
         </div>
       </div>
 
       <div class="card-b">
         <div class="split">
-          <!-- ---------- 左：角色列表 ---------- -->
+          <!-- ---------- 左：职位列表 ---------- -->
           <div class="lft">
-            <div class="desc" style="padding: 4px 6px 7px">角色列表（{{ roles.length }}）</div>
+            <div class="desc" style="padding: 4px 6px 7px">职位列表（{{ roles.length }}）</div>
             <div v-if="loading && !roles.length" class="empty">
               <div class="ic">⏳</div>
               加载中…
             </div>
             <div v-else-if="!roles.length" class="empty">
               <div class="ic">🎭</div>
-              暂无角色
+              暂无职位
             </div>
             <template v-else>
               <div
@@ -655,7 +655,7 @@ async function openRoleUsers(): Promise<void> {
 
               <div class="perm-tools">
                 <button class="btn xs" type="button" @click="openTree('edit')">＋ 配置权限</button>
-                <button class="btn xs" type="button" @click="openCopy">从其他角色复制</button>
+                <button class="btn xs" type="button" @click="openCopy">从其他职位复制</button>
                 <button class="btn xs" type="button" @click="openRoleUsers">查看账号（{{ userCount }}）</button>
                 <span class="cl">共 {{ treeStats.modCount }} 个模块 / {{ treeStats.actionCount }} 个权限点</span>
               </div>
@@ -717,7 +717,7 @@ async function openRoleUsers(): Promise<void> {
 
             <div v-else class="empty">
               <div class="ic">👈</div>
-              请在左侧选择一个角色
+              请在左侧选择一个职位
             </div>
           </div>
         </div>
@@ -832,9 +832,9 @@ async function openRoleUsers(): Promise<void> {
       </template>
     </ProtoDialog>
 
-    <!-- ==================== 从其他角色复制（原型 copyPermFrom） ==================== -->
+    <!-- ==================== 从其他职位复制（原型 copyPermFrom） ==================== -->
     <ProtoDialog v-model="copyOpen" :title="copyTitle" size="md">
-      <div class="notice w mb12">⚠<div>复制将<b>覆盖</b>目标角色当前的权限配置，请谨慎操作。</div></div>
+      <div class="notice w mb12">⚠<div>复制将<b>覆盖</b>目标职位当前的权限配置，请谨慎操作。</div></div>
       <div style="border: 1px solid var(--line); border-radius: 9px; padding: 9px; max-height: 320px; overflow-y: auto">
         <div v-for="r in copyCandidates" :key="r.id" class="rl-item" @click="pickCopySource(r.id)">
           <span>{{ roleIcon(r.id) }} {{ r.roleName }}</span>
@@ -842,10 +842,10 @@ async function openRoleUsers(): Promise<void> {
         </div>
         <div v-if="!copyCandidates.length" class="empty">
           <div class="ic">🎭</div>
-          没有可复制的其他角色
+          没有可复制的其他职位
         </div>
       </div>
-      <div class="notice i mt12">ℹ<div>复制后两角色权限完全一致，后续可再单独微调。</div></div>
+      <div class="notice i mt12">ℹ<div>复制后两职位权限完全一致，后续可再单独微调。</div></div>
 
       <template #footer>
         <button class="btn" type="button" @click="copyOpen = false">取消</button>
@@ -865,7 +865,6 @@ async function openRoleUsers(): Promise<void> {
         <thead>
           <tr>
             <th>姓名</th>
-            <th>工号</th>
             <th>部门</th>
             <th>状态</th>
           </tr>
@@ -873,7 +872,6 @@ async function openRoleUsers(): Promise<void> {
         <tbody>
           <tr v-for="u in roleUsers" :key="u.id">
             <td><b>{{ u.userName }}</b></td>
-            <td class="num">{{ u.gwNo }}</td>
             <td>{{ u.deptName }}</td>
             <td>
               <span v-if="String(u.userStatus) === '正常'" class="tag g">正常</span>
@@ -884,7 +882,7 @@ async function openRoleUsers(): Promise<void> {
       </table>
       <div v-else class="empty">
         <div class="ic">👤</div>
-        该角色下暂无账号
+        该职位下暂无账号
       </div>
 
       <template #footer>
@@ -899,7 +897,7 @@ async function openRoleUsers(): Promise<void> {
       icon="📋"
       :msg="`确认将「${copySource?.roleName || ''}」的权限复制到「${currentRoleName}」？`"
       :detail="copyDetail"
-      warn="目标角色原有权限将被完全覆盖。"
+      warn="目标职位原有权限将被完全覆盖。"
       ok-text="确认复制"
       @ok="doCopy"
     />
@@ -910,7 +908,7 @@ async function openRoleUsers(): Promise<void> {
       icon="↩"
       icon-bg="var(--warn-l)"
       :msg="`确认将「${currentRoleName}」重置为系统预置权限？`"
-      desc="系统将按该角色的标准职责重新生成权限配置。"
+      desc="系统将按该职位的标准职责重新生成权限配置。"
       :detail="resetDetail"
       warn="当前自定义的权限调整将丢失，且无法撤销。"
       ok-text="确认重置"
@@ -923,9 +921,9 @@ async function openRoleUsers(): Promise<void> {
       title="清空权限"
       icon="🗑"
       icon-bg="var(--dg-l)"
-      msg="确认清空该角色的全部权限？"
-      :desc="`当前共勾选 <b>${treeStat.n}</b> 项动作，清空后该角色将没有任何功能可用。`"
-      warn="清空后角色下的账号登录将看不到任何菜单，请谨慎操作。"
+      msg="确认清空该职位的全部权限？"
+      :desc="`当前共勾选 <b>${treeStat.n}</b> 项动作，清空后该职位将没有任何功能可用。`"
+      warn="清空后职位下的账号登录将看不到任何菜单，请谨慎操作。"
       ok-text="确认清空"
       ok-class="dg"
       @ok="doTreeClear"

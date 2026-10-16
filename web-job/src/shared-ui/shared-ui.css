@@ -480,7 +480,7 @@ select.inp{cursor:pointer;padding-right:26px;appearance:none;-webkit-appearance:
  * 【背景】上面「权限模块原型类名补齐」那一段只映射了颜色/字号，
  *   `.split / .lft / .rgt / .rl-item / .cnt / .perm-tools / .cl / .desc`
  *   这几个**布局类**从来没有定义过（单体合并时原型 prototype.css 没带过来）。
- *   后果：角色-权限分配页的「左角色列表 / 右权限概览」不是左右分栏，
+ *   后果：职位权限分配页的「左角色列表 / 右权限概览」不是左右分栏，
  *   而是上下堆叠成一长条 —— 与原型和高保真图对不上。
  *
  * 【作用范围】已逐一核对：这几个类名在 web-job/src 里**只有权限模块在用**

@@ -302,7 +302,7 @@ async function doExport(): Promise<void> {
               <tr>
                 <th style="width: 142px">操作时间</th>
                 <th style="width: 130px">操作人</th>
-                <th style="width: 110px">所属角色</th>
+                <th style="width: 110px">所属职位</th>
                 <th style="width: 100px">操作模块</th>
                 <th style="width: 80px">操作类型</th>
                 <th>操作对象</th>
@@ -380,7 +380,7 @@ async function doExport(): Promise<void> {
           <div class="f"><label>操作时间</label><div class="num">{{ cur.logTime }}</div></div>
           <div class="f"><label>操作人</label><div><b>{{ cur.operatorName }}</b></div></div>
           <div class="f">
-            <label>所属角色</label>
+            <label>所属职位</label>
             <div><span class="tag b">{{ cur.operatorRole || '—' }}</span></div>
           </div>
           <div class="f"><label>操作模块</label><div>{{ cur.moduleName }}</div></div>
