@@ -851,13 +851,20 @@ function seedClass(conn) {
 function seedClassJh(conn) {
   say('\n【4/7】初高 sms_class_jh');
 
-  // 9.1 阶段字典
+  // 9.1 阶段方案（★ 2026-10-16：一个方案可含多个阶段）
+  const PLANS = [
+    ['JHPLAN-JH', '初高部阶段方案', 1],
+    ['JHPLAN-UNI', '大学部阶段方案', 2],
+  ].map(([id, name, dept], i) => base(id, { plan_name: name, dept_code: dept, sort_no: i }));
+
+  // 9.1.1 阶段字典（挂在方案下）
   const STAGES = [
     [101, '预科', 1, 3], [102, '初中部1期', 1, 6], [103, '初中部2期', 1, 6], [104, '初中部3期', 1, 6],
     [105, '高中部1期', 1, 6], [106, '高中部2期', 1, 6], [107, '高中部3期', 1, 6],
     [201, '一阶段', 2, 4], [202, '二阶段', 2, 4], [203, '三阶段', 2, 4], [204, '四阶段', 2, 4],
   ].map(([code, name, dept, months], i) => base(`JHSTG-${code}`, {
     stage_code: code, stage_name: name, dept_code: dept, study_months: months, sort_no: i,
+    plan_id: dept === 2 ? 'JHPLAN-UNI' : 'JHPLAN-JH',
   }));
 
   // 9.2 系统设置
@@ -1050,6 +1057,7 @@ function seedClassJh(conn) {
   return {
     classes, stu, fees, att, details, exams, scores,
     async write() {
+      await insertMany(conn, `${DB.cjh}.t_class_stage_plan`, PLANS);
       await insertMany(conn, `${DB.cjh}.t_class_stage`, STAGES);
       await insertMany(conn, `${DB.cjh}.t_class_setting`, settings);
       await insertMany(conn, `${DB.cjh}.t_class_info`, classes);

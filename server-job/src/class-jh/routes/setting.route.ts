@@ -14,6 +14,8 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { writeOpLog } from '../utils/opLog';
 import { nameOf } from '../utils/enumName';
+// ★ 2026-10-16 阶段方案：阶段的增删改后要刷新「阶段编码 → 名称」内存缓存
+import { refreshStageDict } from '../utils/stageDict';
 import { getAllSettings, SETTING_DEFAULTS } from '../utils/setting';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
@@ -25,6 +27,9 @@ export const opLogRouter = Router();
 
 const SETTING_TABLE = 't_class_setting';
 const STAGE_TABLE = 't_class_stage';
+/** ★ 2026-10-16 阶段方案表（一个方案含多个阶段） */
+const STAGE_PLAN_TABLE = 't_class_stage_plan';
+const CLASS_TABLE = 't_class_info';
 const OP_LOG_TABLE = 't_class_op_log';
 const STUDENT_TABLE = 't_class_student';
 
@@ -183,6 +188,7 @@ stageRouter.post(
       create_time: now,
       create_by: req.user?.userId || 'system',
     });
+    await refreshStageDict();
 
     res.json(ok({ id }, '新增成功'));
   }),
@@ -208,6 +214,285 @@ stageRouter.delete(
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
+    });
+    await refreshStageDict();
+
+    res.json(ok(null, '删除成功'));
+  }),
+);
+
+/* ============================================================
+ * 5.5 ★ 2026-10-16 阶段方案（一个方案 = 多个阶段）
+ *
+ *   表：t_class_stage_plan（方案） 1 ── N t_class_stage（阶段，plan_id 关联）
+ *
+ *   规则：
+ *     - 方案名称在同一部门内不可重复
+ *     - 阶段编码由后端自动生成：初高部 1xx / 大学部 2xx，取同部门当前最大值 +1
+ *       （软删除的行仍占号，避免编码复用把历史数据指到别的阶段上）
+ *     - 已被班级 / 学生使用的阶段，不允许删除，也不允许通过改「所属部门」换号
+ *   ============================================================ */
+
+/** 生成同部门的下一个阶段编码 */
+async function nextStageCode(deptCode: number): Promise<number> {
+  const base = deptCode === 2 ? 200 : 100;
+  const row: any = await db(STAGE_TABLE).where('dept_code', deptCode).max({ m: 'stage_code' }).first();
+  const max = Number(row?.m);
+  return (Number.isFinite(max) && max > base ? max : base) + 1;
+}
+
+/** 阶段编码是否已被班级 / 学生使用 */
+async function stageInUse(stageCode: number): Promise<boolean> {
+  const byClass = await db(CLASS_TABLE).where({ stage: stageCode, is_deleted: false }).first();
+  if (byClass) return true;
+  const byStudent = await db(STUDENT_TABLE).where({ stage: stageCode, is_deleted: false }).first();
+  return !!byStudent;
+}
+
+const planPhaseSchema = z.object({
+  /** 编辑时带上的已有阶段 ID；新增的阶段不带 */
+  id: z.string().optional(),
+  stageName: z.string().min(1, '阶段名称必填'),
+  studyMonths: z.coerce.number().int().min(0).optional(),
+});
+
+const planSaveSchema = z.object({
+  planName: z.string().min(1, '方案名称必填'),
+  deptCode: z.coerce.number().int().min(1).max(2),
+  phases: z.array(planPhaseSchema).min(1, '至少需要一个阶段'),
+});
+
+/** 方案列表（含阶段明细） GET /api/class-jh/stage/plan/list?deptCode= */
+stageRouter.get(
+  '/plan/list',
+  checkPermission('class:setting:view'),
+  validate(z.object({ deptCode: z.coerce.number().int().optional() })),
+  wrap(async (req, res) => {
+    const q = (req as any).validated as { deptCode?: number };
+
+    const planQuery = db(STAGE_PLAN_TABLE).where('is_deleted', false);
+    if (q.deptCode) planQuery.andWhere('dept_code', q.deptCode);
+    const plans = await planQuery.select('*').orderBy('sort_no', 'asc').orderBy('create_time', 'asc');
+
+    const stageQuery = db(STAGE_TABLE).where('is_deleted', false);
+    if (q.deptCode) stageQuery.andWhere('dept_code', q.deptCode);
+    const stages = await stageQuery.select('*').orderBy('sort_no', 'asc').orderBy('stage_code', 'asc');
+
+    const byPlan = new Map<string, any[]>();
+    for (const s of stages) {
+      const key = s.plan_id || '';
+      if (!byPlan.has(key)) byPlan.set(key, []);
+      byPlan.get(key)!.push(s);
+    }
+
+    res.json(
+      ok(
+        plans.map((p: any) => ({
+          id: p.id,
+          planName: p.plan_name,
+          deptCode: p.dept_code,
+          deptName: nameOf(DEPT_NAME, p.dept_code),
+          sortNo: p.sort_no,
+          phases: (byPlan.get(p.id) || []).map((s: any) => ({
+            id: s.id,
+            stageCode: s.stage_code,
+            stageName: s.stage_name || nameOf(STAGE_NAME, s.stage_code),
+            studyMonths: s.study_months,
+            sortNo: s.sort_no,
+          })),
+        })),
+      ),
+    );
+  }),
+);
+
+/** 方案新增 POST /api/class-jh/stage/plan/add */
+stageRouter.post(
+  '/plan/add',
+  checkPermission('class:setting:edit'),
+  validate(planSaveSchema),
+  wrap(async (req, res) => {
+    const body = (req as any).validated as z.infer<typeof planSaveSchema>;
+    const dup = await db(STAGE_PLAN_TABLE)
+      .where({ plan_name: body.planName, dept_code: body.deptCode, is_deleted: false })
+      .first();
+    if (dup) throw new BizError(BizCode.DATA_DUPLICATE, '该部门下方案名称已存在');
+
+    const now = new Date();
+    const uid = req.user?.userId || 'system';
+    const planId = randomUUID();
+
+    await db(STAGE_PLAN_TABLE).insert({
+      id: planId,
+      plan_name: body.planName,
+      dept_code: body.deptCode,
+      sort_no: 0,
+      is_deleted: false,
+      create_time: now,
+      create_by: uid,
+    });
+
+    let sortNo = 0;
+    for (const p of body.phases) {
+      const stageCode = await nextStageCode(body.deptCode);
+      await db(STAGE_TABLE).insert({
+        id: randomUUID(),
+        stage_code: stageCode,
+        stage_name: p.stageName,
+        dept_code: body.deptCode,
+        plan_id: planId,
+        study_months: p.studyMonths ?? null,
+        sort_no: sortNo,
+        is_deleted: false,
+        create_time: now,
+        create_by: uid,
+      });
+      sortNo += 1;
+    }
+
+    await refreshStageDict();
+    await writeOpLog({
+      module: 'setting',
+      bizType: '阶段方案',
+      opUserId: req.user?.userId,
+      opUserName: req.user?.userName,
+      opDesc: `新增阶段方案：${body.planName}（${body.phases.length} 个阶段）`,
+      afterValue: body,
+    });
+
+    res.json(ok({ id: planId }, '新增成功'));
+  }),
+);
+
+/** 方案编辑 PUT /api/class-jh/stage/plan/update */
+stageRouter.put(
+  '/plan/update',
+  checkPermission('class:setting:edit'),
+  validate(planSaveSchema.extend({ id: z.string().min(1) })),
+  wrap(async (req, res) => {
+    const body = (req as any).validated as z.infer<typeof planSaveSchema> & { id: string };
+    const plan = await db(STAGE_PLAN_TABLE).where({ id: body.id, is_deleted: false }).first();
+    if (!plan) throw new BizError(BizCode.SETTING_NOT_FOUND, '方案不存在');
+
+    const dup = await db(STAGE_PLAN_TABLE)
+      .where({ plan_name: body.planName, dept_code: body.deptCode, is_deleted: false })
+      .whereNot('id', body.id)
+      .first();
+    if (dup) throw new BizError(BizCode.DATA_DUPLICATE, '该部门下方案名称已存在');
+
+    const now = new Date();
+    const uid = req.user?.userId || 'system';
+    const deptChanged = Number(plan.dept_code) !== body.deptCode;
+    const existing: any[] = await db(STAGE_TABLE).where({ plan_id: plan.id, is_deleted: false });
+
+    // 改部门 = 换编码，被使用的阶段不允许（否则班级/学生的阶段会指错）
+    if (deptChanged) {
+      for (const s of existing) {
+        if (await stageInUse(s.stage_code)) {
+          throw new BizError(
+            BizCode.BUSINESS_RULE_VIOLATION,
+            `阶段「${s.stage_name}」已被班级或学生使用，不能修改方案的所属部门`,
+          );
+        }
+      }
+    }
+
+    const existingById = new Map<string, any>(existing.map((s) => [s.id, s]));
+    const keepIds = new Set(body.phases.filter((p) => p.id).map((p) => p.id as string));
+
+    await db(STAGE_PLAN_TABLE).where({ id: plan.id }).update({
+      plan_name: body.planName,
+      dept_code: body.deptCode,
+      update_time: now,
+      update_by: uid,
+    });
+
+    // 1) 逐条更新 / 新增
+    let sortNo = 0;
+    for (const p of body.phases) {
+      const old = p.id ? existingById.get(p.id) : null;
+      if (old) {
+        const patch: Record<string, any> = {
+          stage_name: p.stageName,
+          study_months: p.studyMonths ?? null,
+          sort_no: sortNo,
+          update_time: now,
+          update_by: uid,
+        };
+        if (deptChanged) {
+          patch.stage_code = await nextStageCode(body.deptCode);
+          patch.dept_code = body.deptCode;
+        }
+        await db(STAGE_TABLE).where({ id: old.id }).update(patch);
+      } else {
+        const stageCode = await nextStageCode(body.deptCode);
+        await db(STAGE_TABLE).insert({
+          id: randomUUID(),
+          stage_code: stageCode,
+          stage_name: p.stageName,
+          dept_code: body.deptCode,
+          plan_id: plan.id,
+          study_months: p.studyMonths ?? null,
+          sort_no: sortNo,
+          is_deleted: false,
+          create_time: now,
+          create_by: uid,
+        });
+      }
+      sortNo += 1;
+    }
+
+    // 2) 被移除的阶段：软删除（在用的禁止删）
+    for (const s of existing) {
+      if (keepIds.has(s.id)) continue;
+      if (await stageInUse(s.stage_code)) {
+        throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, `阶段「${s.stage_name}」已被班级或学生使用，不能删除`);
+      }
+      await db(STAGE_TABLE).where({ id: s.id }).update({ is_deleted: true, update_time: now, update_by: uid });
+    }
+
+    await refreshStageDict();
+    await writeOpLog({
+      module: 'setting',
+      bizType: '阶段方案',
+      opUserId: req.user?.userId,
+      opUserName: req.user?.userName,
+      opDesc: `修改阶段方案：${body.planName}`,
+      afterValue: body,
+    });
+
+    res.json(ok(null, '保存成功'));
+  }),
+);
+
+/** 方案删除 DELETE /api/class-jh/stage/plan/delete/:id */
+stageRouter.delete(
+  '/plan/delete/:id',
+  checkPermission('class:setting:edit'),
+  wrap(async (req, res) => {
+    const { id } = req.params;
+    const plan = await db(STAGE_PLAN_TABLE).where({ id, is_deleted: false }).first();
+    if (!plan) throw new BizError(BizCode.SETTING_NOT_FOUND, '方案不存在');
+
+    const stages: any[] = await db(STAGE_TABLE).where({ plan_id: id, is_deleted: false });
+    for (const s of stages) {
+      if (await stageInUse(s.stage_code)) {
+        throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, `阶段「${s.stage_name}」已被班级或学生使用，不能删除该方案`);
+      }
+    }
+
+    const now = new Date();
+    const uid = req.user?.userId || 'system';
+    await db(STAGE_TABLE).where({ plan_id: id, is_deleted: false }).update({ is_deleted: true, update_time: now, update_by: uid });
+    await db(STAGE_PLAN_TABLE).where({ id }).update({ is_deleted: true, update_time: now, update_by: uid });
+    await refreshStageDict();
+
+    await writeOpLog({
+      module: 'setting',
+      bizType: '阶段方案',
+      opUserId: req.user?.userId,
+      opUserName: req.user?.userName,
+      opDesc: `删除阶段方案：${plan.plan_name}`,
     });
 
     res.json(ok(null, '删除成功'));

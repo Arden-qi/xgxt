@@ -9,6 +9,9 @@
  */
 
 import { http } from '@/api/request';
+import type { StagePlanOption } from './class';
+
+export type { StagePlanOption };
 
 export type StudentStage = 'jh' | 'class' | 'job' | 'edu';
 
@@ -186,6 +189,8 @@ export interface StudentStageMeta {
   stage: StudentStage;
   stageName: string;
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案（见 api/class.ts 的 StagePlanOption） */
+  planOptions?: StagePlanOption[];
   sections: string[];
   supportUnassigned: boolean;
 }

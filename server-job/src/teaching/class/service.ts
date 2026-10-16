@@ -27,6 +27,7 @@ import type {
 } from '../shared/dto';
 import { TEACHING_STAGES, TEACHING_STAGE_NAME } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
+import { loadStagePlanOptions } from '../shared/stagePlans';
 import type { ClassDetail, ClassRepo } from './types';
 
 const REPOS: Record<TeachingStage, ClassRepo> = {
@@ -172,7 +173,12 @@ export async function changeClassStatus(
  */
 export async function listClassMeta(user: any): Promise<ClassStageMeta[]> {
   const stages = await visibleStages(user);
-  return Promise.all(stages.map((s) => REPOS[s].meta()));
+  const [list, planOptions] = await Promise.all([
+    Promise.all(stages.map((s) => REPOS[s].meta())),
+    // ★ 2026-10-16 阶段方案：两个部门的方案都在 sms_class_jh 里，与学段无关
+    loadStagePlanOptions(),
+  ]);
+  return list.map((m) => ({ ...m, planOptions }));
 }
 
 /**

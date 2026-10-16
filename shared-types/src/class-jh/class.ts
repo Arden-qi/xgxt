@@ -608,6 +608,35 @@ export interface StageDict extends BaseEntity {
   sortNo?: number;
 }
 
+/* ---------- ★ 2026-10-16 阶段方案（一个方案含多个阶段） ---------- */
+
+/** 阶段方案里的一个阶段 */
+export interface StagePlanPhase {
+  /** 阶段行 ID（后端返回；新增时可空） */
+  id?: string;
+  /** 阶段编码（后端自动生成：初高部 1xx / 大学部 2xx） */
+  stageCode?: number;
+  /** 阶段名称，如 一阶段 */
+  stageName: string;
+  /** 学制月数 */
+  studyMonths?: number;
+  sortNo?: number;
+}
+
+/** 阶段方案（原「阶段字典」页改版后的主体） */
+export interface StagePlan {
+  id: string;
+  /** 方案名称，如 初高部阶段方案 */
+  planName: string;
+  deptCode: number;
+  /** 双返回 */
+  deptName?: string;
+  sortNo?: number;
+  /** 该方案包含的阶段（有序） */
+  phases: StagePlanPhase[];
+  createTime?: string;
+}
+
 /** 操作日志 */
 export interface OpLog extends BaseEntity {
   logId: string;

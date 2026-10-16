@@ -253,6 +253,14 @@
               </el-select>
             </el-form-item>
           </el-col>
+          <!-- ★ 2026-10-16 阶段方案：阶段下拉改成「先选方案，再选阶段」 -->
+          <el-col v-if="formPlanOptions.length" :span="8">
+            <el-form-item label="阶段方案">
+              <el-select v-model="formPlanId" clearable placeholder="请选择" style="width: 100%">
+                <el-option v-for="p in formPlanOptions" :key="p.id" :label="p.name" :value="p.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
           <el-col v-if="formPhaseOptions.length" :span="8">
             <el-form-item label="阶段">
               <el-select v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
@@ -492,6 +500,7 @@ import {
   type ClassStage,
   type ClassStageMeta,
   type ClassSummary,
+  type StagePlanOption,
 } from '@/teaching/api/class';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
@@ -644,13 +653,33 @@ function emptyForm(stage: ClassStage): ClassSaveBody {
 }
 const form = reactive<ClassSaveBody>(emptyForm('jh'));
 
-/** 表单里的阶段选项（按表单当前学段取；初高按批注只给 初中部1期~高中部3期，不含预科） */
+/** 表单里的阶段选项：★ 2026-10-16 改为「方案驱动」——
+ *   选了方案 → 只给该方案下的阶段（新方案里的新阶段也能选到）；
+ *   没选方案 → 回落到 meta 的阶段清单（此时初高仍按旧口径过滤掉预科）。 */
 const JH_PHASE_CODES = [102, 103, 104, 105, 106, 107];
+
+/** 全部阶段方案（来自后端 meta，两个部门的方案都在里面） */
+const planOptionsAll = computed<StagePlanOption[]>(
+  () => metaList.value.find((m) => m.planOptions?.length)?.planOptions || [],
+);
+/** 表单里可选的方案：按「部门」过滤 */
+const formPlanOptions = computed(() => planOptionsAll.value.filter((p) => p.deptCode === form.deptCode));
+/** 表单当前选中的方案 ID（只用于联动，不入库） */
+const formPlanId = ref('');
+
 const formPhaseOptions = computed(() => {
+  const plan = planOptionsAll.value.find((p) => p.id === formPlanId.value);
+  if (plan) return plan.phases;
   const list = metaList.value.find((m) => m.stage === form.stage)?.phaseOptions || [];
   if (form.stage === 'jh') return list.filter((p) => JH_PHASE_CODES.includes(p.value));
   return list;
 });
+
+/** 阶段码 → 方案 ID（编辑回显时反查） */
+function planIdOfPhase(phaseCode: number | null | undefined): string {
+  if (!phaseCode) return '';
+  return planOptionsAll.value.find((p) => p.phases.some((x) => x.value === Number(phaseCode)))?.id || '';
+}
 
 /* ============ 2026-10-15 改版：删除「学段」选择器，学段由部门判定 ============ */
 
@@ -658,6 +687,8 @@ const formPhaseOptions = computed(() => {
 function onFormDeptChange(v: number | undefined) {
   if (v === DeptCode.JUNIOR_SENIOR) form.stage = 'jh';
   else if (v === DeptCode.UNIVERSITY) form.stage = 'class';
+  // ★ 2026-10-16 部门变了 → 原来选的「阶段方案」可能不属于新部门，先清掉
+  if (!formPlanOptions.value.some((p) => p.id === formPlanId.value)) formPlanId.value = '';
   // 学段变了：阶段按新学段重选（onFormStageChange 会清编号/交棒/备注等学段特有字段）
   if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
   onFormStageChange();
@@ -715,6 +746,7 @@ function onStaffChange(kind: StaffKind, id: string) {
 function openCreate() {
   const stage = (query.stage || stageOptions.value[0]?.value || 'jh') as ClassStage;
   Object.assign(form, emptyForm(stage));
+  formPlanId.value = '';
   editVisible.value = true;
 }
 
@@ -741,6 +773,8 @@ function openEdit(row: ClassRow) {
     closeDate: row.closeDate || '',
     remark: row.remark || '',
   });
+  // ★ 2026-10-16 反查这个阶段属于哪个方案，让「阶段方案」下拉回显
+  formPlanId.value = planIdOfPhase(row.phaseCode);
   editVisible.value = true;
 }
 

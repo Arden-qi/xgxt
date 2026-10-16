@@ -952,12 +952,33 @@ export interface StudentExtras {
   dormClassName: string | null;
 }
 
+/**
+ * ★ 2026-10-16 阶段方案（一个方案含多个阶段）
+ *
+ *   原「阶段字典」改版成「阶段方案」后，班级 / 学生表单里的「阶段」下拉
+ *   不再从写死的常量里取，而是：**先选方案 → 再选该方案下的阶段**。
+ *   数据源：sms_class_jh 的 t_class_stage_plan + t_class_stage
+ *   （初高部 / 大学部两个部门的方案都存在那里）。
+ */
+export interface StagePlanOption {
+  /** 方案 ID */
+  id: string;
+  /** 方案名称，如 初高部阶段方案 */
+  name: string;
+  /** 所属部门 1 初高部 / 2 大学部 */
+  deptCode: number;
+  /** 该方案下的阶段（value = 阶段编码，label = 阶段名称） */
+  phases: Array<{ value: number; label: string }>;
+}
+
 /** 元信息：某学段支持哪些筛选项 / 能不能写 / 有哪些特有区块 */
 export interface StudentStageMeta {
   stage: StudentStage;
   stageName: string;
   /** 该学段支持的学段内阶段码可选项 */
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案（前端「阶段方案」下拉的数据源） */
+  planOptions?: StagePlanOption[];
   /** 该学段特有区块的键（前端据此决定显示哪些页签） */
   sections: string[];
   /** 是否支持「只看未分配宿舍」筛选 */
@@ -1170,6 +1191,8 @@ export interface ClassStageMeta {
   classroomLabel: string;
   /** 学段内阶段码可选项 */
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案（前端「阶段方案」下拉的数据源） */
+  planOptions?: StagePlanOption[];
 }
 
 /** 统计卡片 */

@@ -582,6 +582,7 @@ import {
   type StudentStage,
   type StudentStageMeta,
   type StudentSummary,
+  type StagePlanOption,
 } from '@/teaching/api/student';
 import { http } from '@/api/request';
 
@@ -671,7 +672,9 @@ const activeStage = computed<StudentStage | ''>(() => {
 });
 
 const meta = ref<StudentStageMeta[]>([]);
-const classOptions = ref<Array<{ stage: StudentStage; stageName: string; id: string; name: string }>>([]);
+const classOptions = ref<
+  Array<{ stage: StudentStage; stageName: string; id: string; name: string; deptCode?: number; phaseCode?: number }>
+>([]);
 
 const classSelectOptions = computed(() =>
   activeStage.value ? classOptions.value.filter((c) => c.stage === activeStage.value) : classOptions.value,
@@ -888,6 +891,11 @@ const agePreview = computed<number | ''>(() => {
 const JH_PHASE_CODES = [102, 103, 104, 105, 106, 107];
 /** 学历下拉选项（2026-10-15 三次调整：固定选项，不随部门联动，单独选择） */
 const EDUCATION_OPTIONS = ['初中', '高中', '专科', '本科', '研究生'];
+
+/** ★ 2026-10-16 全部阶段方案（来自后端 meta；两个部门的方案都在里面） */
+const planOptionsAll = computed<StagePlanOption[]>(
+  () => meta.value.find((m) => m.planOptions?.length)?.planOptions || [],
+);
 /** 部门变化 → 自动判定学段（初高部 → 初高；大学部 → 大学）。
  * 就业/教务学段没有部门概念，编辑这两类学生时不改学段。
  */
@@ -976,8 +984,19 @@ function normalizeBedNo(): string | null {
 const formClassOptions = computed(() =>
   classOptions.value.filter((c) => c.stage === form.stage),
 );
-/** 表单里阶段下拉：按当前表单学段；初高只给 初中部1期 ~ 高中部3期（批注口径） */
+/** 表单里阶段下拉：★ 2026-10-16 改为「阶段方案驱动」——
+ *   有方案数据时用方案里的阶段（按部门过滤），否则回落到 meta 的阶段清单
+ *   （回落时初高仍按旧口径过滤掉预科）。 */
 const formPhaseOptions = computed(() => {
+  const dept = form.deptCode ?? (form.stage === 'jh' ? 1 : form.stage === 'class' ? 2 : undefined);
+  if (form.stage === 'jh' || form.stage === 'class') {
+    const seen = new Map<number, string>();
+    for (const pl of planOptionsAll.value) {
+      if (dept && pl.deptCode !== dept) continue;
+      for (const ph of pl.phases) if (!seen.has(ph.value)) seen.set(ph.value, ph.label);
+    }
+    if (seen.size) return [...seen].map(([value, label]) => ({ value, label }));
+  }
   const list = meta.value.find((m) => m.stage === form.stage)?.phaseOptions || [];
   if (form.stage === 'jh') return list.filter((p) => JH_PHASE_CODES.includes(p.value));
   return list;
@@ -1051,6 +1070,12 @@ async function openEdit(row: StudentRow) {
 function onFormClassChange(id: string) {
   const c = formClassOptions.value.find((x) => x.id === id);
   form.className = c?.name || '';
+  // ★ 2026-10-16「学生档案的阶段、部门跟随学生所在班级」：
+  //   选了班级就自动带出该班的部门与阶段（仍可在下拉里手动改，覆盖自动值）
+  if (c) {
+    if (c.deptCode) form.deptCode = c.deptCode;
+    if (c.phaseCode) form.phaseCode = c.phaseCode;
+  }
 }
 
 async function doSave() {

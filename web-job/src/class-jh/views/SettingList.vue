@@ -2,20 +2,24 @@
 /**
  * 系统设置页
  *
- * 三个页签：系统设置（KV）/ 阶段字典 / 操作日志。
+ * 三个页签：系统设置（KV）/ 阶段方案 / 操作日志。
+ *
+ * ★ 2026-10-16 改版：原「阶段字典」（一行 = 一个阶段）改成「阶段方案」——
+ *    一个方案可包含多个阶段（阶段名称 + 学制月数），列表只展示 序号/方案名称/所属部门/操作。
  */
 
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Delete, Search, Refresh, SetUp } from '@element-plus/icons-vue';
+import { Plus, Delete, Edit, Search, Refresh, SetUp } from '@element-plus/icons-vue';
 import { DEPT_NAME } from 'shared-types/class-jh';
-import type { ClassSetting, StageDict, OpLog, OpLogListQuery, StageSavePayload } from 'shared-types/class-jh';
+import type { ClassSetting, StagePlan, OpLog, OpLogListQuery } from 'shared-types/class-jh';
 import {
   fetchSettingDetail,
   updateSetting,
-  fetchStageList,
-  addStage,
-  deleteStage,
+  fetchStagePlanList,
+  addStagePlan,
+  updateStagePlan,
+  deleteStagePlan,
   fetchOpLogList,
 } from '@/class-jh/api/setting';
 import { dash, formatDateTime } from '@/class-jh/utils/format';
@@ -80,57 +84,100 @@ async function saveSettings() {
   }
 }
 
-/* ================= 阶段字典 ================= */
-const stageLoading = ref(false);
-const stageData = ref<StageDict[]>([]);
+/* ================= 阶段方案 ================= */
+const planLoading = ref(false);
+const planData = ref<StagePlan[]>([]);
 
-async function loadStage() {
-  stageLoading.value = true;
-  try {
-    stageData.value = await fetchStageList();
-  } catch {
-    /* 错误已统一处理 */
-  } finally {
-    stageLoading.value = false;
-  }
+/** 方案弹窗里的一行阶段明细 */
+interface PhaseRow {
+  id?: string;
+  stageName: string;
+  studyMonths?: number;
 }
 
-const stageVisible = ref(false);
-const stageSubmitting = ref(false);
-const stageForm = reactive<StageSavePayload>({
-  stageCode: 101,
-  stageName: '',
+const planVisible = ref(false);
+const planSubmitting = ref(false);
+const planEditingId = ref('');
+const planTitle = computed(() => (planEditingId.value ? '编辑方案' : '新增方案'));
+
+const planForm = reactive<{ planName: string; deptCode: number; phases: PhaseRow[] }>({
+  planName: '',
   deptCode: 1,
-  studyMonths: undefined,
-  sortNo: 0,
+  phases: [{ stageName: '', studyMonths: undefined }],
 });
 
-function openStageDialog() {
-  Object.assign(stageForm, { stageCode: 101, stageName: '', deptCode: 1, studyMonths: undefined, sortNo: 0 });
-  stageVisible.value = true;
-}
-
-async function submitStage() {
-  if (!stageForm.stageName || !stageForm.stageCode || !stageForm.deptCode) {
-    ElMessage.warning('请填写阶段编码、名称与所属部门');
-    return;
-  }
-  stageSubmitting.value = true;
+async function loadPlans() {
+  planLoading.value = true;
   try {
-    await addStage({ ...stageForm });
-    ElMessage.success('新增成功');
-    stageVisible.value = false;
-    loadStage();
+    planData.value = await fetchStagePlanList();
   } catch {
     /* 错误已统一处理 */
   } finally {
-    stageSubmitting.value = false;
+    planLoading.value = false;
   }
 }
 
-async function handleDeleteStage(row: StageDict) {
+function openPlanDialog(row?: StagePlan) {
+  planEditingId.value = row?.id || '';
+  planForm.planName = row?.planName || '';
+  planForm.deptCode = row?.deptCode ?? 1;
+  planForm.phases = row?.phases?.length
+    ? row.phases.map((p) => ({ id: p.id, stageName: p.stageName, studyMonths: p.studyMonths ?? undefined }))
+    : [{ stageName: '', studyMonths: undefined }];
+  planVisible.value = true;
+}
+
+function addPhaseRow() {
+  planForm.phases.push({ stageName: '', studyMonths: undefined });
+}
+
+function removePhaseRow(idx: number) {
+  planForm.phases.splice(idx, 1);
+}
+
+async function submitPlan() {
+  if (!planForm.planName.trim()) {
+    ElMessage.warning('请输入方案名称');
+    return;
+  }
+  if (!planForm.phases.length) {
+    ElMessage.warning('请至少添加一个阶段');
+    return;
+  }
+  if (planForm.phases.some((p) => !p.stageName.trim())) {
+    ElMessage.warning('请填写全部阶段名称');
+    return;
+  }
+  planSubmitting.value = true;
   try {
-    await ElMessageBox.confirm(`确定删除阶段「${row.stageName}」吗？（仍有学生的阶段不可删）`, '删除确认', {
+    const payload = {
+      planName: planForm.planName.trim(),
+      deptCode: planForm.deptCode,
+      phases: planForm.phases.map((p) => ({
+        id: p.id,
+        stageName: p.stageName.trim(),
+        studyMonths: p.studyMonths,
+      })),
+    };
+    if (planEditingId.value) {
+      await updateStagePlan({ ...payload, id: planEditingId.value });
+      ElMessage.success('保存成功');
+    } else {
+      await addStagePlan(payload);
+      ElMessage.success('新增成功');
+    }
+    planVisible.value = false;
+    loadPlans();
+  } catch {
+    /* 错误已统一处理 */
+  } finally {
+    planSubmitting.value = false;
+  }
+}
+
+async function handleDeletePlan(row: StagePlan) {
+  try {
+    await ElMessageBox.confirm(`确定删除方案「${row.planName}」吗？（方案下已有班级/学生使用的阶段不可删）`, '删除确认', {
       type: 'warning',
       confirmButtonText: '确定删除',
       cancelButtonText: '取消',
@@ -139,9 +186,9 @@ async function handleDeleteStage(row: StageDict) {
     return;
   }
   try {
-    await deleteStage(row.id);
+    await deleteStagePlan(row.id);
     ElMessage.success('删除成功');
-    loadStage();
+    loadPlans();
   } catch {
     /* 错误已统一处理 */
   }
@@ -183,7 +230,7 @@ function resetOpLogQuery() {
 
 onMounted(() => {
   loadSettings();
-  loadStage();
+  loadPlans();
   loadOpLog();
 });
 </script>
@@ -216,23 +263,21 @@ onMounted(() => {
         </div>
       </el-tab-pane>
 
-      <!-- 阶段字典 -->
-      <el-tab-pane label="阶段字典" name="stage">
+      <!-- 阶段方案 -->
+      <el-tab-pane label="阶段方案" name="stage">
         <div class="toolbar">
-          <el-button v-readonly-hide type="primary" :icon="Plus" @click="openStageDialog">新增阶段</el-button>
+          <el-button v-readonly-hide type="primary" :icon="Plus" @click="openPlanDialog()">新增方案</el-button>
         </div>
-        <el-table v-loading="stageLoading" :data="stageData" border stripe empty-text="暂无阶段">
+        <el-table v-loading="planLoading" :data="planData" border stripe empty-text="暂无方案">
           <el-table-column type="index" label="序号" width="60" align="center" />
-          <el-table-column prop="stageCode" label="阶段编码" width="110" align="center" />
-          <el-table-column prop="stageName" label="阶段名称" width="160" />
-          <el-table-column label="所属部门" width="120">
-            <template #default="{ row }">{{ DEPT_NAME[row.deptCode] || dash(row.deptCode) }}</template>
+          <el-table-column prop="planName" label="方案名称" min-width="220" />
+          <el-table-column label="所属部门" width="140">
+            <template #default="{ row }">{{ row.deptName || DEPT_NAME[row.deptCode] || dash(row.deptCode) }}</template>
           </el-table-column>
-          <el-table-column prop="studyMonths" label="学制(月)" width="100" align="center" />
-          <el-table-column prop="sortNo" label="排序" width="90" align="center" />
-          <el-table-column label="操作" width="100" align="center" fixed="right">
+          <el-table-column label="操作" width="170" align="center" fixed="right">
             <template #default="{ row }">
-              <el-button v-readonly-hide link type="danger" size="small" :icon="Delete" @click="handleDeleteStage(row)">删除</el-button>
+              <el-button v-readonly-hide link type="primary" size="small" :icon="Edit" @click="openPlanDialog(row)">编辑</el-button>
+              <el-button v-readonly-hide link type="danger" size="small" :icon="Delete" @click="handleDeletePlan(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -283,30 +328,36 @@ onMounted(() => {
       </el-tab-pane>
     </el-tabs>
 
-    <!-- 新增阶段 -->
-    <el-dialog v-model="stageVisible" title="新增阶段" width="480px">
-      <el-form :model="stageForm" label-width="100px">
-        <el-form-item label="阶段编码" required>
-          <el-input-number v-model="stageForm.stageCode" :min="1" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="阶段名称" required>
-          <el-input v-model="stageForm.stageName" placeholder="如 初中部1期" />
+    <!-- 新增 / 编辑方案 -->
+    <el-dialog v-model="planVisible" :title="planTitle" width="720px">
+      <el-form :model="planForm" label-width="90px">
+        <el-form-item label="方案名称" required>
+          <el-input v-model="planForm.planName" placeholder="如 方案一" />
         </el-form-item>
         <el-form-item label="所属部门" required>
-          <el-select v-model="stageForm.deptCode" style="width: 100%">
+          <el-select v-model="planForm.deptCode" style="width: 100%">
             <el-option v-for="(name, value) in DEPT_NAME" :key="value" :label="name" :value="Number(value)" />
           </el-select>
         </el-form-item>
-        <el-form-item label="学制(月)">
-          <el-input-number v-model="stageForm.studyMonths" :min="0" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="排序">
-          <el-input-number v-model="stageForm.sortNo" :min="0" style="width: 100%" />
+        <el-form-item label="阶段明细" required>
+          <div class="phase-wrap">
+            <div v-for="(p, idx) in planForm.phases" :key="idx" class="phase-row">
+              <span class="phase-idx">{{ idx + 1 }}</span>
+              <el-input v-model="p.stageName" placeholder="阶段名称，如 一阶段" class="phase-name" />
+              <el-input-number v-model="p.studyMonths" :min="0" class="phase-month" controls-position="right" />
+              <span class="phase-unit">月</span>
+              <el-button link type="danger" :icon="Delete" @click="removePhaseRow(idx)">删除</el-button>
+            </div>
+            <el-button link type="primary" :icon="Plus" class="phase-add" @click="addPhaseRow">添加阶段名称</el-button>
+            <div class="phase-hint">
+              一个方案可包含多个阶段，例：方案一 → 一阶段·学制2月 / 二阶段·学制2月 / 三阶段·学制2月
+            </div>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="stageVisible = false">取消</el-button>
-        <el-button v-readonly-hide type="primary" :loading="stageSubmitting" @click="submitStage">确定</el-button>
+        <el-button @click="planVisible = false">取消</el-button>
+        <el-button v-readonly-hide type="primary" :loading="planSubmitting" @click="submitPlan">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -333,5 +384,48 @@ onMounted(() => {
 }
 .toolbar {
   margin-bottom: 12px;
+}
+
+/* ---- 阶段明细（新增/编辑方案） ---- */
+.phase-wrap {
+  width: 100%;
+}
+.phase-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.phase-idx {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  border-radius: 50%;
+  background: #ecf5ff;
+  color: #409eff;
+  font-size: 12px;
+}
+.phase-name {
+  flex: 1;
+}
+.phase-month {
+  flex: none;
+  width: 140px;
+}
+.phase-unit {
+  flex: none;
+  color: #606266;
+  font-size: 13px;
+}
+.phase-add {
+  margin-top: 2px;
+}
+.phase-hint {
+  margin-top: 6px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>

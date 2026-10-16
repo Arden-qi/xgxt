@@ -31,6 +31,7 @@ import type {
 import { STUDENT_DEDUP_PRIORITY, STUDENT_STAGES, STUDENT_STAGE_NAME } from '../shared/dto';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { listClassesByStage } from '../shared/classOptions';
+import { loadStagePlanOptions } from '../shared/stagePlans';
 import { db } from '../../utils/db';
 import { StudentStatus } from 'shared-types';
 import type { StudentRepo, StudentStat } from './types';
@@ -267,6 +268,8 @@ export async function removeStudent(
 /** 元信息：每个可见学段支持的阶段码与特有区块（前端据此渲染筛选项与页签） */
 export async function listStageMeta(user: any): Promise<StudentStageMeta[]> {
   const stages = await visibleStages(user);
+  // ★ 2026-10-16 阶段方案：两个部门的方案都在 sms_class_jh 里，与学段无关，取一次即可
+  const planOptions = await loadStagePlanOptions();
   const out: StudentStageMeta[] = [];
   for (const s of stages) {
     const repo = REPOS[s];
@@ -274,6 +277,7 @@ export async function listStageMeta(user: any): Promise<StudentStageMeta[]> {
       stage: s,
       stageName: STUDENT_STAGE_NAME[s],
       phaseOptions: await repo.phaseOptions(),
+      planOptions,
       sections: repo.sections,
       supportUnassigned: repo.supportUnassigned,
     });
@@ -293,6 +297,9 @@ export interface StudentClassOption {
   stageName: string;
   id: string;
   name: string;
+  /** ★ 2026-10-16 所选班级的部门 / 阶段，供学生表单「跟随班级」自动带出 */
+  deptCode?: number;
+  phaseCode?: number;
 }
 
 export async function listStudentClasses(user: any): Promise<StudentClassOption[]> {
@@ -316,7 +323,14 @@ export async function listStudentClasses(user: any): Promise<StudentClassOption[
       continue;
     }
     for (const c of await listClassesByStage(s)) {
-      out.push({ stage: s, stageName: STUDENT_STAGE_NAME[s], id: c.id, name: c.name });
+      out.push({
+        stage: s,
+        stageName: STUDENT_STAGE_NAME[s],
+        id: c.id,
+        name: c.name,
+        deptCode: c.deptCode,
+        phaseCode: c.phaseCode,
+      });
     }
   }
   return out;

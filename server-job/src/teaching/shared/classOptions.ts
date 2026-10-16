@@ -23,7 +23,21 @@ export interface ClassOption {
   stageName: string;
   id: string;
   name: string;
+  /**
+   * ★ 2026-10-16：带上班级的「部门」和「阶段」，供学生档案在选了班级后
+   *   自动带出「部门 / 阶段」（跟随学生所在班级）。
+   */
+  deptCode?: number;
+  phaseCode?: number;
 }
+
+/** 三张班级表都有 dept_code / stage 两列，统一取出来 */
+const pick = (r: any) => ({
+  id: String(r.id),
+  name: String(r.name ?? ''),
+  deptCode: r.dept_code === null || r.dept_code === undefined ? undefined : Number(r.dept_code),
+  phaseCode: r.stage === null || r.stage === undefined ? undefined : Number(r.stage),
+});
 
 /**
  * 取某学段的班级列表
@@ -35,23 +49,22 @@ export interface ClassOption {
  */
 export async function listClassesByStage(
   stage: TeachingStage,
-): Promise<Array<{ id: string; name: string }>> {
-  const pick = (r: any) => ({ id: String(r.id), name: String(r.name ?? '') });
+): Promise<Array<{ id: string; name: string; deptCode?: number; phaseCode?: number }>> {
   if (stage === 'jh') {
     const rows = (await tbl(classJhDb, 'sms_class_jh', 't_class_info', stage)
       .where('is_deleted', 0)
-      .select('id', 'class_name as name')) as Array<{ id: string; name: string }>;
+      .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
     return rows.map(pick);
   }
   if (stage === 'class') {
     const rows = (await tbl(classDb, 'sms_class', 't_class_info', stage)
       .where('is_deleted', 0)
-      .select('id', 'class_name as name')) as Array<{ id: string; name: string }>;
+      .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
     return rows.map(pick);
   }
   const rows = (await tbl(jobDb, 'sms_job', 't_job_class', stage)
     .where('is_deleted', 0)
-    .select('id', 'class_name as name')) as Array<{ id: string; name: string }>;
+    .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
   return rows.map(pick);
 }
 

@@ -17,7 +17,6 @@ import {
   GENDER_NAME,
   DEPT_NAME,
   STUDENT_STATUS_NAME,
-  STAGE_NAME,
   FLOW_TYPE_NAME,
   ATTENDANCE_STATUS_NAME,
   EXAM_TYPE_NAME,
@@ -32,6 +31,8 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { writeOpLog } from '../utils/opLog';
 import { nameOf } from '../utils/enumName';
+// ★ 2026-10-16 阶段名改为「优先读阶段字典表」，常量表兜底（用户自建方案的阶段编码不在常量里）
+import { resolveStageName } from '../utils/stageDict';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
@@ -109,7 +110,7 @@ function toListItem(r: any) {
     studentStatus: r.student_status,
     studentStatusName: nameOf(STUDENT_STATUS_NAME, r.student_status),
     stage: r.stage,
-    stageName: nameOf(STAGE_NAME, r.stage),
+    stageName: resolveStageName(r.stage),
     phone: r.phone,
     parentPhone: r.parent_phone,
     dormNo: r.dorm_no,
@@ -140,7 +141,7 @@ function toStudent(row: any) {
     classId: row.class_id,
     className: row.class_name,
     stage: row.stage,
-    stageName: nameOf(STAGE_NAME, row.stage),
+    stageName: resolveStageName(row.stage),
     headTeacherId: row.head_teacher_id,
     headTeacherName: row.head_teacher_name,
     teacherId: row.teacher_id,
@@ -880,7 +881,7 @@ async function assertRepeatAllowed(studentId: string, toClassId: string): Promis
   if (!canRepeatByStage(stu.stage)) {
     throw new BizError(
       BizCode.BUSINESS_RULE_VIOLATION,
-      `「${STAGE_NAME[stu.stage] ?? stu.stage}」阶段学生不可末班，仅非1期阶段可办理末班`,
+      `「${resolveStageName(stu.stage) || stu.stage}」阶段学生不可末班，仅非1期阶段可办理末班`,
     );
   }
   const toCls = await assertClassAcceptsIntake(toClassId, true);

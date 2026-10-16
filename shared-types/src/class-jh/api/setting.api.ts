@@ -5,7 +5,7 @@
  */
 
 import { ApiResponse, PageResponse } from '../common';
-import { ClassSetting, StageDict, OpLog, DashboardStat } from '../class';
+import { ClassSetting, StageDict, StagePlan, StagePlanPhase, OpLog, DashboardStat } from '../class';
 
 /* ---------------- 系统设置 ---------------- */
 
@@ -42,6 +42,35 @@ export type StageAddResponse = ApiResponse<{ id: string }>;
 
 /** 阶段删除响应 */
 export type StageDeleteResponse = ApiResponse<null>;
+
+/* ---------- ★ 2026-10-16 阶段方案（原阶段字典页改版） ---------- */
+
+/** 方案列表查询参数 */
+export interface StagePlanListQuery {
+  deptCode?: number;
+}
+
+/** 方案列表响应（含阶段明细） */
+export type StagePlanListResponse = ApiResponse<StagePlan[]>;
+
+/** 方案保存入参（新增 / 编辑共用；编辑时带 id） */
+export interface StagePlanSavePayload {
+  /** 编辑时必传 */
+  id?: string;
+  planName: string;
+  deptCode: number;
+  /** 阶段明细（至少一条） */
+  phases: StagePlanPhase[];
+}
+
+/** 方案新增响应 */
+export type StagePlanAddResponse = ApiResponse<{ id: string }>;
+
+/** 方案编辑响应 */
+export type StagePlanUpdateResponse = ApiResponse<null>;
+
+/** 方案删除响应 */
+export type StagePlanDeleteResponse = ApiResponse<null>;
 
 /* ---------------- 操作日志 ---------------- */
 

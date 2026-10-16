@@ -9,6 +9,9 @@ import type {
   StageDict,
   StageListQuery,
   StageSavePayload,
+  StagePlan,
+  StagePlanListQuery,
+  StagePlanSavePayload,
   OpLog,
   OpLogListQuery,
 } from 'shared-types/class-jh';
@@ -40,6 +43,28 @@ export function addStage(payload: StageSavePayload): Promise<{ id: string }> {
 /** 阶段删除 */
 export function deleteStage(id: string): Promise<null> {
   return http.delete<null>(`/api/class-jh/stage/delete/${id}`);
+}
+
+/* ---------------- ★ 阶段方案（一个方案含多个阶段） ---------------- */
+
+/** 方案列表（含阶段明细） */
+export function fetchStagePlanList(query?: StagePlanListQuery): Promise<StagePlan[]> {
+  return http.get<StagePlan[]>('/api/class-jh/stage/plan/list', query);
+}
+
+/** 方案新增 */
+export function addStagePlan(payload: StagePlanSavePayload): Promise<{ id: string }> {
+  return http.post<{ id: string }>('/api/class-jh/stage/plan/add', payload);
+}
+
+/** 方案编辑 */
+export function updateStagePlan(payload: StagePlanSavePayload): Promise<null> {
+  return http.put<null>('/api/class-jh/stage/plan/update', payload);
+}
+
+/** 方案删除 */
+export function deleteStagePlan(id: string): Promise<null> {
+  return http.delete<null>(`/api/class-jh/stage/plan/delete/${id}`);
 }
 
 /* ---------------- 操作日志 ---------------- */

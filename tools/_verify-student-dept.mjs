@@ -5,7 +5,7 @@
  *   ① 说明条、筛选标签都是「部门」，不再出现「学段」；
  *   ② 列表里学生显示的是部门名（大学部），不是「大学」；
  *   ③ 「部门」下拉展开后是 初高部 / 大学部；
- *   ④ 选「大学部」查询能查出 1 条，选「初高部」查出 0 条。
+ *   ④ 选「大学部」/「初高部」各查一次，条数不同（筛选生效）。
  *
  * 用法：node tools/_verify-student-dept.mjs        （前后端需在跑：8004 + 5173）
  * 产物：tools/_out/verify_student_dept_*.png
@@ -130,7 +130,7 @@ const check = (name, ok, detail = '') => {
   const firstRow = await ev(
     `(() => { const r = document.querySelector('.el-table__row'); return r ? r.innerText.replace(/\\n/g,' | ') : ''; })()`,
   );
-  check('列表首行显示 大学部', firstRow.includes('大学部'), firstRow);
+  check('列表首行显示部门名（初高部 / 大学部）', /初高部|大学部/.test(firstRow), firstRow);
   await shot('verify_student_dept_list.png');
 
   /* ③ 部门下拉选项 */
@@ -148,7 +148,12 @@ const check = (name, ok, detail = '') => {
   check('部门下拉含 初高部 / 大学部', /初高部/.test(opts) && /大学部/.test(opts), opts);
   await shot('verify_student_dept_options.png');
 
-  /* ④ 选「大学部」→ 1 条；选「初高部」→ 0 条 */
+  /* ④ 选「大学部」/「初高部」各查一次
+   *
+   * ⚠️ 2026-10-16 改成【与数据量无关】的断言：
+   *   原来写死「大学部 = 1 条 / 初高部 = 0 条」，那是早期「演示库里只有 1 条学生」的
+   *   快照。后来演示库用 seed:all 重建（32 名学生、两个部门都有），这两条断言必然红，
+   *   但那不是功能坏了。现在只验「筛选确实生效」：两边都能查出数、且条数不同。 */
   const pick = (label) => `(() => {
     const el = [...document.querySelectorAll('.el-select-dropdown__item')].find(e => e.innerText.trim() === '${label}');
     if (!el) return 'not-found';
@@ -161,12 +166,17 @@ const check = (name, ok, detail = '') => {
     return 'not-found';
   })()`;
   const totalText = `document.body.innerText.match(/共\\s*(\\d+)\\s*条/)?.[1] ?? '?'`;
+  const totalOf = async () => {
+    const t = await ev(totalText);
+    return t === '?' ? -1 : Number(t);
+  };
 
   check('选中 大学部', (await ev(pick('大学部'))) === 'ok');
   await sleep(300);
   await ev(search);
-  await sleep(1500);
-  check('大学部结果 = 1 条', (await ev(totalText)) === '1', '实际 ' + (await ev(totalText)));
+  await sleep(1600);
+  const uniTotal = await totalOf();
+  console.log('    大学部筛选结果条数：' + uniTotal);
 
   /* 重开下拉选「初高部」 */
   await ev(`(() => {
@@ -180,8 +190,12 @@ const check = (name, ok, detail = '') => {
   check('选中 初高部', (await ev(pick('初高部'))) === 'ok');
   await sleep(300);
   await ev(search);
-  await sleep(1500);
-  check('初高部结果 = 0 条', (await ev(totalText)) === '0', '实际 ' + (await ev(totalText)));
+  await sleep(1600);
+  const jhTotal = await totalOf();
+  console.log('    初高部筛选结果条数：' + jhTotal);
+
+  check('部门筛选能查出数据（两个部门合计 > 0）', uniTotal + jhTotal > 0, `大学部 ${uniTotal} / 初高部 ${jhTotal}`);
+  check('两个部门的筛选结果不同（筛选确实生效）', uniTotal !== jhTotal, `大学部 ${uniTotal} / 初高部 ${jhTotal}`);
   await shot('verify_student_dept_filter_jh.png');
 
   console.log(`\n${fails.length ? 'FAILED: ' + fails.join(' / ') : 'ALL PASS'}`);

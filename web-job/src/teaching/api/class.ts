@@ -114,6 +114,20 @@ export interface ClassSaveBody {
   remark?: string | null;
 }
 
+/**
+ * ★ 2026-10-16 阶段方案（一个方案含多个阶段）
+ *   原「阶段字典」改版后，班级/学生表单的「阶段」改成「先选方案，再选阶段」。
+ */
+export interface StagePlanOption {
+  id: string;
+  /** 方案名称，如 初高部阶段方案 */
+  name: string;
+  /** 所属部门 1 初高部 / 2 大学部 */
+  deptCode: number;
+  /** 该方案下的阶段（value = 阶段编码，label = 阶段名称） */
+  phases: Array<{ value: number; label: string }>;
+}
+
 export interface ClassStageMeta {
   stage: ClassStage;
   stageName: string;
@@ -122,6 +136,8 @@ export interface ClassStageMeta {
   hasSealAction: boolean;
   classroomLabel: string;
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案清单 */
+  planOptions?: StagePlanOption[];
 }
 
 export interface ClassSummary {
