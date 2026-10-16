@@ -17,8 +17,11 @@
  *      → 本自检钉住「employ 不是合法 stage 参数」；
  *   ③ 三个可用部门的学段映射被改错（比如 初高中 指到 class）→ 学生搜不到 /
  *      单子落到别的库 → 本自检用真实数据清点各学段的候选学生数来钉住。
- *      ⚠️ 交叉核对必须用**同一口径**：候选数 = 该库「非终态」在册人数
- *      （退学 7 / 流失 11 / 已就业 10 自 2026-10-16 起不下发，详见 service.ts）。
+ *      ⚠️ 交叉核对必须用**同一口径**，且规则在测试里**独立重算**：
+ *      候选数 = 该库「非终态（退学 7 / 流失 11 / 已就业 10 已排除）
+ *               且无未办结单（待提交 / 待学管 / 待校长）」
+ *      （口径 2026-10-16 两次变化：先加终态剔除，再加未办结剔除 ——
+ *        规则改了这里必须一起改，等于把规则钉住。）
  *
  * 【跑法】在 server-job 目录下（前后端已在 8004/5173 运行）：
  *     node scripts/_test-leave-department-options.mjs
@@ -75,43 +78,68 @@ const EXPECT = [
     );
 
     /* ---------- C. 三个可用部门各自能搜到「该部门库里的学生」（映射没被改错） ---------- */
-    /** 学段 → 该学段的学生表（用于与接口返回人数交叉核对） */
-    const STU_TABLE = {
-      jh: ['sms_class_jh', 't_class_student'],
-      class: ['sms_class', 't_class_student'],
-      job: ['sms_job', 't_student_base'],
+    /** 学段 → 该学段的学生表 / 异动单表（用于与接口返回人数交叉核对） */
+    const STAGE_TABLES = {
+      jh: { stu: ['sms_class_jh', 't_class_student'], leave: ['sms_class_jh', 't_class_flow'] },
+      class: { stu: ['sms_class', 't_class_student'], leave: ['sms_class', 't_class_suspend_apply'] },
+      job: { stu: ['sms_job', 't_student_base'], leave: ['sms_job', 't_job_student_leave'] },
     };
+
     /**
-     * ★ 终态学生（退学 7 / 流失 11 / 已就业 10）不下发到候选名单里
-     *   （2026-10-16 起，见 service.ts 的 TERMINAL_STUDENT_STATUSES）。
-     *   所以交叉核对时**必须用同一口径**，否则等式永远不成立：
-     *   库里全量 32 人 vs 接口 28 人 —— 看起来像「映射指错库」，其实是口径不同。
-     *   ⚠️ 老数据里 student_status 可能为 NULL，单写 NOT IN 会连 NULL 行一起滤掉，
-     *      和仓储一样要补 `OR IS NULL`。
+     * ★★ 这里**刻意在测试里独立重算一遍「谁会出现在下拉里」的规则**
+     *
+     * 原来只减掉「终态学生」，于是每次下游口径一变（终态 → 又加未办结），
+     * 这条等式就被打破一次，两次都表现为「接口人数 ≠ 库里人数」，
+     * 看着像「部门映射指错库」，其实是测试没跟上规则。
+     * → 索性把规则抄进来重算，规则改了这里就必须一起改（等于把规则钉住）。
+     *
+     * 规则（与 service.ts / repo.*.ts 一致）：
+     *   候选 = 该库在册学生
+     *          − 终态（退学 7 / 流失 11 / 已就业 10）
+     *          − 已有**未办结**异动单的学生（待提交 / 待学管 / 待校长）
+     *   ⚠️ 未办结状态用的是**各库原码**：初高 1/2/5（3 才是已同意）、大学与实训 1/2/3。
+     *   ⚠️ 老数据 student_status 可能为 NULL → 与仓储一样补 `OR IS NULL`。
      */
     const TERMINAL = [7, 10, 11];
+    const PENDING_RULE = {
+      jh: { statusCol: 'flow_status', statuses: [1, 2, 5], typeCol: 'flow_type', types: [1, 2, 5] },
+      class: { statusCol: 'apply_status', statuses: [1, 2, 3], typeCol: 'apply_type', types: [1, 2] },
+      job: { statusCol: 'approval_status', statuses: [1, 2, 3], typeCol: null, types: [] },
+    };
     const LIMIT = 200;
     for (const e of EXPECT.filter((x) => x.stage)) {
       const stage = e.stage;
-      const [dbName, table] = STU_TABLE[stage];
-      const db = dbName === 'sms_class_jh' ? dbJh : conn(dbName);
-      const dbCount = Number(
-        (await db(table)
-          .where('is_deleted', 0)
-          .andWhere((b) => b.whereNotIn('student_status', TERMINAL).orWhereNull('student_status'))
-          .count({ c: '*' })
-          .first())?.c || 0,
+      const t = STAGE_TABLES[stage];
+      const db = t.stu[0] === 'sms_class_jh' ? dbJh : conn(t.stu[0]);
+
+      // ① 未办结的学生 id
+      const rule = PENDING_RULE[stage];
+      const pendQ = db(t.leave[1])
+        .where('is_deleted', 0)
+        .whereIn(rule.statusCol, rule.statuses)
+        .whereNotNull('student_id');
+      if (rule.typeCol) pendQ.whereIn(rule.typeCol, rule.types);
+      const pendIds = new Set(
+        (await pendQ.select('student_id')).map((r) => String(r.student_id || '')),
       );
-      if (dbName !== 'sms_class_jh') await db.destroy();
+
+      // ② 在册 + 非终态的学生
+      const stuRows = await db(t.stu[1])
+        .where('is_deleted', 0)
+        .andWhere((b) => b.whereNotIn('student_status', TERMINAL).orWhereNull('student_status'))
+        .select('id');
+      if (t.stu[0] !== 'sms_class_jh') await db.destroy();
+
+      const expect = stuRows.filter((r) => !pendIds.has(String(r.id))).length;
 
       const r = await req(`${API}/student-options?stage=${stage}&limit=${LIMIT}`, { token });
       const n = (r.json?.data || []).length;
-      // ★ 不写死「必须有人」，但要求「接口返回人数 = 该库**非终态**在册人数（受 limit 截断）」——
+      // ★ 不写死「必须有人」，只要求「接口人数 = 按规则算出来的候选数（受 limit 截断）」——
       //   映射指错库时这个等式立刻不成立（比如指到空的库 → 0 vs 28）。
       check(
-        `★ 部门「${e.name}」（stage=${stage}）候选人数 = 该部门库**非终态**在册人数`,
-        r.json?.code === 200 && n === Math.min(dbCount, LIMIT),
-        `接口 ${n} 人 / ${dbName}.${table} 非终态在册 ${dbCount} 人`,
+        `★ 部门「${e.name}」（stage=${stage}）候选人数 = 该库「非终态 且 无未办结单」的人数`,
+        r.json?.code === 200 && n === Math.min(expect, LIMIT),
+        `接口 ${n} 人 / 按规则应 ${expect} 人（在册 ${stuRows.length}、未办结 ${pendIds.size}）`,
       );
     }
     const jhTotal = Number(

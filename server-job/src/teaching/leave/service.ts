@@ -101,8 +101,12 @@ type Repo = {
   studentOptions: (
     keyword: string,
     limit: number,
-    /** `onlySuspended` = 只放休学中的；`excludeStatuses` = 剔除这些状态的行 */
-    opts?: { onlySuspended?: boolean; excludeStatuses?: number[] },
+    /**
+     * `onlySuspended` = 只放休学中的；
+     * `excludeStatuses` = 剔除这些**学生状态**的行；
+     * `excludeWithPending` = 剔除**已有未办结申请**的学生（与 hasPending 同口径）
+     */
+    opts?: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean },
   ) => Promise<StudentOption[]>;
   findStudent: (id: string) => Promise<{
     no: string;
@@ -392,8 +396,15 @@ const ACTION_NAME: Record<number, string> = { 1: '提交', 2: '同意', 3: '驳�
  *   审批通过时会把已经终结的学生状态改写掉（见 TERMINAL_STUDENT_STATUSES）。
  *   → 与类型无关，一律剔除；`onlySuspended` 与它叠加（复学时两者同时成立）。
  *
+ * ★★ 已有**未办结**申请的学生也不出现（2026-10-16 用户要求）：
+ *   以前只有 `create()` 里的 `hasPending` 拦一道 —— 用户在下拉里照样能看到这个人，
+ *   费劲选完、填完原因，提交时才被拒「请勿重复提交」，白跑一趟。
+ *   现在在下拉这一层就不列。
+ *   ⚠️ 这里的 `excludeWithPending` 与 `create()` 的 `hasPending` **共用仓储里的同一份
+ *      「未办结状态」常量**，两处口径不可能分叉（分叉 = 下拉选得到却提交失败）。
+ *
  * ⚠️ 只收窄下拉是**不够的**：下拉是可以绕过的（直接调接口）。
- *   所以 `create()` 里还有一道同样的校验，两处口径必须一致（同一个常量）。
+ *   所以 `create()` 里还有同样的校验，两处口径必须一致（同一个常量）。
  */
 export async function studentOptions(
   stage: TeachingStage,
@@ -407,6 +418,7 @@ export async function studentOptions(
   return REPOS[stage].studentOptions(keyword, limit, {
     onlySuspended,
     excludeStatuses: TERMINAL_STUDENT_STATUSES,
+    excludeWithPending: true,
   });
 }
 

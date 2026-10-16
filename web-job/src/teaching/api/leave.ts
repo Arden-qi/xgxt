@@ -199,8 +199,10 @@ export function getLeaveDetail(id: string) {
  *
  * ★ 传 `bizType = 3`（复学）时，后端**只返回当前处于休学的学生** ——
  *   复学是「把休学的人接回来」，下拉里就不该出现在读/退学的人。
- * ★ 无论哪种类型，**终态学生（退学 7 / 流失 11 / 已就业 10）都不会返回** ——
- *   已经终结的学生不能再办任何学籍异动（先退学再休学是自相矛盾的单据）。
+ * ★ 无论哪种类型，以下两类人都**不会返回**：
+ *   ① 终态学生（退学 7 / 流失 11 / 已就业 10）—— 已经终结，不能再办任何学籍异动；
+ *   ② **已有未办结申请**的学生（待提交 / 待学管 / 待校长）—— 避免重复申请。
+ *   （2026-10-16 起；② 与后端 create 的 hasPending 共用同一份「未办结状态」常量。）
  */
 export function listStudentOptions(stage: TeachingStage, keyword?: string, bizType?: number) {
   return http.get<StudentOption[]>('/api/teaching/leave/student-options', {

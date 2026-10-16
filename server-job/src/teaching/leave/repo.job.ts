@@ -88,6 +88,29 @@ async function decorate(
 }
 
 /**
+ * ★ 未办结（= 统一码 1 待提交 / 2 待学管 / 3 待校长）
+ *
+ * 本表 `approval_status` 与统一码恒等，所以直接写 1/2/3。
+ * 【为什么把「待提交」也算进去】用户口径是「已有进行中的申请的学生不再出现在下拉里」，
+ *   草稿也是一张还没办完的单子；而且**下拉剔除的口径必须与 hasPending 完全一致**，
+ *   否则会出现「下拉里选得到、提交却被拒」的错位（跟终态那一刀同一个道理）。
+ *   ⚠️ 2026-10-16 统一：原来这里只有 [2,3]（漏了草稿），初高/大学都是 [1,2,3]。
+ */
+const PENDING_STATUSES = [1, 2, 3];
+
+/** 有未办结异动单的学生 id（下拉剔除用；与 hasPending 同一口径） */
+async function pendingStudentIds(): Promise<string[]> {
+  const rows = (await tbl(db, SRC, T, STAGE)
+    .where('is_deleted', 0)
+    .whereIn('approval_status', PENDING_STATUSES)
+    .whereNotNull('student_id')
+    .select('student_id')) as Array<Record<string, any>>;
+  // ⚠️ 必须去重 + 剔空：`whereNotIn('id', ids)` 里一旦混进 NULL，
+  //    `id NOT IN (..., NULL)` 恒不成立 → 学生列表整片变空（经典坑）
+  return [...new Set(rows.map((r) => String(r.student_id || '')).filter(Boolean))];
+}
+
+/**
  * 学生下拉
  *
  * ★ `opts.onlySuspended` = 只挑「当前处于休学」的学生（`student_status = 6`）。
@@ -97,18 +120,26 @@ async function decorate(
  *   ⚠️ 用 `NOT IN (...) OR IS NULL`：老数据里 `student_status` 可能为 NULL，
  *      单写 `NOT IN` 会把这类行一起滤掉（NULL NOT IN => NULL => 不成立），
  *      那是「名单莫名少人」的经典成因。
+ * ★ `opts.excludeWithPending` = **剔掉已有未办结申请的学生**（2026-10-16 用户要求）。
+ *   以前只有 `create()` 里一道 `hasPending` 兜底，用户在下拉里仍能看到这些人，
+ *   选完提交才被拒（「请勿重复提交」）—— 现在下拉直接不列，少一次白跑。
+ *   ⚠️ 口径与 `hasPending` 必须是同一份 `PENDING_STATUSES`，改一处就够了。
  *   ⚠️ 「哪种类型要限/剔什么状态」是**业务规则**，判定在 service 一处；仓储只负责过滤。
  */
 export async function studentOptions(
   keyword: string,
   limit: number,
-  opts: { onlySuspended?: boolean; excludeStatuses?: number[] } = {},
+  opts: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean } = {},
 ): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_job', S, STAGE).where('is_deleted', 0);
   if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
   if (opts.excludeStatuses?.length) {
     const ex = opts.excludeStatuses;
     q.andWhere((b) => b.whereNotIn('student_status', ex).orWhereNull('student_status'));
+  }
+  if (opts.excludeWithPending) {
+    const ids = await pendingStudentIds();
+    if (ids.length) q.whereNotIn('id', ids);
   }
   if (keyword) {
     q.andWhere((b) => {
@@ -344,7 +375,7 @@ async function applyStudentStatus(conn: any, row: Record<string, any>, operatorI
 export async function hasPending(studentId: string): Promise<boolean> {
   const row = await tbl(db, SRC, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
-    .whereIn('approval_status', [2, 3])
+    .whereIn('approval_status', PENDING_STATUSES)
     .first();
   return !!row;
 }
