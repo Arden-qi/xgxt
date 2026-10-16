@@ -24,7 +24,9 @@
  *     - 绕过下拉直调 create：给退学/流失/已就业的学生开单 → 被拒，提示含对应状态名
  *     - 复学建单不填复学班 → 被拒（「复学必须填写复学班级」）
  *     - 复学建单填了复学班 → 放行；终审不传班级 → 用建单时填的班，学生回到该班
- *   B. 实训（repo.job）：终态三态在学生下拉里都不出现
+ *     - ★ 列表接口返回的 `newClassName` 必须是**班级名**（不是 null/「—」）
+ *       —— 初高老表只存 `resume_class_id`、没有名字列，原来列表恒为「—」
+ *   B. 实训（repo.job）：终态三态在学生下拉里都不出现；复学班级在列表里也能显示
  *
  * 【跑法】在 server-job 目录下（前后端已在 8004/5173 运行）：
  *     node scripts/_test-leave-terminal-and-resume-class.mjs
@@ -127,10 +129,15 @@ const STAGE_CONF = {
     const jobLost = await mkStudent('job', '自检RTM-实训流失', SS.LOST);
     const jobEmp = await mkStudent('job', '自检RTM-实训已就业', SS.EMPLOYED);
     const jobOn = await mkStudent('job', '自检RTM-实训在读', SS.STUDYING);
+    // 复学用例：需要一个「休学中」的学生 + 一个复学班（两个学段各一套）
+    const jobSus = await mkStudent('job', '自检RTM-实训休学', SS.SUSPENDED);
+    const jobCls = await mkClass('job', '自检RTM-实训复学班');
 
     check(
-      '夹具就绪（初高 5 学生 + 1 班；实训 4 学生）',
-      [jhQuit, jhLost, jhEmp, jhOn, jhSus, jhCls, jobQuit, jobLost, jobEmp, jobOn].every((r) => !!r.id),
+      '夹具就绪（初高 5 学生 + 1 班；实训 5 学生 + 1 班）',
+      [jhQuit, jhLost, jhEmp, jhOn, jhSus, jhCls, jobQuit, jobLost, jobEmp, jobOn, jobSus, jobCls].every(
+        (r) => !!r.id,
+      ),
     );
 
     /** 某学段某 bizType 的学生下拉 id 集合 */
@@ -140,6 +147,12 @@ const STAGE_CONF = {
         { token },
       );
       return { code: r.json?.code, ids: (r.json?.data || []).map((o) => o.id), msg: r.json?.message };
+    };
+
+    /** 在「异动单列表」里按单据 id 找出那一行（用 KW 收窄到本脚本的数据） */
+    const listRowOf = async (stage, token, id) => {
+      const r = await req(`${API}/list?stage=${stage}&keyword=${KW}&size=200`, { token });
+      return (r.json?.data?.list || []).find((x) => x.id === id) || null;
     };
 
     /* ============ 2. 初高：终态学生不在下拉 + 直调 create 被拒 ============ */
@@ -244,6 +257,16 @@ const STAGE_CONF = {
           String(row1?.resume_class_id || '') === String(jhCls.id),
           `resume_class_id=${row1?.resume_class_id}`,
         );
+
+        /* ★★ 2026-10-16 用户报的：选了复学班，但**列表的「复学班级」列不体现**。
+           根因 = 初高老表只有 resume_class_id、没有名字列，decorate 里恒为 null。
+           这里直接钉住「列表接口返回的 newClassName 必须是班级名」。 */
+        const listed = await listRowOf(stage, tJh, flowId);
+        check(
+          '★★[jh] 列表里的「复学班级」列能显示班级名（不是 —）',
+          listed?.newClassName === jhCls.class_name,
+          `列表 newClassName=${listed?.newClassName} 期望=${jhCls.class_name}`,
+        );
       }
 
       // 3.3 终审**不传** newClassId → 用建单时填的班，学生回到该班
@@ -303,6 +326,40 @@ const STAGE_CONF = {
         r.json?.code !== 200 && String(r.json?.message || '').includes('退学'),
         `code=${r.json?.code} msg=${r.json?.message}`,
       );
+    }
+
+    /* ============ 5. 实训：复学班级在列表里也要能显示 ============ */
+    {
+      const stage = 'job';
+      const r = await req(`${API}/create`, {
+        method: 'POST',
+        token: tJob,
+        body: {
+          stage,
+          studentId: jobSus.id,
+          bizType: BIZ.RESUME,
+          leaveDate: TODAY,
+          newClassId: jobCls.id,
+          leaveReason: '自检RTM-实训复学（列表要能看到复学班级）',
+          submit: false,
+        },
+      });
+      check(`[${stage}] 复学建单填了复学班 → 放行`, r.json?.code === 200, r.json?.message || '');
+      const id = r.json?.data?.id;
+      if (id) {
+        reg('sms_job', 't_job_student_leave', id);
+        const ap = await db('sms_job')('t_job_approval')
+          .where({ biz_type: 'resume', biz_id: id, is_deleted: 0 })
+          .first()
+          .catch(() => null);
+        if (ap) reg('sms_job', 't_job_approval', ap.id);
+        const listed = await listRowOf(stage, tJob, id);
+        check(
+          `★★[${stage}] 列表里的「复学班级」列能显示班级名（不是 —）`,
+          listed?.newClassName === jobCls.class_name,
+          `列表 newClassName=${listed?.newClassName} 期望=${jobCls.class_name}`,
+        );
+      }
     }
   } catch (e) {
     check('脚本执行未抛异常', false, e?.message || String(e));

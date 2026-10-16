@@ -130,7 +130,12 @@
       <el-table-column label="异动日期" width="105" align="center">
         <template #default="{ row }">{{ row.leaveDate || '—' }}</template>
       </el-table-column>
-      <el-table-column label="复学班" min-width="110">
+      <!--
+        ★ 列名统一叫「复学班级」（2026-10-16）：原来这里叫「复学班」、
+          详情/表单里叫「复学班级」，同一件事两个叫法，用户对不上。
+        初高老表只存班级 id、没有名字列 → 名字由后端按 id 反查补齐（见 repo.classJh）。
+      -->
+      <el-table-column label="复学班级" min-width="110">
         <template #default="{ row }">{{ row.newClassName || '—' }}</template>
       </el-table-column>
       <el-table-column label="状态" width="105" align="center">
@@ -352,7 +357,7 @@
           <el-descriptions-item label="班级">{{ detail.record.className || '—' }}</el-descriptions-item>
           <el-descriptions-item label="异动日期">{{ detail.record.leaveDate || '—' }}</el-descriptions-item>
           <el-descriptions-item label="预计复学">{{ detail.record.expectResumeDate || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="复学班">{{ detail.record.newClassName || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="复学班级">{{ detail.record.newClassName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="已上课时">
             {{ detail.record.attendedHours ?? '—' }}
           </el-descriptions-item>

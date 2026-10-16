@@ -22,6 +22,7 @@ import {
   toUnifiedLeaveStatus,
 } from '../shared/conf';
 import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
+import { classNamesByIds } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
 import { buildApplyNo } from '../shared/conf';
@@ -37,9 +38,20 @@ const WT = 'sms_job.t_job_student_leave';
 /** ★ 班级库（大学部）学生表 —— 跨库全限定名（与实训原实现同款做法） */
 const CLASS_DB_STUDENT = 'sms_class.t_class_student';
 
-async function decorate(row: Record<string, any>): Promise<LeaveRow> {
+/**
+ * 行装饰（`classNames` = 复学班 id → 班级名，由调用方批量预取）
+ *
+ * ★ 复学班名：本表**有** `new_class_name` 快照列，优先用快照；
+ *   快照为空（老单 / 建单时没查到班级名）时**按 id 反查兜底** ——
+ *   与初高（只有 id、没有名字列）保持同一口径，列表不会一处有名一处是「—」。
+ */
+async function decorate(
+  row: Record<string, any>,
+  classNames: Record<string, string> = {},
+): Promise<LeaveRow> {
   const biz = (await toUnifiedLeaveBiz(STAGE, row.biz_type)) ?? 0;
   const st = (await toUnifiedLeaveStatus(STAGE, row.approval_status)) ?? 0;
+  const newClassId = row.new_class_id ? String(row.new_class_id) : null;
 
   return {
     stage: STAGE,
@@ -60,8 +72,8 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
     headTeacherName: row.head_teacher_name || null,
     leaveDate: fmtDate(row.leave_date) || null,
     expectResumeDate: null, // 实训表无此列
-    newClassId: row.new_class_id ? String(row.new_class_id) : null,
-    newClassName: row.new_class_name || null,
+    newClassId,
+    newClassName: row.new_class_name || (newClassId ? classNames[newClassId] || null : null),
     leaveReason: String(row.leave_reason || ''),
     attendedHours: row.attended_hours != null ? Number(row.attended_hours) : null,
     relatedRefundNo: row.related_refund_no || null,
@@ -151,7 +163,12 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
     .orderBy('create_time', 'desc')
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
-  return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
+  // ★ 复学班名按页批量预取（快照为空时用它兜底）
+  const names = await classNamesByIds(
+    STAGE,
+    rows.map((r) => r.new_class_id),
+  );
+  return { rows: await Promise.all(rows.map((r) => decorate(r, names))), total: Number(total) };
 }
 
 /**
@@ -177,7 +194,9 @@ export async function detail(id: string): Promise<LeaveRow | null> {
   const row = (await tbl(db, SRC, T, STAGE).where({ id, is_deleted: 0 }).first()) as
     | Record<string, any>
     | undefined;
-  return row ? decorate(row) : null;
+  if (!row) return null;
+  // ★ 复学班名快照为空时按 id 反查兜底
+  return decorate(row, await classNamesByIds(STAGE, [row.new_class_id]));
 }
 
 /** 汇总 */

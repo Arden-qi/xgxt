@@ -27,6 +27,7 @@ import {
   toUnifiedLeaveStatus,
 } from '../shared/conf';
 import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
+import { classNamesByIds } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
 import { buildApplyNo } from '../shared/conf';
@@ -44,9 +45,21 @@ const WS = 'sms_class_jh.t_class_student';
 /** ★ 本域只关心这三类流程（其余 4 类是初高独有，不属于本次合并范围） */
 const IN_SCOPE = [1, 2, 5];
 
-async function decorate(row: Record<string, any>): Promise<LeaveRow> {
+/**
+ * 行装饰（`classNames` = 复学班 id → 班级名，由调用方批量预取）
+ *
+ * ★★ 复学班名（2026-10-16 修）：初高老表 **只有 `resume_class_id`、没有名字列**
+ *   → 原来 `newClassName` 硬写成 `null`，列表「复学班级」列永远是「—」，
+ *     用户以为「我选了复学班但没存上」。其实 id 存得好好的，缺的是把 id 翻成名字。
+ *   → 这里按 id 反查（不过滤 is_deleted，历史单里已软删的班也要显示名字）。
+ */
+async function decorate(
+  row: Record<string, any>,
+  classNames: Record<string, string> = {},
+): Promise<LeaveRow> {
   const biz = (await toUnifiedLeaveBiz(STAGE, row.flow_type)) ?? 0;
   const st = (await toUnifiedLeaveStatus(STAGE, row.flow_status)) ?? 0;
+  const resumeClassId = row.resume_class_id ? String(row.resume_class_id) : null;
 
   return {
     stage: STAGE,
@@ -67,8 +80,8 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
     headTeacherName: null,
     leaveDate: fmtDate(row.suspend_start_date) || null,
     expectResumeDate: fmtDate(row.expect_resume_date) || null,
-    newClassId: row.resume_class_id ? String(row.resume_class_id) : null,
-    newClassName: null,
+    newClassId: resumeClassId,
+    newClassName: resumeClassId ? classNames[resumeClassId] || null : null,
     leaveReason: String(row.suspend_reason || row.apply_reason || ''),
     attendedHours: row.attended_hours != null ? Number(row.attended_hours) : null,
     relatedRefundNo: null,
@@ -161,7 +174,12 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
     .orderBy('create_time', 'desc')
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
-  return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
+  // ★ 复学班名按页批量预取（一次 whereIn，不是每行查一次）
+  const names = await classNamesByIds(
+    STAGE,
+    rows.map((r) => r.resume_class_id),
+  );
+  return { rows: await Promise.all(rows.map((r) => decorate(r, names))), total: Number(total) };
 }
 
 /**
@@ -187,7 +205,9 @@ export async function detail(id: string): Promise<LeaveRow | null> {
   const row = (await tbl(db, SRC, T, STAGE).where({ id, is_deleted: 0 }).whereIn('flow_type', IN_SCOPE).first()) as
     | Record<string, any>
     | undefined;
-  return row ? decorate(row) : null;
+  if (!row) return null;
+  // ★ 复学班名同样要反查（详情页也要显示）
+  return decorate(row, await classNamesByIds(STAGE, [row.resume_class_id]));
 }
 
 /** 汇总 */
