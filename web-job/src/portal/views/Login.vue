@@ -97,7 +97,8 @@ async function doLogin() {
       return;
     }
 
-    // 带 redirect 就回原页（但要过一遍守卫），否则落地到自己的第一个模块
+    // 带 redirect 就回原页（但要过一遍守卫），否则落到系统首页工作台
+    // ★ 2026-10-16：工作台 = 首页，服务端 landingPathOf 对所有角色统一返回 '/'
     const redirect = route.query.redirect as string | undefined;
     router.replace(redirect || res.landingPath || auth.landingHash);
   } catch (err: any) {
