@@ -3,7 +3,7 @@
     <!-- ★ 把"走哪几步"显式告诉用户（合并后审批链变了，不能让人猜） -->
     <el-alert class="trf-chain" type="info" :closable="false" show-icon>
       <template #title>
-        本模块审批链（三学段统一）：
+        本模块审批链（三部门统一）：
         <b>班主任 / 项目经理发起 → 学管审批 → 校长审批 → 通过后通知财务出款</b>
       </template>
     </el-alert>
@@ -11,7 +11,7 @@
     <!-- 汇总卡片 -->
     <div class="trf-cards">
       <div v-for="s in summaries" :key="s.stage" class="trf-card">
-        <div class="trf-card__head">{{ s.stageName }}</div>
+        <div class="trf-card__head">{{ deptNameOf(s.stage, s.stageName) }}</div>
         <div class="trf-card__row">
           <span>共 <b>{{ s.total }}</b> 单</span>
           <span class="warn">审批中 <b>{{ s.pendingCount }}</b></span>
@@ -20,32 +20,69 @@
         </div>
         <div class="trf-card__amt">已通过金额：¥{{ fmtCent(s.approvedAmount) }}</div>
       </div>
-      <el-empty v-if="!summaries.length" description="当前账号没有可访问的学段" :image-size="60" />
+      <el-empty v-if="!summaries.length" description="当前账号没有可访问的部门" :image-size="60" />
     </div>
 
-    <!-- 筛选栏 -->
+    <!--
+      筛选栏 ★ 2026-10-16 完善（与 TeachingLeave 同一纪律）：
+        · 「学段」改叫「部门」（选项 = /summary 派生的可见部门，名字走 deptNameOf）；
+        · 新增「班级」「申请日期」两个筛选（后端 list 早支持 classId / startDate / endDate，页面原来没暴露）；
+        · 所有筛选项「选完即查」（@change → load(1)），关键字回车/清空即查，
+          不用再点「查询」；「查询」按钮保留，用于主动刷一遍。
+    -->
     <el-form class="trf-filter" inline>
-      <el-form-item label="学段">
-        <el-select v-model="query.stage" clearable placeholder="全部学段" style="width: 130px">
-          <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
+      <el-form-item label="部门">
+        <el-select
+          v-model="query.stage"
+          clearable
+          placeholder="全部部门"
+          style="width: 130px"
+          @change="onFilterStageChange"
+        >
+          <el-option v-for="d in deptFilterOptions" :key="d.value" :label="d.name" :value="d.value" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="班级">
+        <el-select
+          v-model="query.classId"
+          clearable
+          filterable
+          placeholder="全部班级"
+          style="width: 160px"
+          @change="load(1)"
+        >
+          <el-option v-for="c in classFilterOptions" :key="c.id" :label="c.name" :value="c.id" />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
-        <el-select v-model="query.status" clearable placeholder="全部" style="width: 140px">
+        <el-select v-model="query.status" clearable placeholder="全部" style="width: 130px" @change="load(1)">
           <el-option v-for="(n, v) in REFUND_STATUS_NAME" :key="v" :label="n" :value="Number(v)" />
         </el-select>
+      </el-form-item>
+      <el-form-item label="申请日期">
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          style="width: 240px"
+          @change="onDateRangeChange"
+        />
       </el-form-item>
       <el-form-item label="关键字">
         <el-input
           v-model="query.keyword"
           placeholder="学生姓名 / 学号"
           clearable
-          style="width: 180px"
+          style="width: 170px"
           @keyup.enter="load(1)"
+          @clear="load(1)"
         />
       </el-form-item>
       <el-form-item>
-        <el-checkbox v-model="query.onlyMine">只看待我审批</el-checkbox>
+        <el-checkbox v-model="query.onlyMine" @change="load(1)">只看待我审批</el-checkbox>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" @click="load(1)">查询</el-button>
@@ -56,8 +93,13 @@
 
     <!-- 列表 -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
-      <el-table-column v-if="!query.stage" label="学段" width="70" align="center">
-        <template #default="{ row }">{{ row.stageName }}</template>
+      <!--
+        ★ 部门列**始终显示**（2026-10-16 用户要求，与 TeachingLeave 同款）：
+          原来 `v-if="!query.stage"` —— 用部门筛选之后这列就消失了，
+          用户以为「筛完数据没归属」。现在不管筛没筛、筛到哪个部门，这一列都在。
+      -->
+      <el-table-column label="部门" width="80" align="center">
+        <template #default="{ row }">{{ deptNameOf(row.stage, row.stageName) }}</template>
       </el-table-column>
       <el-table-column label="学生" min-width="130">
         <template #default="{ row }">
@@ -137,9 +179,9 @@
     <!-- 新建对话框 -->
     <el-dialog v-model="createVisible" title="发起退费申请" width="640px">
       <el-form label-width="90px">
-        <el-form-item label="学段" required>
+        <el-form-item label="部门" required>
           <el-select v-model="form.stage" style="width: 160px" @change="onStageChange">
-            <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
+            <el-option v-for="d in deptFilterOptions" :key="d.value" :label="d.name" :value="d.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="学生" required>
@@ -205,7 +247,7 @@
     <el-dialog v-model="detailVisible" title="退费单详情" width="680px">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="学段">{{ detail.record.stageName }}</el-descriptions-item>
+          <el-descriptions-item label="部门">{{ deptNameOf(detail.record.stage, detail.record.stageName) }}</el-descriptions-item>
           <el-descriptions-item label="学生">
             {{ detail.record.studentName }}（{{ detail.record.studentNo }}）
           </el-descriptions-item>
@@ -263,28 +305,37 @@
 /**
  * 退费管理 · 统一页（第 2 期第 4 个域）
  *
- * ★ 一个页面取代原来三套（初高 / 大学 / 实训），靠顶部「学段」筛选切换。
+ * ★ 一个页面取代原来三套（初高 / 大学 / 实训），靠顶部「部门」筛选切换。
  * ★ 审批链统一采用实训那套（学管 → 校长），与后端 `service.ts` 口径一致。
  * ★ 金额：接口一律传「分」，页面用「元」输入/展示。
+ * ★ 2026-10-16：全页面统一叫「部门」，不再出现「学段」（内部技术词）——
+ *   汇总卡片 / 部门筛选 / 列表「部门」列 / 详情全走 deptNameOf() 翻成部门名
+ *   （初高中 / 大学 / 实训），与 TeachingLeave.vue 同一份口径（REFUND_DEPARTMENTS）。
+ *   ⚠️ 列表「部门」列始终显示（原来 v-if="!query.stage"，筛完这列就消失）。
+ * ★ 筛选/搜索：部门 / 班级 / 状态 / 申请日期区间 / 关键字 / 只看待我审批，
+ *   全部「选完即查」（@change → load(1)，与 TeachingLeave 同一纪律）。
+ *   班级与日期区间走的是后端 list 本来就支持的 classId / startDate / endDate。
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   FEE_TYPE_OPTIONS,
+  REFUND_DEPARTMENTS,
   REFUND_STATUS,
   REFUND_STATUS_NAME,
-  STAGE_NAME,
   approveRefund,
   cancelRefund,
   createRefund,
   financeConfirm,
   getRefundDetail,
   getRefundSummary,
+  listClasses,
   listRefunds,
   listStudentOptions,
   rejectRefund,
   submitRefund,
+  type RefundDepartment,
   type RefundDetail,
   type RefundRow,
   type RefundSummary,
@@ -297,14 +348,21 @@ const saving = ref(false);
 const rows = ref<RefundRow[]>([]);
 const total = ref(0);
 const summaries = ref<RefundSummary[]>([]);
-const stageOptions = ref<Array<{ value: TeachingStage; label: string }>>([]);
+/** 部门口径（与 api/leave.ts / 后端 LEAVE_DEPARTMENTS 同源；退费无「就业」业务，只有 3 个） */
+const departments = ref<RefundDepartment[]>([...REFUND_DEPARTMENTS]);
+/** 班级下拉候选（/classes 按可见学段下发；选了部门就只列该部门的班） */
+const allClasses = ref<Array<{ stage: TeachingStage; stageName: string; id: string; name: string }>>([]);
+/** 申请日期区间（[开始, 结束]，与 query.startDate / query.endDate 同步） */
+const dateRange = ref<[string, string] | null>(null);
 
 const query = reactive({
-
   stage: undefined as TeachingStage | undefined,
+  classId: undefined as string | undefined,
   status: undefined as number | undefined,
   keyword: '',
   onlyMine: false,
+  startDate: undefined as string | undefined,
+  endDate: undefined as string | undefined,
   page: 1,
   size: 20,
 });
@@ -314,6 +372,32 @@ useBreadcrumbStageKey(() => query.stage || '');
 
 /** 财务登记出款按钮：仅财务 / 管理员看到（后端有二次校验） */
 const canFinanceConfirm = ref(false);
+
+/**
+ * ★ 学段码 → 部门名（界面上不再出现「学段」；与 TeachingLeave.deptNameOf 同一份口径）
+ *   取不到时回落到后端给的 stageName，不凭空编名字。
+ */
+function deptNameOf(stage?: TeachingStage | string | null, fallback = '') {
+  if (!stage) return fallback;
+  return departments.value.find((d) => d.stage === stage)?.name || fallback;
+}
+
+/**
+ * ★ 部门下拉（筛选 + 发起表单共用）：由 `/summary` 派生 —— 只含**当前账号有权限**的部门。
+ *   不能用全量部门表：选了无权限的部门，后端 list 直接 40302 报错（原来根本选不到）。
+ *   某部门暂时没有单据也仍然可选（summary 里会出现，total=0）。
+ */
+const deptFilterOptions = computed(() =>
+  summaries.value.map((s) => ({
+    value: s.stage as TeachingStage,
+    name: deptNameOf(s.stage, s.stageName),
+  })),
+);
+
+/** 班级筛选项：选了部门只列该部门的班，没选部门列全部 */
+const classFilterOptions = computed(() =>
+  query.stage ? allClasses.value.filter((c) => c.stage === query.stage) : allClasses.value,
+);
 
 /* ---------------- 加载 ---------------- */
 
@@ -334,9 +418,12 @@ async function load(p = query.page) {
   try {
     const res = await listRefunds({
       stage: query.stage,
+      classId: query.classId,
       status: query.status,
       keyword: query.keyword || undefined,
       onlyMine: query.onlyMine || undefined,
+      startDate: query.startDate,
+      endDate: query.endDate,
       page: query.page,
       size: query.size,
     });
@@ -353,22 +440,49 @@ async function loadSummary() {
   try {
     const list = await getRefundSummary();
     summaries.value = list || [];
-    stageOptions.value = (list || []).map((s) => ({ value: s.stage, label: s.stageName }));
   } catch {
     /* 汇总失败不影响主流程 */
   }
 }
 
+async function loadClasses() {
+  try {
+    allClasses.value = (await listClasses()) || [];
+  } catch {
+    /* 班级下拉失败不阻塞列表 */
+  }
+}
+
+/** 切部门：班级是部门内的，清掉不匹配的已选班级，避免带着上一个部门的筛选去查 */
+function onFilterStageChange() {
+  if (query.classId && !classFilterOptions.value.some((c) => c.id === query.classId)) {
+    query.classId = undefined;
+  }
+  load(1);
+}
+
+/** 申请日期区间 → startDate / endDate（清空 = 不限） */
+function onDateRangeChange(v: unknown) {
+  const r = Array.isArray(v) && v.length === 2 ? ([v[0], v[1]] as [string, string]) : null;
+  query.startDate = r?.[0] || undefined;
+  query.endDate = r?.[1] || undefined;
+  load(1);
+}
+
 function reset() {
   query.stage = undefined;
+  query.classId = undefined;
   query.status = undefined;
   query.keyword = '';
   query.onlyMine = false;
+  query.startDate = undefined;
+  query.endDate = undefined;
+  dateRange.value = null;
   load(1);
 }
 
 onMounted(async () => {
-  await loadSummary();
+  await Promise.all([loadSummary(), loadClasses()]);
   await load(1);
 });
 
@@ -397,7 +511,7 @@ const formTotalText = computed(() =>
 );
 
 function openCreate() {
-  form.stage = (query.stage || stageOptions.value[0]?.value || 'job') as TeachingStage;
+  form.stage = (query.stage || deptFilterOptions.value[0]?.value || 'job') as TeachingStage;
   form.studentId = '';
   form.items = [{ feeType: 1, yuan: 0 }];
   form.applyDate = '';
