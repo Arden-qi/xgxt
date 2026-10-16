@@ -17,6 +17,8 @@
  *      → 本自检钉住「employ 不是合法 stage 参数」；
  *   ③ 三个可用部门的学段映射被改错（比如 初高中 指到 class）→ 学生搜不到 /
  *      单子落到别的库 → 本自检用真实数据清点各学段的候选学生数来钉住。
+ *      ⚠️ 交叉核对必须用**同一口径**：候选数 = 该库「非终态」在册人数
+ *      （退学 7 / 流失 11 / 已就业 10 自 2026-10-16 起不下发，详见 service.ts）。
  *
  * 【跑法】在 server-job 目录下（前后端已在 8004/5173 运行）：
  *     node scripts/_test-leave-department-options.mjs
@@ -79,25 +81,37 @@ const EXPECT = [
       class: ['sms_class', 't_class_student'],
       job: ['sms_job', 't_student_base'],
     };
+    /**
+     * ★ 终态学生（退学 7 / 流失 11 / 已就业 10）不下发到候选名单里
+     *   （2026-10-16 起，见 service.ts 的 TERMINAL_STUDENT_STATUSES）。
+     *   所以交叉核对时**必须用同一口径**，否则等式永远不成立：
+     *   库里全量 32 人 vs 接口 28 人 —— 看起来像「映射指错库」，其实是口径不同。
+     *   ⚠️ 老数据里 student_status 可能为 NULL，单写 NOT IN 会连 NULL 行一起滤掉，
+     *      和仓储一样要补 `OR IS NULL`。
+     */
+    const TERMINAL = [7, 10, 11];
     const LIMIT = 200;
     for (const e of EXPECT.filter((x) => x.stage)) {
       const stage = e.stage;
       const [dbName, table] = STU_TABLE[stage];
       const db = dbName === 'sms_class_jh' ? dbJh : conn(dbName);
       const dbCount = Number(
-        (await db(table).where('is_deleted', 0).count({ c: '*' }).first())?.c || 0,
+        (await db(table)
+          .where('is_deleted', 0)
+          .andWhere((b) => b.whereNotIn('student_status', TERMINAL).orWhereNull('student_status'))
+          .count({ c: '*' })
+          .first())?.c || 0,
       );
       if (dbName !== 'sms_class_jh') await db.destroy();
 
       const r = await req(`${API}/student-options?stage=${stage}&limit=${LIMIT}`, { token });
       const n = (r.json?.data || []).length;
-      // ★ 不写死「必须有人」：演示库的大学/实训学生表本来就是空的。
-      //   要钉的是「接口返回的人数 = 该部门库里在册的人数（受 limit 截断）」——
-      //   映射指错库时这个等式立刻不成立（比如指到空的库 → 0 vs 32）。
+      // ★ 不写死「必须有人」，但要求「接口返回人数 = 该库**非终态**在册人数（受 limit 截断）」——
+      //   映射指错库时这个等式立刻不成立（比如指到空的库 → 0 vs 28）。
       check(
-        `★ 部门「${e.name}」（stage=${stage}）候选人数 = 该部门库在册人数`,
+        `★ 部门「${e.name}」（stage=${stage}）候选人数 = 该部门库**非终态**在册人数`,
         r.json?.code === 200 && n === Math.min(dbCount, LIMIT),
-        `接口 ${n} 人 / ${dbName}.${table} 在册 ${dbCount} 人`,
+        `接口 ${n} 人 / ${dbName}.${table} 非终态在册 ${dbCount} 人`,
       );
     }
     const jhTotal = Number(
