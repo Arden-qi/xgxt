@@ -99,6 +99,8 @@ teachingLeaveRouter.get(
  * 3. 学生下拉  GET /api/teaching/leave/student-options?stage=&bizType=
  *    ★ bizType=3（复学）时后端只返回**当前处于休学**的学生 ——
  *      复学是「把休学的人接回来」，下拉里就不该出现在读/退学的人。
+ *    ★ 终态学生（退学 7 / 流失 11 / 已就业 10）**任何 bizType 都不返回** ——
+ *      已经终结的学生不能再办学籍异动（先退学再休学 = 自相矛盾的单据）。
  * ============================================================ */
 
 teachingLeaveRouter.get(
@@ -169,6 +171,7 @@ teachingLeaveRouter.get(
 
 /* ============================================================
  * 7. 新建  POST /api/teaching/leave/create
+ *    ★ bizType=3（复学）时 `newClassId`（复学班）必填 —— 见 service.create 的校验
  * ============================================================ */
 
 teachingLeaveRouter.post(

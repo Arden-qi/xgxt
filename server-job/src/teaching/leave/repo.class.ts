@@ -90,14 +90,22 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
  *      在大学这条链上暂时用不到；仍然实现，是为了让三个仓储**签名一致**
  *      （service 按 stage 一致分派，缺参数会编译不过）。哪天大学开出复学，
  *      这里已经是对的。
+ * ★ `opts.excludeStatuses` = 剔除这些状态的学生（service 传「终态」：
+ *   退学 7 / 流失 11 / 已就业 10 —— 已经终结、不能再办任何学籍异动）。
+ *   ⚠️ `NOT IN (...) OR IS NULL`：老数据里 `student_status` 可能为 NULL，
+ *      单写 `NOT IN` 会把这类行一起滤掉（NULL NOT IN => NULL => 不成立）。
  */
 export async function studentOptions(
   keyword: string,
   limit: number,
-  opts: { onlySuspended?: boolean } = {},
+  opts: { onlySuspended?: boolean; excludeStatuses?: number[] } = {},
 ): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_class', S, STAGE).where('is_deleted', 0);
   if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
+  if (opts.excludeStatuses?.length) {
+    const ex = opts.excludeStatuses;
+    q.andWhere((b) => b.whereNotIn('student_status', ex).orWhereNull('student_status'));
+  }
   if (keyword) {
     q.andWhere((b) => {
       b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);

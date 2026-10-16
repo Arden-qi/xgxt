@@ -8,11 +8,12 @@
  *   ③ 审批引擎 = `utils/approval.ts`（submitApproval / doApprove / doReject / doCancel）
  *
  * 【本域特有的一件事：复学班】
- *   复学**必须在终审通过那一刻确定落到哪个班**，而且这个决定是**学管审批时选的**。
- *   所以 `approve` 多收一个 `newClassId`：
- *     · 只有「复学」类型 + 审批走完时必填（没给就报错，不会悄悄通过）
+ *   复学**必须在终审通过那一刻确定落到哪个班**，并把这个班写进学生主档。
+ *   这个班由**发起人填写**（2026-10-16 起：`create` 时 `newClassId` 必填），
+ *   学管终审时仍可改；写库发生在终审通过那一刻：
  *     · 顺序上是**先 doApprove（权限校验）→ 再写复学班**，越权的人碰不到数据
  *     · 写完之后**重新读一次单**再执行副作用（否则 afterApproved 读不到复学班）
+ *     · 老单（建单时没有复学班）在终审仍必须补选，两者都没有就报错、不悄悄通过
  */
 
 import {
@@ -74,6 +75,22 @@ function bizToApproval(bizType: number): string {
   return ApprovalBizType.QUIT;
 }
 
+/**
+ * ★ 终态学生状态：**不再办理任何学籍异动**
+ *
+ * 退学 / 流失 / 已就业这三种状态一旦落到学生身上，这个人就不再是「在读学员」，
+ * 后面的休学/退学/复学都不该再对他开放 —— 否则会出现「先退学、再休学」这种
+ * 自相矛盾的单据，且审批通过时会把已经终结的状态又改回去（把数据改坏）。
+ *
+ * 【口径】`退学(7)` + `流失(11)` + `已就业(10)`（用户 2026-10-16 确认）。
+ *   两个口子都要堵：① 学生下拉候选名单剔除；② `create()` 再拦一次（下拉可被绕过）。
+ */
+const TERMINAL_STUDENT_STATUSES: number[] = [
+  StudentStatus.QUIT,
+  StudentStatus.LOST,
+  StudentStatus.EMPLOYED,
+];
+
 /* ============================================================
  * 仓储统一接口
  * ============================================================ */
@@ -84,7 +101,8 @@ type Repo = {
   studentOptions: (
     keyword: string,
     limit: number,
-    opts?: { onlySuspended?: boolean },
+    /** `onlySuspended` = 只放休学中的；`excludeStatuses` = 剔除这些状态的行 */
+    opts?: { onlySuspended?: boolean; excludeStatuses?: number[] },
   ) => Promise<StudentOption[]>;
   findStudent: (id: string) => Promise<{
     no: string;
@@ -369,8 +387,13 @@ const ACTION_NAME: Record<number, string> = { 1: '提交', 2: '同意', 3: '驳�
  *   而错误直到审批通过（改学生状态那一刻）才暴露，已经晚了。
  *   → 在下拉这一层就把名单收窄到 `student_status = 休学(6)`。
  *
+ * ★★ 终态学生（退学 7 / 流失 11 / 已就业 10）**任何类型都不出现**：
+ *   退回学之后又出现在「休学/退学」的候选里，用户就能给他再开一张单，
+ *   审批通过时会把已经终结的学生状态改写掉（见 TERMINAL_STUDENT_STATUSES）。
+ *   → 与类型无关，一律剔除；`onlySuspended` 与它叠加（复学时两者同时成立）。
+ *
  * ⚠️ 只收窄下拉是**不够的**：下拉是可以绕过的（直接调接口）。
- *   所以 `create()` 里还有一道同样的校验，两处口径必须一致。
+ *   所以 `create()` 里还有一道同样的校验，两处口径必须一致（同一个常量）。
  */
 export async function studentOptions(
   stage: TeachingStage,
@@ -381,7 +404,10 @@ export async function studentOptions(
 ): Promise<StudentOption[]> {
   await assertStageView(user, stage);
   const onlySuspended = bizType === LEAVE_BIZ_TYPE.RESUME;
-  return REPOS[stage].studentOptions(keyword, limit, { onlySuspended });
+  return REPOS[stage].studentOptions(keyword, limit, {
+    onlySuspended,
+    excludeStatuses: TERMINAL_STUDENT_STATUSES,
+  });
 }
 
 export async function classOptions(user: any) {
@@ -419,6 +445,22 @@ export async function create(body: LeaveSaveBody, user: any): Promise<{ id: stri
   if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
   /**
+   * ★ 终态学生（退学 7 / 流失 11 / 已就业 10）不能发起任何学籍异动
+   *
+   * 下拉里已经剔除了，但**下拉可以被绕过**（直接 POST /create）→ 这里必须再拦一次。
+   * 不拦的后果不是「多一张单子」那么轻：审批通过时 `afterApproved` 会把
+   * `student_status` 从「退学」改写成「休学」/「实训中」，把已经终结的学生
+   * 又改回在册状态，出勤/统计/宿舍全线跟着错。
+   */
+  if (stu.studentStatus != null && TERMINAL_STUDENT_STATUSES.includes(stu.studentStatus)) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `${stu.name} 当前是「${STUDENT_STATUS_NAME[stu.studentStatus] || '未知'}」，` +
+        `已不能再发起学籍异动申请（退学 / 流失 / 已就业均为终态）`,
+    );
+  }
+
+  /**
    * ★ 复学：只有「当前处于休学」的学生办得通
    *
    * 下拉里已经过滤了，但**下拉可以被绕过**（直接 POST /create），
@@ -431,6 +473,18 @@ export async function create(body: LeaveSaveBody, user: any): Promise<{ id: stri
       BizCode.PARAM_ERROR,
       `只有「休学」中的学生才能办复学：${stu.name} 当前是「${STUDENT_STATUS_NAME[cur] || '未知'}」`,
     );
+  }
+
+  /**
+   * ★ 复学必须填写「复学班级」（2026-10-16：由「审批时选」改为「发起申请时填」）
+   *
+   * 复学 = 回到某个班上课，这个班本来就必须有人定；原来放在学管终审时选，
+   * 结果是**发起人提交时不用想清楚、学管审批时才被迫猜**。
+   * 现在改成发起申请时必填，学管审批时仍可改（见 approve()）。
+   * ⚠️ 同样不能只靠前端：表单可以被绕过 → 服务端必须拦。
+   */
+  if (body.bizType === LEAVE_BIZ_TYPE.RESUME && !body.newClassId) {
+    throw new BizError(BizCode.PARAM_ERROR, '复学必须填写复学班级');
   }
 
   /**
@@ -609,13 +663,17 @@ export async function approve(
     finished = r.finished;
     nextStatus = Number(r.status);
 
-    // ② ★ 复学：**批到"通过"那一刻**才落复学班，且必须选
+    // ② ★ 复学：批到"通过"那一刻**才落复学班**
+    //   班级优先取**本次审批传的**（学管可在审批时改），没传就用
+    //   **发起申请时填的**（`row.newClassId`，2026-10-16 起建单必填）；
+    //   两者都没有（老单）才报错 —— 不悄悄通过。
     if (row.bizType === LEAVE_BIZ_TYPE.RESUME && finished) {
-      if (!body.newClassId) {
+      const newClassId = body.newClassId || row.newClassId || '';
+      if (!newClassId) {
         throw new BizError(BizCode.PARAM_ERROR, '复学审批必须选定复学班级');
       }
-      const clsName = await classNameOf(stage, body.newClassId);
-      await REPOS[stage].setResumeClass(trx, id, body.newClassId, clsName);
+      const clsName = await classNameOf(stage, newClassId);
+      await REPOS[stage].setResumeClass(trx, id, newClassId, clsName);
     }
 
     await REPOS[stage].setStatus(trx, id, nextStatus);

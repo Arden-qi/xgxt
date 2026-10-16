@@ -230,6 +230,29 @@
           >
             当前没有「休学中」的学生：休学单还没批准、或休学后又已办过复学的学生，都不算休学中
           </div>
+          <!--
+            ★ 终态学生说明（2026-10-16）：退学 / 流失 / 已就业的学生**任何类型都不再出现**在名单里。
+            没有这句，用户会以为「退学了的学生怎么搜不到」（其实这是有意为之）。
+          -->
+          <div v-if="form.stage" class="muted muted--block">
+            已退学 / 流失 / 已就业的学生不在此名单（终态，不能再发起学籍异动）
+          </div>
+        </el-form-item>
+        <!--
+          ★ 复学班级（2026-10-16 新增）：复学**发起申请时就必须填**，学管审批时仍可改。
+          没有这个字段时，班级只能等学管终审时猜 —— 发起人不填、审批人被迫决策。
+        -->
+        <el-form-item v-if="form.bizType === 3" label="复学班级" required>
+          <el-select
+            v-model="form.newClassId"
+            filterable
+            :disabled="!form.stage"
+            placeholder="请选择复学后进入的班级"
+            style="width: 100%"
+          >
+            <el-option v-for="c in classOptsForCreate" :key="c.id" :label="c.name" :value="c.id" />
+          </el-select>
+          <div class="muted muted--block">复学必须选定班级；学管审批通过时仍可调整</div>
         </el-form-item>
         <el-form-item :label="form.bizType === 3 ? '复学日期' : '异动日期'">
           <el-date-picker
@@ -261,7 +284,7 @@
           type="info"
           :closable="false"
           show-icon
-          title="复学班级在【学管审批通过时】选定（与实训口径一致）"
+          title="复学班级在发起申请时填写（必填）；学管审批通过时仍可调整，终审通过才写入学生主档"
         />
       </el-form>
       <template #footer>
@@ -290,14 +313,9 @@
         </el-form-item>
         <el-form-item v-if="current?.bizType === 3" label="复学班级" required>
           <el-select v-model="approveForm.newClassId" filterable placeholder="请选择复学后进入的班级" style="width: 100%">
-            <el-option
-              v-for="c in classOptsOfStage"
-              :key="c.id"
-              :label="`${c.name} · ${c.stageName || ''}`"
-              :value="c.id"
-            />
+            <el-option v-for="c in classOptsOfStage" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
-          <div class="muted">复学必须选定班级，未选不允许通过</div>
+          <div class="muted">默认取发起申请时填的班级，可在此调整；未选不允许通过</div>
         </el-form-item>
         <el-form-item label="审批意见">
           <el-input v-model="approveForm.comment" type="textarea" :rows="3" maxlength="500" />
@@ -370,9 +388,12 @@
  *
  * ★ 一个页面取代原来三套（初高「通用流程引擎」/ 大学「休学退学」/ 实训「学籍异动」）
  * ★ 审批链统一采用实训那套（休学/复学 1 步；退学 2 步）—— 与后端 service.ts 口径一致
- * ★ 复学：审批通过时必须选「复学班」（对话框里有班级下拉，未选不允许通过）
+ * ★ 复学班级：**发起申请时必填**（表单里的「复学班级」下拉），
+ *   学管审批对话框默认带出该班级、仍可调整，**终审通过才写入学生主档**。
  * ★ 复学：**发起时的学生下拉只列「当前处于休学的学生」**（后端按 bizType=3 过滤），
  *   切换类型会清空已选并重搜；后端 create 另有一道同样的校验（下拉可被绕过）
+ * ★ 终态学生（退学 7 / 流失 11 / 已就业 10）**任何类型都不出现在学生下拉里** ——
+ *   退回学之后不能再给他开休学/退学单（后端 create 同样会拦，见 TERMINAL_STUDENT_STATUSES）
  * ★ 发起申请第一项是「**部门**」（初高中 / 大学 / 实训 / 就业），取代原来的「学段」：
  *   部门 → 学段（jh/class/job）由 `/meta` 的 departments 下发，页面不另抄一份。
  *   「就业」暂无学籍异动业务 → 选中即提示 + 置灰（类型/学生/保存全禁用），
@@ -470,7 +491,18 @@ function allowedBiz(stage: TeachingStage | undefined): number[] {
   return stageBiz.value[stage] || [];
 }
 
-const classOptsOfStage = computed(() => allClasses.value);
+/**
+ * 审批对话框的「复学班级」候选：**只列该单所属学段的班级**
+ * （复学班必须和学生在同一学段，跨学段选班会把学生塞进别的学段的班）
+ */
+const classOptsOfStage = computed(() =>
+  current.value ? allClasses.value.filter((c) => c.stage === current.value!.stage) : [],
+);
+
+/** 发起申请表单的「复学班级」候选：同上，按当前表单学段过滤 */
+const classOptsForCreate = computed(() =>
+  form.stage ? allClasses.value.filter((c) => c.stage === form.stage) : [],
+);
 
 /* ---------------- 加载 ---------------- */
 
@@ -573,6 +605,8 @@ const form = reactive<{
   stage?: TeachingStage;
   bizType: number;
   studentId: string;
+  /** ★ 复学班级：仅「复学」必填（2026-10-16 起由发起人填，学管审批时可改） */
+  newClassId: string;
   leaveDate: string;
   expectResumeDate: string;
   leaveReason: string;
@@ -581,6 +615,7 @@ const form = reactive<{
   stage: 'jh',
   bizType: 1,
   studentId: '',
+  newClassId: '',
   leaveDate: '',
   expectResumeDate: '',
   leaveReason: '',
@@ -637,6 +672,7 @@ function openCreate() {
   form.stage = stageOfDept(form.dept);
   form.bizType = allowedBiz(form.stage)[0] || 1;
   form.studentId = '';
+  form.newClassId = '';
   form.leaveDate = '';
   form.expectResumeDate = '';
   form.leaveReason = '';
@@ -654,11 +690,13 @@ function onDeptChange() {
   form.stage = stageOfDept(form.dept);
   if (!form.stage) {
     form.studentId = '';
+    form.newClassId = '';
     students.value = [];
     return;
   }
   if (!bizAllowed(form.stage, form.bizType)) form.bizType = allowedBiz(form.stage)[0] || 1;
   form.studentId = '';
+  form.newClassId = ''; // ★ 换学段 = 复学班候选也换了，必须清空（否则提交的是别的学段的班）
   students.value = [];
   searchStudents('');
 }
@@ -670,9 +708,11 @@ function onDeptChange() {
  * 复学只能挑「当前处于休学」的学生（后端按 bizType 过滤）。
  * 不重搜的话，切到复学后列表里还留着刚才搜出来的在读生 →
  * 用户选中 → 后端直接报错，体验上就是「点了没反应/莫名报错」。
+ * ★ 复学班同理：切走复学类型就把已选的班清掉，免得残留在表单里被带进别的单。
  */
 function onBizTypeChange() {
   form.studentId = '';
+  form.newClassId = '';
   students.value = [];
   searchStudents('');
 }
@@ -694,6 +734,8 @@ async function doCreate(submit: boolean) {
     return ElMessage.warning(`「${currentDept.value?.name || '该部门'}」部门暂不办理学籍异动`);
   }
   if (!form.studentId) return ElMessage.warning('请选择学生');
+  // ★ 复学必须选复学班（后端也会拦，这里先给出明确提示，避免白跑一次请求）
+  if (form.bizType === 3 && !form.newClassId) return ElMessage.warning('复学必须选择复学班级');
   if (!form.leaveReason.trim()) return ElMessage.warning('请填写原因');
   saving.value = true;
   try {
@@ -701,6 +743,7 @@ async function doCreate(submit: boolean) {
       stage: form.stage!,
       studentId: form.studentId,
       bizType: form.bizType,
+      newClassId: form.bizType === 3 ? form.newClassId : undefined,
       leaveDate: form.leaveDate || undefined,
       expectResumeDate: form.expectResumeDate || undefined,
       leaveReason: form.leaveReason,
@@ -739,7 +782,9 @@ const approveForm = reactive({ comment: '', newClassId: '' });
 function openApprove(row: LeaveRow) {
   current.value = row;
   approveForm.comment = '';
-  approveForm.newClassId = '';
+  // ★ 复学：默认带出「发起申请时填的复学班」（学管可在对话框里改）；
+  //   老单没有这个值时为空，仍需选一个才允许通过。
+  approveForm.newClassId = row.bizType === 3 ? row.newClassId || '' : '';
   approveVisible.value = true;
 }
 

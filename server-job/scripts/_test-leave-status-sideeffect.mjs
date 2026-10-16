@@ -126,7 +126,16 @@ const STAGE_CONF = {
       let r = await req(`${API}/create`, {
         method: 'POST',
         token,
-        body: { stage, studentId: student.id, bizType, leaveDate: TODAY, leaveReason: `自检RSS-${bizType}`, submit: true },
+        // ★ 2026-10-16 起「复学必须在发起申请时填复学班」→ 建单就要带上 newClassId
+        body: {
+          stage,
+          studentId: student.id,
+          bizType,
+          leaveDate: TODAY,
+          leaveReason: `自检RSS-${bizType}`,
+          submit: true,
+          ...(newClassId ? { newClassId } : {}),
+        },
       });
       if (r.json?.code !== 200) return { ok: false, msg: r.json?.message || '建单失败' };
       const id = r.json?.data?.id;

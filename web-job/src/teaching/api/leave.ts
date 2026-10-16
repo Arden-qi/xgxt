@@ -199,6 +199,8 @@ export function getLeaveDetail(id: string) {
  *
  * ★ 传 `bizType = 3`（复学）时，后端**只返回当前处于休学的学生** ——
  *   复学是「把休学的人接回来」，下拉里就不该出现在读/退学的人。
+ * ★ 无论哪种类型，**终态学生（退学 7 / 流失 11 / 已就业 10）都不会返回** ——
+ *   已经终结的学生不能再办任何学籍异动（先退学再休学是自相矛盾的单据）。
  */
 export function listStudentOptions(stage: TeachingStage, keyword?: string, bizType?: number) {
   return http.get<StudentOption[]>('/api/teaching/leave/student-options', {
@@ -222,6 +224,7 @@ export function getLeaveMeta() {
   return http.get<LeaveMeta>('/api/teaching/leave/meta');
 }
 
+/** ★ 复学：建单时 `newClassId`（复学班）必填；终审仍可改 */
 export function createLeave(body: {
   stage: TeachingStage;
   studentId: string;

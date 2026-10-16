@@ -117,6 +117,17 @@ const reg = (dbName, table, id) => {
       !!(jhSus.id && jhOn.id && jobSus.id && jobOn.id),
     );
 
+    // ★ 2026-10-16 起「复学必须在发起申请时填复学班」→ 正例需要一个真实班级
+    const jhCls = await buildRow(dbJh, 't_class_info', {
+      class_name: '自检RSF-复学班',
+      is_deleted: 0,
+    });
+    await dbJh('t_class_info').insert(jhCls);
+    reg('sms_class_jh', 't_class_info', jhCls.id);
+    await mirrorRow(uniDb, 'sms_class_jh', 't_class_info', jhCls, 'jh', (_d, t, id) =>
+      reg('sms_common', t, id),
+    );
+
     /** 关键字：4 个夹具的学号都带 RSF 前缀，用它把结果收窄到本脚本的数据 */
     const KW = 'RSF';
 
@@ -168,7 +179,7 @@ const reg = (dbName, table, id) => {
       );
       const ids1 = (opts1.json?.data || []).map((o) => o.id);
       check(
-        `[${stage}] bizType=1（休学）不过滤状态：两个夹具都在（证明过滤只作用于复学）`,
+        `[${stage}] bizType=1（休学）不剔在读学生：两个夹具都在（证明「只留休学」只作用于复学）`,
         ids1.includes(jhSus.id) && ids1.includes(jhOn.id),
         `共 ${ids1.length} 行`,
       );
@@ -201,6 +212,7 @@ const reg = (dbName, table, id) => {
           studentId: jhSus.id, // ★ 休学生
           bizType: BIZ.RESUME,
           leaveDate: TODAY,
+          newClassId: jhCls.id, // ★ 复学建单必填复学班（2026-10-16）
           leaveReason: '自检RSF-休学生复学（应放行）',
           submit: false,
         },
