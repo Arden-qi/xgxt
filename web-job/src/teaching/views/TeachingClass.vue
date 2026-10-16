@@ -322,10 +322,52 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <!-- 2026-10-16 按批注：删除「项目经理 / 项目经理姓名 / 就业老师 / 就业老师姓名 / 大学学号」
-               这五个交棒字段（截图红框 + 红字「删除【项目经理】【大学学号】和【就业老师】的字段」）。
-               ⚠️ 表单 state（form.projectManagerId 等）与保存入参**故意保留**：
-                 编辑老班级时仍会把库里已有的值原样回传，不会因为字段下线就被清空。 -->
+          <!-- 2026-10-16 按批注：加回「项目经理姓名 / 就业老师姓名」——不再是工号/ID 输入框，
+               而是和 班主任/教员/助教 同一套规则：下拉取自「权限管理」用户列表，选人自动带 ID。
+               ★ 只有「阶段 = 实训」时才必填（见 isTrainPhase / rules）。
+               ⚠️ 初高部的表没有这几列，所以只对 大学部 / 实训 显示（与「大学学号」下线的口径一致）。 -->
+          <template v-if="form.stage !== 'jh'">
+            <el-col :span="8">
+              <el-form-item label="项目经理姓名" prop="projectManagerName">
+                <el-select
+                  v-model="form.projectManagerId"
+                  clearable
+                  filterable
+                  placeholder="接入权限管理，请选择"
+                  :loading="staffLoading"
+                  style="width: 100%"
+                  @change="onStaffChange('projectManager', $event)"
+                >
+                  <el-option
+                    v-for="u in withFallback(staffOptions, form.projectManagerId, form.projectManagerName)"
+                    :key="u.id"
+                    :label="u.userName"
+                    :value="u.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="就业老师姓名" prop="employmentTeacherName">
+                <el-select
+                  v-model="form.employmentTeacherId"
+                  clearable
+                  filterable
+                  placeholder="接入权限管理，请选择"
+                  :loading="staffLoading"
+                  style="width: 100%"
+                  @change="onStaffChange('employmentTeacher', $event)"
+                >
+                  <el-option
+                    v-for="u in withFallback(staffOptions, form.employmentTeacherId, form.employmentTeacherName)"
+                    :key="u.id"
+                    :label="u.userName"
+                    :value="u.id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </template>
           <el-col :span="8">
             <el-form-item :label="curMeta?.classroomLabel || '教室'">
               <el-input v-model="form.classroom" />
@@ -369,7 +411,7 @@
           type="info"
           :closable="false"
           show-icon
-          title="班主任 / 教员 / 助教 均为可选，姓名来自「权限管理」的用户列表；没有「项目经理 / 就业老师 / 大学学号」这些交棒字段"
+          title="班主任 / 教员 / 助教 均为可选，姓名来自「权限管理」的用户列表；初高部的表没有「项目经理姓名 / 就业老师姓名 / 大学学号」这几列，所以这个学段不显示"
         />
       </el-form>
       <template #footer>
@@ -555,8 +597,26 @@ async function openDetail(row: ClassRow) {
 const editVisible = ref(false);
 const saving = ref(false);
 const formRef = ref<FormInstance>();
-/** 2026-10-15 改版：学段/班级名称/部门/班主任/教员/阶段 全部不再必填 */
-const rules: FormRules = {};
+
+/** 阶段码里的「实训」：班级/学生两边的阶段表都用 13 = 实训 */
+const TRAIN_PHASE_CODE = 13;
+/** 是否处于「实训」阶段 —— 决定「项目经理姓名 / 就业老师姓名」要不要必填 */
+const isTrainPhase = computed(() => Number(form.phaseCode) === TRAIN_PHASE_CODE);
+
+/**
+ * 表单校验规则
+ *   2026-10-15 改版：学段 / 班级名称 / 部门 / 班主任 / 教员 / 阶段 全部不再必填；
+ *   2026-10-16 批注：「项目经理姓名 / 就业老师姓名」**只在阶段 = 实训时**必填。
+ *   规则写成 computed，切换阶段后红星与校验会立刻跟着变。
+ */
+const rules = computed<FormRules>(() => ({
+  projectManagerName: isTrainPhase.value
+    ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
+    : [],
+  employmentTeacherName: isTrainPhase.value
+    ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
+    : [],
+}));
 
 function emptyForm(stage: ClassStage): ClassSaveBody {
   return {
@@ -639,17 +699,17 @@ function withFallback(
   return [{ id, userName: name || id } as PermUserListItem, ...list];
 }
 
+/** 岗位种类：前三个是建班岗位，后两个是交棒岗位（阶段=实训时必填） */
+type StaffKind = 'headTeacher' | 'teacher' | 'assistant' | 'projectManager' | 'employmentTeacher';
+
 /** 选人自动带姓名；清空时姓名一并清掉 */
-function onStaffChange(kind: 'headTeacher' | 'teacher' | 'assistant', id: string) {
-  const u = staffOptions.value.find((x) => x.id === id);
-  const name = u?.userName || '';
-  if (kind === 'headTeacher') {
-    form.headTeacherName = name;
-  } else if (kind === 'teacher') {
-    form.teacherName = name;
-  } else {
-    form.assistantName = name;
-  }
+function onStaffChange(kind: StaffKind, id: string) {
+  const name = staffOptions.value.find((x) => x.id === id)?.userName || '';
+  if (kind === 'headTeacher') form.headTeacherName = name;
+  else if (kind === 'teacher') form.teacherName = name;
+  else if (kind === 'assistant') form.assistantName = name;
+  else if (kind === 'projectManager') form.projectManagerName = name;
+  else form.employmentTeacherName = name;
 }
 
 function openCreate() {
@@ -697,7 +757,12 @@ async function doGenCode() {
 }
 
 async function doSave() {
-  await formRef.value?.validate();
+  // 校验不通过就别往下走：原来直接 await validate() 会把 reject 抛成未捕获异常，
+  // 界面上只有字段下面那行红字，看不到任何提示（加了「实训必填」规则后更容易踩到）
+  if (formRef.value) {
+    const ok = await formRef.value.validate().catch(() => false);
+    if (!ok) return;
+  }
   saving.value = true;
   try {
     await saveClass({ ...form });

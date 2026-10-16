@@ -187,11 +187,16 @@ const check = (name, ok, detail = '') => {
   await sleep(600);
   const cLabels = await ev(DIALOG_LABELS);
   console.log('  labels:', cLabels);
-  for (const f of ['项目经理', '项目经理姓名', '就业老师', '就业老师姓名', '大学学号']) {
-    check(`已删除「${f}」`, !cLabels.includes(f));
+  const labelList = cLabels.split('|').map((s) => s.trim()).filter(Boolean);
+  // 2026-10-16 第二批批注删过「项目经理 / 就业老师」的**工号/ID 输入框」，
+  // 第三批又要求把「项目经理姓名 / 就业老师姓名」按权限用户下拉加回来 —— 两者别混
+  for (const f of ['项目经理', '就业老师', '大学学号']) {
+    check(`工号/ID 字段「${f}」已删除`, !labelList.includes(f));
   }
-  check('仍保留「教室 / 开班日期」', cLabels.includes('教室') && cLabels.includes('开班日期'));
-  check('仍保留「班主任姓名 / 教员姓名 / 助教姓名」', cLabels.includes('班主任姓名') && cLabels.includes('教员姓名') && cLabels.includes('助教姓名'));
+  check('已新增「项目经理姓名」', labelList.includes('项目经理姓名'));
+  check('已新增「就业老师姓名」', labelList.includes('就业老师姓名'));
+  check('仍保留「教室 / 开班日期」', labelList.includes('教室') && labelList.includes('开班日期'));
+  check('仍保留「班主任姓名 / 教员姓名 / 助教姓名」', labelList.includes('班主任姓名') && labelList.includes('教员姓名') && labelList.includes('助教姓名'));
   await shot('verify_form_class_no_handover.png');
 
   /* ============ 部门 → 阶段 联动（2026-10-16 第三批批注）============ */
@@ -220,11 +225,47 @@ const check = (name, ok, detail = '') => {
   const jhPhases = await readPhases('verify_form_class_phase_jh.png');
   console.log('  初高部 阶段:', jhPhases);
   check('部门=初高部 → 阶段 6 项（初中部1期 ~ 高中部3期）', jhPhases === JH_PHASES, jhPhases);
+  const jhLabels = (await ev(DIALOG_LABELS)).split('|').map((s) => s.trim());
+  check('初高部不显示「项目经理姓名 / 就业老师姓名」（表里没这两列）',
+    !jhLabels.includes('项目经理姓名') && !jhLabels.includes('就业老师姓名'), jhLabels.join('|'));
 
   await changeDept('大学部');
   const classPhases = await readPhases('verify_form_class_phase_class.png');
   console.log('  大学部 阶段:', classPhases);
   check('部门=大学部 → 阶段 7 项（实训 + 一~六阶段）', classPhases === CLASS_PHASES, classPhases);
+
+  /* ====== 交棒岗位必填：只有「阶段 = 实训」时（2026-10-16 第四批批注）====== */
+  console.log('=== 交棒岗位：只有阶段=实训才必填 ===');
+  const itemClassOf = (label) => `(() => {
+    const it=[...document.querySelectorAll('.el-dialog .el-form-item')].find(x=>x.querySelector('.el-form-item__label')?.innerText.trim()==='${label}');
+    return it ? it.className : 'not-found'; })()`;
+
+  await changeDept('大学部');
+  await mouseClickAt(dialogSelectEl('阶段'));
+  await sleep(800);
+  await mouseClickAt(visibleItemEl('一阶段'));
+  await sleep(600);
+  check('阶段=一阶段 → 项目经理姓名 无红星', !(await ev(itemClassOf('项目经理姓名'))).includes('is-required'));
+  check('阶段=一阶段 → 就业老师姓名 无红星', !(await ev(itemClassOf('就业老师姓名'))).includes('is-required'));
+  await shot('verify_form_class_handover_notrain.png');
+
+  await mouseClickAt(dialogSelectEl('阶段'));
+  await sleep(800);
+  await mouseClickAt(visibleItemEl('实训'));
+  await sleep(600);
+  check('阶段=实训 → 项目经理姓名 有红星', (await ev(itemClassOf('项目经理姓名'))).includes('is-required'));
+  check('阶段=实训 → 就业老师姓名 有红星', (await ev(itemClassOf('就业老师姓名'))).includes('is-required'));
+  await shot('verify_form_class_handover_train.png');
+
+  await ev(clickDialogBtn('保存'));
+  await sleep(1500);
+  const handoverErrs = await ev(`[...document.querySelectorAll('.el-form-item__error')].map(e=>e.innerText.trim()).join(' || ')`);
+  check('不填这两个岗位 → 两条「实训阶段必填」',
+    (handoverErrs.match(/实训阶段必填/g) || []).length === 2, handoverErrs);
+  check('被拦住：弹窗不关闭', (await ev(`!!document.querySelector('.el-dialog__body')`)) === true);
+  await shot('verify_form_class_handover_required.png');
+  await ev(clickDialogBtn('取消'));
+  await sleep(400);
 
   console.log(`\n${fails.length ? 'FAILED: ' + fails.join(' / ') : 'ALL PASS'}`);
   child.kill();
