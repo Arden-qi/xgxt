@@ -167,7 +167,10 @@ async function countStudents(classIds: string[]): Promise<Map<string, number>> {
     .where('is_deleted', false)
     .whereIn('student_status', IN_SCHOOL_STATUS)
     .select('class_id')
-    .count({ c: '*' })) as unknown as Array<{ class_id: string; c: number | string }>;
+    .count({ c: '*' })
+    // ★ MySQL only_full_group_by：SELECT 里的 class_id 是非聚合列，必须 GROUP BY，
+    //   否则报「In aggregated query without GROUP BY, expression #1 ... is incompatible」。
+    .groupBy('class_id')) as unknown as Array<{ class_id: string; c: number | string }>;
   for (const r of rows) map.set(String(r.class_id), Number(r.c));
   return map;
 }

@@ -162,7 +162,9 @@ async function countStudents(classIds: string[]): Promise<Map<string, number>> {
     .whereIn('class_id', classIds)
     .where({ is_deleted: false, status: 1 })
     .select('class_id')
-    .count({ c: '*' })) as unknown as Array<{ class_id: string; c: number | string }>;
+    .count({ c: '*' })
+    // ★ MySQL only_full_group_by：非聚合列 class_id 必须进 GROUP BY（同 repo.classJh）
+    .groupBy('class_id')) as unknown as Array<{ class_id: string; c: number | string }>;
   for (const r of rows) map.set(String(r.class_id), Number(r.c));
   return map;
 }
