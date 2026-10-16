@@ -513,17 +513,9 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8" v-if="form.stage === 'jh'">
-            <!-- 2026-10-15 分签改版：校园网账号由系统按学号生成，此处可手改 -->
-            <el-form-item label="上网账号">
-              <el-input v-model="form.netAccount" placeholder="留空保存时自动生成" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8" v-if="form.stage === 'jh'">
-            <el-form-item label="初始密码">
-              <el-input v-model="form.netInitPassword" placeholder="留空保存时自动生成" />
-            </el-form-item>
-          </el-col>
+          <!-- 2026-10-16 按批注：删除「上网账号 / 初始密码」两个输入框（红字「删除框选内容」）。
+               账号仍由系统按学号自动生成，详情页「校园网账号」页签照旧只读展示；
+               表单 state 保留 → 编辑老学生时原值随保存回传，不会被清空。 -->
           <el-col :span="24">
             <el-form-item label="家庭住址">
               <el-input v-model="form.homeAddress" />
@@ -571,7 +563,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { DEPT_NAME, DeptCode, STUDENT_STATUS_NAME } from 'shared-types';
+import { DEPT_NAME, DeptCode, StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
 import type { DormRoomItem } from 'shared-types/edu';
 import { isReadOnlyUser } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
@@ -990,11 +982,16 @@ const formPhaseOptions = computed(() => {
   if (form.stage === 'jh') return list.filter((p) => JH_PHASE_CODES.includes(p.value));
   return list;
 });
-/** 表单里状态下拉：按该学段允许的状态 */
+/** 表单里状态下拉：按该学段允许的状态
+ *  ★ 2026-10-16 按批注：去掉「预在读」（截图红框 + 红字「删除这个选择」）——
+ *    新增 / 编辑学生时不再提供这个选项；老数据里已有的「预在读」照常显示（只是不能新选） */
 const formStatusOptions = computed(() => {
   const allow = STATUS_BY_STAGE[form.stage] || [];
   const out: Record<number, string> = {};
-  for (const s of allow) out[s] = STUDENT_STATUS_NAME[s] || String(s);
+  for (const s of allow) {
+    if (s === StudentStatus.PRE_STUDY) continue;
+    out[s] = STUDENT_STATUS_NAME[s] || String(s);
+  }
   return out;
 });
 /** 是否显示床位号：就业/教务表没有 bed_no 列 */

@@ -74,3 +74,23 @@ node tools\_verify-teaching-dept.mjs     rem 教学管理 9 个合并入口逐�
 
 > 与 `e2e-merged.mjs` 同一套路（CDP 直连本机 Edge/Chrome，零依赖）。
 > 改完教学管理页面的文案/筛选后，先跑这两个脚本再提交。
+
+---
+
+## 4. `_verify-form-fields.mjs` —— 两个弹窗的表单字段回归
+
+```bat
+node tools\_verify-form-fields.mjs
+```
+
+| 弹窗 | 断言 |
+|---|---|
+| 学生档案 · 新增学生 | 没有「上网账号 / 初始密码」；状态下拉没有「预在读」但有「正式在读 / 休学」；不填姓名点保存 → 提示「姓名必填」且弹窗不关（必填被拦住） |
+| 班级管理 · 新增班级（部门选大学部） | 没有「项目经理 / 项目经理姓名 / 就业老师 / 就业老师姓名 / 大学学号」；仍有「班主任姓名 / 教员姓名 / 助教姓名 / 教室 / 开班日期」 |
+
+> ⚠️ **踩坑（写这类脚本必看）**：Element Plus 的下拉**打不开**如果只用
+> `dispatchEvent(new MouseEvent('click'))` —— 必须用 CDP 的
+> `Input.dispatchMouseEvent` 派发原生 mousePressed/mouseReleased。
+> 另外下拉挂在 body 上的 fixed popper 里，`offsetParent` 恒为 `null`，
+> 判断可见性要用 `getComputedStyle(popper).display` + `getBoundingClientRect()`。
+

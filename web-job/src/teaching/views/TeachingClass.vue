@@ -322,34 +322,10 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <!-- ★ 只有大学/实训有交棒岗位 -->
-          <template v-if="form.stage !== 'jh'">
-            <el-col :span="8">
-              <el-form-item label="项目经理">
-                <el-input v-model="form.projectManagerId" placeholder="工号/ID" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="项目经理姓名">
-                <el-input v-model="form.projectManagerName" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="就业老师">
-                <el-input v-model="form.employmentTeacherId" placeholder="工号/ID" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="就业老师姓名">
-                <el-input v-model="form.employmentTeacherName" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="大学学号">
-                <el-input v-model="form.universityNo" />
-              </el-form-item>
-            </el-col>
-          </template>
+          <!-- 2026-10-16 按批注：删除「项目经理 / 项目经理姓名 / 就业老师 / 就业老师姓名 / 大学学号」
+               这五个交棒字段（截图红框 + 红字「删除【项目经理】【大学学号】和【就业老师】的字段」）。
+               ⚠️ 表单 state（form.projectManagerId 等）与保存入参**故意保留**：
+                 编辑老班级时仍会把库里已有的值原样回传，不会因为字段下线就被清空。 -->
           <el-col :span="8">
             <el-form-item :label="curMeta?.classroomLabel || '教室'">
               <el-input v-model="form.classroom" />
