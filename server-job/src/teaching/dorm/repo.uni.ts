@@ -58,6 +58,7 @@ import type { DormRepo } from './types';
 import { bedNoText } from 'shared-types/class';
 import { hasRole, RoleCode, StudentStatus } from 'shared-types';
 import { tbl, tblIns, upd } from '../shared/uniTable';
+import { listBuildingNames as listDormBuildingNames } from './building.service';
 
 const DORM_T = 't_job_dorm';
 const BED_T = 't_job_dorm_bed';
@@ -495,18 +496,45 @@ export function makeRepo(stage: TeachingStage): DormRepo {
       await refreshUsedCount(String(dormId));
     },
   
+    /**
+     * ★ 楼栋下拉 =「楼栋设置里的楼栋」+「历史上已经在用的楼栋」
+     *
+     * 【为什么是并集，不能只取一边】
+     *   ① 只取设置表 → 设置页还没建「A-1栋」时，已有的 A-1 宿舍在筛选里消失，
+     *      用户会以为数据丢了（实测库里就是 BB-1 / A-1 这类历史楼栋）。
+     *   ② 只取房间表 → 「设置页刚加了 4 号楼、还没建房间」，下拉里就没有 4 号楼，
+     *      用户根本没法把新楼用起来 —— 而这正是本次需求要的效果。
+     *   → 并集，且**设置表的排在前面**（它是权威字典，顺序由 sort_no 决定）。
+     *
+     * 【顺序】设置表按 sort_no → 名称；历史楼栋按名称字典序追加在后。
+     */
     async buildings(user) {
+      const seen = new Set<string>();
+      const out: Array<{ value: string; label: string }> = [];
+      const push = (name: string) => {
+        const v = String(name ?? '').trim();
+        if (!v || seen.has(v)) return;
+        seen.add(v);
+        out.push({ value: v, label: v });
+      };
+
+      // ① 楼栋设置（权威来源，与「系统设置 → 楼栋设置」同一张表）
+      for (const b of await listDormBuildingNames()) push(b);
+
+      // ② 已在用的楼栋（历史数据兜底）
       const qb = T_DORM().where({ is_deleted: false });
       const scope = await scopedDormIds(user);
       if (scope !== null) {
-        if (!scope.length) return [];
+        if (!scope.length) return out;
         qb.whereIn('id', scope);
       }
       const rows = await qb.distinct('building');
-      return rows
+      rows
         .map((r: any) => String(r.building ?? ''))
         .filter(Boolean)
-        .map((b) => ({ value: b, label: b }));
+        .sort((a: string, b: string) => a.localeCompare(b, 'zh-Hans-CN'))
+        .forEach(push);
+      return out;
     },
   
     async changeList(q, user) {

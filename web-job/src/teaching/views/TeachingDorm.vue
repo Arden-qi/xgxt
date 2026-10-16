@@ -5,7 +5,8 @@
       <template #title>
         本页合并了 <b>3 个学段</b>的宿舍管理（初高 / 大学 / 实训）。
         <span class="muted">
-          房间状态统一成 4 档（1 使用中 / 2 空置 / 3 维修 / 4 停用），床位状态统一成 3 档（1 空闲 / 2 已占用 / 3 停用）；
+          类别分「男寝 / 女寝」；宿舍号是 <b>3 位数字</b>，第 1 位是楼层、后 2 位是房号（如 308 = 3 楼 08 室）；
+          楼栋选项来自「系统设置 → 楼栋设置」，那边加一栋这里立刻多一项；
           <b>已住人数是实时统计的</b>，不信任表里的冗余列，所以改了床位立刻见效。
         </span>
       </template>
@@ -47,8 +48,8 @@
           <el-option v-for="b in buildings" :key="b.value" :label="b.label" :value="b.value" />
         </el-select>
       </el-form-item>
-      <el-form-item label="类型">
-        <el-select v-model="query.dormType" clearable placeholder="全部" style="width: 120px">
+      <el-form-item label="类别">
+        <el-select v-model="query.dormType" clearable placeholder="全部" style="width: 110px">
           <el-option
             v-for="d in DORM_GENDER_OPTIONS"
             :key="d.value"
@@ -60,17 +61,17 @@
       <el-form-item label="状态">
         <el-select v-model="query.roomStatus" clearable placeholder="全部" style="width: 110px">
           <el-option
-            v-for="(n, v) in DORM_STATUS_NAME"
-            :key="v"
-            :label="n"
-            :value="Number(v)"
+            v-for="d in DORM_ROOM_STATUS_OPTIONS"
+            :key="d.value"
+            :label="d.label"
+            :value="d.value"
           />
         </el-select>
       </el-form-item>
       <el-form-item label="关键字">
         <el-input
           v-model="query.keyword"
-          placeholder="房间号 / 楼栋 / 负责人"
+          placeholder="宿舍号 / 楼栋"
           clearable
           style="width: 190px"
           @keyup.enter="load(1)"
@@ -88,43 +89,36 @@
     </el-form>
 
     <!-- 房间列表 -->
+    <!--
+      ★ 列表列（2026-10-16 改版）
+        类别 / 楼栋 / 宿舍号 / 已住-床位 / 入住率 / 状态 / 备注 / 操作
+        原来的「学段 / 楼层 / 所属班级 / 负责人」四列已按要求去掉：
+        学段改由顶部筛选器承担（列里再显示一次是重复信息），
+        楼层不再单列 —— 宿舍号第 1 位就是楼层。
+    -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
-      <el-table-column v-if="!query.stage" label="学段" width="70" align="center">
+      <el-table-column label="类别" width="80" align="center">
         <template #default="{ row }">
-          <el-tag size="small" effect="plain">{{ row.stageName }}</el-tag>
+          <el-tag size="small" :type="row.dormType === 2 ? 'danger' : 'primary'" effect="plain">
+            {{ categoryName(row) }}
+          </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="楼栋" width="130">
+      <el-table-column label="楼栋" width="120">
         <template #default="{ row }">{{ row.buildingName || '—' }}</template>
       </el-table-column>
-      <el-table-column label="房间号" min-width="130">
+      <el-table-column label="宿舍号" min-width="120">
         <template #default="{ row }">
           <a class="link" @click="openBeds(row)">{{ row.roomNo }}</a>
         </template>
       </el-table-column>
-      <!-- ★ 只有初高有楼层 -->
-      <el-table-column v-if="hasFloorCol" label="楼层" width="70" align="center">
-        <template #default="{ row }">{{ row.floorNo ?? '—' }}</template>
-      </el-table-column>
-      <el-table-column label="类型" width="100" align="center">
-        <template #default="{ row }">{{ row.dormTypeName }}</template>
-      </el-table-column>
-      <!-- ★ 只有初高有所属班级 -->
-      <el-table-column v-if="hasClassCol" label="所属班级" width="120">
-        <template #default="{ row }">{{ row.className || '—' }}</template>
-      </el-table-column>
-      <!-- ★ 只有初高/大学有负责人 -->
-      <el-table-column v-if="hasOwnerCol" label="负责人" width="100">
-        <template #default="{ row }">{{ row.ownerName || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="床位" width="80" align="center">
-        <template #default="{ row }"><b>{{ row.bedCount }}</b></template>
-      </el-table-column>
-      <el-table-column label="已住" width="80" align="center">
+      <!-- ★「已住/床位」合成一列：入住情况一眼看完，不用左右对两列 -->
+      <el-table-column label="已住/床位" width="100" align="center">
         <template #default="{ row }">
           <b :class="row.occupiedCount >= row.bedCount ? 'danger' : 'ok'">
             {{ row.occupiedCount }}
           </b>
+          <span class="muted"> / {{ row.bedCount }}</span>
         </template>
       </el-table-column>
       <el-table-column label="入住率" width="90" align="center">
@@ -139,8 +133,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <!-- ★ 只有实训有备注 -->
-      <el-table-column v-if="hasRemarkCol" label="备注" min-width="120">
+      <el-table-column label="备注" min-width="140" show-overflow-tooltip>
         <template #default="{ row }">{{ row.remark || '—' }}</template>
       </el-table-column>
       <el-table-column label="操作" width="170" fixed="right" align="center">
@@ -186,7 +179,7 @@
           <el-tag :type="DORM_STATUS_TAG[curDorm.roomStatus] || 'info'">
             {{ curDorm.roomStatusName }}
           </el-tag>
-          <el-tag size="small" effect="plain">{{ curDorm.dormTypeName }}</el-tag>
+          <el-tag size="small" effect="plain">{{ categoryName(curDorm) }}</el-tag>
           <span class="muted">
             床位 {{ curDorm.bedCount }} · 已住 {{ curDorm.occupiedCount }} · 空床
             {{ curDorm.bedCount - curDorm.occupiedCount }}
@@ -258,32 +251,70 @@
         <el-row :gutter="12">
           <el-col :span="12">
             <el-form-item label="学段" required>
-              <el-select v-model="form.stage" :disabled="!!form.id" style="width: 100%" @change="onFormStageChange">
+              <el-select v-model="form.stage" :disabled="!!form.id" style="width: 100%">
                 <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
               </el-select>
             </el-form-item>
           </el-col>
+
+          <!-- ① 类别：单选框，只有 男寝 / 女寝 两项（没有「不限」） -->
           <el-col :span="12">
-            <el-form-item label="楼栋" required>
-              <el-input v-model="form.buildingName" maxlength="50" />
+            <el-form-item label="类别" prop="dormType" required>
+              <el-radio-group v-model="form.dormType">
+                <el-radio v-for="d in DORM_CATEGORY_OPTIONS" :key="d.value" :value="d.value">
+                  {{ d.label }}
+                </el-radio>
+              </el-radio-group>
             </el-form-item>
           </el-col>
+
+          <!-- ② 楼栋：下拉，选项来自「系统设置 → 楼栋设置」 -->
           <el-col :span="12">
-            <el-form-item label="房间号" required>
-              <el-input v-model="form.roomNo" maxlength="50" placeholder="如 301 / 3-201" />
-            </el-form-item>
-          </el-col>
-          <!-- ★ 只有初高有楼层 -->
-          <el-col v-if="formMeta?.hasFloor" :span="12">
-            <el-form-item label="楼层">
-              <el-input-number v-model="form.floorNo" :min="0" :max="99" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="类型">
-              <el-select v-model="form.dormType" style="width: 100%">
+            <el-form-item label="楼栋" prop="buildingName" required>
+              <el-select v-model="form.buildingName" placeholder="请选择楼栋" style="width: 100%">
                 <el-option
-                  v-for="d in DORM_GENDER_OPTIONS"
+                  v-for="b in buildingOptions"
+                  :key="b.value"
+                  :label="b.label"
+                  :value="b.value"
+                />
+              </el-select>
+              <div class="tdv-hint">
+                选项是「系统设置 → 楼栋设置」里维护的，那边新增这里自动出现
+              </div>
+            </el-form-item>
+          </el-col>
+
+          <!-- ③ 宿舍号：3 位数字，第 1 位楼层 + 后 2 位房号 -->
+          <el-col :span="12">
+            <el-form-item label="宿舍号" prop="roomNo" required>
+              <el-input
+                v-model="form.roomNo"
+                maxlength="3"
+                placeholder="如 308"
+                style="width: 100%"
+                @input="form.roomNo = form.roomNo.replace(/\D/g, '')"
+              />
+              <div class="tdv-hint">
+                3 位数字：第 1 位是楼层、后 2 位是房号
+                <template v-if="roomNoFloor"> → 当前 {{ roomNoFloor }} 楼</template>
+              </div>
+            </el-form-item>
+          </el-col>
+
+          <!-- ④ 床位数（已住人数由系统实时统计，不在这里填） -->
+          <el-col :span="12">
+            <el-form-item label="床位数">
+              <el-input-number v-model="form.bedCount" :min="1" :max="20" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+
+          <!-- ⑤ 状态：只有 使用中 / 停用 -->
+          <el-col :span="12">
+            <el-form-item label="状态">
+              <el-select v-model="form.roomStatus" style="width: 100%">
+                <el-option
+                  v-for="d in DORM_ROOM_STATUS_OPTIONS"
                   :key="d.value"
                   :label="d.label"
                   :value="d.value"
@@ -291,56 +322,27 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="12">
-            <el-form-item label="床位数">
-              <el-input-number v-model="form.bedCount" :min="1" :max="20" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <!-- ★ 只有初高/大学有负责人 -->
-          <el-col v-if="formMeta?.hasOwner" :span="12">
-            <el-form-item label="负责人">
-              <el-input v-model="form.ownerName" maxlength="50" placeholder="宿舍长 / 负责人" />
-            </el-form-item>
-          </el-col>
-          <!-- ★ 只有初高有所属班级 -->
-          <el-col v-if="formMeta?.hasClass" :span="12">
-            <el-form-item label="所属班级">
-              <el-input v-model="form.className" maxlength="50" placeholder="可留空（混班）" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="房间状态">
-              <el-select v-model="form.roomStatus" style="width: 100%">
-                <el-option
-                  v-for="(n, v) in DORM_STATUS_NAME"
-                  :key="v"
-                  :label="n"
-                  :value="Number(v)"
-                />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <!-- ★ 只有实训有备注 -->
-          <el-col v-if="formMeta?.hasRemark" :span="24">
-            <el-form-item label="备注">
-              <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit />
+
+          <!-- ⑥ 备注：≤ 50 个汉字 -->
+          <el-col :span="24">
+            <el-form-item label="备注" prop="remark">
+              <el-input
+                v-model="form.remark"
+                type="textarea"
+                :rows="2"
+                :maxlength="DORM_REMARK_MAX"
+                show-word-limit
+                placeholder="选填，最多 50 个汉字"
+              />
             </el-form-item>
           </el-col>
         </el-row>
 
         <el-alert
-          v-if="form.stage === 'job'"
           type="info"
           :closable="false"
           show-icon
-          title="实训宿舍的房间号会按「楼栋-房号」自动拼成唯一编号（如 A栋-301），新建时会自动生成床位行"
-        />
-        <el-alert
-          v-if="form.stage === 'jh'"
-          type="info"
-          :closable="false"
-          show-icon
-          title="初高房间没有「备注」字段；床位数是房间上的总数，床位行要另外维护"
+          title="入住率 = 已住人数 / 床位数，已住人数由床位实时统计，不用手工填；保存后系统会自动生成对应数量的床位行。"
         />
       </el-form>
       <template #footer>
@@ -488,9 +490,23 @@
  *    大学没有独立床位表，live_sync 是「一人一条在住记录」，没有真实床位号。
  *    → 抽屉里用「编号1、编号2…」并明确提示，别让用户以为是真床位号。
  *
- * 【★ 三个学段字段差异全部由 /meta 下发，前端不写死学段判断】
- *   hasFloor（初高有）· hasOwner（初高/大学有）· hasClass（初高有）
- *   hasRemark（实训有）· hasBedTable（大学无）· hasCreate（大学无）
+ * 【★ 2026-10-16 改版：列表列与新增房间规则重构】
+ *
+ *   列表列固定为 8 列（不再按学段动态增删）：
+ *     类别 / 楼栋 / 宿舍号 / 已住-床位 / 入住率 / 状态 / 备注 / 操作
+ *
+ *   新增房间 6 条规则：
+ *     ① 类别   —— 单选框，只有「男寝 / 女寝」（没有「不限」）
+ *     ② 楼栋   —— 下拉，选项来自「系统设置 → 楼栋设置」（同一张 t_dorm_building，实时同步）
+ *     ③ 宿舍号 —— 3 位数字，第 1 位是楼层、后 2 位是房号（如 308）→ 楼层不再单独存列
+ *     ④ 床位数 —— 手工填；已住人数由床位实时统计，不在这里填
+ *     ⑤ 状态   —— 只有「使用中 / 停用」两档
+ *     ⑥ 备注   —— ≤ 50 个汉字
+ *   （四条硬规则在后端 /save 里又校验了一次，前端规则能被绕过）
+ *
+ * 【★ 三个学段的字段差异仍由 /meta 下发，前端不写死学段判断】
+ *   meta 现在只管两件事：hasCreate（能否增删改）、hasBedTable（床位是不是虚拟编号）。
+ *   原来的 hasFloor / hasOwner / hasClass / hasRemark 已随列固定而下线。
  */
 
 import { computed, onMounted, reactive, ref } from 'vue';
@@ -499,6 +515,10 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { isReadOnlyUser } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
+import {
+  listDormBuildings as fetchBuildingSettings,
+  type DormBuildingRow,
+} from '@/teaching/api/building';
 import {
   listDorms,
   getDormBeds,
@@ -512,9 +532,13 @@ import {
   assignBed,
   checkoutBed,
   createDormChange,
-  DORM_STATUS_NAME,
   DORM_STATUS_TAG,
   DORM_GENDER_OPTIONS,
+  DORM_CATEGORY_OPTIONS,
+  DORM_CATEGORY_NAME,
+  DORM_ROOM_STATUS_OPTIONS,
+  DORM_ROOM_NO_RE,
+  DORM_REMARK_MAX,
   DORM_APPROVAL_TAG,
   type DormBedRow,
   type DormChangeRow,
@@ -540,6 +564,33 @@ const metaList = ref<DormStageMeta[]>([]);
 const buildings = ref<Array<{ value: string; label: string }>>([]);
 const residents = ref<DormResidentRow[]>([]);
 const changes = ref<DormChangeRow[]>([]);
+/** ★ 楼栋设置（「系统设置 → 楼栋设置」维护的那份，新增房间的楼栋下拉读它） */
+const buildingSettings = ref<DormBuildingRow[]>([]);
+
+/** 新增/编辑弹窗的楼栋选项：楼栋设置优先，其次是列表接口回来的「已在用楼栋」 */
+const buildingOptions = computed(() => {
+  const seen = new Set<string>();
+  const out: Array<{ value: string; label: string }> = [];
+  for (const b of buildingSettings.value) {
+    if (!b.buildingName || seen.has(b.buildingName)) continue;
+    seen.add(b.buildingName);
+    out.push({ value: b.buildingName, label: b.buildingName });
+  }
+  for (const b of buildings.value) {
+    if (!b.value || seen.has(b.value)) continue;
+    seen.add(b.value);
+    out.push(b);
+  }
+  return out;
+});
+
+async function loadBuildingSettings() {
+  try {
+    buildingSettings.value = (await fetchBuildingSettings()) || [];
+  } catch {
+    /* 楼栋设置拉不到就退回列表接口的楼栋，别让弹窗开不起来 */
+  }
+}
 
 const query = reactive({
 
@@ -558,18 +609,20 @@ useBreadcrumbStageKey(() => query.stage || '');
 /** ★ 只有空床的（不参与 query 对象，单独一个开关） */
 const onlyVacant = ref(false);
 
-/** 当前所选学段的 meta（列显隐全靠它，不写死学段判断） */
+/**
+ * 当前所选学段的 meta（学段差异仍由后端 /meta 下发，前端不写死学段判断）
+ *
+ * ★ 2026-10-16：列表列已经「定死」成 类别/楼栋/宿舍号/已住-床位/入住率/状态/备注/操作，
+ *   不再按 hasFloor / hasOwner / hasClass / hasRemark 动态增删列，
+ *   所以下面那四个 anyHas 派生量连同它们的调用一起删了 —— 留着就是死代码。
+ *   meta 现在只服务两件事：hasCreate（能不能增删改）和 hasBedTable（床位是不是虚拟编号）。
+ */
 const curMeta = computed(() => metaList.value.find((m) => m.stage === query.stage) || null);
 
-/** 未选学段时，只要任一可见学段有该字段就显示该列 */
-function anyHas(key: keyof DormStageMeta): boolean {
-  if (query.stage) return !!curMeta.value?.[key];
-  return metaList.value.some((m) => m[key]);
+/** 类别显示名：1 男寝 / 2 女寝；历史数据里的 0「不限」原样显示，不假装成别的值 */
+function categoryName(row: DormRow): string {
+  return DORM_CATEGORY_NAME[row.dormType] ?? row.dormTypeName ?? '不限';
 }
-const hasFloorCol = computed(() => anyHas('hasFloor'));
-const hasOwnerCol = computed(() => anyHas('hasOwner'));
-const hasClassCol = computed(() => anyHas('hasClass'));
-const hasRemarkCol = computed(() => anyHas('hasRemark'));
 
 /** ★ 只有可写学段（大学 hasCreate=false）才给新增按钮 */
 const canCreate = computed(() => {
@@ -742,21 +795,45 @@ const form = reactive<Record<string, any>>({
   stage: 'job' as DormStage,
   buildingName: '',
   roomNo: '',
-  floorNo: undefined as number | undefined,
-  dormType: 0,
+  dormType: 1,
   bedCount: 4,
-  ownerName: '',
-  className: '',
   roomStatus: 1,
   remark: '',
 });
 
-const formMeta = computed(() => metaList.value.find((m) => m.stage === form.stage) || null);
+/** ★ 宿舍号第 1 位 = 楼层（输入时实时提示，楼层不再单独存一列） */
+const roomNoFloor = computed(() =>
+  DORM_ROOM_NO_RE.test(form.roomNo) ? Number(form.roomNo.slice(0, 1)) : 0,
+);
 
 const rules: FormRules = {
   stage: [{ required: true, message: '请选择学段', trigger: 'change' }],
-  buildingName: [{ required: true, message: '楼栋必填', trigger: 'blur' }],
-  roomNo: [{ required: true, message: '房间号必填', trigger: 'blur' }],
+  buildingName: [{ required: true, message: '请选择楼栋', trigger: 'change' }],
+  dormType: [{ required: true, message: '请选择类别', trigger: 'change' }],
+  roomNo: [
+    { required: true, message: '宿舍号必填', trigger: 'blur' },
+    {
+      validator: (_r: unknown, v: string, cb: (e?: Error) => void) => {
+        if (!v) return cb();
+        if (!DORM_ROOM_NO_RE.test(String(v))) {
+          return cb(new Error('宿舍号必须是 3 位数字（第 1 位楼层 + 后 2 位房号，如 308）'));
+        }
+        return cb();
+      },
+      trigger: 'blur',
+    },
+  ],
+  remark: [
+    {
+      validator: (_r: unknown, v: string, cb: (e?: Error) => void) => {
+        if (v && [...String(v)].length > DORM_REMARK_MAX) {
+          return cb(new Error(`备注不能超过 ${DORM_REMARK_MAX} 个汉字`));
+        }
+        return cb();
+      },
+      trigger: 'blur',
+    },
+  ],
 };
 
 function openCreate() {
@@ -765,14 +842,13 @@ function openCreate() {
     stage: query.stage || 'job',
     buildingName: '',
     roomNo: '',
-    floorNo: undefined,
-    dormType: 0,
+    dormType: 1,
     bedCount: 4,
-    ownerName: '',
-    className: '',
     roomStatus: 1,
     remark: '',
   });
+  // ★ 每次开弹窗都重拉一次楼栋设置：设置页刚加的楼栋，这边立刻能选到
+  loadBuildingSettings();
   editVisible.value = true;
 }
 
@@ -782,23 +858,17 @@ function openEdit(row: DormRow) {
     stage: row.stage,
     buildingName: row.buildingName,
     roomNo: row.roomNo,
-    floorNo: row.floorNo ?? undefined,
-    dormType: row.dormType,
+    /**
+     * ★ 历史数据的 dormType 可能是 0「不限」，但新增/编辑口径已收紧成二选一，
+     *   编辑时给个默认值 1（男寝），否则单选框两个都不亮、用户不知道自己选没选。
+     */
+    dormType: row.dormType === 2 ? 2 : 1,
     bedCount: row.bedCount,
-    ownerName: row.ownerName || '',
-    className: row.className || '',
-    roomStatus: row.roomStatus,
+    roomStatus: row.roomStatus === 4 ? 4 : 1,
     remark: row.remark || '',
   });
+  loadBuildingSettings();
   editVisible.value = true;
-}
-
-function onFormStageChange() {
-  // 切学段后不适用的字段清空，别把上一个学段的值带过去
-  form.floorNo = undefined;
-  form.ownerName = '';
-  form.className = '';
-  form.remark = '';
 }
 
 async function doSave() {
@@ -806,7 +876,11 @@ async function doSave() {
   if (!okd) return;
   saving.value = true;
   try {
-    // ★ NOT NULL 列不传 null：编辑时「没填」要当「不修改」而不是「清空」
+    /**
+     * ★ 备注一律送字符串（没填就送空串）——老逻辑里「没填」被当成「不修改」，
+     *   于是用户在编辑框里把备注删空、保存后备注还在。备注现在是常规字段，
+     *   清空的意图就该生效。
+     */
     const payload: Record<string, unknown> = {
       stage: form.stage,
       id: form.id,
@@ -815,12 +889,8 @@ async function doSave() {
       bedCount: form.bedCount,
       dormType: form.dormType,
       roomStatus: form.roomStatus,
+      remark: form.remark || '',
     };
-    if (formMeta.value?.hasFloor && form.floorNo !== undefined) payload.floorNo = form.floorNo;
-    if (formMeta.value?.hasOwner) payload.ownerName = form.ownerName || null;
-    if (formMeta.value?.hasClass) payload.className = form.className || null;
-    if (formMeta.value?.hasRemark) payload.remark = form.remark || null;
-
     await saveDorm(payload);
     ElMessage.success(form.id ? '房间已更新' : '房间已创建');
     editVisible.value = false;
@@ -924,6 +994,7 @@ function openChangeEntry() {
 
 onMounted(async () => {
   await load(1);
+  await loadBuildingSettings();
   // 预取一次 meta，让按钮显隐在首屏就正确
   if (!metaList.value.length) {
     try {
@@ -959,6 +1030,9 @@ defineExpose({ openChangeList, openChangeEntry });
 .tdv-card__x .danger { color: #CD3A33; }
 
 .tdv-filter { margin-bottom: 8px; }
+
+/** 表单项下方的灰色说明（楼栋来源 / 宿舍号规则） */
+.tdv-hint { color: #A2938E; font-size: 12px; line-height: 1.5; margin-top: 2px; }
 
 .link { color: #CD3A33; cursor: pointer; text-decoration: none; }
 .link:hover { text-decoration: underline; }

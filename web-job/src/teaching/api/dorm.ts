@@ -44,6 +44,44 @@ export const DORM_GENDER_OPTIONS = [
   { value: 2, label: '女生宿舍' },
 ];
 
+/**
+ * ★ 宿舍「类别」（2026-10-16 改版）
+ *
+ * 列表和新增房间统一叫「类别」，只有两个取值：1 男寝 / 2 女寝。
+ * 与上面 `DORM_GENDER_OPTIONS`（0 不限 / 1 男生宿舍 / 2 女生宿舍）的区别：
+ *   · DORM_GENDER_OPTIONS 是**底层枚举的全集**，库里历史数据还有 0「不限」，
+ *     筛选器用它才能把老数据筛全；
+ *   · DORM_CATEGORY_OPTIONS 是**新增房间时的可选范围** —— 二选一，没有「不限」。
+ *   → 别把两个混用：新增时给了 0，后端会报「类别只能选男寝或女寝」。
+ */
+export const DORM_CATEGORY_OPTIONS = [
+  { value: 1, label: '男寝' },
+  { value: 2, label: '女寝' },
+];
+
+/** 类别 → 显示名（列表列、抽屉标签都读它，保证三处口径一致） */
+export const DORM_CATEGORY_NAME: Record<number, string> = {
+  1: '男寝',
+  2: '女寝',
+};
+
+/**
+ * ★ 房间状态只剩两档（2026-10-16 改版）
+ *   1 使用中 / 4 停用 —— 列表筛选与新增房间都只给这两项。
+ *   「空置(2)」「维修(3)」是其它学段历史口径，本次不对外开放，
+ *   但 DORM_STATUS_NAME 仍保留全集，老数据才不会显示成空。
+ */
+export const DORM_ROOM_STATUS_OPTIONS = [
+  { value: 1, label: '使用中' },
+  { value: 4, label: '停用' },
+];
+
+/** ★ 备注长度上限（汉字个数，后端同口径校验，改这里记得同步后端） */
+export const DORM_REMARK_MAX = 50;
+
+/** ★ 宿舍号规则：3 位数字，第 1 位是楼层、后 2 位是房号（如 308） */
+export const DORM_ROOM_NO_RE = /^\d{3}$/;
+
 /** 床位状态 1 空闲 / 2 已占用 / 3 停用 */
 export const DORM_BED_STATUS_NAME: Record<number, string> = {
   1: '空闲',

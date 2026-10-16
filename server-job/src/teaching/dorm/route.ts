@@ -32,7 +32,7 @@ import { BizError } from '../../middleware/errorHandler';
 import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 import type { DormListQuery, TeachingStage } from '../shared/dto';
-import { DORM_STATUS_NAME } from '../shared/dto';
+import { UnifiedDormStatus } from '../shared/dto';
 
 export const teachingDormRouter = Router();
 
@@ -175,18 +175,54 @@ teachingDormRouter.post(
     if (!String(b.roomNo ?? '').trim()) {
       throw new BizError(BizCode.PARAM_ERROR, '房间号必填');
     }
-    if (b.roomStatus !== undefined && b.roomStatus !== null && b.roomStatus !== '') {
-      const st = Number(b.roomStatus);
-      if (!DORM_STATUS_NAME[st]) {
-        throw new BizError(BizCode.PARAM_ERROR, '房间状态取值非法');
-      }
+    /**
+     * ★★ 新增房间的四条业务规则（和前端弹窗一一对应，后端必须再拦一次）
+     *
+     *   ① 宿舍号 = **3 位数字**，第 1 位是楼层、后 2 位是房号（如 308 = 3 楼 08 室）
+     *      → 楼层不再单独存一列，房号本身就带楼层，改房号即改楼层，不会两处不一致。
+     *   ② 类别（dorm_gender）只能是 **1 男寝 / 2 女寝**
+     *      → 老数据的 0「不限」是历史遗留，新数据不允许再造（前端已经是二选一单选）。
+     *   ③ 状态只能是 **1 使用中 / 4 停用**（统一码；实训原码 1/2 由 repo 翻译）
+     *      → 「空置(2)」「维修(3)」不在本次口径内，传了直接拒，避免存进去显示不出来。
+     *   ④ 备注 ≤ 50 个汉字（按**字符数**算，不是字节数 —— utf8mb4 下一个汉字是 1 个字符）
+     *
+     * 【为什么后端要重复校验】前端 el-form 的 rules 能被绕过（直接调接口 /
+     *   改 DOM），而且 ① 这类规则一旦绕过，dorm_no 唯一键会存进「A-1-3O8」这种脏值。
+     */
+    const roomNo = String(b.roomNo ?? '').trim();
+    if (!/^\d{3}$/.test(roomNo)) {
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        '宿舍号必须是 3 位数字：第 1 位为楼层、后 2 位为房号（如 308）',
+      );
     }
+    const dormType = numOrUndef(b.dormType);
+    if (dormType !== undefined && dormType !== 1 && dormType !== 2) {
+      throw new BizError(BizCode.PARAM_ERROR, '类别只能选「男寝」或「女寝」');
+    }
+    // ★ 新建必须选（老数据的 0「不限」是历史遗留，新数据不允许再造）
+    if (!b.id && dormType === undefined) {
+      throw new BizError(BizCode.PARAM_ERROR, '请选择类别（男寝 / 女寝）');
+    }
+    const roomStatus = numOrUndef(b.roomStatus);
+    if (
+      roomStatus !== undefined &&
+      roomStatus !== UnifiedDormStatus.IN_USE &&
+      roomStatus !== UnifiedDormStatus.DISABLED
+    ) {
+      throw new BizError(BizCode.PARAM_ERROR, '房间状态只能选「使用中」或「停用」');
+    }
+    const remark = strOrNull(b.remark);
+    if (remark !== undefined && remark !== null && [...remark].length > 50) {
+      throw new BizError(BizCode.PARAM_ERROR, '备注不能超过 50 个字');
+    }
+
     const r = await svc.saveDorm(
       {
         stage,
         id: str(b.id),
         buildingName: String(b.buildingName).trim(),
-        roomNo: String(b.roomNo).trim(),
+        roomNo,
         // ★ NOT NULL 列（floorNo / dormType / bedCount / roomStatus）一律 numOrUndef，
         //   传 null 会被降级成 undefined（= 不修改），避免 ER_BAD_NULL_ERROR
         floorNo: numOrUndef(b.floorNo),

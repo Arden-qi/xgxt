@@ -2,7 +2,11 @@
 /**
  * 系统设置页
  *
- * 三个页签：系统设置（KV）/ 阶段字典 / 操作日志。
+ * 四个页签：系统设置（KV）/ 楼栋设置 / 阶段字典 / 操作日志。
+ *
+ * ★ 2026-10-16 新增「楼栋设置」：宿舍楼栋字典，和「教学管理 → 宿舍管理」
+ *   的楼栋下拉是同一份数据（sms_common.t_dorm_building）。
+ *   这里加一栋 → 宿舍管理的楼栋下拉立刻多一项，不需要改任何代码。
  */
 
 import { ref, reactive, onMounted } from 'vue';
@@ -18,6 +22,12 @@ import {
   deleteStage,
   fetchOpLogList,
 } from '@/class-jh/api/setting';
+import {
+  listDormBuildings,
+  saveDormBuilding,
+  deleteDormBuilding,
+  type DormBuildingRow,
+} from '@/teaching/api/building';
 import { dash, formatDateTime } from '@/class-jh/utils/format';
 
 const activeTab = ref('setting');
@@ -77,6 +87,79 @@ async function saveSettings() {
     /* 错误已统一处理 */
   } finally {
     settingSaving.value = false;
+  }
+}
+
+/* ================= 楼栋设置 ================= */
+/**
+ * ★ 宿舍楼栋字典
+ *
+ * 与「教学管理 → 宿舍管理」的楼栋下拉**共用同一份数据**（接口 /api/teaching/building/*）。
+ * 所以新增/删除后不需要通知谁：宿舍管理那边每次开「新增房间」弹窗都会重拉一次，
+ * 列表页的楼栋筛选也会在下次 load 时带上。
+ */
+const buildingLoading = ref(false);
+const buildingData = ref<DormBuildingRow[]>([]);
+const buildingVisible = ref(false);
+const buildingSubmitting = ref(false);
+const buildingForm = reactive({ id: '', buildingName: '', sortNo: 0, remark: '' });
+
+async function loadBuildings() {
+  buildingLoading.value = true;
+  try {
+    buildingData.value = await listDormBuildings();
+  } catch {
+    /* 错误已统一处理 */
+  } finally {
+    buildingLoading.value = false;
+  }
+}
+
+function openBuildingDialog() {
+  Object.assign(buildingForm, { id: '', buildingName: '', sortNo: buildingData.value.length + 1, remark: '' });
+  buildingVisible.value = true;
+}
+
+async function submitBuilding() {
+  const name = buildingForm.buildingName.trim();
+  if (!name) {
+    ElMessage.warning('请填写楼栋名称');
+    return;
+  }
+  buildingSubmitting.value = true;
+  try {
+    await saveDormBuilding({
+      id: buildingForm.id || undefined,
+      buildingName: name,
+      sortNo: buildingForm.sortNo,
+      remark: buildingForm.remark || undefined,
+    });
+    ElMessage.success(buildingForm.id ? '楼栋已更新' : '新增成功');
+    buildingVisible.value = false;
+    loadBuildings();
+  } catch {
+    /* 错误已统一处理（如「楼栋已存在」「名下还有宿舍不能删」） */
+  } finally {
+    buildingSubmitting.value = false;
+  }
+}
+
+async function handleDeleteBuilding(row: DormBuildingRow) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除楼栋「${row.buildingName}」吗？（名下已有宿舍的楼栋不能删）`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' },
+    );
+  } catch {
+    return;
+  }
+  try {
+    await deleteDormBuilding(row.id);
+    ElMessage.success('删除成功');
+    loadBuildings();
+  } catch {
+    /* 错误已统一处理 */
   }
 }
 
@@ -183,6 +266,7 @@ function resetOpLogQuery() {
 
 onMounted(() => {
   loadSettings();
+  loadBuildings();
   loadStage();
   loadOpLog();
 });
@@ -214,6 +298,29 @@ onMounted(() => {
           </el-form>
           <el-button v-readonly-hide type="primary" :icon="SetUp" :loading="settingSaving" @click="saveSettings">保存设置</el-button>
         </div>
+      </el-tab-pane>
+
+      <!-- 楼栋设置 -->
+      <el-tab-pane label="楼栋设置" name="building">
+        <div class="toolbar">
+          <el-button v-readonly-hide type="primary" :icon="Plus" @click="openBuildingDialog">新增楼栋</el-button>
+          <el-text type="info" size="small" class="ml12">
+            这里的楼栋就是「宿舍管理」里楼栋下拉的选项，两边实时一致
+          </el-text>
+        </div>
+        <el-table v-loading="buildingLoading" :data="buildingData" border stripe empty-text="暂无楼栋">
+          <el-table-column type="index" label="序号" width="60" align="center" />
+          <el-table-column prop="buildingName" label="楼栋名称" min-width="180" />
+          <el-table-column prop="sortNo" label="排序" width="90" align="center" />
+          <el-table-column prop="remark" label="备注" min-width="200">
+            <template #default="{ row }">{{ dash(row.remark) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="100" align="center" fixed="right">
+            <template #default="{ row }">
+              <el-button v-readonly-hide link type="danger" size="small" :icon="Delete" @click="handleDeleteBuilding(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </el-tab-pane>
 
       <!-- 阶段字典 -->
@@ -282,6 +389,25 @@ onMounted(() => {
         />
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 新增楼栋 -->
+    <el-dialog v-model="buildingVisible" title="新增楼栋" width="480px">
+      <el-form :model="buildingForm" label-width="100px">
+        <el-form-item label="楼栋名称" required>
+          <el-input v-model="buildingForm.buildingName" maxlength="50" placeholder="如 4号楼" />
+        </el-form-item>
+        <el-form-item label="排序">
+          <el-input-number v-model="buildingForm.sortNo" :min="0" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="buildingForm.remark" maxlength="100" placeholder="选填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="buildingVisible = false">取消</el-button>
+        <el-button v-readonly-hide type="primary" :loading="buildingSubmitting" @click="submitBuilding">确定</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 新增阶段 -->
     <el-dialog v-model="stageVisible" title="新增阶段" width="480px">

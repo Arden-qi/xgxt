@@ -74,6 +74,8 @@ import { teachingLeaveRouter } from './teaching/leave/route';
 import { teachingStudentRouter } from './teaching/student/route';
 import { teachingClassRouter } from './teaching/class/route';
 import { teachingDormRouter } from './teaching/dorm/route';
+// ★ 宿舍楼栋设置（系统设置页与宿舍管理共用的楼栋字典）
+import { teachingBuildingRouter } from './teaching/dorm/building.route';
 import { denyReadOnlyAdmin } from './teaching/shared/readOnlyGuard';
 
 /* ============================================================
@@ -662,13 +664,38 @@ app.use(
 );
 
   app.use(
-    '/api/teaching/dorm',
-    authMiddleware,
-    denyReadOnlyAdmin,
-    denyApprovalOnlyWrite,
-    requireAnyPage(['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view']),
-    teachingDormRouter,
-  );
+  '/api/teaching/dorm',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage(['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view']),
+  teachingDormRouter,
+);
+
+  /**
+   * ★ 宿舍楼栋设置 · /api/teaching/building/*
+   *
+   * 【为什么权限码是 4 个而不是 dorm 那 3 个】
+   *   两个入口共用这一份字典：
+   *     ① 教学管理 → 系统设置 → 楼栋设置页签   → classjh:setting:view
+   *     ② 教学管理 → 宿舍管理 → 楼栋下拉       → classjh/class/job 的 dorm:view
+   *   只挂 ① 会让「有宿舍权限、没设置权限」的用户拉不到下拉；
+   *   只挂 ② 会让「有设置权限、没宿舍权限」的用户打不开设置页。
+   *   → 两边都放行：看得见楼栋的人就能读，写操作另有只读管理员/学管主任两道闸。
+   */
+  app.use(
+  '/api/teaching/building',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage([
+    'classjh:setting:view',
+    'classjh:dorm:view',
+    'class:dorm:view',
+    'job:dorm:view',
+  ]),
+  teachingBuildingRouter,
+);
 
 // ============================================================
 // 404 处理（放在所有路由之后）
