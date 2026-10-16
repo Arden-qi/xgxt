@@ -194,6 +194,38 @@ const check = (name, ok, detail = '') => {
   check('仍保留「班主任姓名 / 教员姓名 / 助教姓名」', cLabels.includes('班主任姓名') && cLabels.includes('教员姓名') && cLabels.includes('助教姓名'));
   await shot('verify_form_class_no_handover.png');
 
+  /* ============ 部门 → 阶段 联动（2026-10-16 第三批批注）============ */
+  console.log('=== 班级管理 · 部门 → 阶段 联动 ===');
+  // ⚠️ visibleOptions 用 '/' 拼接（没有空格），期望值必须一字不差
+  const JH_PHASES = '初中部1期/初中部2期/初中部3期/高中部1期/高中部2期/高中部3期';
+  const CLASS_PHASES = '实训/一阶段/二阶段/三阶段/四阶段/五阶段/六阶段';
+
+  const changeDept = async (label) => {
+    await mouseClickAt(dialogSelectEl('部门'));
+    await sleep(800);
+    await mouseClickAt(visibleItemEl(label));
+    await sleep(600);
+  };
+  const readPhases = async (shotName) => {
+    await mouseClickAt(dialogSelectEl('阶段'));
+    await sleep(800);
+    const v = await ev(visibleOptions);
+    if (shotName) await shot(shotName); // 截图要留在下拉展开的状态
+    await mouseClickAt(`document.querySelector('.el-dialog__header')`); // 关掉下拉
+    await sleep(400);
+    return v;
+  };
+
+  await changeDept('初高部');
+  const jhPhases = await readPhases('verify_form_class_phase_jh.png');
+  console.log('  初高部 阶段:', jhPhases);
+  check('部门=初高部 → 阶段 6 项（初中部1期 ~ 高中部3期）', jhPhases === JH_PHASES, jhPhases);
+
+  await changeDept('大学部');
+  const classPhases = await readPhases('verify_form_class_phase_class.png');
+  console.log('  大学部 阶段:', classPhases);
+  check('部门=大学部 → 阶段 7 项（实训 + 一~六阶段）', classPhases === CLASS_PHASES, classPhases);
+
   console.log(`\n${fails.length ? 'FAILED: ' + fails.join(' / ') : 'ALL PASS'}`);
   child.kill();
   process.exitCode = fails.length ? 1 : 0;
