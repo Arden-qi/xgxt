@@ -52,9 +52,8 @@
         >
           <!--
             ⚠️ 这里只列「本页可能出现」的状态。
-               本页硬约束为「只看已上传凭证的单据」，所以「待缴」「逾期」
-               这两类（都是没交钱、没凭证的）永远不会出现，
-               列出来只会让财务选了之后得到空列表，白踩一次坑。
+               本页硬约束为「只看已上传凭证、且非冻结的单据」，所以
+               「待缴」「冻结」永远不会出现，列出来只会让财务白踩一次坑。
           -->
           <el-option
             v-for="(name, v) in payStatusOptions"
@@ -485,8 +484,10 @@ const dateRange = ref<[string, string] | null>(null);
 /**
  * 「缴费状态」筛选下拉的可选项。
  *
- * ⚠️ 只列本页真的可能出现的那几个 —— 本页硬约束是「只看已上传凭证的单据」，
- *    「待缴/逾期」都是没交钱没凭证的，永远不会出现在结果里，
+ * ⚠️ 只列本页真的可能出现的那几个 —— 本页硬约束是
+ *    「只看已上传凭证、且非冻结的单据」，所以：
+ *      · 「待缴」没有凭证 → 不会出现
+ *      · 「冻结」被后端硬性排除 → 不会出现
  *    列出来等于给财务挖坑（选了就是空列表）。
  *
  * 命名对照（2026-10-04 起）：2 = 待核对，3 = 已缴。
@@ -494,7 +495,6 @@ const dateRange = ref<[string, string] | null>(null);
 const payStatusOptions = computed(() => ({
   [PayStatus.PAID]: PAY_STATUS_NAME[PayStatus.PAID],
   [PayStatus.VERIFIED]: PAY_STATUS_NAME[PayStatus.VERIFIED],
-  [PayStatus.FROZEN]: PAY_STATUS_NAME[PayStatus.FROZEN],
 }));
 
 /**
@@ -549,7 +549,6 @@ const stats = ref<FeeStats>({
   waitVerify: 0,
   verified: 0,
   rejected: 0,
-  overdue: 0,
   frozen: 0,
 });
 

@@ -93,17 +93,14 @@ export function visibleModulesOf(account: SysAccount): ModuleDef[] {
   return MODULES.filter((m) => account.modules.includes(m.key));
 }
 
-/** 建议落地路径（第一个可见模块的第一页） */
-export function landingPathOf(account: SysAccount): string {
-  // ★ 2026-10-05 合并：legacy 模块（就业/教务/班级）的路由不带模块前缀，
-  //   页面清单也不在注册表里（由角色页面权限算），所以这里跳过它们。
-  //   只有 legacy 模块的账号返回空串 —— 前端会兜底到
-  //   /api/job/auth/my-pages 里的第一个页面（见 web-job 路由守卫 step 3）。
-  const first = visibleModulesOf(account).find((m) => !m.legacy);
-  if (!first) return '';
-  const firstMenu = first.menus[0];
-  if (!firstMenu) return '';
-  return `${first.key}${firstMenu.path}`;
+/**
+ * 建议落地路径
+ * ★ 2026-10-16 用户指令：「将工作台放置首页，每个角色进来第一个页面就是工作台」
+ *   → 所有角色（含原先返回空串的 legacy 模块账号）统一落到 '/' 工作台首页。
+ *     前端 Login.vue 拿到后 router.replace，无任何角色特判。
+ */
+export function landingPathOf(_account: SysAccount): string {
+  return '/';
 }
 
 /* ============================================================

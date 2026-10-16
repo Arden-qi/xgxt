@@ -120,12 +120,14 @@ export function toFeeDetail(r: any) {
 /**
  * 构造列表查询条件（列表和导出共用）
  *
- * ⚠️⚠️ 财务侧【硬约束】：只查「已上传凭证」的缴费单。
+ * ⚠️⚠️ 财务侧【硬约束】共两条：
+ *    ① 只查「已上传凭证」的缴费单
+ *    ② 排除「冻结」状态的单据（2026-10-15 用户指令）
  *
  * 为什么（2026-10-04 用户指令）：
  *    缴费管理是财务的【核对工作台】，不是全量缴费台账。
  *    财务的职责链是：学生交钱 → 上游传凭证 → 财务核对凭证 → 入账。
- *    所以「还没传凭证」的单子（待缴/逾期）对财务毫无意义 ——
+ *    所以「还没传凭证」的单子（待缴）对财务毫无意义 ——
  *    它们是上游（咨询/教务）该跟学生催缴的事，财务侧不该看到。
  *
  * 这个约束写死在 buildFeeQuery 里（而不是交给前端传参），
@@ -135,8 +137,19 @@ export function toFeeDetail(r: any) {
 export function buildFeeQuery(q: any): Knex.QueryBuilder {
   const query = db(FEE_TABLE).where('is_deleted', false);
 
-  // ---- 硬约束：必须有凭证 ----
+  // ---- 硬约束1：必须有凭证 ----
   query.whereNotNull('voucher_url').andWhereNot('voucher_url', '');
+
+  /**
+   * ---- 硬约束2：冻结中的单据不出现在缴费管理 ----
+   *
+   * ⭐ 2026-10-15 用户指令：「冻结的不会出现在缴费管理中」。
+   *    冻结单据（学生休学自动冻结的餐费/住宿费）属于学籍冻结范畴，
+   *    不是财务的核对对象，留在核对台只会干扰财务视线。
+   *
+   * ⚠️ 写在这里而不是前端过滤：这样列表 / 统计 / 导出三条路径自动一致。
+   */
+  query.whereNot('pay_status', PayStatus.FROZEN);
 
   if (q.studentNo) query.andWhere('student_no', 'like', `%${q.studentNo}%`);
   if (q.studentName) query.andWhere('student_name', 'like', `%${q.studentName}%`);
@@ -357,8 +370,6 @@ export async function statsFee(q: any) {
       sum('verified', 'is_verified = 1'),
       // 已打回：等上游重传凭证
       sum('rejected', 'is_rejected = 1'),
-      // 逾期（有凭证但也可能被标记逾期）
-      sum('overdue', 'pay_status = ?', [PayStatus.OVERDUE]),
       sum('frozen', 'pay_status = ?', [PayStatus.FROZEN]),
     );
 
@@ -368,7 +379,6 @@ export async function statsFee(q: any) {
     waitVerify: n(row?.waitVerify),
     verified: n(row?.verified),
     rejected: n(row?.rejected),
-    overdue: n(row?.overdue),
     frozen: n(row?.frozen),
   };
 }
@@ -405,9 +415,6 @@ export async function verifyFee(
     }
     if (row.pay_status === PayStatus.UNPAID) {
       throw new BizError(BizCode.PARAM_ERROR, '该缴费单尚未缴费，无法核对');
-    }
-    if (row.pay_status === PayStatus.OVERDUE) {
-      throw new BizError(BizCode.PARAM_ERROR, '该缴费单已逾期，请先让班主任重新上传凭证');
     }
     if (!row.voucher_url) {
       throw new BizError(BizCode.PARAM_ERROR, '该缴费单未上传缴费凭证，无法核对');
@@ -537,7 +544,7 @@ export async function freezeFeeByStudent(
     const affected = await db(FEE_TABLE)
       .where({ student_id: studentId, is_deleted: false })
       .whereIn('fee_type', [FeeType.ACCOMMODATION, FeeType.MEAL])
-      .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.PAID, PayStatus.OVERDUE])
+      .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.PAID])
       .update({
         pay_status: PayStatus.FROZEN,
         update_time: now,
@@ -779,10 +786,7 @@ export async function attachVoucher(
     is_rejected: false,
     reject_reason: null,
     // 传了凭证 → 状态推到「待核对(PAID)」，等财务核对后才是「已缴(VERIFIED)」
-    // ⚠️ 只把「待缴/逾期」这类未收款状态往上推，不动已核对/已入账的单
-    pay_status:
-      row.pay_status === PayStatus.UNPAID || row.pay_status === PayStatus.OVERDUE
-        ? PayStatus.PAID
-        : row.pay_status,
+    // ⚠️ 只把「待缴」这类未收款状态往上推，不动已核对/已入账的单
+    pay_status: row.pay_status === PayStatus.UNPAID ? PayStatus.PAID : row.pay_status,
   });
 }

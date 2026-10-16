@@ -147,8 +147,6 @@ export interface FeeStats {
   verified: number;
   /** 已打回：等上游重新上传凭证 */
   rejected: number;
-  /** 已逾期 */
-  overdue: number;
   /** 已冻结 */
   frozen: number;
 }

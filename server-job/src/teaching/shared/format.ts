@@ -74,6 +74,50 @@ export function todayStr(): string {
 }
 
 /**
+ * ★ 异动日期的可选窗口：**今天 ± N 天**（业务要求：只能选「当日临近」的日期）
+ *
+ * 【为什么要有这个限制】
+ *   异动日期写的是「学生实际休学 / 退学 / 复学的那一天」。填错年份或月份
+ *   （比如 2025-10-09 写成 2026-10-09）在列表里很难一眼看出来，
+ *   却会让出勤、按天退费、宿舍退宿等一串下游数据整体错位。
+ *   把可选范围收窄到临近 10 天，从源头挡掉绝大多数手滑。
+ *
+ * 【一处定义，两处使用】
+ *   · 前端：`/meta.leaveDateWindowDays` 下发 → el-date-picker 的 disabled-date
+ *   · 后端：`create()` 校验（表单可以被绕过，服务端也必须拦）
+ *   两边都读这里的常量，改一个数字就够。
+ */
+export const LEAVE_DATE_WINDOW_DAYS = 10;
+
+/**
+ * 目标日期与今天相差几天（正数 = 未来）；日期串非法时返回 `null`
+ *
+ * ⚠️ 用 `Date.UTC` 归一后再相减：直接用本地时间构造两个 Date 相减，
+ *    在夏令时切换那天会得到 0.958 天这类小数，`Math.round` 后边界日期偶发误判。
+ */
+export function daysFromToday(dateStr: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ''));
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (!y || !mo || !d) return null;
+  const target = Date.UTC(y, mo - 1, d);
+  const now = new Date();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target - today) / 86400000);
+}
+
+/** 是否落在「今天 ± N 天」窗口内（含边界；日期串非法 → false） */
+export function isWithinLeaveDateWindow(
+  dateStr: string,
+  days: number = LEAVE_DATE_WINDOW_DAYS,
+): boolean {
+  const diff = daysFromToday(dateStr);
+  return diff !== null && Math.abs(diff) <= days;
+}
+
+/**
  * 由出生日期算年龄（周岁）；算不出返回 null
  *
  * ⚠️ 学生档案里 `age` 是**冗余列**（有的历史数据 age 是空的），

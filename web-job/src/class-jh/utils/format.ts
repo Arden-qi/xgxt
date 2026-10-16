@@ -76,8 +76,7 @@ export function payStatusTagType(status: number): TagType {
   if (status === 1) return 'warning'; // 待缴
   if (status === 2) return 'primary'; // 已缴
   if (status === 3) return 'success'; // 已核对
-  if (status === 4) return 'danger'; // 逾期
-  return 'info'; // 冻结
+  return 'info'; // 冻结(5)
 }
 
 /** 退费状态标签色 */

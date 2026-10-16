@@ -63,7 +63,6 @@ export const PayStatusName: Record<number, string> = {
   [PayStatus.UNPAID]: '待缴',
   [PayStatus.PAID]: '已缴',
   [PayStatus.VERIFIED]: '已核对',
-  [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
 };
 

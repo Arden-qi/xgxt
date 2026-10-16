@@ -1234,14 +1234,25 @@ async function submitUpload() {
   const re = isReupload.value;
   uploading.value = true;
   try {
-    await uploadCertificate({
+    const res = await uploadCertificate({
       id: uploadTarget.value.paymentId,
       certificateName: shotFileName.value || undefined,
       uploadRemark: uploadRemark.value || undefined,
       amount: ocrResult.value?.amount,
       orderNo: ocrResult.value?.orderNo || undefined,
+      // ⭐ 2026-10-15：把截图地址一并提交，后端落库后回传财务
+      certificateUrl: ocrResult.value?.certificateUrl,
     });
-    ElMessage.success(re ? '凭证重新上传成功' : '凭证上传成功');
+
+    const baseTip = re ? '凭证重新上传成功' : '凭证上传成功';
+    if (res?.financeSynced) {
+      ElMessage.success(`${baseTip}，已同步至财务`);
+    } else {
+      // 教务侧传成功了、但财务没收到 —— 必须明说，否则就是「以为传好了、财务那边没有」
+      ElMessage.warning(
+        `${baseTip}，但未同步至财务：${res?.financeSyncMessage || '未知原因'}`,
+      );
+    }
     uploadVisible.value = false;
     loadExpiring();
   } finally {
