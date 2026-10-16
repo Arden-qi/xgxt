@@ -59,8 +59,16 @@ const PHASE_NAME: Record<number, string> = {
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
 const GENDER: Record<number, string> = { 0: '未知', 1: '男', 2: '女' };
 
-/** 初高学生状态枚举（只显示在读状态的） */
-const IN_SCHOOL_STATUS: number[] = [1, 2, 3, 6];
+/**
+ * 「在读」学生状态（**统一码**）：试学中 3 / 预在读 4 / 正式在读 5
+ *
+ * ⚠️ 2026-10-16 修正：原来是 `[1, 2, 3, 6]`，那是老初高库的旧编码 ——
+ *   统一码里 1=待咨询、2=咨询中、6=休学，套在现在的数据上结果是
+ *   「班里 12 个正式在读的学生一个都不算，休学的反而算在读」，班级人数永远显示 0。
+ *   口径与 `teaching/shared/conf.ts` 的 `DEFAULT_SCOPE.jh.shouldStatuses = [3,4,5]`
+ *   （初高出勤「应到」）保持一致。
+ */
+const IN_SCHOOL_STATUS: number[] = [3, 4, 5];
 
 function str(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null;
@@ -167,7 +175,11 @@ async function countStudents(classIds: string[]): Promise<Map<string, number>> {
     .where('is_deleted', false)
     .whereIn('student_status', IN_SCHOOL_STATUS)
     .select('class_id')
-    .count({ c: '*' })) as unknown as Array<{ class_id: string; c: number | string }>;
+    .count({ c: '*' })
+    // ⚠️ 必须 group by：MySQL 8 的 ONLY_FULL_GROUP_BY 下少它会报 1140；
+    //    一个学段只有 1 个班时 MySQL 会把单值 IN 优化成等值判断而侥幸通过，
+    //    ≥2 个班就 500（班级管理整页打不开）
+    .groupBy('class_id')) as unknown as Array<{ class_id: string; c: number | string }>;
   for (const r of rows) map.set(String(r.class_id), Number(r.c));
   return map;
 }

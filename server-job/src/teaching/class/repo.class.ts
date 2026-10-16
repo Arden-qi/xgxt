@@ -128,7 +128,13 @@ function buildBase(q: ClassListQuery, user: any) {
   return qb;
 }
 
-/** 实时统计班里的学生（学生表上直接挂 class_id，没有独立花名册表） */
+/** 实时统计班里的学生（学生表上直接挂 class_id，没有独立花名册表）
+ *
+ *  ⚠️ 必须 `.groupBy('class_id')`：MySQL 8 默认开 ONLY_FULL_GROUP_BY，
+ *     少这个 group by 时 `select class_id, count(*)` 直接报 1140。
+ *     为什么一直没暴露？—— MySQL 会把「只有 1 个值的 IN 列表」优化成等值判断，
+ *     满足函数依赖检查，所以**一个学段只有 1 个班时侥幸能跑**；
+ *     某学段一旦有 ≥2 个班就必然 500，整个班级管理页打不开。 */
 async function countStudents(classIds: string[]): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   if (!classIds.length) return map;
@@ -136,7 +142,8 @@ async function countStudents(classIds: string[]): Promise<Map<string, number>> {
     .whereIn('class_id', classIds)
     .where('is_deleted', false)
     .select('class_id')
-    .count({ c: '*' })) as unknown as Array<{ class_id: string; c: number | string }>;
+    .count({ c: '*' })
+    .groupBy('class_id')) as unknown as Array<{ class_id: string; c: number | string }>;
   for (const r of rows) map.set(String(r.class_id), Number(r.c));
   return map;
 }

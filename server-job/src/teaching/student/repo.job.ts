@@ -44,8 +44,16 @@ const T = 't_student_base';
 const CLASS_TABLE = 't_job_class';
 const STAGE = 'job' as const;
 
-/** 就业档案只认这四种状态（原实现口径） */
+/**
+ * 学生档案「实训」页签可见的状态
+ *
+ * ★ 2026-10-16：在原口径（待就业 / 已就业 / 休学 / 退学 —— 旧的「就业档案」只关心
+ *   已经走到就业环节的人）基础上**补上「实训中」**：教学管理合并成一个入口后，
+ *   这个页签就是看实训班学生的，把「实训中」滤掉的话，实训班明明有 5 个学生，
+ *   页签里却是空的（班级管理花名册 5 人 / 学生档案 0 人，对不上）。
+ */
 const VISIBLE_STATUS: number[] = [
+  StudentStatus.TRAINING,
   StudentStatus.WAIT_EMPLOY,
   StudentStatus.EMPLOYED,
   StudentStatus.SUSPENDED,

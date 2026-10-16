@@ -96,3 +96,20 @@ node tools\_verify-form-fields.mjs
 > 另外下拉挂在 body 上的 fixed popper 里，`offsetParent` 恒为 `null`，
 > 判断可见性要用 `getComputedStyle(popper).display` + `getBoundingClientRect()`。
 
+---
+
+## 5. `_verify-teaching-demo-data.mjs` —— 教学管理九个入口「有没有数据」
+
+```bat
+node tools\_verify-teaching-demo-data.mjs
+```
+
+逐页打开 学生档案 / 班级管理 / 出勤管理 / 考试管理 / 成绩管理 / 宿舍管理 /
+催费缴费 / 退费 / 休学退学审批，断言**列表至少 1 行**且**无未捕获异常**，
+每页截图落到 `tools/_out/demo_<域>.png`。
+
+配合 `server-job` 的 `npm run seed:teaching`（教学管理演示数据补齐：幂等、不清库、
+走真实接口）使用 —— 补完数据跑这个脚本，一眼看出哪个页面还是空的。
+
+> 首屏接口慢时会数到 0 行：脚本内部有 8 秒轮询等待，不用手动加 sleep。
+

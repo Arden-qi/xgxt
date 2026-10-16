@@ -162,7 +162,9 @@ async function countStudents(classIds: string[]): Promise<Map<string, number>> {
     .whereIn('class_id', classIds)
     .where({ is_deleted: false, status: 1 })
     .select('class_id')
-    .count({ c: '*' })) as unknown as Array<{ class_id: string; c: number | string }>;
+    .count({ c: '*' })
+    // ⚠️ 同上：ONLY_FULL_GROUP_BY 下必须 group by（现在只有 1 个实训班没暴露，别等 2 个班）
+    .groupBy('class_id')) as unknown as Array<{ class_id: string; c: number | string }>;
   for (const r of rows) map.set(String(r.class_id), Number(r.c));
   return map;
 }
