@@ -50,9 +50,9 @@
 ### 推荐方式：一键启动
 
 1. 将项目源码包解压到本机目录，保留 `shared-types/`、`server-job/`、`web-job/` 和 `tools/` 等目录。数据库初始化 SQL 已随仓库放在 `server-job/sql/init/`，无需另行索取。
-2. 启动 MySQL 服务。
+2. 启动 MySQL 服务。如果 MySQL 装在项目同级的 `mysql/` 目录或常见安装目录下，且 `DB_HOST` 指向本机，可以跳过这一步：`一键启动.bat` 检测到 3306 没在监听时会自动把 `mysqld` 拉起来（等端口就绪后再继续）。
 3. 若没有 `server-job/.env`，将 `server-job/.env.example` 复制为 `server-job/.env`；填写 `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`JWT_SECRET` 和 `INTERNAL_TOKEN`。模板值是占位符，必须替换。默认数据库名为 9 个 `sms_*` 数据库，通常无需修改。请勿将含真实凭据的 `.env` 对外分享。
-4. 双击项目根目录的 `一键启动.bat`。启动器会检查环境、安装缺少的 npm 依赖、编译共享类型、创建所需数据库、运行五组数据库迁移，导入 `server-job/sql/init/` 中的初始化 SQL（四个模块库仅在该库为空时导入；统一表用 `IF NOT EXISTS` 补齐，可重复执行），最后启动前后端。
+4. 双击项目根目录的 `一键启动.bat`。启动器会检查环境（含自动启动本机 MySQL）、安装缺少的 npm 依赖、编译共享类型、创建所需数据库、运行五组数据库迁移，导入 `server-job/sql/init/` 中的初始化 SQL（四个模块库仅在该库为空时导入；统一表用 `IF NOT EXISTS` 补齐，可重复执行），最后启动前后端。
 5. 首次安装也可以直接在项目根目录运行 `node tools/start.mjs`。加 `--no-browser` 可跳过自动打开浏览器；加 `--frontend=5174` 可更改前端端口（默认 5173）。
 
 ### 手动安装
