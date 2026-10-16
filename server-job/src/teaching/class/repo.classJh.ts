@@ -166,6 +166,9 @@ async function countStudents(classIds: string[]): Promise<Map<string, number>> {
     .whereIn('class_id', classIds)
     .where('is_deleted', false)
     .whereIn('student_status', IN_SCHOOL_STATUS)
+    // ★ 2026-10-16 修：必须 groupBy，否则 only_full_group_by 模式下
+    //   「select class_id, count(*) 无 group by」直接报 1140 错误。
+    .groupBy('class_id')
     .select('class_id')
     .count({ c: '*' })) as unknown as Array<{ class_id: string; c: number | string }>;
   for (const r of rows) map.set(String(r.class_id), Number(r.c));
