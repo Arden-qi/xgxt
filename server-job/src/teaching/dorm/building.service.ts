@@ -33,6 +33,7 @@ const T = 't_dorm_building';
 export interface DormBuildingRow {
   id: string;
   buildingName: string;
+  category: number | null;
   sortNo: number;
   remark: string | null;
 }
@@ -51,6 +52,7 @@ export async function listBuildings(): Promise<DormBuildingRow[]> {
   return rows.map((r: any) => ({
     id: String(r.id),
     buildingName: String(r.building_name ?? ''),
+    category: r.category === null || r.category === undefined ? null : Number(r.category),
     sortNo: Number(r.sort_no ?? 0),
     remark: str(r.remark),
   }));
@@ -64,8 +66,16 @@ export async function listBuildingNames(): Promise<string[]> {
 export interface DormBuildingSaveBody {
   id?: string;
   buildingName: string;
+  category?: number;
   sortNo?: number;
   remark?: string | null;
+}
+
+function normalizeCategory(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  if (Number.isNaN(n)) return null;
+  return n;
 }
 
 export async function saveBuilding(
@@ -75,6 +85,10 @@ export async function saveBuilding(
   const name = String(body.buildingName ?? '').trim();
   if (!name) throw new BizError(BizCode.PARAM_ERROR, '楼栋名称必填');
   if (name.length > 50) throw new BizError(BizCode.PARAM_ERROR, '楼栋名称不能超过 50 个字');
+  const category = normalizeCategory(body.category);
+  if (category !== null && category !== 1 && category !== 2) {
+    throw new BizError(BizCode.PARAM_ERROR, '楼栋类别只能选「男寝」或「女寝」');
+  }
   if (str(body.remark) && String(body.remark).length > 100) {
     throw new BizError(BizCode.PARAM_ERROR, '备注不能超过 100 个字');
   }
@@ -94,6 +108,7 @@ export async function saveBuilding(
     if (dup) throw new BizError(BizCode.PARAM_ERROR, `楼栋「${name}」已存在`);
     await commonDb(T).where({ id: String(body.id) }).update({
       building_name: name,
+      category,
       sort_no: sortNo,
       remark: str(body.remark),
       update_time: new Date(),
@@ -114,6 +129,7 @@ export async function saveBuilding(
   if (dead) {
     await commonDb(T).where({ id: String(dead.id) }).update({
       is_deleted: false,
+      category,
       sort_no: sortNo,
       remark: str(body.remark),
       update_time: new Date(),
@@ -126,6 +142,7 @@ export async function saveBuilding(
   await commonDb(T).insert({
     id,
     building_name: name,
+    category,
     sort_no: sortNo,
     remark: str(body.remark),
     is_deleted: false,

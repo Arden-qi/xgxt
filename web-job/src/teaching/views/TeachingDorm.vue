@@ -13,24 +13,6 @@
       </template>
     </el-alert>
 
-    <!-- 统计卡片 -->
-    <div class="tdv-cards">
-      <div v-for="s in summary" :key="s.stage" class="tdv-card">
-        <div class="tdv-card__k">{{ s.stageName }}宿舍</div>
-        <div class="tdv-card__v">{{ s.roomCount }} 间</div>
-        <div class="tdv-card__x">
-          <span>床位 <b>{{ s.bedCount }}</b></span>
-          <span class="ok">已住 {{ s.occupiedCount }}</span>
-          <span class="warn">空床 {{ s.vacantBeds }}</span>
-        </div>
-        <div class="tdv-card__x">入住率 {{ s.occupancyRate }}%</div>
-      </div>
-      <div v-if="!summary.length" class="tdv-card">
-        <div class="tdv-card__k">暂无数据</div>
-        <div class="tdv-card__v">0 间</div>
-      </div>
-    </div>
-
     <!--
       筛选栏（2026-10-18 改版）
       · 顺序固定：关键字 → 类别 → 楼栋 → 状态 → 入住率
@@ -250,100 +232,86 @@
     <el-dialog
       v-model="editVisible"
       :title="form.id ? '编辑房间' : '新增房间'"
-      width="640px"
+      width="480px"
       top="8vh"
       destroy-on-close
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
-        <el-row :gutter="12">
-          <!-- ① 类别：单选框，只有 男寝 / 女寝 两项（没有「不限」） -->
-          <el-col :span="12">
-            <el-form-item label="类别" prop="dormType" required>
-              <el-radio-group v-model="form.dormType">
-                <el-radio v-for="d in DORM_CATEGORY_OPTIONS" :key="d.value" :value="d.value">
-                  {{ d.label }}
-                </el-radio>
-              </el-radio-group>
-            </el-form-item>
-          </el-col>
+        <!-- ① 类别：单选框，只有 男寝 / 女寝 两项（没有「不限」） -->
+        <el-form-item label="类别" prop="dormType" required>
+          <el-radio-group v-model="form.dormType">
+            <el-radio v-for="d in DORM_CATEGORY_OPTIONS" :key="d.value" :value="d.value">
+              {{ d.label }}
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
 
-          <!-- ② 楼栋：下拉，选项来自「系统设置 → 楼栋设置」 -->
-          <el-col :span="12">
-            <el-form-item label="楼栋" prop="buildingName" required>
-              <el-select v-model="form.buildingName" placeholder="请选择楼栋" style="width: 100%">
-                <el-option
-                  v-for="b in buildingOptions"
-                  :key="b.value"
-                  :label="b.label"
-                  :value="b.value"
-                />
-              </el-select>
-              <div class="tdv-hint">
-                选项是「系统设置 → 楼栋设置」里维护的，那边新增这里自动出现
-              </div>
-            </el-form-item>
-          </el-col>
+        <!-- ② 楼栋：下拉，选项按类别联动 -->
+        <el-form-item label="楼栋" prop="buildingName" required>
+          <el-select v-model="form.buildingName" placeholder="请先选择类别" style="width: 100%">
+            <el-option
+              v-for="b in buildingOptions"
+              :key="b.value"
+              :label="b.label"
+              :value="b.value"
+            />
+          </el-select>
+          <div class="tdv-hint">
+            只显示与「类别」一致的楼栋；如没有，请先去「系统设置 → 楼栋设置」维护
+          </div>
+        </el-form-item>
 
-          <!-- ③ 宿舍号：3 位数字，第 1 位楼层 + 后 2 位房号 -->
-          <el-col :span="12">
-            <el-form-item label="宿舍号" prop="roomNo" required>
-              <el-input
-                v-model="form.roomNo"
-                maxlength="3"
-                placeholder="如 308"
-                style="width: 100%"
-                @input="form.roomNo = form.roomNo.replace(/\D/g, '')"
-              />
-              <div class="tdv-hint">
-                3 位数字：第 1 位是楼层、后 2 位是房号
-                <template v-if="roomNoFloor"> → 当前 {{ roomNoFloor }} 楼</template>
-              </div>
-            </el-form-item>
-          </el-col>
+        <!-- ③ 宿舍号：3 位数字，第 1 位楼层 + 后 2 位房号 -->
+        <el-form-item label="宿舍号" prop="roomNo" required>
+          <el-input
+            v-model="form.roomNo"
+            maxlength="3"
+            placeholder="如 308"
+            style="width: 100%"
+            @input="form.roomNo = form.roomNo.replace(/\D/g, '')"
+          />
+          <div class="tdv-hint">
+            3 位数字：第 1 位是楼层、后 2 位是房号
+            <template v-if="roomNoFloor"> → 当前 {{ roomNoFloor }} 楼</template>
+          </div>
+        </el-form-item>
 
-          <!-- ④ 床位数：1~50（已住人数由系统实时统计，不在这里填） -->
-          <el-col :span="12">
-            <el-form-item label="床位数" prop="bedCount">
-              <el-input-number
-                v-model="form.bedCount"
-                :min="1"
-                :max="DORM_BED_COUNT_MAX"
-                :step="1"
-                step-strictly
-                style="width: 100%"
-              />
-              <div class="tdv-hint">取值范围 1 ~ {{ DORM_BED_COUNT_MAX }}</div>
-            </el-form-item>
-          </el-col>
+        <!-- ④ 床位数：1~50（已住人数由系统实时统计，不在这里填） -->
+        <el-form-item label="床位数" prop="bedCount">
+          <el-input-number
+            v-model="form.bedCount"
+            :min="1"
+            :max="DORM_BED_COUNT_MAX"
+            :step="1"
+            step-strictly
+            style="width: 100%"
+          />
+          <div class="tdv-hint">取值范围 1 ~ {{ DORM_BED_COUNT_MAX }}</div>
+        </el-form-item>
 
-          <!-- ⑤ 状态：只有 使用中 / 停用 -->
-          <el-col :span="12">
-            <el-form-item label="状态">
-              <el-select v-model="form.roomStatus" style="width: 100%">
-                <el-option
-                  v-for="d in DORM_ROOM_STATUS_OPTIONS"
-                  :key="d.value"
-                  :label="d.label"
-                  :value="d.value"
-                />
-              </el-select>
-            </el-form-item>
-          </el-col>
+        <!-- ⑤ 状态：只有 使用中 / 停用 -->
+        <el-form-item label="状态">
+          <el-select v-model="form.roomStatus" style="width: 100%">
+            <el-option
+              v-for="d in DORM_ROOM_STATUS_OPTIONS"
+              :key="d.value"
+              :label="d.label"
+              :value="d.value"
+            />
+          </el-select>
+        </el-form-item>
 
-          <!-- ⑥ 备注：≤ 50 个汉字 -->
-          <el-col :span="24">
-            <el-form-item label="备注" prop="remark">
-              <el-input
-                v-model="form.remark"
-                type="textarea"
-                :rows="2"
-                :maxlength="DORM_REMARK_MAX"
-                show-word-limit
-                placeholder="选填，最多 50 个汉字"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
+        <!-- ⑥ 备注：≤ 50 个汉字 -->
+        <el-form-item label="备注" prop="remark">
+          <el-input
+            v-model="form.remark"
+            type="textarea"
+            :rows="2"
+            :maxlength="DORM_REMARK_MAX"
+            show-word-limit
+            placeholder="选填，最多 50 个汉字"
+          />
+        </el-form-item>
 
         <el-alert
           type="info"
@@ -504,7 +472,7 @@
  *
  *   新增房间弹窗（学段已在 2026-10-18 下线，见下）：
  *     ① 类别   —— 单选框，只有「男寝 / 女寝」（没有「不限」）
- *     ② 楼栋   —— 下拉，选项来自「系统设置 → 楼栋设置」（同一张 t_dorm_building，实时同步）
+ *     ② 楼栋   —— 下拉，选项按类别联动：选男寝只出现男寝楼栋，选女寝只出现女寝楼栋
  *     ③ 宿舍号 —— 3 位数字，第 1 位是楼层、后 2 位是房号（如 308）→ 楼层不再单独存列
  *     ④ 床位数 —— 手工填，取值 1 ~ 50；已住人数由床位实时统计，不在这里填
  *     ⑤ 状态   —— 只有「使用中 / 停用」两档
@@ -536,9 +504,14 @@
  *   但宿舍在后端按学段分表，saveDorm 的 stage 参数不能省 ——
  *   → 新增固定用 DEFAULT_DORM_STAGE（= job，当前实际在用的表）；
  *     编辑沿用 row.stage，绝不套用默认值（否则等于把房间搬到另一张表）。
+ *
+ * 【★ 2026-10-18 改版③：楼栋设置支持「类别」】
+ *   楼栋字典 t_dorm_building 新增 category 列（1 男寝 / 2 女寝）。
+ *   新增房间时「类别」和「楼栋」按类别联动：选男寝 → 只列男寝楼栋。
+ *   老楼栋未分类（NULL）时不会出现在弹窗下拉里，需先在「系统设置 → 楼栋设置」编辑补录。
  */
 
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
@@ -552,7 +525,6 @@ import {
   listDorms,
   getDormBeds,
   getDormMeta,
-  getDormSummary,
   listDormBuildings,
   listDormResidents,
   listDormChanges,
@@ -578,7 +550,6 @@ import {
   type DormRow,
   type DormStage,
   type DormStageMeta,
-  type DormSummary,
 } from '@/teaching/api/dorm';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
@@ -591,7 +562,6 @@ const stageOptions = computed(() => visibleStageOptions('dorm', DORM_STAGE_ORDER
 const loading = ref(false);
 const rows = ref<DormRow[]>([]);
 const total = ref(0);
-const summary = ref<DormSummary[]>([]);
 const metaList = ref<DormStageMeta[]>([]);
 const buildings = ref<Array<{ value: string; label: string }>>([]);
 const residents = ref<DormResidentRow[]>([]);
@@ -609,6 +579,11 @@ const buildingSettings = ref<DormBuildingRow[]>([]);
  */
 const buildingOptions = computed(() =>
   buildingSettings.value
+    .filter((b) => {
+      // 弹窗里按已选类别联动：只显示同类别楼栋；未分类楼栋两边都不显示
+      if (!form.dormType) return false;
+      return b.category === form.dormType;
+    })
     .map((b) => String(b.buildingName ?? '').trim())
     .filter(Boolean)
     .map((v) => ({ value: v, label: v })),
@@ -679,9 +654,8 @@ async function load(page?: number) {
   loading.value = true;
   try {
     const q = { ...query };
-    const [r, s, m, b, rs, rates] = await Promise.all([
+    const [r, m, b, rs, rates] = await Promise.all([
       listDorms(q),
-      getDormSummary(q),
       metaList.value.length ? Promise.resolve(metaList.value) : getDormMeta(),
       listDormBuildings(query.stage),
       listDormResidents(q),
@@ -694,7 +668,6 @@ async function load(page?: number) {
     ]);
     rows.value = r.list || [];
     total.value = r.total || 0;
-    summary.value = s || [];
     metaList.value = m || [];
     buildings.value = b || [];
     residents.value = rs || [];
@@ -882,6 +855,18 @@ const rules: FormRules = {
   ],
 };
 
+/**
+ * ★ 类别切换时，若当前楼栋不在新类别对应的选项里，自动清空楼栋
+ *   避免「类别=男寝、楼栋=女寝楼」这种无效组合存进库。
+ */
+watch(
+  () => form.dormType,
+  () => {
+    const ok = buildingOptions.value.some((b) => b.value === form.buildingName);
+    if (!ok) form.buildingName = '';
+  },
+);
+
 function openCreate() {
   Object.assign(form, {
     id: undefined,
@@ -1059,21 +1044,6 @@ defineExpose({ openChangeList, openChangeEntry });
 <style scoped>
 .tdv-tip { margin-bottom: 12px; }
 .tdv-tip :deep(.muted) { color: #A2938E; font-weight: normal; }
-
-.tdv-cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
-.tdv-card {
-  min-width: 190px;
-  padding: 12px 14px;
-  border: 1px solid #E2D7D1;
-  border-radius: 6px;
-  background: #fff;
-}
-.tdv-card__k { font-size: 13px; color: #A2938E; }
-.tdv-card__v { font-size: 22px; font-weight: 600; margin: 4px 0 6px; }
-.tdv-card__x { font-size: 12px; color: #7A6C67; display: flex; gap: 10px; flex-wrap: wrap; }
-.tdv-card__x .ok { color: #5FA36F; }
-.tdv-card__x .warn { color: #C9852E; }
-.tdv-card__x .danger { color: #CD3A33; }
 
 .tdv-filter { margin-bottom: 8px; }
 

@@ -11,7 +11,7 @@
 
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Delete, Search, Refresh, SetUp } from '@element-plus/icons-vue';
+import { Plus, Delete, Search, Refresh, SetUp, EditPen } from '@element-plus/icons-vue';
 import { DEPT_NAME } from 'shared-types/class-jh';
 import type { ClassSetting, StageDict, OpLog, OpLogListQuery, StageSavePayload } from 'shared-types/class-jh';
 import {
@@ -102,7 +102,18 @@ const buildingLoading = ref(false);
 const buildingData = ref<DormBuildingRow[]>([]);
 const buildingVisible = ref(false);
 const buildingSubmitting = ref(false);
-const buildingForm = reactive({ id: '', buildingName: '', sortNo: 0, remark: '' });
+const buildingForm = reactive({ id: '', buildingName: '', category: 1 as number, remark: '' });
+
+const DORM_BUILDING_CATEGORY_OPTIONS = [
+  { value: 1, label: '男寝' },
+  { value: 2, label: '女寝' },
+];
+
+function buildingCategoryName(category: number | null | undefined) {
+  if (category === 1) return '男寝';
+  if (category === 2) return '女寝';
+  return '未设置';
+}
 
 async function loadBuildings() {
   buildingLoading.value = true;
@@ -116,7 +127,17 @@ async function loadBuildings() {
 }
 
 function openBuildingDialog() {
-  Object.assign(buildingForm, { id: '', buildingName: '', sortNo: buildingData.value.length + 1, remark: '' });
+  Object.assign(buildingForm, { id: '', buildingName: '', category: 1, remark: '' });
+  buildingVisible.value = true;
+}
+
+function openBuildingEdit(row: DormBuildingRow) {
+  Object.assign(buildingForm, {
+    id: row.id,
+    buildingName: row.buildingName,
+    category: row.category ?? 1,
+    remark: row.remark || '',
+  });
   buildingVisible.value = true;
 }
 
@@ -131,7 +152,7 @@ async function submitBuilding() {
     await saveDormBuilding({
       id: buildingForm.id || undefined,
       buildingName: name,
-      sortNo: buildingForm.sortNo,
+      category: buildingForm.category,
       remark: buildingForm.remark || undefined,
     });
     ElMessage.success(buildingForm.id ? '楼栋已更新' : '新增成功');
@@ -311,12 +332,20 @@ onMounted(() => {
         <el-table v-loading="buildingLoading" :data="buildingData" border stripe empty-text="暂无楼栋">
           <el-table-column type="index" label="序号" width="60" align="center" />
           <el-table-column prop="buildingName" label="楼栋名称" min-width="180" />
-          <el-table-column prop="sortNo" label="排序" width="90" align="center" />
+          <el-table-column label="类别" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.category" :type="row.category === 1 ? 'primary' : 'danger'" size="small">
+                {{ buildingCategoryName(row.category) }}
+              </el-tag>
+              <el-tag v-else type="info" size="small">未设置</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="remark" label="备注" min-width="200">
             <template #default="{ row }">{{ dash(row.remark) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="100" align="center" fixed="right">
+          <el-table-column label="操作" width="140" align="center" fixed="right">
             <template #default="{ row }">
+              <el-button v-readonly-hide link type="primary" size="small" :icon="EditPen" @click="openBuildingEdit(row)">编辑</el-button>
               <el-button v-readonly-hide link type="danger" size="small" :icon="Delete" @click="handleDeleteBuilding(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -390,14 +419,18 @@ onMounted(() => {
       </el-tab-pane>
     </el-tabs>
 
-    <!-- 新增楼栋 -->
-    <el-dialog v-model="buildingVisible" title="新增楼栋" width="480px">
+    <!-- 新增 / 编辑楼栋 -->
+    <el-dialog v-model="buildingVisible" :title="buildingForm.id ? '编辑楼栋' : '新增楼栋'" width="480px">
       <el-form :model="buildingForm" label-width="100px">
         <el-form-item label="楼栋名称" required>
           <el-input v-model="buildingForm.buildingName" maxlength="50" placeholder="如 4号楼" />
         </el-form-item>
-        <el-form-item label="排序">
-          <el-input-number v-model="buildingForm.sortNo" :min="0" style="width: 100%" />
+        <el-form-item label="类别" required>
+          <el-radio-group v-model="buildingForm.category">
+            <el-radio v-for="d in DORM_BUILDING_CATEGORY_OPTIONS" :key="d.value" :value="d.value">
+              {{ d.label }}
+            </el-radio>
+          </el-radio-group>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="buildingForm.remark" maxlength="100" placeholder="选填" />

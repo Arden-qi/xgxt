@@ -20,6 +20,8 @@ import { http } from '@/api/request';
 export interface DormBuildingRow {
   id: string;
   buildingName: string;
+  /** 1 男寝 / 2 女寝 / null 未分类 */
+  category: number | null;
   sortNo: number;
   remark: string | null;
 }
@@ -27,6 +29,7 @@ export interface DormBuildingRow {
 export interface DormBuildingSavePayload {
   id?: string;
   buildingName: string;
+  category: number;
   sortNo?: number;
   remark?: string;
 }

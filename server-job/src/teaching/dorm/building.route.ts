@@ -47,10 +47,14 @@ teachingBuildingRouter.post(
   '/save',
   wrap(async (req, res) => {
     const b = req.body || {};
+    const category = b.category === undefined || b.category === null || b.category === ''
+      ? undefined
+      : Number(b.category);
     const r = await svc.saveBuilding(
       {
         id: str(b.id),
         buildingName: String(b.buildingName ?? ''),
+        category,
         sortNo: b.sortNo === undefined || b.sortNo === null || b.sortNo === ''
           ? undefined
           : Number(b.sortNo),
