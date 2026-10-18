@@ -79,6 +79,25 @@ export const DORM_ROOM_STATUS_OPTIONS = [
 /** ★ 备注长度上限（汉字个数，后端同口径校验，改这里记得同步后端） */
 export const DORM_REMARK_MAX = 50;
 
+/**
+ * ★ 新增房间默认落在哪个学段
+ *
+ * 弹窗里已经没有「学段」选项了（列表三学段合并展示，让用户选学段是暴露实现细节），
+ * 但宿舍在后端是**按学段分表**存的，saveDorm 必须带 stage 才知道写哪张表。
+ * → 固定写实训（sms_job.t_job_dorm），当前实际在用的也是这张表；
+ *   编辑时不要套用这个值，要沿用房间自己的 stage，否则等于把房间搬到另一张表。
+ */
+export const DEFAULT_DORM_STAGE: DormStage = 'job';
+
+/**
+ * ★ 床位数取值范围：1 ~ 50（大于 0，小于等于 50）
+ *   下限 1 —— 0 张床的房间入住率会出现除零，且没有意义；
+ *   上限 50 —— 业务上单间宿舍不会超过这个量级。
+ *   后端 route.ts 同口径校验，改这里记得同步后端。
+ */
+export const DORM_BED_COUNT_MIN = 1;
+export const DORM_BED_COUNT_MAX = 50;
+
 /** ★ 宿舍号规则：3 位数字，第 1 位是楼层、后 2 位是房号（如 308） */
 export const DORM_ROOM_NO_RE = /^\d{3}$/;
 

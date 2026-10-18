@@ -256,14 +256,6 @@
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="学段" required>
-              <el-select v-model="form.stage" :disabled="!!form.id" style="width: 100%">
-                <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-
           <!-- ① 类别：单选框，只有 男寝 / 女寝 两项（没有「不限」） -->
           <el-col :span="12">
             <el-form-item label="类别" prop="dormType" required>
@@ -309,10 +301,18 @@
             </el-form-item>
           </el-col>
 
-          <!-- ④ 床位数（已住人数由系统实时统计，不在这里填） -->
+          <!-- ④ 床位数：1~50（已住人数由系统实时统计，不在这里填） -->
           <el-col :span="12">
-            <el-form-item label="床位数">
-              <el-input-number v-model="form.bedCount" :min="1" :max="20" style="width: 100%" />
+            <el-form-item label="床位数" prop="bedCount">
+              <el-input-number
+                v-model="form.bedCount"
+                :min="1"
+                :max="DORM_BED_COUNT_MAX"
+                :step="1"
+                step-strictly
+                style="width: 100%"
+              />
+              <div class="tdv-hint">取值范围 1 ~ {{ DORM_BED_COUNT_MAX }}</div>
             </el-form-item>
           </el-col>
 
@@ -502,14 +502,14 @@
  *   列表列固定为 8 列（不再按学段动态增删）：
  *     类别 / 楼栋 / 宿舍号 / 已住-床位 / 入住率 / 状态 / 备注 / 操作
  *
- *   新增房间 6 条规则：
+ *   新增房间弹窗（学段已在 2026-10-18 下线，见下）：
  *     ① 类别   —— 单选框，只有「男寝 / 女寝」（没有「不限」）
  *     ② 楼栋   —— 下拉，选项来自「系统设置 → 楼栋设置」（同一张 t_dorm_building，实时同步）
  *     ③ 宿舍号 —— 3 位数字，第 1 位是楼层、后 2 位是房号（如 308）→ 楼层不再单独存列
- *     ④ 床位数 —— 手工填；已住人数由床位实时统计，不在这里填
+ *     ④ 床位数 —— 手工填，取值 1 ~ 50；已住人数由床位实时统计，不在这里填
  *     ⑤ 状态   —— 只有「使用中 / 停用」两档
  *     ⑥ 备注   —— ≤ 50 个汉字
- *   （四条硬规则在后端 /save 里又校验了一次，前端规则能被绕过）
+ *   （五条硬规则在后端 /save 里又校验了一次，前端规则能被绕过）
  *
  * 【★ 三个学段的字段差异仍由 /meta 下发，前端不写死学段判断】
  *   meta 现在只管两件事：hasCreate（能否增删改）、hasBedTable（床位是不是虚拟编号）。
@@ -530,6 +530,12 @@
  *   ③ 入住率 —— 选项由 /occupancy-rates **实时**下发，不写死档位；
  *      每次 load 重拉，且跟着楼栋/类别/状态联动（后端算选项时会摘掉入住率条件本身，
  *      否则先选 50% 之后下拉就只剩 50%，用户再也选不回去）。
+ *
+ * 【★ 2026-10-18 改版②：新增房间弹窗去掉「学段」】
+ *   列表已经合并三学段、筛选栏也不再有学段，弹窗里再让用户选一次是自相矛盾。
+ *   但宿舍在后端按学段分表，saveDorm 的 stage 参数不能省 ——
+ *   → 新增固定用 DEFAULT_DORM_STAGE（= job，当前实际在用的表）；
+ *     编辑沿用 row.stage，绝不套用默认值（否则等于把房间搬到另一张表）。
  */
 
 import { computed, onMounted, reactive, ref } from 'vue';
@@ -562,6 +568,9 @@ import {
   DORM_ROOM_STATUS_OPTIONS,
   DORM_ROOM_NO_RE,
   DORM_REMARK_MAX,
+  DORM_BED_COUNT_MIN,
+  DORM_BED_COUNT_MAX,
+  DEFAULT_DORM_STAGE,
   DORM_APPROVAL_TAG,
   type DormBedRow,
   type DormChangeRow,
@@ -812,7 +821,12 @@ const saving = ref(false);
 const formRef = ref<FormInstance>();
 const form = reactive<Record<string, any>>({
   id: undefined as string | undefined,
-  stage: 'job' as DormStage,
+  /**
+   * ★ 学段不再出现在弹窗里（用户不需要也不该知道三学段的分表），但**接口参数里还得有**：
+   *   宿舍在三学段是分表存的，保存时后端靠 stage 决定写哪张表。
+   *   → 新增固定写 DEFAULT_DORM_STAGE；编辑时沿用房间自己的 stage，别把房间搬到别的表去。
+   */
+  stage: DEFAULT_DORM_STAGE,
   buildingName: '',
   roomNo: '',
   dormType: 1,
@@ -827,9 +841,21 @@ const roomNoFloor = computed(() =>
 );
 
 const rules: FormRules = {
-  stage: [{ required: true, message: '请选择学段', trigger: 'change' }],
   buildingName: [{ required: true, message: '请选择楼栋', trigger: 'change' }],
   dormType: [{ required: true, message: '请选择类别', trigger: 'change' }],
+  bedCount: [
+    {
+      validator: (_r: unknown, v: number, cb: (e?: Error) => void) => {
+        const n = Number(v);
+        if (!Number.isInteger(n)) return cb(new Error('床位数必须是整数'));
+        if (n < DORM_BED_COUNT_MIN || n > DORM_BED_COUNT_MAX) {
+          return cb(new Error(`床位数取值范围 ${DORM_BED_COUNT_MIN} ~ ${DORM_BED_COUNT_MAX}`));
+        }
+        return cb();
+      },
+      trigger: 'change',
+    },
+  ],
   roomNo: [
     { required: true, message: '宿舍号必填', trigger: 'blur' },
     {
@@ -859,7 +885,7 @@ const rules: FormRules = {
 function openCreate() {
   Object.assign(form, {
     id: undefined,
-    stage: query.stage || 'job',
+    stage: DEFAULT_DORM_STAGE,
     buildingName: '',
     roomNo: '',
     dormType: 1,

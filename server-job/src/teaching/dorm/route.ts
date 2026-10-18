@@ -190,7 +190,7 @@ teachingDormRouter.post(
       throw new BizError(BizCode.PARAM_ERROR, '房间号必填');
     }
     /**
-     * ★★ 新增房间的四条业务规则（和前端弹窗一一对应，后端必须再拦一次）
+     * ★★ 新增房间的五条业务规则（和前端弹窗一一对应，后端必须再拦一次）
      *
      *   ① 宿舍号 = **3 位数字**，第 1 位是楼层、后 2 位是房号（如 308 = 3 楼 08 室）
      *      → 楼层不再单独存一列，房号本身就带楼层，改房号即改楼层，不会两处不一致。
@@ -199,6 +199,7 @@ teachingDormRouter.post(
      *   ③ 状态只能是 **1 使用中 / 4 停用**（统一码；实训原码 1/2 由 repo 翻译）
      *      → 「空置(2)」「维修(3)」不在本次口径内，传了直接拒，避免存进去显示不出来。
      *   ④ 备注 ≤ 50 个汉字（按**字符数**算，不是字节数 —— utf8mb4 下一个汉字是 1 个字符）
+     *   ⑤ 床位数 1 ~ 50（大于 0、小于等于 50）—— 0 会让入住率除零
      *
      * 【为什么后端要重复校验】前端 el-form 的 rules 能被绕过（直接调接口 /
      *   改 DOM），而且 ① 这类规则一旦绕过，dorm_no 唯一键会存进「A-1-3O8」这种脏值。
@@ -226,6 +227,16 @@ teachingDormRouter.post(
     ) {
       throw new BizError(BizCode.PARAM_ERROR, '房间状态只能选「使用中」或「停用」');
     }
+    /**
+     * ⑤ 床位数：1 ~ 50（大于 0、小于等于 50）
+     *    → 0 会让入住率除零（入住率 = 已住 / 床位）；上限 50 是业务口径。
+     *    → 前端 el-input-number 有 min/max，但那个能被绕过，后端必须再挡一次。
+     */
+    const bedCount = numOrUndef(b.bedCount);
+    if (bedCount !== undefined && (!Number.isInteger(bedCount) || bedCount < 1 || bedCount > 50)) {
+      throw new BizError(BizCode.PARAM_ERROR, '床位数必须是 1 ~ 50 之间的整数');
+    }
+
     const remark = strOrNull(b.remark);
     if (remark !== undefined && remark !== null && [...remark].length > 50) {
       throw new BizError(BizCode.PARAM_ERROR, '备注不能超过 50 个字');
