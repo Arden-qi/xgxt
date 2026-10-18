@@ -94,11 +94,25 @@ function queryOf(req: Request): DormListQuery {
     dormType: numOrUndef(req.query.dormType),
     roomStatus: numOrUndef(req.query.roomStatus),
     keyword: str(req.query.keyword),
+    occupancyRate: numOrUndef(req.query.occupancyRate),
     onlyVacant: bool(req.query.onlyVacant),
     page: int(req.query.page, 1),
     size: Math.min(int(req.query.size, 20), 200),
   };
 }
+
+/**
+ * 14. 入住率可选项（实时从数据里去重，随其它筛选联动）
+ *
+ * 复用 queryOf 是为了让「楼栋=1号楼 → 只给 1号楼 真实存在的入住率」成立；
+ * occupancyRate 本身会在 service 里被摘掉（见 listOccupancyRates 注释）。
+ */
+teachingDormRouter.get(
+  '/occupancy-rates',
+  wrap(async (req, res) => {
+    res.json(ok(await svc.listOccupancyRates(queryOf(req), req.user), '查询成功'));
+  }),
+);
 
 /** 1. 房间列表 */
 teachingDormRouter.get(

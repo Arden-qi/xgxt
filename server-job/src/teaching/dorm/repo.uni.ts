@@ -206,15 +206,18 @@ export function makeRepo(stage: TeachingStage): DormRepo {
       // 「空置(2)」实训没有 → 不加条件（别把整表筛空）
       if (jobCode) qb.andWhere('dorm_status', Number(jobCode));
     }
-    if (q.keyword) {
-      const kw = `%${q.keyword}%`;
-      qb.andWhere((b: any) => {
-        b.where('room_no', 'like', kw)
-          .orWhere('building', 'like', kw)
-          .orWhere('dorm_no', 'like', kw)
-          .orWhere('facility', 'like', kw);
-      });
-    }
+    /**
+     * ★ 关键字**不在这里过滤**（2026-10-18 改）
+     *
+     * 旧实现在 SQL 里 like 了 room_no / building / dorm_no / facility 四个字段，
+     * 但列表上真正展示的还有「类别（男寝/女寝）」「状态（使用中/停用）」「备注」——
+     * 这些要么不在 like 范围内，要么是 int 码、得翻译成文字才搜得到。
+     * 结果就是「列表上看得见、搜索框里搜不出来」。
+     *
+     * → 统一挪到 service.mergedRows()：三学段合并成 DormRow 之后再做内存匹配，
+     *   匹配范围 = 列表全部可见列，且三学段口径天然一致（不用每个 repo 各写一遍）。
+     *   这里保留注释说明「关键字故意不在此处理」，避免后人又加回来。
+     */
   
     const rooms = await qb.select('*');
     if (!rooms.length) return [];
@@ -497,44 +500,28 @@ export function makeRepo(stage: TeachingStage): DormRepo {
     },
   
     /**
-     * ★ 楼栋下拉 =「楼栋设置里的楼栋」+「历史上已经在用的楼栋」
+     * ★ 楼栋下拉 = **只取「系统设置 → 楼栋设置」里维护的楼栋**（2026-10-18 改）
      *
-     * 【为什么是并集，不能只取一边】
-     *   ① 只取设置表 → 设置页还没建「A-1栋」时，已有的 A-1 宿舍在筛选里消失，
-     *      用户会以为数据丢了（实测库里就是 BB-1 / A-1 这类历史楼栋）。
-     *   ② 只取房间表 → 「设置页刚加了 4 号楼、还没建房间」，下拉里就没有 4 号楼，
-     *      用户根本没法把新楼用起来 —— 而这正是本次需求要的效果。
-     *   → 并集，且**设置表的排在前面**（它是权威字典，顺序由 sort_no 决定）。
+     * 【旧口径为什么被推翻】
+     *   之前是「设置表 ∪ 房间表已在用楼栋」的并集，理由是怕历史楼栋丢。
+     *   但并集带来一个更难收拾的问题：库里躺着 BB-1 / A-1 这类**只在房间表出现、
+     *   设置页根本没有**的脏楼栋，它们会混在下拉里 —— 用户以为这是系统认的楼，
+     *   选它、照它建房间，脏数据就越滚越多。
      *
-     * 【顺序】设置表按 sort_no → 名称；历史楼栋按名称字典序追加在后。
+     * 【现在的口径】设置表是**唯一权威**：
+     *   · 设置页没有的楼栋 = 系统不认 → 下拉里不出现，也不该再被选用；
+     *   · 顺序由设置表的 sort_no 决定（见 building.service.listBuildings）。
+     *
+     * 【存量数据怎么办】房间表里的历史楼栋**不会被改写**（本函数只读），
+     *   只是下拉筛不到它们。要清理的话在设置页把它们加回来、或改房间的楼栋，
+     *   属于数据治理动作，不该由下拉的取数逻辑悄悄兜着。
      */
-    async buildings(user) {
-      const seen = new Set<string>();
-      const out: Array<{ value: string; label: string }> = [];
-      const push = (name: string) => {
-        const v = String(name ?? '').trim();
-        if (!v || seen.has(v)) return;
-        seen.add(v);
-        out.push({ value: v, label: v });
-      };
-
-      // ① 楼栋设置（权威来源，与「系统设置 → 楼栋设置」同一张表）
-      for (const b of await listDormBuildingNames()) push(b);
-
-      // ② 已在用的楼栋（历史数据兜底）
-      const qb = T_DORM().where({ is_deleted: false });
-      const scope = await scopedDormIds(user);
-      if (scope !== null) {
-        if (!scope.length) return out;
-        qb.whereIn('id', scope);
-      }
-      const rows = await qb.distinct('building');
-      rows
-        .map((r: any) => String(r.building ?? ''))
+    async buildings(_user) {
+      const names = await listDormBuildingNames();
+      return names
+        .map((n) => String(n ?? '').trim())
         .filter(Boolean)
-        .sort((a: string, b: string) => a.localeCompare(b, 'zh-Hans-CN'))
-        .forEach(push);
-      return out;
+        .map((v) => ({ value: v, label: v }));
     },
   
     async changeList(q, user) {

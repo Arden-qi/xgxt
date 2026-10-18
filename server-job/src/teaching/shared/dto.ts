@@ -1280,6 +1280,25 @@ export const DORM_GENDER_NAME: Record<number, string> = {
   2: '女生宿舍',
 };
 
+/**
+ * ★「类别」的**展示口径**：1 男寝 / 2 女寝（2026-10-18）
+ *
+ * 【为什么不能直接用上面的 DORM_GENDER_NAME】
+ *   DORM_GENDER_NAME 是**底层枚举全集**，且被老路由（dorm.route.ts /
+ *   classInfo.route.ts）复用着，改它会连带改掉老页面的文案。
+ *   而宿舍管理列表现在统一显示「男寝 / 女寝」（见前端 DORM_CATEGORY_NAME）。
+ *
+ * 【为什么搜索必须用它】
+ *   关键字匹配取的是「列表上显示出来的值」（见 service.searchTextOf）。
+ *   若这里用「男生宿舍」，用户看着列表上的「男寝」去搜「男寝」就会搜不到 ——
+ *   「屏幕上看得见、搜索框里搜不出来」正是这次要根治的问题。
+ *   → 0「不限」不在新口径内 → 返回 undefined，由调用方回退到 dormTypeName。
+ */
+export const DORM_CATEGORY_NAME: Record<number, string> = {
+  1: '男寝',
+  2: '女寝',
+};
+
 /** 调宿 / 退宿 业务类型（复用 shared-types 的 DormChangeBizType 口径） */
 export const DORM_CHANGE_NAME: Record<number, string> = {
   1: '调换宿舍',
@@ -1295,8 +1314,27 @@ export interface DormListQuery {
   dormType?: number;
   /** 统一房间状态 */
   roomStatus?: number;
-  /** 关键字：房间号 / 楼栋 / 负责人 */
+  /**
+   * ★ 关键字：匹配**列表上能看到的所有内容**（2026-10-18 改）
+   *
+   * 旧口径只在 SQL 里 like 了 room_no / building / dorm_no / facility 四个字段，
+   * 于是「搜备注里的‘向阳’」「搜‘男寝’」「搜‘停用’」都搜不到 ——
+   * 用户看到列表上有这个字，却搜不出来，是最典型的一类投诉。
+   *
+   * 现在改成在**服务层内存匹配**：等三学段合并成 DormRow 之后再过滤，
+   * 这样 dormType→「男寝」、roomStatus→「停用」这类「int 码要翻译成文字才能搜」
+   * 的字段也能一起命中，且**三学段口径完全一致**（不用每个 repo 各写一遍 like）。
+   *
+   * 匹配范围 = 列表全部列：类别 / 楼栋 / 宿舍号 / 已住·床位 / 入住率 / 状态 / 备注
+   */
   keyword?: string;
+  /**
+   * ★ 入住率（整数百分比，精确匹配，如 50 表示 50%）
+   *
+   * 入住率是**算出来的**（已住/床位），表里没有这一列 → 只能内存过滤，不能进 SQL。
+   * 可选项由 /occupancy-rates 实时从当前数据里取，不写死 0/25/50/75/100。
+   */
+  occupancyRate?: number;
   /** 只看有空床位的 */
   onlyVacant?: boolean;
   page: number;

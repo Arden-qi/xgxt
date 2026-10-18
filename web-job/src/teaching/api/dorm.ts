@@ -223,6 +223,8 @@ export interface DormQuery {
   dormType?: number;
   roomStatus?: number;
   keyword?: string;
+  /** ★ 入住率（整数百分比，精确匹配）；可选项由 /occupancy-rates 实时下发 */
+  occupancyRate?: number;
   onlyVacant?: boolean;
   page?: number;
   size?: number;
@@ -316,4 +318,17 @@ export async function listDormChanges(q: DormQuery) {
 /** 13. 发起调宿/退宿申请（三学段都允许，含大学） */
 export async function createDormChange(body: Record<string, unknown>) {
   return http.post(`${BASE}/change/create`, body);
+}
+
+/**
+ * 14. 入住率可选项
+ *
+ * ★ 选项是**后端从当前数据里去重算出来的**，前端不写死档位。
+ *   入住率 = 已住/床位，4 床房只会出 0/25/50/75/100，6 床房又是另一套 ——
+ *   写死必然出现「选了却一条都没有」。
+ *   每次 load 都重拉一次 → 改了床位、换了楼栋，下拉跟着变（需求要的「实时更新」）。
+ */
+export async function listDormOccupancyRates(q: DormQuery) {
+  const r = await http.get(`${BASE}/occupancy-rates${qs(q as Record<string, unknown>)}`);
+  return (r as unknown as Array<{ value: number; label: string }>) || [];
 }

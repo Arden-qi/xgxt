@@ -3,10 +3,11 @@
     <!-- 说明条 -->
     <el-alert class="tdv-tip" type="info" :closable="false" show-icon>
       <template #title>
-        本页合并了 <b>3 个学段</b>的宿舍管理（初高 / 大学 / 实训）。
+        本页合并了 <b>3 个学段</b>的宿舍（初高 / 大学 / 实训），不再按学段分开看。
         <span class="muted">
           类别分「男寝 / 女寝」；宿舍号是 <b>3 位数字</b>，第 1 位是楼层、后 2 位是房号（如 308 = 3 楼 08 室）；
-          楼栋选项来自「系统设置 → 楼栋设置」，那边加一栋这里立刻多一项；
+          楼栋只认「系统设置 → 楼栋设置」里维护过的；
+          <b>关键字搜全部列</b>（类别 / 楼栋 / 宿舍号 / 状态 / 备注都能搜）；
           <b>已住人数是实时统计的</b>，不信任表里的冗余列，所以改了床位立刻见效。
         </span>
       </template>
@@ -30,32 +31,39 @@
       </div>
     </div>
 
-    <!-- 筛选 -->
+    <!--
+      筛选栏（2026-10-18 改版）
+      · 顺序固定：关键字 → 类别 → 楼栋 → 状态 → 入住率
+      · 【删掉了「学段」下拉】三个学段合并展示，再拿学段筛一次是重复信息，
+        而且会让用户以为「还有第二个学段页面没打开」。
+      · 【删掉了「只看有空床」复选框】入住率筛选已经能覆盖它（选 0~99% 就是有空床），
+        两个开关表达同一件事，留着只会互相打架。
+      · 关键字是全局搜索：类别/楼栋/宿舍号/已住·床位/入住率/状态/备注 **全都搜**
+        （后端按列表显示值匹配，所以搜「男寝」「停用」也能命中）。
+    -->
     <el-form class="tdv-filter" inline>
-      <el-form-item label="学段">
-        <el-select
-          v-model="query.stage"
+      <el-form-item label="关键字">
+        <el-input
+          v-model="query.keyword"
+          placeholder="搜全部：类别 / 楼栋 / 宿舍号 / 状态 / 备注"
           clearable
-          placeholder="全部学段"
-          style="width: 130px"
-          @change="onStageChange"
-        >
-          <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
+          style="width: 240px"
+          @keyup.enter="load(1)"
+        />
+      </el-form-item>
+      <el-form-item label="类别">
+        <el-select v-model="query.dormType" clearable placeholder="全部" style="width: 110px">
+          <el-option
+            v-for="d in DORM_CATEGORY_OPTIONS"
+            :key="d.value"
+            :label="d.label"
+            :value="d.value"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="楼栋">
         <el-select v-model="query.building" clearable placeholder="全部楼栋" style="width: 140px">
           <el-option v-for="b in buildings" :key="b.value" :label="b.label" :value="b.value" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="类别">
-        <el-select v-model="query.dormType" clearable placeholder="全部" style="width: 110px">
-          <el-option
-            v-for="d in DORM_GENDER_OPTIONS"
-            :key="d.value"
-            :label="d.label"
-            :value="d.value"
-          />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
@@ -68,17 +76,16 @@
           />
         </el-select>
       </el-form-item>
-      <el-form-item label="关键字">
-        <el-input
-          v-model="query.keyword"
-          placeholder="宿舍号 / 楼栋"
+      <!-- ★ 入住率：选项后端实时算，不写死档位 -->
+      <el-form-item label="入住率">
+        <el-select
+          v-model="query.occupancyRate"
           clearable
-          style="width: 190px"
-          @keyup.enter="load(1)"
-        />
-      </el-form-item>
-      <el-form-item>
-        <el-checkbox v-model="onlyVacant">只看有空床</el-checkbox>
+          placeholder="全部"
+          style="width: 110px"
+        >
+          <el-option v-for="r in occupancyRates" :key="r.value" :label="r.label" :value="r.value" />
+        </el-select>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" @click="load(1)">查询</el-button>
@@ -507,6 +514,22 @@
  * 【★ 三个学段的字段差异仍由 /meta 下发，前端不写死学段判断】
  *   meta 现在只管两件事：hasCreate（能否增删改）、hasBedTable（床位是不是虚拟编号）。
  *   原来的 hasFloor / hasOwner / hasClass / hasRemark 已随列固定而下线。
+ *
+ * 【★ 2026-10-18 改版：筛选栏重做】
+ *
+ *   删掉两个控件：
+ *     · 学段下拉     —— 三学段本来就合并展示，再按学段筛一次是重复信息
+ *     · 只看有空床   —— 入住率筛选已能覆盖（选 0~99% 就是有空床），两个开关表达同一件事
+ *
+ *   筛选项顺序固定：关键字 → 类别 → 楼栋 → 状态 → 入住率
+ *
+ *   ① 关键字 —— **全局搜索**，匹配列表全部可见列（类别/楼栋/宿舍号/已住·床位/入住率/状态/备注）。
+ *      匹配在后端服务层做（三学段合并成 DormRow 之后），取的是**显示值**不是原始列，
+ *      所以搜「男寝」「停用」这种 int 码翻译出来的文字也能命中。
+ *   ② 楼栋   —— **只认楼栋设置**（t_dorm_building），设置页没有的一律不出现
+ *   ③ 入住率 —— 选项由 /occupancy-rates **实时**下发，不写死档位；
+ *      每次 load 重拉，且跟着楼栋/类别/状态联动（后端算选项时会摘掉入住率条件本身，
+ *      否则先选 50% 之后下拉就只剩 50%，用户再也选不回去）。
  */
 
 import { computed, onMounted, reactive, ref } from 'vue';
@@ -527,13 +550,13 @@ import {
   listDormBuildings,
   listDormResidents,
   listDormChanges,
+  listDormOccupancyRates,
   saveDorm,
   deleteDorm,
   assignBed,
   checkoutBed,
   createDormChange,
   DORM_STATUS_TAG,
-  DORM_GENDER_OPTIONS,
   DORM_CATEGORY_OPTIONS,
   DORM_CATEGORY_NAME,
   DORM_ROOM_STATUS_OPTIONS,
@@ -567,47 +590,45 @@ const changes = ref<DormChangeRow[]>([]);
 /** ★ 楼栋设置（「系统设置 → 楼栋设置」维护的那份，新增房间的楼栋下拉读它） */
 const buildingSettings = ref<DormBuildingRow[]>([]);
 
-/** 新增/编辑弹窗的楼栋选项：楼栋设置优先，其次是列表接口回来的「已在用楼栋」 */
-const buildingOptions = computed(() => {
-  const seen = new Set<string>();
-  const out: Array<{ value: string; label: string }> = [];
-  for (const b of buildingSettings.value) {
-    if (!b.buildingName || seen.has(b.buildingName)) continue;
-    seen.add(b.buildingName);
-    out.push({ value: b.buildingName, label: b.buildingName });
-  }
-  for (const b of buildings.value) {
-    if (!b.value || seen.has(b.value)) continue;
-    seen.add(b.value);
-    out.push(b);
-  }
-  return out;
-});
+/**
+ * 新增/编辑弹窗的楼栋选项
+ *
+ * ★ 2026-10-18：**只认楼栋设置**，不再拿列表接口的「已在用楼栋」兜底。
+ *   和筛选栏的楼栋下拉保持同一口径：设置页里没有的楼栋，就是不存在的楼栋。
+ *   之前并集写法会把库里 BB-1 / A-1 这类只在房间表出现过的脏楼栋带到下拉里，
+ *   用户照着它建房间，脏数据越滚越多。
+ */
+const buildingOptions = computed(() =>
+  buildingSettings.value
+    .map((b) => String(b.buildingName ?? '').trim())
+    .filter(Boolean)
+    .map((v) => ({ value: v, label: v })),
+);
 
 async function loadBuildingSettings() {
   try {
     buildingSettings.value = (await fetchBuildingSettings()) || [];
   } catch {
-    /* 楼栋设置拉不到就退回列表接口的楼栋，别让弹窗开不起来 */
+    /* 楼栋设置拉不到就是空数组：宁可下拉空着，也不要兜底出脏楼栋 */
   }
 }
 
 const query = reactive({
-
   stage: undefined as DormStage | undefined,
   building: undefined as string | undefined,
   dormType: undefined as number | undefined,
   roomStatus: undefined as number | undefined,
   keyword: '',
+  occupancyRate: undefined as number | undefined,
   page: 1,
   size: 20,
 });
 
-/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+/* 面包屑第 4 级：学段筛选已下线（2026-10-18），这里恒为空，保留以便日后恢复 */
 useBreadcrumbStageKey(() => query.stage || '');
 
-/** ★ 只有空床的（不参与 query 对象，单独一个开关） */
-const onlyVacant = ref(false);
+/** ★ 入住率可选项：每次 load 实时重拉，跟着楼栋/类别/状态联动 */
+const occupancyRates = ref<Array<{ value: number; label: string }>>([]);
 
 /**
  * 当前所选学段的 meta（学段差异仍由后端 /meta 下发，前端不写死学段判断）
@@ -648,13 +669,19 @@ async function load(page?: number) {
   if (page) query.page = page;
   loading.value = true;
   try {
-    const q = { ...query, onlyVacant: onlyVacant.value || undefined };
-    const [r, s, m, b, rs] = await Promise.all([
+    const q = { ...query };
+    const [r, s, m, b, rs, rates] = await Promise.all([
       listDorms(q),
       getDormSummary(q),
       metaList.value.length ? Promise.resolve(metaList.value) : getDormMeta(),
       listDormBuildings(query.stage),
       listDormResidents(q),
+      /**
+       * ★ 入住率选项每次都重拉（需求：实时更新）
+       *   传的 q 里带了 keyword/楼栋/类别/状态，后端会摘掉 occupancyRate 再算，
+       *   所以选了「1号楼」之后，下拉只给 1号楼 真实存在的入住率。
+       */
+      listDormOccupancyRates(q),
     ]);
     rows.value = r.list || [];
     total.value = r.total || 0;
@@ -662,19 +689,12 @@ async function load(page?: number) {
     metaList.value = m || [];
     buildings.value = b || [];
     residents.value = rs || [];
+    occupancyRates.value = rates || [];
   } catch (e) {
     ElMessage.error((e as Error).message || '加载失败');
   } finally {
     loading.value = false;
   }
-}
-
-/** 切学段：楼栋/状态是学段内的，清掉避免带着上一个学段的筛选去查 */
-function onStageChange() {
-  query.building = undefined;
-  query.roomStatus = undefined;
-  query.dormType = undefined;
-  load(1);
 }
 
 function reset() {
@@ -683,7 +703,7 @@ function reset() {
   query.dormType = undefined;
   query.roomStatus = undefined;
   query.keyword = '';
-  onlyVacant.value = false;
+  query.occupancyRate = undefined;
   load(1);
 }
 
