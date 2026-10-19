@@ -7,7 +7,7 @@
  * ⚠️ 权限模型：模块 → 功能点 → 动作
  *    t_perm_menu          功能点
  *    t_perm_menu_action   动作
- *    t_perm_role_perm     角色已授权的（功能点，动作）
+ *    t_perm_role_perm     职位已授权的（功能点，动作）
  */
 
 import { randomUUID } from 'crypto';
@@ -120,12 +120,12 @@ export async function getTreeStats(): Promise<PermTreeStats> {
 }
 
 /* ============================================================
- * 二、角色权限
+ * 二、职位权限
  * ============================================================ */
 
 const permKey = (moduleKey: string, itemName: string) => `${moduleKey}||${itemName}`;
 
-/** 读某角色的权限映射 */
+/** 读某职位的权限映射 */
 export async function getRolePermMap(roleId: string): Promise<RolePermMap> {
   const rows = await db('t_perm_role_perm')
     .where({ role_id: roleId, is_deleted: false })
@@ -140,7 +140,7 @@ export async function getRolePermMap(roleId: string): Promise<RolePermMap> {
   return map;
 }
 
-/** 某角色的已授权动作总数 */
+/** 某职位的已授权动作总数 */
 export async function countRolePerms(roleId: string): Promise<number> {
   const rows = await db('t_perm_role_perm')
     .where({ role_id: roleId, is_deleted: false })
@@ -149,7 +149,7 @@ export async function countRolePerms(roleId: string): Promise<number> {
 }
 
 /**
- * 全量覆盖保存某角色的权限
+ * 全量覆盖保存某职位的权限
  * ⚠️ 应用权限为全量覆盖（非增量合并）：先按 role_id 清空，再插入。
  */
 export async function replaceRolePerms(
@@ -214,11 +214,11 @@ export async function replaceRolePerms(
 }
 
 /* ============================================================
- * 三、账号权限（多角色取并集）
+ * 三、账号权限（多职位取并集）
  * ============================================================ */
 
 /**
- * 取某账号全部角色的权限并集
+ * 取某账号全部职位的权限并集
  *
  * ⚠️⚠️ 2026-10-03 修正：权限串里的【动作段改用 action_code（英文编码）】
  *
@@ -234,7 +234,7 @@ export async function replaceRolePerms(
  * permissions 字段「只放机器可判定的编码」这一约定一致。
  *
  * @returns permissions 去重后的权限点数组（动作段为 action_code）
- *          dataScope   取所有角色中最宽的一档
+ *          dataScope   取所有职位中最宽的一档
  */
 export async function getUserEffectivePerms(userId: string): Promise<{
   roleIds: string[];
@@ -277,15 +277,312 @@ export const SCOPE_ACTION_TO_VALUE: Record<string, DataScope> = {
  * ⚠️⚠️ 为什么需要这一层：
  *    本系统里存在【两张账号表】：
  *      · t_sys_account（门户 sms_portal 库）—— 登录唯一凭据，7 个种子账号
- *      · t_perm_user  （权限 sms_perm 库）  —— 角色 / 权限 / 数据范围，15 个种子账号
+ *      · t_perm_user  （权限 sms_perm 库）  —— 职位 / 权限 / 数据范围，15 个种子账号
  *    两张表【没有共用主键】，只能靠 `account`（登录名）对齐。
  *    实测：两张表原本只有 admin 一个账号重合 —— 所以「权限分配」保存的数据
  *    在财务 / 咨询模块里根本读不到，这正是用户说的「权限分配没生效」。
  *
  *    本模块是权限数据的【单一事实来源】，所以由本模块负责：
- *      登录名 → t_perm_user.id → 角色并集 → 有效权限点 + 数据范围
+ *      登录名 → t_perm_user.id → 职位并集 → 有效权限点 + 数据范围
  *    并把「按模块算出来的可见页面」交给各业务模块消费。
  * ============================================================ */
+
+/**
+ * ⭐ 2026-10-16 新增：把密码同步到【门户登录表】（`sms_portal`.t_sys_account）
+ *
+ * 【为什么必须同步】
+ *   用户报障：「在账号管理里给陈晓峰设了密码，用新密码登不进系统」。
+ *   真因就是上面那两张账号表：门户登录只校验 `t_sys_account.password`
+ *   （见 portal/services/account.service.ts 的 login），
+ *   而「账号管理 / 重置密码 / 编辑账号」写的是 `t_perm_user.password` ——
+ *   两边各写各的，改了业务表完全不影响登录，用户自然进不来。
+ *
+ * 【口径】本模块是账号的维护方，门户表是登录凭据的【镜像】：
+ *   凡本模块改了 t_perm_user.password，就同步一份到同登录名的门户账号。
+ *   （反方向——登录人自助改密——由门户那边负责同步，见
+ *     portal/services/account.service.ts 的 changeOwnPassword）
+ *
+ * 【跨库写法】与 class / consult 模块一致：同一个连接里用全限定表名跨库读写。
+ *
+ * @returns true = 门户表里确实有这个登录名并已更新；
+ *          false = 门户表里没有这个账号（没同步 —— 这个人也就登不进门户）
+ * @remarks 门户库连不上等异常【不抛错】，只打 warn ——「改密码」不该被门户抖动连累。
+ */
+export async function syncPortalPassword(account: string, password: string): Promise<boolean> {
+  if (!account || !password) return false;
+  const portalDb = process.env.DB_NAME_PORTAL || 'sms_portal';
+  try {
+    const res: any = await db.raw(
+      `UPDATE \`${portalDb}\`.t_sys_account
+          SET password = ?, update_time = NOW()
+        WHERE account = ? AND is_deleted = 0`,
+      [password, account],
+    );
+    const affected = Number(res?.[0]?.affectedRows ?? 0);
+    if (!affected) {
+      // 常见坑：t_perm_user 有、t_sys_account 没有 → 这个人永远登不进门户
+      console.warn(`[perm] 门户账号表里没有登录名「${account}」，密码未同步（该账号无法登录）`);
+      return false;
+    }
+    return true;
+  } catch (e: any) {
+    console.warn(`[perm] 同步门户登录密码失败（account=${account}）：${e?.message || e}`);
+    return false;
+  }
+}
+
+/**
+ * 门户账号的简要信息（登录名 → 可访问模块 / 启用状态）
+ */
+export interface PortalAccountBrief {
+  /** 门户账号 id */
+  id: string;
+  /** 可访问模块 key 数组（如 ['class']） */
+  modules: string[];
+  /** 是否启用 */
+  active: boolean;
+}
+
+/** 解析门户表里的 modules 列（库里存 JSON 字符串，兼容逗号分隔的老数据） */
+function parsePortalModules(raw: any): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String);
+  try {
+    const arr = JSON.parse(String(raw));
+    if (Array.isArray(arr)) return arr.map(String);
+  } catch {
+    /* 退回逗号分隔 */
+  }
+  return String(raw)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 批量取门户账号信息
+ *
+ * ⚠️ 列表页 / 编辑表单要回显「这个账号登录后能进哪些模块」，
+ *    所以按【登录名】批量查一次，避免每行一次跨库查询。
+ */
+export async function getPortalAccounts(accounts: string[]): Promise<Map<string, PortalAccountBrief>> {
+  const out = new Map<string, PortalAccountBrief>();
+  const list = Array.from(new Set((accounts || []).filter(Boolean)));
+  if (!list.length) return out;
+  const portalDb = process.env.DB_NAME_PORTAL || 'sms_portal';
+  try {
+    const res: any = await db.raw(
+      `SELECT id, account, modules, active FROM \`${portalDb}\`.t_sys_account
+        WHERE is_deleted = 0 AND account IN (${list.map(() => '?').join(',')})`,
+      list,
+    );
+    const rows: any[] = Array.isArray(res?.[0]) ? res[0] : [];
+    for (const r of rows) {
+      if (!r?.account) continue;
+      out.set(String(r.account), {
+        id: String(r.id),
+        modules: parsePortalModules(r.modules),
+        active: !!r.active,
+      });
+    }
+  } catch (e: any) {
+    console.warn(`[perm] 读取门户账号失败：${e?.message || e}`);
+  }
+  return out;
+}
+
+/**
+ * ⭐ 2026-10-16 新增：开通 / 更新【门户登录账号】
+ *
+ * 【为什么需要】
+ *   门户登录要求 t_sys_account 里同时具备两样东西：**账号本身 + 至少一个可访问模块**
+ *   （见 portal/services/account.service.ts 的 login：visibleModules 为空直接拒绝）。
+ *   而「权限管理 → 账号管理」过去只写 t_perm_user ——
+ *   结果【在账号管理里新建的账号，天生登不进系统】。
+ *
+ * 【口径】
+ *   · 门户已有同登录名 → 只更新传进来的字段（密码 / 姓名 / 手机 / 部门 / 模块）；
+ *     ⚠️ 没传 password 就【绝不动】现有密码（避免悄悄改掉一个还能用的登录密码）；
+ *   · 门户没有 → 用这些字段新建一个门户账号（kind = module_owner、启用）。
+ *     新建时的密码：password → passwordIfCreating → 环境变量默认值；
+ *     连模块都没给就不建（建了也登不进去，白白多一条脏数据）。
+ *
+ * @returns existed 门户原本就有 / created 这次新建 / updated 这次改动了
+ * @remarks 门户库异常只 warn 不抛错 —— 不能因为门户抖动连「建账号」都做不了。
+ */
+export async function upsertPortalAccount(input: {
+  account: string;
+  userName?: string;
+  password?: string;
+  /** 仅在【新建门户账号】时使用的密码（已有账号时不会拿它去覆盖） */
+  passwordIfCreating?: string;
+  phone?: string;
+  dept?: string;
+  modules?: string[];
+}): Promise<{ existed: boolean; created: boolean; updated: boolean }> {
+  const account = String(input.account || '').trim();
+  if (!account) return { existed: false, created: false, updated: false };
+  const portalDb = process.env.DB_NAME_PORTAL || 'sms_portal';
+  const modules = (input.modules || []).filter(Boolean);
+
+  try {
+    const res: any = await db.raw(
+      `SELECT id FROM \`${portalDb}\`.t_sys_account WHERE account = ? AND is_deleted = 0 LIMIT 1`,
+      [account],
+    );
+    const found: any = Array.isArray(res?.[0]) ? res[0][0] : undefined;
+
+    if (found?.id) {
+      // ---- 已有门户账号：只改明确传进来的字段 ----
+      const patch: Record<string, any> = {};
+      if (input.password) patch.password = input.password;
+      if (input.userName) patch.user_name = input.userName;
+      if (input.phone) patch.phone = input.phone;
+      if (input.dept) patch.dept = input.dept;
+      if (modules.length) patch.modules = JSON.stringify(modules);
+      if (!Object.keys(patch).length) return { existed: true, created: false, updated: false };
+      patch.update_time = new Date();
+      const keys = Object.keys(patch);
+      // ⚠️ 列名手写不可能，但这里必须显式加反引号 ——
+      //    所以拼在字符串里（不用模板串），顺手避免 `update` 之类的保留字炸掉 SQL
+      const setSql = keys.map((k) => '`' + k + '` = ?').join(', ');
+      await db.raw(
+        `UPDATE \`${portalDb}\`.t_sys_account SET ${setSql} WHERE id = ?`,
+        [...keys.map((k) => patch[k]), found.id],
+      );
+      return { existed: true, created: false, updated: true };
+    }
+
+    // ---- 门户里没有：必须有模块才建（否则建了也登不进去）----
+    if (!modules.length) {
+      console.warn(`[perm] 门户没有登录名「${account}」且未指定模块 → 未开通登录`);
+      return { existed: false, created: false, updated: false };
+    }
+    const pwd = input.password || input.passwordIfCreating || process.env.DEFAULT_ACCOUNT_PASSWORD || '123456';
+    await db.raw(
+      `INSERT INTO \`${portalDb}\`.t_sys_account
+         (id, create_time, create_by, create_by_name, is_deleted,
+          account, password, user_name, kind, title, dept, phone, modules, active, last_login)
+       VALUES (?, NOW(), 'perm-sync', '权限管理', 0, ?, ?, ?, 'module_owner', NULL, ?, ?, ?, 1, NULL)`,
+      [
+        randomUUID(),
+        account,
+        pwd,
+        input.userName || account,
+        input.dept || null,
+        input.phone || null,
+        JSON.stringify(modules),
+      ],
+    );
+    return { existed: false, created: true, updated: false };
+  } catch (e: any) {
+    console.warn(`[perm] 开通/更新门户登录账号失败（account=${account}）：${e?.message || e}`);
+    return { existed: false, created: false, updated: false };
+  }
+}
+
+/**
+ * ⭐ 2026-10-16 新增：同步门户账号的【启用状态】
+ *
+ * 【为什么】「账号管理 → 停用」过去只改 t_perm_user.user_status，
+ *   门户登录表那边 active 仍是 1 —— 结果【被停用的人照样能登进系统】。
+ *
+ * @returns true = 门户账号确实被改了；false = 门户没这个登录名 / 库异常
+ */
+export async function setPortalAccountActive(account: string, active: boolean): Promise<boolean> {
+  return updatePortalByAccount(account, { active: active ? 1 : 0 });
+}
+
+/**
+ * ⭐ 2026-10-16 新增：账号被删除时【作废门户登录账号】
+ *
+ * 与权限库同一步调：登录名加 `#DEL#` 后缀 + 逻辑删除 + 停用。
+ * 改名是为了把【唯一键腾出来】—— 否则以后用同一个登录名新建账号会撞唯一索引。
+ *
+ * @param renamedAccount 与权限库同规则改出来的新登录名（不传则只做作废标记）
+ */
+export async function retirePortalAccount(account: string, renamedAccount?: string): Promise<boolean> {
+  const patch: Record<string, any> = { is_deleted: 1, active: 0 };
+  if (renamedAccount) patch.account = String(renamedAccount).slice(0, 50);
+  return updatePortalByAccount(account, patch);
+}
+
+/** 按登录名更新门户账号（内部工具，只改传进来的列） */
+async function updatePortalByAccount(account: string, patch: Record<string, any>): Promise<boolean> {
+  const acc = String(account || '').trim();
+  if (!acc) return false;
+  const keys = Object.keys(patch);
+  if (!keys.length) return false;
+  const portalDb = process.env.DB_NAME_PORTAL || 'sms_portal';
+  try {
+    // ⚠️ 列名必须显式加反引号 → 拼在普通字符串里（不放进模板串，免得转义炸掉）
+    const setSql = keys.map((k) => '`' + k + '` = ?').join(', ');
+    const res: any = await db.raw(
+      `UPDATE \`${portalDb}\`.t_sys_account SET ${setSql}, update_time = NOW()
+        WHERE account = ? AND is_deleted = 0`,
+      [...keys.map((k) => patch[k]), acc],
+    );
+    const n = Number(res?.[0]?.affectedRows ?? 0);
+    if (!n) console.warn(`[perm] 门户账号表里没有可更新的登录名「${acc}」（状态未同步）`);
+    return n > 0;
+  } catch (e: any) {
+    console.warn(`[perm] 同步门户账号状态失败（account=${acc}）：${e?.message || e}`);
+    return false;
+  }
+}
+
+/**
+ * ⭐ 2026-10-16 新增：查这个账号在【业务表】里还被谁引用
+ *
+ * 用途：账号删除规则 ——「有业务数据关联时不可删除 / 不可停用」。
+ *
+ * 【为什么跨库】业务表存的是【门户账号 id】（`sms_portal`.t_sys_account.id，UUID），
+ *   权限库这边只有登录名 —— 所以先按登录名换出门户 id，再去业务表数引用。
+ *
+ * 【口径】只算【当前仍挂着】的引用（未删除的班级师资），**不含历史**（如交接记录的 from/to）——
+ *   否则几乎谁都删不掉。以后哪个模块再把人挂到业务表上，往下面清单里加一行即可。
+ *
+ * @returns 中文描述数组，例如 ['大学部班级 2 个班级的师资']；无关联返回 []
+ */
+export async function accountBusinessRefs(account: string): Promise<string[]> {
+  const refs: string[] = [];
+  const acc = String(account || '').trim();
+  if (!acc) return refs;
+  const portalDb = process.env.DB_NAME_PORTAL || 'sms_portal';
+  try {
+    const r: any = await db.raw(
+      `SELECT id FROM \`${portalDb}\`.t_sys_account WHERE account = ? AND is_deleted = 0 LIMIT 1`,
+      [acc],
+    );
+    const row: any = Array.isArray(r?.[0]) ? r[0][0] : undefined;
+    const uid = row?.id;
+    if (!uid) return refs;
+
+    /** 业务表里的人列清单：[库, 表, [列...], 中文说明] */
+    const checks: Array<[string, string, string[], string]> = [
+      [
+        'sms_class',
+        't_class_info',
+        ['head_teacher_id', 'teacher_id', 'assistant_id', 'project_manager_id', 'employment_teacher_id'],
+        '大学部班级',
+      ],
+      ['sms_class_jh', 't_class_info', ['head_teacher_id', 'teacher_id', 'assistant_id'], '初高班级'],
+    ];
+
+    for (const [d, t, cols, label] of checks) {
+      const where = cols.map((c) => `\`${c}\` = ?`).join(' OR ');
+      const res: any = await db.raw(
+        `SELECT COUNT(*) AS n FROM \`${d}\`.\`${t}\` WHERE is_deleted = 0 AND (${where})`,
+        cols.map(() => uid),
+      );
+      const n = Number((Array.isArray(res?.[0]) ? res[0][0] : undefined)?.n || 0);
+      if (n > 0) refs.push(`${label} ${n} 个班级的师资`);
+    }
+  } catch (e: any) {
+    console.warn(`[perm] 查账号业务关联失败（account=${acc}）：${e?.message || e}`);
+  }
+  return refs;
+}
 
 /** 账号档案（按登录名解析出来的权限全景） */
 export interface AccountPermProfile {
@@ -303,9 +600,9 @@ export interface AccountPermProfile {
   deptName: string;
   /** 用户状态：正常 / 已停用 / 已锁定 */
   userStatus: string;
-  /** 角色编码数组（如 ['FIN_STAFF']） */
+  /** 职位编码数组（如 ['FIN_STAFF']） */
   roles: string[];
-  /** 角色中文名数组（如 ['财务']） */
+  /** 职位中文名数组（如 ['财务']） */
   roleNames: string[];
   /** 有效权限点，形如 ['fin:账单明细:查看'] */
   permissions: string[];
@@ -375,7 +672,7 @@ export async function getAccountPermProfile(account: string): Promise<AccountPer
     ? await db('t_perm_role').whereIn('id', roleIds).andWhere('is_deleted', false)
     : [];
 
-  // ---- 权限点 + 数据范围（多角色并集去重）----
+  // ---- 权限点 + 数据范围（多职位并集去重）----
   const { permissions, dataScope } = await getUserEffectivePerms(row.id);
 
   // ---- ⭐ 按模块聚合功能点（供各业务模块算可见页面）----
@@ -422,15 +719,15 @@ export interface AddLogInput {
 }
 
 /**
- * 角色编码 → 角色中文名
+ * 职位编码 → 职位中文名
  *
  * ⚠️ 为什么需要这一步：
- *    req.user.roles 里装的是【角色编码】（SYS_ADMIN / MKT_CONSULT / TEACH_HEAD），
- *    而操作日志是给人看的，应该记中文角色名（系统管理员 / 咨询老师 / 班主任）。
+ *    req.user.roles 里装的是【职位编码】（SYS_ADMIN / MKT_CONSULT / TEACH_HEAD），
+ *    而操作日志是给人看的，应该记中文职位名（系统管理员 / 咨询老师 / 班主任）。
  *    种子数据里预置的那 10 条日志用的就是中文名，如果写入时不转换，
  *    日志列表里就会出现「系统管理员 · SYS_ADMIN」这种中英混杂的行 —— 与原型不一致。
  *
- * 只对「形如角色编码」的片段查库（全大写字母/数字/下划线），
+ * 只对「形如职位编码」的片段查库（全大写字母/数字/下划线），
  * 已经是中文名的直接原样返回，不做无谓查询。
  */
 async function toRoleNames(raw: string): Promise<string> {
@@ -588,17 +885,20 @@ export async function getRuleRaw(group: string): Promise<Record<string, string>>
   return out;
 }
 
-/** 角色权限数回填 */
+/** 职位权限数回填 */
 export async function refreshRolePermCount(roleId: string): Promise<number> {
   const n = await countRolePerms(roleId);
   await db('t_perm_role').where({ id: roleId }).update({ perm_count: n });
   return n;
 }
 
-/** 该角色关联的账号数 */
+/** 该职位关联的账号数（★ 2026-10-16：只数有效账号，防止孤儿关联把人数撑大） */
 export async function countRoleUsers(roleId: string): Promise<number> {
-  const rows = await db('t_perm_user_role')
-    .where({ role_id: roleId, is_deleted: false })
+  const rows = await db('t_perm_user_role as ur')
+    .join('t_perm_user as u', function (this: any) {
+      this.on('u.id', 'ur.user_id').andOn('u.is_deleted', 0);
+    })
+    .where({ 'ur.role_id': roleId, 'ur.is_deleted': false })
     .count({ n: '*' });
   return Number(rows[0]?.n || 0);
 }

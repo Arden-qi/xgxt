@@ -157,3 +157,99 @@ export async function findById(id: string): Promise<any | null> {
   if (!id) return null;
   return db(ACCOUNT_TABLE).where({ id, is_deleted: false }).first();
 }
+
+/* ============================================================
+ * ⭐ 2026-10-15 新增：登录人【自助修改密码】
+ *
+ * 需求（用户原话）：
+ *   「在顶栏加一个重置密码的按钮，每个角色登录进去都能看到并修改；
+ *     弹窗先输旧密码，旧密码正确后才能输新密码，再确认一遍新密码，
+ *     两次一致才能改成功。」
+ *
+ * 设计要点：
+ *   ① 只要「登录了」就能改自己的密码 —— 不校验模块/权限点，
+ *      所以校长、班主任、教务、咨询、财务、权限管理员全都能用。
+ *   ② 旧密码必须由后端复核（前端那一步只是为了交互流畅），
+ *      改密接口里再验一次，防止前端跳过验证直接提交。
+ *   ③ 演示环境密码是明文存储（与登录同口径），这里保持一致；
+ *      正式环境换成 bcrypt 时，只需改本文件这三处比较/写入。
+ * ============================================================ */
+
+/** 新密码规则（需与前端弹窗的提示文案保持一致）：6~20 位、不含空格、不能与原密码相同 */
+export function assertNewPassword(newPassword: string, oldPassword?: string): void {
+  const p = String(newPassword ?? '');
+  if (p.length < 6 || p.length > 20) {
+    throw new BizError(BizCode.PARAM_ERROR, '新密码长度需为 6~20 位');
+  }
+  if (/\s/.test(p)) {
+    throw new BizError(BizCode.PARAM_ERROR, '新密码不能包含空格');
+  }
+  if (oldPassword !== undefined && p === oldPassword) {
+    throw new BizError(BizCode.PARAM_ERROR, '新密码不能与原密码相同');
+  }
+}
+
+/**
+ * 校验「本人原密码」
+ *
+ * ⚠️ 密码错用 PARAM_ERROR（HTTP 200 + 业务码）而不是 401：
+ *    401 会让前端拦截器判定「登录过期」并把人踢回登录页 —— 只是输错一次密码，不至于。
+ */
+export async function verifyOwnPassword(accountId: string, password: string): Promise<any> {
+  const row = await db(ACCOUNT_TABLE).where({ id: accountId, is_deleted: false }).first();
+  if (!row) throw new BizError(BizCode.UNAUTHORIZED, '账号不存在或已删除，请重新登录', 401);
+  if (String(row.password ?? '') !== String(password ?? '')) {
+    throw new BizError(BizCode.PARAM_ERROR, '原密码不正确，请重新输入');
+  }
+  return row;
+}
+
+/**
+ * 修改本人密码
+ *
+ * @returns 是否顺带同步了「权限管理 → 账号管理」里的同名账号
+ */
+export async function changeOwnPassword(
+  accountId: string,
+  oldPassword: string,
+  newPassword: string,
+): Promise<boolean> {
+  const row = await verifyOwnPassword(accountId, oldPassword);
+  assertNewPassword(newPassword, oldPassword);
+
+  await db(ACCOUNT_TABLE).where({ id: accountId }).update({
+    password: newPassword,
+    update_time: new Date(),
+    update_by: accountId,
+  });
+
+  // 顺手把「权限管理 → 账号管理」（sms_perm.t_perm_user）里同登录名的密码对齐，
+  // 否则管理员在那个页面上看到的还是旧密码。失败不影响改密结果。
+  return syncPermUserPassword(row.account, newPassword);
+}
+
+/**
+ * 同步同名业务账号的密码（best-effort）
+ *
+ * ⚠️ 门户账号库（sms_portal）与权限库（sms_perm）是两套库，
+ *    这里用动态 import 拿权限库的连接，避免把两个模块的依赖在文件顶部硬绑死；
+ *    查不到（如该账号只有门户账号、没有业务档案）或库暂时连不上，都直接返回 false。
+ */
+async function syncPermUserPassword(account: string, newPassword: string): Promise<boolean> {
+  if (!account) return false;
+  try {
+    const { db: permDb } = await import('../../perm/utils/db');
+    const affected = await permDb('t_perm_user')
+      .where({ account, is_deleted: false })
+      .update({
+        password: newPassword,
+        pwd_algo: 'plain',
+        need_change_pwd: false,
+        pwd_error_count: 0,
+        update_time: new Date(),
+      });
+    return Number(affected) > 0;
+  } catch {
+    return false;
+  }
+}

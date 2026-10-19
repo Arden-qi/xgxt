@@ -32,6 +32,12 @@ import { useAuthStore as usePortalStore } from '@/portal/stores/auth';
 import { portalLogout } from '@/store/modules';
 /* 面包屑导航（内容区顶部的位置指示） */
 import BreadcrumbBar from '@/components/BreadcrumbBar.vue';
+/* ★ 2026-10-15 新增：顶栏「修改密码」—— 登录人自助改密（所有角色都能用）
+ *   ★ 2026-10-16 改名：原来叫「重置密码」，与「账号管理 → 重置密码」
+ *     （管理员代忘记密码的人重置）撞名，改成「修改密码」以示区分。 */
+import { ElMessage } from 'element-plus';
+import type { FormInstance, FormRules } from 'element-plus';
+import { changeMyPassword, verifyMyPassword } from '@/portal/api/portal';
 /* ★ 2026-10-16 侧栏菜单计算抽到 config/sideMenu.ts：
  *   工作台首页（views/Workbench.vue）的「快捷入口」要和侧栏用同一套显隐口径，
  *   两处共用一份，避免口径漂移。
@@ -101,6 +107,139 @@ function doLogout(): void {
   router.replace('/login');
 }
 
+/* ============================================================
+ * ★ 2026-10-15 新增：顶栏「修改密码」（登录人自助改密）
+ *
+ * 交互口径（用户指定）：
+ *   ① 先填【原密码】→ 点「验证」，后端确认无误后，才解锁下面两栏；
+ *   ② 再填【新密码】；
+ *   ③ 最后【再输一遍新密码】，两次一致才能提交。
+ *
+ * ⚠️ 前端这一步「验证后解锁」只是交互引导，真正的把关在后端：
+ *    /change-password 里会再复核一次原密码，跳过验证直接调接口也改不了。
+ * ============================================================ */
+
+/** 弹窗显隐 */
+const pwdOpen = ref(false);
+/** 原密码是否已通过后端校验 —— 未通过时「新密码 / 确认密码」两栏不可填 */
+const pwdVerified = ref(false);
+const pwdVerifying = ref(false);
+const pwdSubmitting = ref(false);
+/** 内联错误（后端也会弹 toast，这里再落到输入框下方，方便用户就地改） */
+const pwdError = ref('');
+const pwdFormRef = ref<FormInstance>();
+
+const pwdForm = ref({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: '',
+});
+
+/** 密码强度 0~3 —— 只做提示，不拦截（演示环境别把用户卡住） */
+const pwdScore = computed(() => {
+  const p = pwdForm.value.newPassword;
+  if (!p) return 0;
+  let s = 0;
+  if (p.length >= 8) s += 1;
+  if (/[A-Za-z]/.test(p) && /\d/.test(p)) s += 1;
+  if (/[^A-Za-z0-9]/.test(p) || p.length >= 12) s += 1;
+  return s;
+});
+const pwdScoreText = computed(() => ['', '偏弱', '中等', '较强'][pwdScore.value] || '');
+
+const pwdRules: FormRules = {
+  oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        const s = String(value || '');
+        if (s.length < 6 || s.length > 20) return callback(new Error('新密码长度需为 6~20 位'));
+        if (/\s/.test(s)) return callback(new Error('新密码不能包含空格'));
+        if (s === pwdForm.value.oldPassword) return callback(new Error('新密码不能与原密码相同'));
+        callback();
+      },
+      trigger: 'blur',
+    },
+  ],
+  confirmPassword: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        if (value !== pwdForm.value.newPassword) return callback(new Error('两次输入的新密码不一致'));
+        callback();
+      },
+      trigger: 'blur',
+    },
+  ],
+};
+
+function openPwdDialog(): void {
+  pwdOpen.value = true;
+}
+
+/** 关闭后必须把「已验证」的闸门复位，否则下次打开能跳过第一步直接填新密码 */
+function onPwdClosed(): void {
+  pwdVerified.value = false;
+  pwdVerifying.value = false;
+  pwdSubmitting.value = false;
+  pwdError.value = '';
+  pwdForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
+  pwdFormRef.value?.clearValidate();
+}
+
+/** 改了新密码 → 顺手复验「确认密码」，否则会出现「两次明明一样却还提示不一致」 */
+function onNewPwdInput(): void {
+  if (pwdForm.value.confirmPassword) {
+    pwdFormRef.value?.validateField('confirmPassword').catch(() => undefined);
+  }
+}
+
+/** 第一步：验证原密码 */
+async function doVerifyOld(): Promise<void> {
+  pwdError.value = '';
+  if (!pwdForm.value.oldPassword) {
+    pwdError.value = '请输入原密码';
+    return;
+  }
+  pwdVerifying.value = true;
+  try {
+    await verifyMyPassword(pwdForm.value.oldPassword);
+    pwdVerified.value = true;
+    ElMessage.success('原密码正确，请设置新密码');
+  } catch {
+    pwdVerified.value = false;
+    pwdError.value = '原密码不正确，请重新输入';
+  } finally {
+    pwdVerifying.value = false;
+  }
+}
+
+/** 第二步：提交修改 */
+async function doChangePwd(): Promise<void> {
+  pwdError.value = '';
+  if (!pwdVerified.value) {
+    pwdError.value = '请先验证原密码';
+    return;
+  }
+  const passed = await pwdFormRef.value?.validate().catch(() => false);
+  if (!passed) return;
+
+  pwdSubmitting.value = true;
+  try {
+    await changeMyPassword({
+      oldPassword: pwdForm.value.oldPassword,
+      newPassword: pwdForm.value.newPassword,
+    });
+    ElMessage.success('密码修改成功，下次登录请使用新密码');
+    pwdOpen.value = false;
+  } catch {
+    // 后端已弹错误提示；这里只把弹窗留在原位，方便用户就地修改
+  } finally {
+    pwdSubmitting.value = false;
+  }
+}
+
 onMounted(() => {
   // 登录页 / 未登录时不拉（否则会打出一个无 token 的 401）
   if (isLoginPage.value) return;
@@ -141,9 +280,117 @@ onMounted(() => {
             <span class="header-urole">{{ roleText }}</span>
           </div>
         </div>
+        <!--
+          ★ 2026-10-15 改版：退出登录整体左移，右侧新增「修改密码」。
+            两者都在最右侧的操作区，所有角色登录后都能看到并使用。
+        -->
         <el-button size="small" text class="switch-role" @click="doLogout">退出登录</el-button>
+        <el-button size="small" class="reset-pwd-btn" @click="openPwdDialog">
+          <el-icon class="reset-pwd-ic"><component :is="getIcon('Key')" /></el-icon>
+          <span>修改密码</span>
+        </el-button>
       </div>
     </el-header>
+
+    <!-- ==================== 修改密码弹窗（所有角色可用） ==================== -->
+    <el-dialog
+      v-model="pwdOpen"
+      title="修改密码"
+      width="440px"
+      append-to-body
+      :close-on-click-modal="false"
+      class="pwd-dialog"
+      @closed="onPwdClosed"
+    >
+      <div class="pwd-who">
+        <span class="pwd-who-lb">当前账号</span>
+        <b class="pwd-who-name">{{ userNameText }}</b>
+        <span class="pwd-who-acc">{{ portal.account?.account || '' }}</span>
+      </div>
+
+      <el-form
+        ref="pwdFormRef"
+        :model="pwdForm"
+        :rules="pwdRules"
+        label-width="82px"
+        class="pwd-form"
+        @submit.prevent
+      >
+        <!-- ① 原密码：验证通过后才解锁下面两栏 -->
+        <el-form-item label="原密码" prop="oldPassword">
+          <div class="pwd-row">
+            <el-input
+              v-model="pwdForm.oldPassword"
+              type="password"
+              show-password
+              placeholder="请输入当前登录密码"
+              :disabled="pwdVerified"
+              @keyup.enter="doVerifyOld"
+            />
+            <el-button
+              class="pwd-verify"
+              :type="pwdVerified ? 'success' : 'primary'"
+              :loading="pwdVerifying"
+              :disabled="pwdVerified"
+              @click="doVerifyOld"
+            >
+              {{ pwdVerified ? '已验证' : '验证' }}
+            </el-button>
+          </div>
+        </el-form-item>
+
+        <!-- ② 新密码 -->
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input
+            v-model="pwdForm.newPassword"
+            type="password"
+            show-password
+            :disabled="!pwdVerified"
+            placeholder="6~20 位，建议字母 + 数字组合"
+            @input="onNewPwdInput"
+          />
+        </el-form-item>
+
+        <!-- ③ 再输一遍新密码 -->
+        <el-form-item label="确认密码" prop="confirmPassword" class="pwd-item-last">
+          <el-input
+            v-model="pwdForm.confirmPassword"
+            type="password"
+            show-password
+            :disabled="!pwdVerified"
+            placeholder="请再次输入新密码"
+            @keyup.enter="doChangePwd"
+          />
+        </el-form-item>
+
+        <!-- 强度提示（只提示，不拦截） -->
+        <div v-if="pwdVerified" class="pwd-score">
+          <span class="pwd-score-lb">密码强度</span>
+          <span class="pwd-score-track">
+            <i :style="{ width: pwdScore * 33.34 + '%' }" :class="`lv${pwdScore}`"></i>
+          </span>
+          <span class="pwd-score-txt" :class="`lv${pwdScore}`">{{ pwdScoreText }}</span>
+        </div>
+      </el-form>
+
+      <div v-if="pwdError" class="pwd-err">{{ pwdError }}</div>
+      <div v-else-if="!pwdVerified" class="pwd-tip">
+        为了防止误操作，请先验证原密码，验证通过后才能设置新密码。
+      </div>
+      <div v-else class="pwd-tip">新密码设置成功后，下次登录请使用新密码。</div>
+
+      <template #footer>
+        <el-button @click="pwdOpen = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!pwdVerified"
+          :loading="pwdSubmitting"
+          @click="doChangePwd"
+        >
+          确认修改
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-container class="body-wrap">
       <!-- ============ 左侧菜单（统一） ============ -->
@@ -436,4 +683,162 @@ onMounted(() => {
   height: 44px;
   line-height: 44px;
 }
+
+/* ============================================================
+ * ★ 2026-10-15 顶栏右侧操作区：退出登录（左移）+ 修改密码（新增，最右）
+ *    配色沿用顶栏的良志红，修改密码做成实心主按钮 ——
+ *    它比退出登录更「需要被点」，放最右侧、视觉更重。
+ * ============================================================ */
+.reset-pwd-btn {
+  color: #fff;
+  background: #cd3a33;
+  border: 1px solid #cd3a33;
+  padding: 6px 12px;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(205, 58, 51, 0.24);
+}
+
+.reset-pwd-btn:hover,
+.reset-pwd-btn:focus {
+  color: #fff;
+  background: #b22a23;
+  border-color: #b22a23;
+}
+
+.reset-pwd-ic {
+  margin-right: 4px;
+}
+
+/* ---------- 修改密码弹窗 ---------- */
+
+/* 顶部「当前账号」信息条：让用户确认改的是哪个账号 */
+.pwd-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fbf7f4;
+  border: 1px solid #f1eae5;
+  border-radius: 9px;
+  padding: 9px 12px;
+  margin-bottom: 16px;
+  font-size: 12.5px;
+}
+
+.pwd-who-lb {
+  color: #9c8d88;
+}
+
+.pwd-who-name {
+  color: #443432;
+  font-size: 13px;
+}
+
+.pwd-who-acc {
+  margin-left: auto;
+  color: #b3a69f;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.pwd-form :deep(.el-form-item) {
+  margin-bottom: 16px;
+}
+
+.pwd-form :deep(.el-form-item__label) {
+  font-size: 12.5px;
+  color: #7a6c67;
+}
+
+/* 原密码 + 「验证」按钮同一行 */
+.pwd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.pwd-verify {
+  flex: none;
+  width: 78px;
+}
+
+/* 「确认密码」是最后一个输入项，下面紧跟密码强度条：
+ * ⚠️ 它的校验错误（如「两次输入的新密码不一致」）是**绝对定位**在输入框正下方、
+ *    只占 item 的 margin-bottom 那一段。所以这里要多留 10px，
+ *    否则错误红字会和「密码强度」挤在同一行、看着像叠在一起。 */
+.pwd-item-last {
+  margin-bottom: 26px;
+}
+
+/* 密码强度条（不拦截，只提示） */
+.pwd-score {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px 82px;
+  font-size: 11.5px;
+}
+
+.pwd-score-lb {
+  color: #9c8d88;
+}
+
+.pwd-score-track {
+  flex: 1;
+  max-width: 120px;
+  height: 6px;
+  border-radius: 3px;
+  background: #f1eae5;
+  overflow: hidden;
+  display: inline-block;
+}
+
+.pwd-score-track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.2s;
+}
+
+.pwd-score-track i.lv0 {
+  background: transparent;
+}
+.pwd-score-track i.lv1 {
+  background: #d9534f;
+}
+.pwd-score-track i.lv2 {
+  background: #e0a33e;
+}
+.pwd-score-track i.lv3 {
+  background: #3f7a55;
+}
+
+.pwd-score-txt.lv1 {
+  color: #d9534f;
+}
+.pwd-score-txt.lv2 {
+  color: #c98a24;
+}
+.pwd-score-txt.lv3 {
+  color: #3f7a55;
+}
+
+/* 底部提示 / 错误 */
+.pwd-tip {
+  font-size: 11.5px;
+  color: #9c8d88;
+  line-height: 1.6;
+}
+
+.pwd-err {
+  font-size: 11.5px;
+  color: #b22a23;
+  background: #fdf4f2;
+  border: 1px solid #f9e4e1;
+  border-radius: 8px;
+  padding: 8px 12px;
+  line-height: 1.6;
+}
+
 </style>

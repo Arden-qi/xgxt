@@ -172,7 +172,7 @@ export enum ExamContentType {
   OTHER = 4,   // 其他
 }
 
-/** 系统预置角色编码（不可修改） */
+/** 系统预置职位编码（不可修改） */
 export enum RoleCode {
   ADMIN = 'ROLE_ADMIN',               // 系统管理员
   PRINCIPAL = 'ROLE_PRINCIPAL',       // 校长
