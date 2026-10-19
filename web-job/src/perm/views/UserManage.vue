@@ -535,10 +535,10 @@ const form = reactive<UserForm>({
 const formRoleIds = ref<string[]>([]);
 
 const formTitle = computed(() => {
-  const sub = '<span class="tag n">填写账号信息并分配职位与部门</span>';
+  // ★ 2026-10-19：编辑账号只改基础信息，副标题不再提「分配职位与部门」
   return formMode.value === 'edit'
-    ? `编辑账号 · <span class="em">${esc(form.userName)}</span> ${sub}`
-    : `新建账号 ${sub}`;
+    ? `编辑账号 · <span class="em">${esc(form.userName)}</span> <span class="tag n">修改账号基础信息</span>`
+    : `新建账号 <span class="tag n">填写账号信息并分配职位与部门</span>`;
 });
 
 const pwScore = computed(() => pwdScore(form.password));
@@ -733,12 +733,15 @@ function validateForm(): string[] {
   }
 
   if (!v.userStatus) errs.push('请选择账号状态');
-  if (!formRoleIds.value.length) errs.push('请至少为该账号分配一个职位');
-  // ★ 2026-10-16：新增账号至少要勾一个可访问模块（门户要求），否则建出来也登不进去
-  if (formMode.value === 'add' && !form.modules.length) {
-    errs.push('请至少勾选一个「可访问模块」，否则该账号登录后看不到任何内容');
+  // ★ 2026-10-19：职位 / 可访问模块 / 所属部门 三块只在【新建账号】表单里出现，
+  //   编辑模式下它们沿用原值提交、界面上也无法修改，所以校验只对新建账号生效。
+  if (formMode.value === 'add') {
+    if (!formRoleIds.value.length) errs.push('请至少为该账号分配一个职位');
+    if (!form.modules.length) {
+      errs.push('请至少勾选一个「可访问模块」，否则该账号登录后看不到任何内容');
+    }
+    if (!v.deptId) errs.push('请至少选择一个所属部门');
   }
-  if (!v.deptId) errs.push('请至少选择一个所属部门');
   return errs;
 }
 
@@ -766,23 +769,28 @@ function submitUserForm(): void {
         { k: '姓名 / 性别', v: `<b>${esc(form.userName)}</b> · ${form.gender === 2 ? '女' : '男'} · ${form.age} 岁` },
         { k: '登录账号', v: `<code>${esc(form.account)}</code>` },
         { k: '手机号', v: esc(form.phone) },
-        { k: '所属部门', v: esc(deptFlat.value.find((d) => d.id === form.deptId)?.deptName || '—') },
-        {
-          k: '可访问模块',
-          v: form.modules.length
-            ? form.modules.map((k) => `<span class="tag b">${esc(moduleTitleOf(k))}</span>`).join(' ')
-            : '<span class="desc">一个都没勾 · 该账号无法登录</span>',
-        },
-        {
-          k: '所属职位',
-          v: roleNames.length
-            ? roleNames.map((n) => `<span class="tag b">${esc(n)}</span>`).join(' ')
-            : '<span class="desc">无</span>',
-        },
-        // ★ 2026-10-16：编辑账号不涉及密码 → 这一行只在【新建】的确认框里出现
+        { k: '账号状态', v: esc(form.userStatus || '—') },
+        // ★ 2026-10-19：编辑账号只改基础信息 → 部门 / 模块 / 职位 / 密码
+        //   这四行只在【新建账号】的确认框里出现。
         ...(isEdit
           ? []
           : [
+              {
+                k: '所属部门',
+                v: esc(deptFlat.value.find((d) => d.id === form.deptId)?.deptName || '—'),
+              },
+              {
+                k: '可访问模块',
+                v: form.modules.length
+                  ? form.modules.map((k) => `<span class="tag b">${esc(moduleTitleOf(k))}</span>`).join(' ')
+                  : '<span class="desc">一个都没勾 · 该账号无法登录</span>',
+              },
+              {
+                k: '所属职位',
+                v: roleNames.length
+                  ? roleNames.map((n) => `<span class="tag b">${esc(n)}</span>`).join(' ')
+                  : '<span class="desc">无</span>',
+              },
               {
                 k: '密码策略',
                 v: `${esc(form.password)} <span class="desc">${
@@ -793,7 +801,7 @@ function submitUserForm(): void {
       ],
       warn: dupName ? '系统内已存在同姓名的账号，请确认不是重复创建。' : '',
       tip: isEdit
-        ? '修改后该账号权限立即按新职位生效。'
+        ? '仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「分配职位」）。'
         : `账号创建后默认状态为「${form.userStatus}」，可直接登录。`,
       okText: isEdit ? '确认保存' : '确认创建',
     },
@@ -1492,8 +1500,15 @@ async function doExport(): Promise<void> {
 
     <!-- ==================== 新建 / 编辑账号（原型 openUserForm 第 2078~2187 行） ==================== -->
     <ProtoDialog v-model="formOpen" :title="formTitle" size="xl">
-      <div style="display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px">
-        <!-- 左：基本信息 + 所属部门 -->
+      <!-- ★ 2026-10-19：编辑账号只保留【基本信息】→ 单列；新建账号仍是左信息 + 右职位两列 -->
+      <div
+        :style="{
+          display: 'grid',
+          gridTemplateColumns: formMode === 'edit' ? '1fr' : '1.15fr 0.85fr',
+          gap: '20px',
+        }"
+      >
+        <!-- 左：基本信息（新建时下方还有 可访问模块 + 所属部门） -->
         <div>
           <div class="sec-t"><span class="bar"></span>基本信息</div>
           <div class="fm" style="grid-template-columns: 1fr 1fr">
@@ -1591,6 +1606,11 @@ async function doExport(): Promise<void> {
             </div>
           </div>
 
+          <!-- ★ 2026-10-19：可访问模块 / 所属部门 / 所属职位 / 权限预览 / 快捷套用
+               只在【新建账号】时出现 —— 编辑账号只改基础信息。
+               编辑时这些字段沿用列表带回的原值一起提交，不会被改动；
+               需要调整职位或部门请走列表里的「分配职位」入口。 -->
+          <template v-if="formMode === 'add'">
           <div class="divider"></div>
           <!-- ★ 2026-10-16 新增：可访问模块 —— 决定「这个账号登录后能看到哪些模块」。
                门户登录要求至少一个模块，一个都不勾 = 建出来也登不进系统，所以新增时必填。
@@ -1670,11 +1690,12 @@ async function doExport(): Promise<void> {
           <div class="desc mt8">
             ※ 选择"教学部"会级联勾选初中部/高中部/大学部；未勾选子部门时按上级部门归属。
           </div>
+          </template>
 
         </div>
 
-        <!-- 右：职位 + 权限预览 + 快捷套用 -->
-        <div>
+        <!-- 右：职位 + 权限预览 + 快捷套用（★ 2026-10-19：仅新建账号时出现） -->
+        <div v-if="formMode === 'add'">
           <div class="sec-t"><span class="bar"></span>所属职位 <span class="desc">（可多选）</span></div>
           <div
             style="border: 1px solid var(--line); border-radius: 9px; padding: 9px; max-height: 262px; overflow-y: auto"
