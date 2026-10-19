@@ -339,7 +339,6 @@ const treeTitle = ref('');
 const treeDraft = ref<RolePermMap>({});
 const treeTargetId = ref('');
 const treeRoleName = ref('');
-const treeRoleCode = ref('');
 const treeUserCount = ref(0);
 /** 模块折叠（原型 treeTog） */
 const collapsed = reactive<Record<string, boolean>>({});
@@ -421,14 +420,12 @@ function collapseAll(): void {
 function openTreeWith(
   id: string,
   roleName: string,
-  roleCode: string,
   mode: TreeMode,
   perms: RolePermMap,
   userCount: number,
 ): void {
   treeTargetId.value = id;
   treeRoleName.value = roleName;
-  treeRoleCode.value = roleCode;
   treeUserCount.value = userCount;
   treeMode.value = mode;
   treeDraft.value = clonePerms(perms);
@@ -446,7 +443,7 @@ function openTreeWith(
 async function openPermTree(row: PermRoleListItem, mode: 'view' | 'edit'): Promise<void> {
   try {
     const d = await roleApi.detail(row.id);
-    openTreeWith(row.id, row.roleName, row.roleCode, mode, d.perms || {}, row.userCount);
+    openTreeWith(row.id, row.roleName, mode, d.perms || {}, row.userCount);
   } catch {
     /* 已提示 */
   }
@@ -457,7 +454,7 @@ function openPermTreeFromDetail(mode: 'view' | 'edit'): void {
   const d = detail.value;
   if (!d) return;
   detailOpen.value = false;
-  openTreeWith(d.id, d.roleName, d.roleCode, mode, d.perms || {}, d.userCount || 0);
+  openTreeWith(d.id, d.roleName, mode, d.perms || {}, d.userCount || 0);
 }
 
 /** 表单「＋ 配置权限」（原型 openFormPermTree） */
@@ -465,7 +462,6 @@ function openFormTree(): void {
   treeMode.value = 'form';
   treeTargetId.value = '';
   treeRoleName.value = form.roleName;
-  treeRoleCode.value = form.roleCode;
   treeUserCount.value = 0;
   treeDraft.value = clonePerms(draftPerms.value);
   collapseAll();
@@ -562,10 +558,7 @@ function saveRolePerms(): void {
       icon: '💾',
       msg: `确认保存 ${treeRoleName.value} 的权限配置？`,
       detail: [
-        {
-          k: '职位',
-          v: `${esc(treeRoleName.value)} <span class="desc">${esc(treeRoleCode.value)}</span>`,
-        },
+        { k: '职位', v: esc(treeRoleName.value) },
         { k: '勾选动作', v: `<b>${n}</b> 项` },
         { k: '影响账号', v: `<b>${treeUserCount.value}</b> 个账号` },
       ],
@@ -692,7 +685,6 @@ function delRole(row: PermRoleListItem): void {
       iconBg: 'var(--dg-l)',
       msg: `确认删除职位「${row.roleName}」？`,
       detail: [
-        { k: '职位编码', v: esc(row.roleCode) },
         { k: '所属部门', v: esc(row.deptName || '—') },
         { k: '已配权限', v: `${row.permCount} 项` },
         { k: '关联账号', v: '0 个' },
@@ -867,7 +859,6 @@ function openUserDetail(u: PermUserListItem): void {
 interface RoleForm {
   id: string;
   roleName: string;
-  roleCode: string;
   deptId: string;
   roleType: string;
   roleStatus: string;
@@ -883,7 +874,6 @@ const submitting = ref(false);
 const form = reactive<RoleForm>({
   id: '',
   roleName: '',
-  roleCode: '',
   deptId: '',
   roleType: '业务职位',
   roleStatus: '启用',
@@ -915,7 +905,6 @@ function openAdd(): void {
   Object.assign(form, {
     id: '',
     roleName: '',
-    roleCode: '',
     deptId: defaultDeptId.value,
     roleType: '业务职位',
     roleStatus: '启用',
@@ -934,7 +923,6 @@ async function openEdit(row: PermRoleListItem): Promise<void> {
     Object.assign(form, {
       id: d.id,
       roleName: d.roleName,
-      roleCode: d.roleCode,
       deptId: d.deptId || defaultDeptId.value,
       roleType: d.roleType,
       roleStatus: d.roleStatus,
@@ -1030,12 +1018,9 @@ function applyRoleTpl(tpl: string): void {
 /** 提交（原型 submitRoleForm：校验 → 确认 → 落库） */
 function submitForm(): void {
   const name = form.roleName.trim();
-  const code = form.roleCode.trim();
   const err: string[] = [];
 
   if (!name) err.push('职位名称必填');
-  if (!code) err.push('职位编码必填');
-  if (code && !/^[A-Z][A-Z0-9_]*$/.test(code)) err.push('职位编码需为大写字母/数字/下划线');
   if (!form.deptId) err.push('所属部门必填');
 
   if (err.length) {
@@ -1052,7 +1037,6 @@ function submitForm(): void {
       msg: isEdit ? `确认保存对「${name}」的修改？` : `确认创建职位「${name}」？`,
       detail: [
         { k: '职位名称', v: `<b>${esc(name)}</b>` },
-        { k: '职位编码', v: `<code>${esc(code)}</code>` },
         { k: '类型 / 部门', v: `${esc(form.roleType)} · ${esc(deptNameOf(form.deptId))}` },
         { k: '已配权限', v: `<b>${draftActionCount.value}</b> 项动作` },
       ],
@@ -1062,17 +1046,16 @@ function submitForm(): void {
       okText: isEdit ? '确认保存' : '确认创建',
     },
     () => {
-      void saveForm(isEdit, name, code);
+      void saveForm(isEdit, name);
     },
   );
 }
 
-async function saveForm(isEdit: boolean, name: string, code: string): Promise<void> {
+async function saveForm(isEdit: boolean, name: string): Promise<void> {
   submitting.value = true;
   try {
     const payload = {
       roleName: name,
-      roleCode: code,
       deptId: form.deptId,
       roleType: form.roleType as RoleType,
       roleStatus: form.roleStatus as RoleStatus,
@@ -1102,7 +1085,6 @@ async function saveForm(isEdit: boolean, name: string, code: string): Promise<vo
 
 interface ImportRow {
   roleName: string;
-  roleCode: string;
   roleType: string;
   deptName: string;
   remark: string;
@@ -1110,11 +1092,11 @@ interface ImportRow {
   reason: string;
 }
 
-const IMPORT_HEADER = '职位名称,职位编码,类型,所属部门,职位说明';
+const IMPORT_HEADER = '职位名称,类型,所属部门,职位说明';
 const IMPORT_TEMPLATE = [
   IMPORT_HEADER,
-  '实训助教,TRAIN_ASSIST,业务职位,实训教学部,导入创建',
-  '财务主管,FIN_LEADER,管理职位,财务管理部,导入创建',
+  '实训助教,业务职位,实训教学部,导入创建',
+  '财务主管,管理职位,财务管理部,导入创建',
 ].join('\n');
 
 const importOpen = ref(false);
@@ -1190,12 +1172,11 @@ function toImportPreview(): void {
 
   const seen = new Set<string>();
   const rows: ImportRow[] = lines.map((line) => {
-    const [roleName, roleCode, roleType, deptName, remark] = line
+    const [roleName, roleType, deptName, remark] = line
       .split(',')
       .map((s) => (s || '').trim());
     const r: ImportRow = {
       roleName: roleName || '',
-      roleCode: roleCode || '',
       roleType: roleType || '业务职位',
       deptName: deptName || '',
       remark: remark || '',
@@ -1205,17 +1186,11 @@ function toImportPreview(): void {
     if (!r.roleName) {
       r.ok = false;
       r.reason = '职位名称必填';
-    } else if (!r.roleCode) {
+    } else if (seen.has(r.roleName)) {
       r.ok = false;
-      r.reason = '职位编码必填';
-    } else if (!/^[A-Z][A-Z0-9_]*$/.test(r.roleCode)) {
-      r.ok = false;
-      r.reason = '编码格式非法';
-    } else if (seen.has(r.roleCode)) {
-      r.ok = false;
-      r.reason = '文件内编码重复';
+      r.reason = '文件内职位名称重复';
     }
-    seen.add(r.roleCode);
+    seen.add(r.roleName);
     return r;
   });
 
@@ -1232,7 +1207,7 @@ function downloadFailList(): void {
   const text = [
     `${IMPORT_HEADER},失败原因`,
     ...importFail.value.map(
-      (r) => `${r.roleName},${r.roleCode},${r.roleType},${r.deptName},${r.remark},${r.reason}`,
+      (r) => `${r.roleName},${r.roleType},${r.deptName},${r.remark},${r.reason}`,
     ),
   ].join('\n');
   downloadText('职位导入失败清单.csv', text);
@@ -1250,7 +1225,6 @@ async function doImport(): Promise<void> {
     const res = await roleApi.importList(
       rows.map((r) => ({
         roleName: r.roleName,
-        roleCode: r.roleCode,
         deptName: r.deptName,
         roleType: r.roleType,
         remark: r.remark,
@@ -1319,7 +1293,7 @@ async function doExport(): Promise<void> {
           <input
             v-model="query.keyword"
             class="inp"
-            placeholder="搜索职位名称 / 编码"
+            placeholder="搜索职位名称"
             style="width: 200px"
             @input="onKeywordInput"
             @keyup.enter="reloadFromFirstPage"
@@ -1348,9 +1322,8 @@ async function doExport(): Promise<void> {
           <table class="tb">
             <thead>
               <tr>
-                <th style="width: 180px">职位名称</th>
-                <th style="width: 130px">职位编码</th>
-                <th style="width: 120px">所属部门</th>
+                <th style="width: 220px">职位名称</th>
+                <th style="width: 150px">所属部门</th>
                 <th style="width: 92px">类型</th>
                 <th style="width: 74px">关联人数</th>
                 <th style="width: 80px">权限数</th>
@@ -1366,9 +1339,6 @@ async function doExport(): Promise<void> {
                     {{ roleIcon(r) }} {{ r.roleName }}
                   </span>
                   <span v-if="r.isSys" class="tag n" style="margin-left: 4px">预置</span>
-                </td>
-                <td>
-                  <code style="font-size: 11.5px; background: #FBF7F4; padding: 1px 6px; border-radius: 4px">{{ r.roleCode }}</code>
                 </td>
                 <td>{{ r.deptName || '—' }}</td>
                 <td><span class="tag" :class="typeTag(r.roleType)">{{ r.roleType }}</span></td>
@@ -1399,7 +1369,7 @@ async function doExport(): Promise<void> {
                 </td>
               </tr>
               <tr v-if="!list.length">
-                <td colspan="9">
+                <td colspan="8">
                   <div class="empty">
                     <div class="ic">🔍</div>
                     {{ loading ? '加载中…' : '没有符合条件的职位，试试调整筛选条件' }}
@@ -1428,12 +1398,6 @@ async function doExport(): Promise<void> {
     <ProtoDialog v-model="detailOpen" :title="detailTitle" size="lg">
       <div class="fm" style="grid-template-columns: repeat(3, 1fr)">
         <div class="f"><label>职位名称</label><div style="font-weight: 600">{{ detail?.roleName || '—' }}</div></div>
-        <div class="f">
-          <label>职位编码</label>
-          <div>
-            <code style="background: #FBF7F4; padding: 2px 7px; border-radius: 4px">{{ detail?.roleCode || '—' }}</code>
-          </div>
-        </div>
         <div class="f">
           <label>职位类型</label>
           <div>
@@ -1638,15 +1602,6 @@ async function doExport(): Promise<void> {
           <input v-model="form.roleName" class="inp" placeholder="如：学管主任" />
         </div>
         <div class="f">
-          <label>职位编码 <span class="req">*</span></label>
-          <input
-            v-model="form.roleCode"
-            class="inp"
-            :disabled="form.isSys"
-            placeholder="如：TEACH_DEAN（英文大写+下划线）"
-          />
-        </div>
-        <div class="f">
           <label>职位类型 <span class="req">*</span></label>
           <select v-model="form.roleType" class="inp">
             <option v-for="t in roleTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
@@ -1725,7 +1680,7 @@ async function doExport(): Promise<void> {
 
     <!-- ==================== 批量导入（原型 dlgImportRole 第 1858~1872 行） ==================== -->
     <ProtoDialog v-model="importOpen" title="批量导入职位" size="md">
-      <div class="notice i mb12">ℹ<div>支持 Excel(.xlsx) / CSV，列顺序：职位名称、职位编码、类型、所属部门、职位说明。</div></div>
+      <div class="notice i mb12">ℹ<div>支持 Excel(.xlsx) / CSV，列顺序：职位名称、类型、所属部门、职位说明。</div></div>
       <div
         style="border: 2px dashed var(--line); border-radius: 10px; padding: 26px; text-align: center; cursor: pointer"
         @click="pickFile"
@@ -1754,12 +1709,11 @@ async function doExport(): Promise<void> {
       </div>
       <table class="tb">
         <thead>
-          <tr><th>职位名称</th><th>编码</th><th>类型</th><th>部门</th><th>校验</th></tr>
+          <tr><th>职位名称</th><th>类型</th><th>部门</th><th>校验</th></tr>
         </thead>
         <tbody>
           <tr v-for="(r, i) in importRows" :key="i" :style="r.ok ? '' : 'background:var(--dg-l)'">
             <td>{{ r.roleName || '—' }}</td>
-            <td><code style="font-size: 11.5px">{{ r.roleCode || '—' }}</code></td>
             <td>{{ r.roleType }}</td>
             <td>{{ r.deptName || '—' }}</td>
             <td>

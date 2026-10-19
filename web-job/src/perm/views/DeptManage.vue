@@ -697,7 +697,6 @@ function gotoUserEdit(id: string): void {
         <thead>
           <tr>
             <th>职位名称</th>
-            <th>编码</th>
             <th>类型</th>
             <th>账号数</th>
             <th>操作</th>
@@ -706,7 +705,6 @@ function gotoUserEdit(id: string): void {
         <tbody>
           <tr v-for="r in deptRolesList" :key="r.id">
             <td><b>👤 {{ r.roleName }}</b></td>
-            <td><code style="font-size: 11.5px">{{ r.roleCode }}</code></td>
             <td>{{ r.roleType }}</td>
             <td class="num">{{ r.userCount }}</td>
             <td>

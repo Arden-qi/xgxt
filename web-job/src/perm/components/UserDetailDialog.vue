@@ -137,11 +137,10 @@ const detailTitle = computed(() => {
   return `账号详情 · <span class="em">${esc(d.userName)}</span> <span class="tag n">${esc(String(d.userStatus))}</span>`;
 });
 
-/** 所属职位：元数据优先取职位清单（含编码 / 权限数 / 状态） */
+/** 所属职位：元数据优先取职位清单（含权限数 / 状态） */
 interface DetailRole {
   id: string;
   roleName: string;
-  roleCode: string;
   permCount: number;
   roleStatus: string;
   icon: string;
@@ -156,7 +155,6 @@ const detailRoles = computed<DetailRole[]>(() => {
       return {
         id,
         roleName: r.roleName,
-        roleCode: r.roleCode,
         permCount: r.permCount,
         roleStatus: r.roleStatus,
         icon: roleIcon(r),
@@ -165,7 +163,6 @@ const detailRoles = computed<DetailRole[]>(() => {
     return {
       id,
       roleName: (d.roleNames || [])[i] || '—',
-      roleCode: '—',
       permCount: 0,
       roleStatus: '启用',
       icon: '👤',
@@ -397,7 +394,6 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
         <thead>
           <tr>
             <th>职位</th>
-            <th>编码</th>
             <th>权限数</th>
             <th>状态</th>
             <th>操作</th>
@@ -406,7 +402,6 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
         <tbody>
           <tr v-for="r in detailRoles" :key="r.id">
             <td><b>{{ r.icon }} {{ r.roleName }}</b></td>
-            <td><code style="font-size: 11.5px">{{ r.roleCode }}</code></td>
             <td class="num">{{ r.permCount }} 项</td>
             <td>
               <span v-if="r.roleStatus === '启用'" class="tag g">启用</span>

@@ -160,7 +160,12 @@ export interface PermRoleQuery extends PageQuery {
 export interface PermRoleSavePayload {
   id?: string;
   roleName: string;
-  roleCode: string;
+  /**
+   * ★ 2026-10-19：界面已去掉「职位编码」——改为可选。
+   *   不传由后端自动生成（t_perm_role.role_code 是 NOT NULL + 唯一索引，
+   *   且是跨模块鉴权连接键，所以列与字段必须保留，只是不再由用户填写）。
+   */
+  roleCode?: string;
   deptId?: string;
   roleType?: RoleType;
   /** ★ 2026-10-08：等价的内置职位码，见 PermRole.equivRoleCode */

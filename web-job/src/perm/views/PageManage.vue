@@ -671,7 +671,7 @@ const currentBoardName = computed(
                     <span class="rl-avatar">{{ r.roleName.slice(0, 1) }}</span>
                     <span
                       style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
-                      :title="`${r.roleName}（${r.roleCode}）· ${r.deptName}`"
+                      :title="`${r.roleName} · ${r.deptName}`"
                     >
                       <b v-if="roleDirty(r.roleId)" style="color: #A66A1F">●</b>
                       {{ r.roleName }}
@@ -732,7 +732,6 @@ const currentBoardName = computed(
                 <template v-else>
                   <div style="font-weight: 600; font-size: 14px">
                     {{ activeRole?.roleName || '职位' }}
-                    <span class="tag n">{{ activeRole?.roleCode }}</span>
                     <span v-if="activeRole" class="tag n">{{ activeRole.deptName }}</span>
                     <span v-if="activeRolePages?.configured" class="tag p">
                       已配置 {{ activeRolePages?.overrideCount }} 处

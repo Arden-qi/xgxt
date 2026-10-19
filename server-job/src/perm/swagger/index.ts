@@ -237,10 +237,17 @@ const definition: swaggerJsdoc.Options['definition'] = {
       },
       RoleSavePayload: {
         type: 'object',
-        required: ['roleName', 'roleCode', 'roleType'],
+        required: ['roleName', 'roleType'],
         properties: {
           roleName: { type: 'string', example: '助教组长' },
-          roleCode: { type: 'string', example: 'TEACH_ASSIST_LEAD' },
+          roleCode: {
+            type: 'string',
+            nullable: true,
+            description:
+              '★ 2026-10-19 起界面不再维护（用户要求全系统去掉「职位编码」）：' +
+              '不传由后端自动生成（如 ROLE_0001）。该字段是跨模块鉴权连接键，响应里仍会返回。',
+            example: 'ROLE_0001',
+          },
           roleType: { type: 'string', example: '管理职位' },
           roleStatus: { type: 'string', enum: ['启用', '停用'], default: '启用' },
           deptId: { type: 'string', nullable: true, example: 'D01' },

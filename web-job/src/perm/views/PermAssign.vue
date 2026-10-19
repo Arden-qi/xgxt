@@ -440,7 +440,7 @@ function treeSaveAsk(): void {
 }
 
 const saveDetail = computed<{ k: string; v: string }[]>(() => [
-  { k: '职位', v: `${esc(currentRoleName.value)} <span class="desc">${esc(currentRole.value?.roleCode || '')}</span>` },
+  { k: '职位', v: esc(currentRoleName.value) },
   { k: '勾选动作', v: `<b>${treeStat.value.n}</b> 项` },
   { k: '影响账号', v: `<b>${userCount.value}</b> 个账号` },
 ]);
@@ -639,7 +639,7 @@ async function openRoleUsers(): Promise<void> {
                 </div>
                 <div>
                   <div style="font-weight: 600; font-size: 14px">
-                    {{ currentRole.roleName }} <span class="tag n">{{ currentRole.roleCode }}</span>
+                    {{ currentRole.roleName }}
                     <span v-if="currentRole.isSys" class="tag p">预置</span>
                     <span v-else class="tag g">自建</span>
                   </div>
