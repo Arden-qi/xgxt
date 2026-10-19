@@ -110,7 +110,21 @@ feeRouter.get(
 
     const total = list.length;
     const paged = list.slice((q.page - 1) * q.size, q.page * q.size);
-    res.json(page(paged, total, q));
+
+    // ★ 催费次数（2026-10-19 用户要求）：按学生聚合催费记录条数（notify 按学生维度催缴，
+    //    只查本页行，一次 groupBy，代价可忽略）
+    const stuIds = [...new Set(paged.map((x: any) => x.studentId))].filter(Boolean);
+    let urgeCountMap: Record<string, number> = {};
+    if (stuIds.length) {
+      const counts = await db(NOTIFY_TABLE)
+        .where('is_deleted', false)
+        .whereIn('student_id', stuIds)
+        .groupBy('student_id')
+        .select('student_id', db.raw('count(*) as urge_count'));
+      urgeCountMap = Object.fromEntries(counts.map((c: any) => [c.student_id, Number(c.urge_count)]));
+    }
+    const withCount = paged.map((x: any) => ({ ...x, urgeCount: urgeCountMap[x.studentId] || 0 }));
+    res.json(page(withCount, total, q));
   }),
 );
 

@@ -21,7 +21,13 @@ const classOptions = ref<ClassInfo[]>([]);
 // ★ 2026-10-19 部门维度（用户二次要求）：催费列表聚合 初高/大学/就业 三部门——
 //   初高=本页原生缴费台账（功能不变）；大学=催缴记录（/api/class/urge/list）；
 //   就业=催费单（/api/job/fee-call/page，实训/就业共用 sms_job 库）。
-type FeeRow = FeeRecord & { dept?: string; /** 原始行（就业催费单的回填字段在 raw 上） */ raw?: any };
+type FeeRow = FeeRecord & {
+  dept?: string;
+  /** 原始行（就业催费单的回填字段在 raw 上） */
+  raw?: any;
+  /** 催费次数（初高=催费记录数；大学=催缴次数；就业无此概念显示 —） */
+  urgeCount?: number;
+};
 
 const query = reactive<FeeListQuery & {
   page: number;
@@ -73,6 +79,7 @@ function urgeToRow(r: any): FeeRow {
     expireDate: r.expireDate || undefined,
     remainDays: r.overdueDays ? -r.overdueDays : undefined,
     isUrgent: !!r.isOverdue,
+    urgeCount: Number(r.urgeCount || 0),
     dept: '大学',
   } as unknown as FeeRow;
 }
@@ -390,6 +397,10 @@ onMounted(() => {
             <el-tag v-if="row.isUrgent" type="danger" size="small">紧急</el-tag>
             <span v-else>—</span>
           </template>
+        </el-table-column>
+        <!-- ★ 催费次数（2026-10-19 用户要求）：初高=催费推送记录数；大学=催缴次数；就业催费单无此概念 -->
+        <el-table-column label="催费次数" width="90" align="center">
+          <template #default="{ row }">{{ row.urgeCount ?? '—' }}</template>
         </el-table-column>
         <el-table-column label="操作" width="140" align="center" fixed="right">
           <template #default="{ row }">

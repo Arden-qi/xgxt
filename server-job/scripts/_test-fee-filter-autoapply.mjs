@@ -76,6 +76,20 @@ function unwired(section) {
       feeSrc.includes('isJhRow(row)') && feeSrc.includes('v-if="query.dept === \'jh\'"'),
     );
 
+    /* ---------- A3. 催费次数列（2026-10-19 用户要求） ---------- */
+    check(
+      '★ 催费列表有「催费次数」列（初高=催费记录数；大学=催缴次数）',
+      feeSrc.includes('label="催费次数"') && feeSrc.includes('urgeCount'),
+    );
+    const feeRouteSrc = readFileSync(
+      path.join(ROOT, 'server-job', 'src', 'class-jh', 'routes', 'fee.route.ts'),
+      'utf8',
+    );
+    check(
+      '★ 后端 fee.list 按学生聚合催费次数（本页行一次 groupBy，接口绕不过）',
+      feeRouteSrc.includes('urgeCount') && feeRouteSrc.includes("groupBy('student_id')"),
+    );
+
     /* ---------- B. live：Vite 编译通过 ---------- */
     for (const pg of PAGES) {
       const r = await req(`${BASE}/src/${pg.rel.replace('web-job/src/', '')}`, { timeout: 8000 });
