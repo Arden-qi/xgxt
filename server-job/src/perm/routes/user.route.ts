@@ -38,13 +38,15 @@ import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+/* ★ 2026-10-19：密码策略抽出到 pwdPolicy —— 与门户「自助改密」共用同一份，
+   原来这里和 portal 各写一套，口径不一致导致自助改密能绕过规则。 */
+import { assertPwdStrength, loadPwdRule } from '../services/pwdPolicy';
 import {
   addLog,
   avatarText,
   clientIp,
   collectDescendants,
   getUserEffectivePerms,
-  getRuleRaw,
   joinRoleNames,
   maskPhone,
   SCOPE_ACTION_TO_VALUE,
@@ -65,40 +67,12 @@ const ACCT_RE = /^[A-Za-z0-9]{4,20}$/;            // 账号：字母/数字，4-
 const PHONE_RE = /^1\d{10}$/;                     // 手机号：11 位，1 开头
 
 /* ============================================================
- * 工具：密码策略校验（读 t_perm_rule / pwd 组）
+ * 工具：密码策略校验
+ *
+ * ★ 2026-10-19：判定逻辑已抽到 perm/services/pwdPolicy.ts，
+ *   与「顶栏自助改密」（portal/services/account.service.ts）共用同一份策略。
+ *   本文件只负责「新增 / 编辑 / 重置密码」三个入口的调用。
  * ============================================================ */
-
-interface PwdRuleRaw {
-  min: number;
-  upper: boolean;
-  digit: boolean;
-  symbol: boolean;
-  retry: number;
-  lockMin: number;
-}
-
-async function loadPwdRule(): Promise<PwdRuleRaw> {
-  const raw = await getRuleRaw('pwd');
-  return {
-    min: Number(raw.min || 8),
-    upper: raw.upper === 'true',
-    digit: raw.digit === 'true',
-    symbol: raw.symbol === 'true',
-    retry: Number(raw.retry || 5),
-    lockMin: Number(raw.lockMin || 30),
-  };
-}
-
-/** 校验密码是否符合当前策略；不符合就抛 40023 */
-async function assertPwdStrength(pwd: string): Promise<void> {
-  const rule = await loadPwdRule();
-  const miss: string[] = [];
-  if (pwd.length < rule.min) miss.push(`不少于 ${rule.min} 位`);
-  if (rule.upper && !/[A-Z]/.test(pwd)) miss.push('含大写字母');
-  if (rule.digit && !/\d/.test(pwd)) miss.push('含数字');
-  if (rule.symbol && !/[^A-Za-z0-9]/.test(pwd)) miss.push('含特殊符号');
-  if (miss.length) throw new BizError(BizCode.PWD_WEAK, `密码不符合安全策略，需：${miss.join('、')}`);
-}
 
 /** 生成一个满足当前策略的随机密码（重置密码用） */
 async function generatePassword(): Promise<string> {
