@@ -20,6 +20,8 @@ import type {
   ConsultFeeCreatePayload,
   ConsultFeeCreateResult,
   ConsultFeeStats,
+  // ★ 2026-10-19 作废收款单返回值
+  ConsultFeeCancelResult,
   ConsultRefundOrder,
   ConsultRefundQuery,
   ConsultRefundApplyPayload,
@@ -44,6 +46,11 @@ import type {
   FeeType,
   ConsultToFormalResult,
   ConsultSupplementPlan,
+  // ★ 2026-10-16 分期付款
+  ConsultInstallmentPlan,
+  ConsultInstallmentCreatePayload,
+  ConsultInstallmentPayPayload,
+  ConsultStudentLedger,
 } from 'shared-types/consult';
 
 /* ============================================================
@@ -198,11 +205,19 @@ export function toFormal(
   consultStudentId: string,
   payMode: FormalPayMode = 'FULL' as FormalPayMode,
   feeTypes?: FeeType[],
+  /**
+   * ★ 2026-10-19 用户口径：只要缴费就要有凭证。
+   *    转正式会真的建缴费单，凭证必须随单提交。
+   */
+  voucherUrl?: string,
+  voucherNo?: string,
 ): Promise<ConsultToFormalResult> {
   return http.post<ConsultToFormalResult>('/api/consult/student/to-formal', {
     consultStudentId,
     payMode,
     feeTypes,
+    voucherUrl,
+    voucherNo,
   });
 }
 
@@ -320,6 +335,19 @@ export function resubmitOrder(orderId: string): Promise<null> {
   return http.post<null>('/api/consult/fee/resubmit', { orderId });
 }
 
+/**
+ * ★ 2026-10-19 作废收款单（重复发起 / 发起错了）
+ *
+ * ⚠️ 传整批 orderIds：学生档案按批次合并显示，只作废一张会留下半截数据。
+ *    已到账的单不能作废（后端会跳过并在 message 里说明），要走退费。
+ */
+export function cancelFeeOrders(
+  orderIds: string[],
+  reason?: string,
+): Promise<ConsultFeeCancelResult> {
+  return http.post<ConsultFeeCancelResult>('/api/consult/fee/cancel', { orderIds, reason });
+}
+
 /** 查费用标准（规则2，用于新建学生时预览金额） */
 export function fetchStandard(feeType: number, deptCode?: number): Promise<FinanceStandardView> {
   return http.get<FinanceStandardView>('/api/consult/fee/standard', { feeType, deptCode });
@@ -334,6 +362,47 @@ export function fetchStandardBatch(
     feeTypes: feeTypes.join(','),
     deptCode,
   });
+}
+
+/* ============================================================
+ * ★ 2026-10-16 分期付款
+ * ============================================================ */
+
+/** 创建分期计划（默认立刻发起第 1 期收款） */
+export function createInstallment(
+  payload: ConsultInstallmentCreatePayload,
+): Promise<ConsultInstallmentPlan> {
+  return http.post<ConsultInstallmentPlan>('/api/consult/fee/plan/create', payload);
+}
+
+/** 缴某一期 */
+export function payInstallmentStage(
+  payload: ConsultInstallmentPayPayload,
+): Promise<ConsultInstallmentPlan> {
+  return http.post<ConsultInstallmentPlan>('/api/consult/fee/plan/pay', payload);
+}
+
+/** 分期计划列表 */
+export function fetchInstallmentList(query: {
+  consultStudentId?: string;
+  status?: number;
+  keyword?: string;
+  page?: number;
+  size?: number;
+}): Promise<PageData<ConsultInstallmentPlan>> {
+  return http.get<PageData<ConsultInstallmentPlan>>('/api/consult/fee/plan/list', query);
+}
+
+/** 分期计划详情 */
+export function fetchInstallmentDetail(planId: string): Promise<ConsultInstallmentPlan> {
+  return http.get<ConsultInstallmentPlan>('/api/consult/fee/plan/detail', { id: planId });
+}
+
+/** 学生缴费账本（应收 / 已收 / 优惠 / 待缴） */
+export function fetchStudentLedger(
+  consultStudentId: string,
+): Promise<ConsultStudentLedger> {
+  return http.get<ConsultStudentLedger>('/api/consult/fee/plan/ledger', { consultStudentId });
 }
 
 /* ============================================================

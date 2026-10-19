@@ -33,6 +33,9 @@ import {
   attachVoucher,
   listFeeClasses,
   statsFee,
+  voucherGroupMap,
+  voucherGroupOf,
+  cancelFee,
 } from '../services/fee.service';
 // ★ 2026-10-05：缴费单新增/变更后推送到班级管理（只读副本），失败不影响主流程
 // ★ 2026-10-06：收方扩到「大学部 + 初高」，故改调 syncFeeToAll / syncFeesToAll
@@ -107,7 +110,27 @@ feeRouter.get(
       .limit(q.size)
       .offset((q.page - 1) * q.size);
 
-    const list = rows.map(toFeeListItem);
+    /**
+     * ★ 2026-10-19 把「这张凭证覆盖了几笔、合计多少」带给前端
+     *
+     * 用户反馈「缴费凭证和实缴金额对不上」的根因：
+     *   一次缴清多项费用时，一张转账截图挂在多张单据上，
+     *   本单 amount 只是其中一项（学费 28000），凭证截图却是合计（32400）。
+     *   列表里不标出来，财务只会以为数据错了。
+     *
+     * 这里只做一次聚合（本页凭证去重后 IN 查询），不产生 N+1。
+     */
+    const groupMap = await voucherGroupMap(rows.map((r: any) => r.voucher_url));
+
+    const list = rows.map((r: any) => {
+      const item = toFeeListItem(r);
+      const g = r.voucher_url ? groupMap.get(String(r.voucher_url)) : undefined;
+      return {
+        ...item,
+        voucherGroupCount: g?.count ?? 1,
+        voucherGroupAmount: g?.amount ?? item.amount,
+      };
+    });
     res.json(page(list, Number(total), q));
   }),
 );
@@ -163,7 +186,9 @@ feeRouter.get(
     }
     // 餐费场景：把「同一张凭证还被谁共用」一并返回，方便财务判断
     const shared = await findVoucherSharers(row.voucher_url, id);
-    res.json(ok({ ...toFeeDetail(row), sharedVoucherBy: shared }));
+    // ★ 2026-10-19 这张凭证一共覆盖几笔、合计多少（详情弹窗要讲清「本单 ≠ 凭证总额」）
+    const group = await voucherGroupOf(row.voucher_url);
+    res.json(ok({ ...toFeeDetail(row), sharedVoucherBy: shared, voucherGroupCount: group.count, voucherGroupAmount: group.amount }));
   }),
 );
 
@@ -181,7 +206,8 @@ const addSchema = z.object({
   deptCode: z.coerce.number().int().optional(),
   headTeacherId: z.string().optional(),
   headTeacherName: z.string().optional(),
-  feeType: z.coerce.number().int().min(1).max(5, '缴费类型只能是 1~5'),
+  // ★ 2026-10-15：上限 5 → 7（押金 6 / 校服 7）
+  feeType: z.coerce.number().int().min(1).max(7, '缴费类型只能是 1~7'),
   /**
    * 金额（单位：分），正整数。
    * ⚠️ 不传时后端会自动从「费用标准」取该 类型+部门 的标准金额（规则2）。
@@ -277,6 +303,29 @@ feeRouter.post(
     await syncFeeToAll(body.id);
 
     res.json(ok({ billNo }, `核对成功，已生成账单 ${billNo}`));
+  }),
+);
+
+/* ============================================================
+ * 8.5 ★ 2026-10-19 作废缴费单（上游发起错了 / 重复发起）
+ *     POST /api/finance/fee/cancel
+ *
+ * ⚠️ 只允许作废「未核对入账」的单，已入账的必须走退费。
+ *    咨询侧发现重复发起时，会先调这里再软删自己的收款单。
+ * ============================================================ */
+
+const cancelSchema = z.object({
+  id: z.string().min(1, '必须传缴费单 id'),
+  reason: z.string().max(200).optional(),
+});
+
+feeRouter.post(
+  '/cancel',
+  validate(cancelSchema),
+  wrap(async (req, res) => {
+    const body = (req as any).validated as z.infer<typeof cancelSchema>;
+    await cancelFee(body.id, body.reason || '上游重复发起', operatorOf(req));
+    res.json(ok(null, '缴费单已作废'));
   }),
 );
 
