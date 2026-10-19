@@ -211,15 +211,20 @@ const routes: RouteRecordRaw[] = [
     name: 'ClassStudentList',
     component: () => import('@/views/ClassStudentList.vue'),
     meta: { title: '班级花名册', pageCode: 'job:classStudent:view' },
-  },{
+  },
+
+  /*
+   * 2026-10-19 批注：删除独立「班级交接」页面（原 /class-transfer）。
+   * 交接入口在「班级管理」操作列的【交接】，这里只给老书签留一个跳转，
+   * 避免用户点到历史链接时白屏。
+   */
+  {
     path: '/class-transfer',
-    name: 'ClassTransfer',
-    component: () => import('@/views/ClassTransfer.vue'),
-    meta: { title: '班级管理', pageCode: 'job:classTransfer:view' },
+    redirect: '/teaching/class',
   },
   {
     path: '/transfer',
-    redirect: '/class-transfer',
+    redirect: '/teaching/class',
   },
 
   /* ============ 实训：未开发模块（占位页 + 权限受控） ============ */

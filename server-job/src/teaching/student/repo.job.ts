@@ -39,6 +39,8 @@ import type {
 import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+// ★ 2026-10-19 实训与就业部共用阶段方案：阶段名优先读 t_class_stage，PHASE_NAME 只兜底老数据
+import { resolveStageName } from '../../class-jh/utils/stageDict';
 
 const T = 't_student_base';
 const CLASS_TABLE = 't_job_class';
@@ -111,7 +113,7 @@ function mapRow(r: Record<string, any>): StudentRow {
     classId: str(r.class_id),
     className: str(r.class_name),
     phaseCode: phase,
-    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase)),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),

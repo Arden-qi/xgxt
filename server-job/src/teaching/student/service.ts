@@ -32,7 +32,7 @@ import type {
 import { STUDENT_DEDUP_PRIORITY, STUDENT_STAGES, STUDENT_STAGE_NAME } from '../shared/dto';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { listClassesByStage } from '../shared/classOptions';
-import { loadStagePlanOptions } from '../shared/stagePlans';
+import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { db } from '../../utils/db';
 import { StudentStatus } from 'shared-types';
 import type { StudentRepo, StudentStat } from './types';
@@ -281,7 +281,8 @@ export async function listStageMeta(user: any): Promise<StudentStageMeta[]> {
     out.push({
       stage: s,
       stageName: STUDENT_STAGE_NAME[s],
-      phaseOptions: await repo.phaseOptions(),
+      // ★ 2026-10-19：本部门方案里的阶段并进筛选下拉（就业部/实训 dept_code=3 共用一套）
+      phaseOptions: mergePhaseOptions(s, await repo.phaseOptions(), planOptions),
       planOptions,
       sections: repo.sections,
       supportUnassigned: repo.supportUnassigned,

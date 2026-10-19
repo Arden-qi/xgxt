@@ -37,6 +37,9 @@ import type {
   ClassSaveBody,
 } from '../shared/dto';
 import { fmtDate, fmtDateTime } from '../shared/format';
+// ★ 2026-10-19 实训与就业部共用「就业部」阶段方案（dept_code=3）：
+//   阶段名优先读 t_class_stage，PHASE_NAME 只兜底老数据
+import { resolveStageName } from '../../class-jh/utils/stageDict';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 
@@ -86,7 +89,7 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
-    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase)),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),

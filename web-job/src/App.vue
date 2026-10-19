@@ -77,8 +77,6 @@ interface ViewGroup {
 
 /** 当前激活的菜单项（hash 路由下 route.path 就是 /xxx） */
 const activeMenu = computed(() => {
-  // 老路径 /transfer 已重定向到 /class-transfer
-  if (route.path === '/transfer') return '/class-transfer';
   /* ★ 第 1 期「入口合并」：
    *   左侧菜单现在只有一个「教学管理」分组，重复业务域指向 /teaching/<域>。
    *   用户直连老路由（/exam、/class/exam、/class-jh/exam …）时，

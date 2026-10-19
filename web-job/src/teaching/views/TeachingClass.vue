@@ -133,7 +133,8 @@
       </el-table-column>
       <el-table-column label="操作" width="220" fixed="right" align="center">
         <template #default="{ row }">
-          <el-button link type="primary" @click="openDetail(row)">花名册</el-button>
+          <!-- 2026-10-19 批注：按钮「花名册」改名「详情」（抽屉里不只有名单，还有班级信息与交接记录） -->
+          <el-button link type="primary" @click="openDetail(row)">详情</el-button>
           <el-button v-if="!isReadOnlyUser" link type="primary" @click="openEdit(row)">编辑</el-button>
           <!-- 2026-10-19 批注：操作列加【交接】；原来单独的【改状态】移进编辑弹窗 -->
           <el-button v-if="!isReadOnlyUser" link type="success" @click="openHandover(row)">交接</el-button>
@@ -153,8 +154,8 @@
       @size-change="load(1)"
     />
 
-    <!-- ============ 详情 / 花名册 ============ -->
-    <el-drawer v-model="detailVisible" :title="`${detail?.base.className || ''} · 花名册`" size="560px">
+    <!-- ============ 详情（原「花名册」，2026-10-19 改名） ============ -->
+    <el-drawer v-model="detailVisible" :title="`${detail?.base.className || ''} · 详情`" size="560px">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="部门">{{ detail.base.stageName }}</el-descriptions-item>

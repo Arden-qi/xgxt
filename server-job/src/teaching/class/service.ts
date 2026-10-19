@@ -30,7 +30,7 @@ import type {
 } from '../shared/dto';
 import { CLASS_STAGES, CLASS_STAGE_NAME, isClassStage } from '../shared/dto';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
-import { loadStagePlanOptions } from '../shared/stagePlans';
+import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import type { ClassDetail, ClassRepo } from './types';
 import {
   HANDOVER_ROLES,
@@ -197,7 +197,12 @@ export async function listClassMeta(user: any): Promise<ClassStageMeta[]> {
     // ★ 2026-10-16 阶段方案：两个部门的方案都在 sms_class_jh 里，与学段无关
     loadStagePlanOptions(),
   ]);
-  return list.map((m) => ({ ...m, planOptions }));
+  return list.map((m) => ({
+    ...m,
+    // ★ 2026-10-19：本部门方案里的阶段并进筛选下拉（就业部/实训 dept_code=3 共用一套）
+    phaseOptions: mergePhaseOptions(m.stage, m.phaseOptions, planOptions),
+    planOptions,
+  }));
 }
 
 /**

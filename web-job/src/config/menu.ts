@@ -143,15 +143,12 @@ export const MENU: MenuNode[] = [
       domainNode('student'),
       domainNode('class'),
 
-      {
-        title: '班级交接',
-        path: '/class-transfer',
-        pageCode: 'job:classTransfer:view',
-        owner: '实训',
-        stage: '已完成',
-        phase: '实训',
-        desc: '换班交接：整个班换负责人（班主任/教员/助教），学生不动，提交即生效并留存快照。',
-      },
+      /*
+       * 2026-10-19 批注：删除左侧「班级交接」独立菜单（原 /class-transfer）。
+       * 交接功能本身保留 —— 入口在「班级管理」操作列的【交接】按钮，
+       * 交接记录在班级详情抽屉里；后端 /api/job/class-transfer 接口未动。
+       */
+
       {
         title: '待接收学员',
         path: '/class/consult',

@@ -11,6 +11,9 @@ import { randomUUID } from 'crypto';
 import { BizCode, STAGE_NAME, DEPT_NAME, FLOW_TYPE_NAME } from 'shared-types/class-jh';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
+// ★ 2026-10-19 就业部接入阶段方案：判断阶段是否被「就业部 / 实训」的班级或学生占用，
+//   这两张表在 sms_job（不是 sms_class_jh）
+import { db as jobDb } from '../../utils/db';
 import { wrap } from '../utils/wrap';
 import { writeOpLog } from '../utils/opLog';
 import { nameOf } from '../utils/enumName';
@@ -228,14 +231,19 @@ stageRouter.delete(
  *
  *   规则：
  *     - 方案名称在同一部门内不可重复
- *     - 阶段编码由后端自动生成：初高部 1xx / 大学部 2xx，取同部门当前最大值 +1
+ *     - 阶段编码由后端自动生成：初高部 1xx / 大学部 2xx / 就业部 3xx，
+ *       取同部门当前最大值 +1
  *       （软删除的行仍占号，避免编码复用把历史数据指到别的阶段上）
  *     - 已被班级 / 学生使用的阶段，不允许删除，也不允许通过改「所属部门」换号
- *   ============================================================ */
+ *
+ *   ★ 2026-10-19：部门扩到 3 个（就业部）。
+ *     实训班与就业部班级共用 `sms_job.t_job_class`（dept_code=3，靠 stage_key 区分），
+ *     所以「就业部」这一套方案对实训 / 就业两个学段同时生效。
+ * ============================================================ */
 
-/** 生成同部门的下一个阶段编码 */
+/** 生成同部门的下一个阶段编码（1xx / 2xx / 3xx，与部门编码对齐） */
 async function nextStageCode(deptCode: number): Promise<number> {
-  const base = deptCode === 2 ? 200 : 100;
+  const base = deptCode === 2 ? 200 : deptCode === 3 ? 300 : 100;
   const row: any = await db(STAGE_TABLE).where('dept_code', deptCode).max({ m: 'stage_code' }).first();
   const max = Number(row?.m);
   return (Number.isFinite(max) && max > base ? max : base) + 1;
@@ -246,7 +254,16 @@ async function stageInUse(stageCode: number): Promise<boolean> {
   const byClass = await db(CLASS_TABLE).where({ stage: stageCode, is_deleted: false }).first();
   if (byClass) return true;
   const byStudent = await db(STUDENT_TABLE).where({ stage: stageCode, is_deleted: false }).first();
-  return !!byStudent;
+  if (byStudent) return true;
+  // ★ 就业部（含实训）：班级 / 学生都在 sms_job，阶段码同样存在 stage 列
+  const byEmpClass = await jobDb('t_job_class')
+    .where({ stage: stageCode, dept_code: 3, is_deleted: false })
+    .first();
+  if (byEmpClass) return true;
+  const byEmpStudent = await jobDb('t_student_base')
+    .where({ stage: stageCode, dept_code: 3, is_deleted: false })
+    .first();
+  return !!byEmpStudent;
 }
 
 const planPhaseSchema = z.object({
@@ -258,7 +275,8 @@ const planPhaseSchema = z.object({
 
 const planSaveSchema = z.object({
   planName: z.string().min(1, '方案名称必填'),
-  deptCode: z.coerce.number().int().min(1).max(2),
+  /** 1 初高部 / 2 大学部 / 3 就业部（实训与就业共用 3） */
+  deptCode: z.coerce.number().int().min(1).max(3),
   phases: z.array(planPhaseSchema).min(1, '至少需要一个阶段'),
 });
 
@@ -399,6 +417,18 @@ stageRouter.put(
 
     const existingById = new Map<string, any>(existing.map((s) => [s.id, s]));
     const keepIds = new Set(body.phases.filter((p) => p.id).map((p) => p.id as string));
+
+    /**
+     * ★ 2026-10-19：把「要删的阶段是否在用」**提前**到写库之前统一校验。
+     *   原来这段判断在下面的删除循环里，而方案名 / 阶段明细已经先更新了 ——
+     *   一旦后面抛错，库里会留下「改了一半」的数据（实测踩到过）。
+     */
+    for (const s of existing) {
+      if (keepIds.has(s.id)) continue;
+      if (await stageInUse(s.stage_code)) {
+        throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, `阶段「${s.stage_name}」已被班级或学生使用，不能删除`);
+      }
+    }
 
     await db(STAGE_PLAN_TABLE).where({ id: plan.id }).update({
       plan_name: body.planName,

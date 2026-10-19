@@ -994,17 +994,19 @@ const formClassOptions = computed(() =>
 );
 /** 表单里阶段下拉：★ 2026-10-16 改为「阶段方案驱动」——
  *   有方案数据时用方案里的阶段（按部门过滤），否则回落到 meta 的阶段清单
- *   （回落时初高仍按旧口径过滤掉预科）。 */
+ *   （回落时初高仍按旧口径过滤掉预科）。
+ *   ★ 2026-10-19：就业部（含实训，部门都是 3）也走方案，不再写死一/二/三阶段。 */
 const formPhaseOptions = computed(() => {
-  const dept = form.deptCode ?? (form.stage === 'jh' ? 1 : form.stage === 'class' ? 2 : undefined);
-  if (form.stage === 'jh' || form.stage === 'class') {
-    const seen = new Map<number, string>();
-    for (const pl of planOptionsAll.value) {
-      if (dept && pl.deptCode !== dept) continue;
-      for (const ph of pl.phases) if (!seen.has(ph.value)) seen.set(ph.value, ph.label);
-    }
-    if (seen.size) return [...seen].map(([value, label]) => ({ value, label }));
+  // 就业部覆盖「实训 / 就业部」两个学段，部门编码都是 3
+  const dept =
+    form.deptCode ??
+    (form.stage === 'jh' ? 1 : form.stage === 'class' ? 2 : form.stage === 'job' || form.stage === 'emp' ? 3 : undefined);
+  const seen = new Map<number, string>();
+  for (const pl of planOptionsAll.value) {
+    if (dept && pl.deptCode !== dept) continue;
+    for (const ph of pl.phases) if (!seen.has(ph.value)) seen.set(ph.value, ph.label);
   }
+  if (seen.size) return [...seen].map(([value, label]) => ({ value, label }));
   const list = meta.value.find((m) => m.stage === form.stage)?.phaseOptions || [];
   if (form.stage === 'jh') return list.filter((p) => JH_PHASE_CODES.includes(p.value));
   return list;

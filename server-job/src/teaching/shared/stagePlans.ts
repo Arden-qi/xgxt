@@ -54,3 +54,27 @@ export async function loadStagePlanOptions(): Promise<StagePlanOption[]> {
     return [];
   }
 }
+
+/** 学段 → 部门编码（jh 1 / class 2；★ 实训与就业部共用 3） */
+const STAGE_DEPT_CODE: Record<string, number> = { jh: 1, class: 2, job: 3, emp: 3 };
+
+/**
+ * ★ 2026-10-19 就业部接入阶段方案：把「本部门方案里的阶段」作为 meta.phaseOptions
+ *
+ * 【口径】方案表是唯一权威，四个部门一视同仁（就业部/实训共用 dept_code=3）。
+ *   只有在本部门一套方案都没有时（表没建好 / 还没配）才回落到仓储常量，
+ *   且只留本部门段位的编码（1xx / 2xx / 3xx）——
+ *   ⚠️ 仓储常量是**全量字典**（jh 的清单里也有 201~204），直接并进来会出现
+ *   「初高部能筛到大学部阶段」，所以必须按段位过滤，不能整份并。
+ */
+export function mergePhaseOptions(
+  stage: string,
+  baseOptions: Array<{ value: number; label: string }> | undefined,
+  planOptions: StagePlanOption[],
+): Array<{ value: number; label: string }> {
+  const deptCode = STAGE_DEPT_CODE[stage];
+  const fromPlans = planOptions.filter((p) => p.deptCode === deptCode).flatMap((p) => p.phases);
+  if (fromPlans.length) return fromPlans;
+  const base = deptCode === 1 ? 100 : deptCode === 2 ? 200 : 300;
+  return (baseOptions ?? []).filter((p) => p.value >= base && p.value < base + 100);
+}
