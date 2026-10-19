@@ -1,15 +1,15 @@
 /**
  * 静态回归守卫：「账号详情」弹窗底部「去编辑」按钮的开关口径
  *
- * 背景（2026-10-19）：
- *   用户要求把「账号管理」详情弹窗里的「去编辑」按钮删掉。
- *   但该弹窗是共享组件 UserDetailDialog.vue，三处入口共用：
- *     · 账号管理（UserManage）—— 列表行操作已有独立「编辑」→ 要求删掉重复入口
- *     · 部门管理（DeptManage）—— 有独立「编辑」，但仍保留弹窗内按钮
- *     · 职位管理（RoleManage）—— 「职位下人员 → 账号详情」里它是【唯一】编辑入口
- *   所以做法不是删按钮，而是加 `showEdit` 开关（默认 true），只在账号管理传 false。
+ * 背景（2026-10-19，分两轮）：
+ *   该弹窗是共享组件 UserDetailDialog.vue，三处入口共用同一个底部按钮：
+ *     · 账号管理（UserManage）—— 第一轮：列表行操作已有独立「编辑」→ 用户要求删掉重复入口
+ *     · 职位管理（RoleManage）—— 第二轮：用户要求一并删掉（那页「职位下人员」行操作
+ *       只有「移出该职位 / 账号详情」，删掉后本页就没有编辑账号的入口了，已提示用户）
+ *     · 部门管理（DeptManage）—— 用户尚未要求，仍显示（成员列表另有独立「编辑」）
+ *   所以做法不是删按钮，而是加 `showEdit` 开关（默认 true），前两页传 false。
  *   这个脚本把该口径钉住：谁要是「顺手清理」掉 prop、改了默认值、
- *   或者误删了另两页的 @edit 绑定，这里会立刻报红。
+ *   或者误把部门管理那处也关掉 / 误删它的 @edit 绑定，这里会立刻报红。
  *
  * 纯静态断言，不起服务、不连库；退出码 0 = 全通过。
  */
@@ -128,23 +128,67 @@ check(
 );
 
 /* ============================================================
- * 三、另两处入口：必须继续保持默认显示（不能全局删按钮）
+ * 三、职位管理：第二轮也关掉了（用户 2026-10-19 追加要求）
  * ============================================================ */
-for (const [name, path] of [
-  ['职位管理', ROLEM],
-  ['部门管理', DEPTM],
-]) {
-  const src = read(path);
-  check(
-    `${name}仍挂载详情弹窗且未传 show-edit（= 按钮照旧显示）`,
-    count(src, '<UserDetailDialog') === 1 && !/show-edit/.test(src),
-  );
-  check(
-    `${name}仍绑定 @edit 处理函数`,
-    /@edit="[A-Za-z_][\w]*"/.test(src),
-    (src.match(/@edit="([A-Za-z_][\w]*)"/) || [])[1] || '未找到',
-  );
-}
+const rolem = read(ROLEM);
+const rolemCode = stripComments(rolem);
+
+check(
+  '职位管理给弹窗传了 :show-edit="false"（且只有一处）',
+  count(rolemCode, ':show-edit="false"') === 1,
+  `代码里 ${count(rolemCode, ':show-edit="false"')} 次（含注释共 ${count(rolem, ':show-edit="false"')} 次）`,
+);
+
+check(
+  '职位管理不再绑定 @edit（按钮没了，绑定就是死代码）',
+  !/@edit=/.test(rolemCode),
+  `@edit= 出现 ${count(rolemCode, '@edit=')} 次`,
+);
+
+check(
+  '职位管理已删除 openUserEditById 函数体（注释里留个说明不算）',
+  !/function openUserEditById/.test(rolemCode),
+  `function openUserEditById 出现 ${count(rolemCode, 'function openUserEditById')} 次`,
+);
+
+check(
+  '职位管理不再引用 permUserEditRoute（随之失效的 import 已清掉）',
+  !/permUserEditRoute/.test(rolemCode),
+  `代码里 ${count(rolemCode, 'permUserEditRoute')} 次`,
+);
+
+check(
+  '职位管理仍挂载着详情弹窗（没顺手连弹窗一起删了）',
+  count(rolem, '<UserDetailDialog') === 1,
+);
+
+check(
+  '职位管理「职位下人员」行操作仍有「移出该职位 / 账号详情」',
+  /@click="removeRoleFromUser\(u\)">移出该职位</.test(rolem) &&
+    /@click="openUserDetail\(u\)">账号详情</.test(rolem),
+);
+
+/* ============================================================
+ * 四、部门管理：目前唯一还显示「去编辑」的入口
+ *    （正因如此，共享组件里的 showEdit 开关还不能当成死代码删掉）
+ * ============================================================ */
+const deptm = read(DEPTM);
+
+check(
+  '部门管理仍挂载详情弹窗且未传 show-edit（= 按钮照旧显示）',
+  count(deptm, '<UserDetailDialog') === 1 && !/show-edit/.test(deptm),
+);
+
+check(
+  '部门管理仍绑定 @edit 处理函数',
+  /@edit="[A-Za-z_][\w]*"/.test(deptm),
+  (deptm.match(/@edit="([A-Za-z_][\w]*)"/) || [])[1] || '未找到',
+);
+
+check(
+  '共享组件的 showEdit 开关仍在（部门管理还要用，别当死代码删）',
+  /showEdit\?:\s*boolean;/.test(read(DETAIL)),
+);
 
 /* ============================================================
  * 输出
