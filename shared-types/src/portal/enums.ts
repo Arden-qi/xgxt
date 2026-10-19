@@ -48,6 +48,10 @@ export enum FeeType {
   MEAL = 3,          // 餐费
   INSURANCE = 4,     // 保险费
   TRIAL_FEE = 5,     // 试学费
+  /** 押金（★ 2026-10-15 新增，与公共字典 enums.ts 同步） */
+  DEPOSIT = 6,       // 押金
+  /** 校服（★ 2026-10-15 新增，与公共字典 enums.ts 同步） */
+  UNIFORM = 7,       // 校服
 }
 
 /** 缴费状态 */
@@ -83,9 +87,11 @@ export enum SourceModule {
 export const FEE_SOURCE_MODULE: Record<number, SourceModule> = {
   [FeeType.TUITION]: SourceModule.CONSULT,        // 正式学费 ← 咨询
   [FeeType.TRIAL_FEE]: SourceModule.CONSULT,      // 试学费   ← 咨询
-  [FeeType.ACCOMMODATION]: SourceModule.EDU,      // 住宿费   ← 教务
-  [FeeType.MEAL]: SourceModule.EDU,               // 餐费     ← 教务
-  [FeeType.INSURANCE]: SourceModule.EDU,          // 保险费   ← 教务
+  [FeeType.ACCOMMODATION]: SourceModule.CONSULT,  // 住宿费   ← 咨询（★ 2026-10-15 改：正式学费六项都由咨询发起）
+  [FeeType.MEAL]: SourceModule.CONSULT,           // 餐费     ← 咨询（同上）
+  [FeeType.INSURANCE]: SourceModule.CONSULT,      // 保险费   ← 咨询（同上）
+  [FeeType.DEPOSIT]: SourceModule.CONSULT,        // 押金     ← 咨询（★ 2026-10-15 新增类型）
+  [FeeType.UNIFORM]: SourceModule.CONSULT,        // 校服     ← 咨询（同上）
 };
 
 /**
@@ -233,6 +239,8 @@ export const FEE_TYPE_NAME: Record<number, string> = {
   [FeeType.MEAL]: '餐费',
   [FeeType.INSURANCE]: '保险费',
   [FeeType.TRIAL_FEE]: '试学费',
+  [FeeType.DEPOSIT]: '押金',
+  [FeeType.UNIFORM]: '校服',
 };
 
 export const PAY_STATUS_NAME: Record<number, string> = {

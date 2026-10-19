@@ -167,6 +167,22 @@ export const financeClient = {
     voucherNo?: string;
     payMethod?: string;
     remark?: string;
+    /** ★ 2026-10-15 自定义金额（单位：分）；不传则由财务按费用标准取值 */
+    amount?: number;
+    /**
+     * ★ 2026-10-19 合计单的分项明细
+     *
+     * 用户口径：「一张凭证就是交的总金额，总金额下面列出包含什么」。
+     * 传了这个，财务侧才能在总金额下面展示子项；
+     * 单项单不传。
+     */
+    itemDetail?: Array<{
+      feeType: FeeType;
+      feeTypeName: string;
+      amount: number;
+      standardAmount: number;
+      discount: number;
+    }>;
   }): Promise<{ id: string; amount?: number }> {
     return request<{ id: string; amount?: number }>('/api/finance/fee/add', {
       method: 'POST',
@@ -195,6 +211,21 @@ export const financeClient = {
     await request<null>('/api/finance/fee/attach-voucher', {
       method: 'POST',
       body: payload,
+    });
+  },
+
+  /**
+   * ★ 2026-10-19 作废财务缴费单（咨询发起错了 / 重复发起时撤销）
+   *
+   * POST /api/finance/fee/cancel
+   *
+   * ⚠️ 财务只允许作废「未核对入账」的单；已入账会报错 —— 那种必须走退费，
+   *    否则账已经出了，作废会把账单和缴费单对不上。
+   */
+  async cancelFee(id: string, reason?: string): Promise<null> {
+    return request<null>('/api/finance/fee/cancel', {
+      method: 'POST',
+      body: { id, reason },
     });
   },
 

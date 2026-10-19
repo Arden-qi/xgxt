@@ -103,6 +103,8 @@ import portalAccountRouter from './portal/routes/account.route';
 import { authMiddleware as consultAuth, consultPermGate } from './consult/middleware/auth';
 import consultStudentRouter from './consult/routes/student.route';
 import consultFeeRouter from './consult/routes/fee.route';
+/* ★ 2026-10-16 分期付款路由，挂在 /api/consult/fee/plan 下 */
+import consultInstallmentRouter from './consult/routes/installment.route';
 import consultRefundRouter from './consult/routes/refund.route';
 import consultApproveRouter from './consult/routes/approve.route';
 import consultLossRouter from './consult/routes/loss.route';
@@ -431,6 +433,7 @@ app.use('/api/portal/account', portalAccountRouter);
  */
 app.use('/api/consult/student', consultAuth, consultPermGate, consultStudentRouter);
 app.use('/api/consult/fee', consultAuth, consultPermGate, consultFeeRouter);
+app.use('/api/consult/fee/plan', consultAuth, consultPermGate, consultInstallmentRouter);
 app.use('/api/consult/refund', consultAuth, consultPermGate, consultRefundRouter);
 app.use('/api/consult/approve', consultAuth, consultPermGate, consultApproveRouter);
 app.use('/api/consult/loss', consultAuth, consultPermGate, consultLossRouter);
