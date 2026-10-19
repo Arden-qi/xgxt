@@ -395,6 +395,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","
 .tb .num{font-variant-numeric:tabular-nums}
 .tb-wrap{overflow-x:auto}
 
+/* ---- 部门结构：树形缩进（2026-10-19 按用户要求）----
+   下级部门不再在「部门名称」单元格里重复列一遍，改为按层级缩进；
+   缩进量由行内 `--dept-indent` 给出（第 2 层=校级直属 → 0，每深一层 +20px）。 */
+.tb td.dept-name{padding-left:calc(14px + var(--dept-indent,0px))}
+.tb td.dept-name .branch{color:#C9BDB8;margin-right:3px;font-size:11px}
+
 /* ---- 输入（原型 .inp → 设计系统口径） ---- */
 .inp,.main select.inp,.main textarea.inp{padding:6px 11px;border:1px solid #E2D7D1;border-radius:7px;background:#fff;font-size:12.5px;color:#5F5350;outline:none;transition:.15s;min-width:0;height:32px}
 textarea.inp{height:auto;padding:9px 11px;line-height:1.6}

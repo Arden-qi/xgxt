@@ -63,6 +63,12 @@ const loading = ref(false);
 const overview = ref<DeptOverview | null>(null);
 /** 拍平后的全部部门节点（含校级根节点） */
 const flatNodes = ref<PermDeptTreeNode[]>([]);
+/**
+ * ★ 2026-10-19 按用户要求新增：每个部门在部门树里的深度。
+ *   校级=1；市场咨询部 / 教学部等=2；初中部 / 高中部 / 大学部=3。
+ *   用途：表格「部门名称」列按层级缩进，让下级部门一眼看出从属关系。
+ */
+const deptDepth = ref<Record<string, number>>({});
 /** 部门列表（带 remark / deptShort，树上没有） */
 const deptList = ref<PermDept[]>([]);
 
@@ -80,6 +86,19 @@ const nameOf = (id: string): string =>
 
 const childrenOf = (id: string): PermDeptTreeNode[] =>
   flatNodes.value.filter((n) => n.parentId === id);
+
+/**
+ * ★ 2026-10-19 部门结构树形缩进（按用户要求：下级部门不再在单元格里重复列一遍）。
+ *   depthOf  —— 树深度；数据还没到手时按「直接挂在校级下」= 2 处理（即不缩进）
+ *   indentOf —— 「部门名称」列的缩进量；第 2 层（校级直属）为 0，每深一层 +20px
+ *   isLastSibling —— 同级里是不是最后一个，决定前面画「└」还是「├」
+ */
+const depthOf = (id: string): number => deptDepth.value[id] || 2;
+const indentOf = (id: string): string => `${Math.max(0, depthOf(id) - 2) * 20}px`;
+const isLastSibling = (d: PermDeptTreeNode): boolean => {
+  const sibs = flatNodes.value.filter((n) => (n.parentId || '') === (d.parentId || ''));
+  return sibs.length > 0 && sibs[sibs.length - 1].id === d.id;
+};
 
 const deptOf = (id: string): PermDept | undefined => deptList.value.find((d) => d.id === id);
 
@@ -100,16 +119,19 @@ async function loadAll(): Promise<void> {
     overview.value = ov;
     deptList.value = page.list || [];
 
-    // 拍平一份，便于查上级名字 / 算下级部门
+    // 拍平一份，便于查上级名字 / 算下级部门；顺手把「树深度」也记下来给表格缩进用
     const flat: PermDeptTreeNode[] = [];
-    const walk = (nodes: PermDeptTreeNode[]): void => {
+    const depth: Record<string, number> = {};
+    const walk = (nodes: PermDeptTreeNode[], d: number): void => {
       nodes.forEach((n) => {
         flat.push(n);
-        if (n.children?.length) walk(n.children);
+        depth[n.id] = d;
+        if (n.children?.length) walk(n.children, d + 1);
       });
     };
-    walk(t);
+    walk(t, 1);
     flatNodes.value = flat;
+    deptDepth.value = depth;
   } catch {
     /* 错误已在 request 拦截器里弹过提示 */
   } finally {
@@ -560,15 +582,17 @@ function gotoUserEdit(id: string): void {
           </thead>
           <tbody>
             <tr v-for="d in rows" :key="d.id">
-              <td>
+              <!-- ★ 2026-10-19 按用户要求：原来这里在「含 N 个下级」下面还把下级部门名
+                   一个个列了一遍（└ 初中部 / └ 高中部 / └ 大学部），可下面又有它们自己的
+                   表格行 —— 同一批部门出现两遍，而且三个学段的行跟「市场咨询部 / 教学部」
+                   平级，看不出谁从属于谁。现在改成：单元格里不再重复列下级，改为在
+                   「部门名称」列按层级缩进（父级部门照旧带「含 N 个下级」标签）。
+                   ⚠️ 三个学段仍保留自己的行 —— 它们是真部门（有职位 / 有账号），
+                      行内的「查看职位 / 查看账号 / 编辑 / 删除」入口不能丢。 -->
+              <td class="dept-name" :style="{ '--dept-indent': indentOf(d.id) }">
+                <span v-if="depthOf(d.id) > 1" class="branch">{{ isLastSibling(d) ? '└' : '├' }}</span>
                 <b>{{ childrenOf(d.id).length ? '📂' : '📁' }} {{ d.deptName }}</b>
                 <span v-if="childrenOf(d.id).length" class="tag n" style="margin-left: 5px">含 {{ childrenOf(d.id).length }} 个下级</span>
-                <div
-                  v-for="c in childrenOf(d.id)"
-                  :key="c.id"
-                  class="desc"
-                  style="padding-left: 16px"
-                >└ {{ c.deptName }}</div>
               </td>
               <td>
                 <span v-if="isSchoolParent(d.parentId || '')" class="tag n">校部</span>
