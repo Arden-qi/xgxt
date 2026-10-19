@@ -134,7 +134,7 @@
   <div class="two">
     <div class="panel">
       <h2>数据表资产</h2>
-      <p class="hint">从 SQL 初始化脚本解析出的 Table 节点，共 70 张业务表。</p>
+      <p class="hint">从 SQL 初始化脚本解析出的 Table 节点，去重后 70 张（含 2 张 knex 迁移表），业务表 68 张。</p>
       <div class="bars" id="tblBars"></div>
       <div class="pills" id="tblPills"></div>
     </div>
@@ -237,7 +237,7 @@ document.getElementById('flow').innerHTML = [
 
 /* ---------- 三个判断 ---------- */
 document.getElementById('notes').innerHTML = [
-  ['ok','统一表体系已成主干','70 张表里 43 张是 <code>t_uni_*</code>，说明「统一表 + 多岗位视图」的建模思路已经在库里落地，新增业务优先挂uni表。'],
+  ['ok','统一表体系已成主干','68 张业务表里 43 张是 <code>t_uni_*</code>，说明「统一表 + 多岗位视图」的建模思路已经在库里落地，新增业务优先挂 uni 表。'],
   ['warn','双命名体系并存','后端同时存在 <code>class</code>／<code>class-jh</code>／<code>job</code>／<code>teaching</code> 四套班级域路由（合计 449 条），前端与后端命名并不对称，是最容易踩坑的边界。'],
   ['warn','前端调用静态可解析率偏低','310 条 HTTP_CALLS 中仅 38 条来自 web 层，其余来自 tools 与 server 自测脚本；说明前端大量走动态拼接 URL，跨层链路目前主要靠路由命名对齐。']
 ].map(([cls,t,p])=>`<div class="note ${cls}"><h3>${t}</h3><p>${p}</p></div>`).join('');
