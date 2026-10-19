@@ -253,7 +253,16 @@
           <span class="muted">（自动汇总各项）</span>
         </el-form-item>
         <el-form-item label="申请日期">
-          <el-date-picker v-model="form.applyDate" type="date" value-format="YYYY-MM-DD" style="width: 180px" />
+          <!-- ★ 不给用户选择：系统自动取提交当天（2026-10-19 用户要求），置灰展示；
+               openCreate 里 form.applyDate = todayStr() 自动填，提交时也传当天 -->
+          <el-date-picker
+            v-model="form.applyDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            disabled
+            style="width: 180px"
+          />
+          <span class="muted">系统自动取当天，不可修改</span>
         </el-form-item>
         <el-form-item label="退费原因" required>
           <el-input v-model="form.refundReason" type="textarea" :rows="3" maxlength="500" show-word-limit />

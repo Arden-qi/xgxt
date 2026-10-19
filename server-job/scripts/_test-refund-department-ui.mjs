@@ -100,6 +100,10 @@ const { check, summary } = makeChecker();
       vue.includes('form.applyDate = todayStr()') && vue.includes('function todayStr()'),
     );
     check(
+      '★ 申请日期不给用户选择：置灰、系统自动取当天（2026-10-19 用户要求）',
+      vue.includes('不给用户选择：系统自动取提交当天') && /v-model="form\.applyDate"[\s\S]*?disabled/.test(vue),
+    );
+    check(
       '★ 关键字回车 / 清空即查',
       tpl.includes('@keyup.enter="load(1)"') && tpl.includes('@clear="load(1)"'),
     );
