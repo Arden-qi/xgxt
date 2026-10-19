@@ -61,6 +61,21 @@ function unwired(section) {
       );
     }
 
+    /* ---------- A2. 催费页部门维度（2026-10-19 二次要求：列表部门列 + 部门筛选） ---------- */
+    const feeSrc = readFileSync(path.join(ROOT, 'web-job', 'src', 'class-jh', 'views', 'FeeList.vue'), 'utf8');
+    check(
+      '★ 催费页有部门筛选（全部部门/初高/大学/就业）且列表有部门列',
+      feeSrc.includes('label="部门"') && feeSrc.includes("dept: 'all'") && feeSrc.includes("row.dept || '初高'"),
+    );
+    check(
+      '★ 三源接线（初高台账 fetchFeeList + 大学催缴 urgeList + 就业催费单 fetchFeeCallList）',
+      feeSrc.includes('fetchFeeList(') && feeSrc.includes('urgeList(') && feeSrc.includes('fetchFeeCallList('),
+    );
+    check(
+      '★ 初高功能保留：催费推送/记录按钮仅在初高行，导出与催费记录按钮在初高视图',
+      feeSrc.includes('isJhRow(row)') && feeSrc.includes('v-if="query.dept === \'jh\'"'),
+    );
+
     /* ---------- B. live：Vite 编译通过 ---------- */
     for (const pg of PAGES) {
       const r = await req(`${BASE}/src/${pg.rel.replace('web-job/src/', '')}`, { timeout: 8000 });
