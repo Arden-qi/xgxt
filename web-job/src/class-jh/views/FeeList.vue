@@ -45,9 +45,6 @@ const tableRows = ref<FeeRow[]>([]);
 const mergedRows = ref<FeeRow[]>([]);
 const serverTotal = ref(0);
 
-/** 类型/状态/紧急/日期筛选是初高台账口径，仅部门=初高时显示 */
-const jhOnlyFilters = computed(() => query.dept === 'jh');
-
 const total = computed(() => (query.dept === 'all' ? mergedRows.value.length : serverTotal.value));
 const tableData = computed<FeeRow[]>(() => {
   if (query.dept !== 'all') return tableRows.value;
@@ -106,12 +103,12 @@ async function loadData() {
   try {
     if (query.dept === 'class') {
       // 大学催缴记录
-      const data = await urgeList({ page: query.page, size: query.size, keyword: query.keyword || undefined });
+      const data = await urgeList({ page: query.page, size: query.size, classId: query.classId, feeType: query.feeType, keyword: query.keyword || undefined });
       tableRows.value = data.list.map((r) => urgeToRow(r));
       serverTotal.value = data.total;
     } else if (query.dept === 'employ') {
       // 就业催费单
-      const data = await fetchFeeCallList({ page: query.page, size: query.size, keyword: query.keyword || undefined });
+      const data = await fetchFeeCallList({ page: query.page, size: query.size, classId: query.classId, feeType: query.feeType, startDate: query.startDate, endDate: query.endDate, keyword: query.keyword || undefined });
       tableRows.value = data.list.map((r) => callToRow(r));
       serverTotal.value = data.total;
     } else if (query.dept === 'all') {
@@ -119,8 +116,8 @@ async function loadData() {
       const kw = query.keyword || undefined;
       const settled = await Promise.allSettled([
         fetchFeeList({ ...query, page: 1, size: 100 }),
-        urgeList({ page: 1, size: 100, keyword: kw }),
-        fetchFeeCallList({ page: 1, size: 100, keyword: kw }),
+        urgeList({ page: 1, size: 100, classId: query.classId, feeType: query.feeType, keyword: kw }),
+        fetchFeeCallList({ page: 1, size: 100, classId: query.classId, feeType: query.feeType, startDate: query.startDate, endDate: query.endDate, keyword: kw }),
       ]);
       const rows: FeeRow[] = [];
       if (settled[0].status === 'fulfilled') rows.push(...settled[0].value.list.map((r) => ({ ...r, dept: '初高' } as FeeRow)));
@@ -311,7 +308,7 @@ onMounted(() => {
     <el-card shadow="never" class="search-card">
       <!-- ★ 2026-10-19：筛选全部「选完即查」（@change → handleSearch），不用再点查询；选完不动，用户视角就是筛选没生效 -->
         <!-- ★ 2026-10-19（二次要求）：部门维度——列表加部门列，筛选加部门（初高/大学/就业）；
-             类型/状态/紧急/日期筛选是初高台账口径，仅部门=初高时显示 -->
+             筛选全程可见；口径差异：缴费状态对初高/大学生效、仅看紧急对初高生效、应缴日期对初高/就业生效 -->
       <el-form :model="query" inline>
         <el-form-item label="部门">
           <el-select v-model="query.dept" style="width: 130px" @change="handleDeptChange">
@@ -324,32 +321,35 @@ onMounted(() => {
         <el-form-item label="关键字">
           <el-input v-model="query.keyword" placeholder="学号/姓名" clearable style="width: 150px" @keyup.enter="handleSearch" @clear="handleSearch" />
         </el-form-item>
-        <el-form-item v-if="jhOnlyFilters" label="班级">
+        <el-form-item label="班级">
           <el-select v-model="query.classId" placeholder="全部" clearable style="width: 150px" @change="handleSearch">
             <el-option v-for="c in classOptions" :key="c.classId" :label="c.className" :value="c.classId" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="jhOnlyFilters" label="缴费类型">
+        <el-form-item label="缴费类型">
           <el-select v-model="query.feeType" placeholder="全部" clearable style="width: 130px" @change="handleSearch">
             <el-option v-for="(name, value) in FEE_TYPE_NAME" :key="value" :label="name" :value="Number(value)" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="jhOnlyFilters" label="缴费状态">
-          <el-select v-model="query.payStatus" placeholder="全部" clearable style="width: 120px" @change="handleSearch">
+        <el-form-item label="缴费状态">
+          <el-select v-model="query.payStatus" placeholder="全部" clearable style="width: 120px" :disabled="query.dept === 'employ'" @change="handleSearch">
             <el-option v-for="(name, value) in PAY_STATUS_NAME" :key="value" :label="name" :value="Number(value)" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="jhOnlyFilters" label="仅看紧急">
-          <el-switch v-model="query.isUrgent" @change="handleSearch" />
+        <el-form-item label="仅看紧急">
+          <el-switch v-model="query.isUrgent" :disabled="query.dept === 'employ'" @change="handleSearch" />
         </el-form-item>
-        <el-form-item v-if="jhOnlyFilters" label="应缴日期">
-          <el-date-picker v-model="query.startDate" type="date" value-format="YYYY-MM-DD" placeholder="开始" style="width: 140px" @change="handleSearch" />
+        <el-form-item label="应缴日期">
+          <el-date-picker v-model="query.startDate" type="date" value-format="YYYY-MM-DD" placeholder="开始" style="width: 140px" :disabled="query.dept === 'class'" @change="handleSearch" />
           <span class="sep">~</span>
-          <el-date-picker v-model="query.endDate" type="date" value-format="YYYY-MM-DD" placeholder="结束" style="width: 140px" @change="handleSearch" />
+          <el-date-picker v-model="query.endDate" type="date" value-format="YYYY-MM-DD" placeholder="结束" style="width: 140px" :disabled="query.dept === 'class'" @change="handleSearch" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
           <el-button :icon="Refresh" @click="handleReset">重置</el-button>
+        </el-form-item>
+        <el-form-item>
+          <div class="dept-hint">注：缴费状态筛选对初高/大学生效；仅看紧急对初高生效；应缴日期对初高/就业生效</div>
         </el-form-item>
       </el-form>
     </el-card>
@@ -518,6 +518,10 @@ onMounted(() => {
 }
 .toolbar {
   margin-bottom: 12px;
+}
+.dept-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .table-card :deep(.el-card__body) {
   padding: 16px;
