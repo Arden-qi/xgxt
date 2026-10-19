@@ -217,6 +217,34 @@ teachingClassRouter.post(
   }),
 );
 
+/* ============================================================
+ * 8/9. 班级交接（2026-10-19 批注）
+ *   一次交接 = 5 个岗位（班主任/教员/助教/项目经理/就业老师）同时换人，
+ *   提交即生效（不走审批），并在详情抽屉里留一条记录。
+ * ============================================================ */
+
+/** 8. 某班的交接记录 */
+teachingClassRouter.get(
+  '/handover/list',
+  wrap(async (req, res) => {
+    const stage = reqStage(req.query.stage);
+    const classId = requireId(req.query.classId);
+    res.json(ok(await svc.listClassHandovers(stage, classId, req.user), '查询成功'));
+  }),
+);
+
+/** 9. 提交交接（只带「要换的新人」，没带的岗位视为不变） */
+teachingClassRouter.post(
+  '/handover',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    const classId = requireId(b.classId);
+    const row = await svc.handoverClass({ ...b, stage, classId }, req.user);
+    res.json(ok(row, '交接已生效'));
+  }),
+);
+
 /** 7. 元信息（各学段特性：有无编号 / 有无结业日期 / 阶段码选项） */
 teachingClassRouter.get(
   '/meta',

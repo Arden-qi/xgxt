@@ -1032,12 +1032,16 @@ export const CLASS_STATUS_NAME: Record<number, string> = {
 };
 
 /**
- * ★ 统一班级状态流转表（取初高那套，最完整）
+ * ★ 统一班级状态流转表
  *   已结业是终态，不可回退 —— 撤销结业属于「结业撤销」专用动作，不走这里。
+ *
+ * 2026-10-19 批注：「待结业」这个状态删除（页面下拉不再出现），
+ *   封班之后直接进「已结业」。为兼容历史数据，3→已结业 的流转仍保留，
+ *   但**不再作为任何状态的下一跳目标**（新数据不可能变成 3）。
  */
 export const CLASS_STATUS_TRANSITIONS: Record<number, number[]> = {
-  [CLASS_STATUS.OPEN]: [CLASS_STATUS.OPEN, CLASS_STATUS.CLOSED, CLASS_STATUS.GRADUATING],
-  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATING],
+  [CLASS_STATUS.OPEN]: [CLASS_STATUS.OPEN, CLASS_STATUS.CLOSED],
+  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
   [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATING, CLASS_STATUS.GRADUATED],
   [CLASS_STATUS.GRADUATED]: [CLASS_STATUS.GRADUATED],
 };
@@ -1155,10 +1159,66 @@ export interface ClassSummary {
   total: number;
   openCount: number;
   closedCount: number;
+  /** 2026-10-19 起「待结业」已下线，恒为 0（保留字段兼容前端旧代码） */
   graduatingCount: number;
   graduatedCount: number;
   /** 在班学生总数 */
   studentCount: number;
+}
+
+/* ============================================================
+ * 班级交接（2026-10-19 批注）
+ *   一次交接 = 一个班 5 个岗位同时换人：
+ *   班主任 / 教员 / 助教 / 项目经理 / 就业老师
+ *   初高没有后两个岗位（页面也不显示）。
+ * ============================================================ */
+
+/** 交接里的一个岗位（原/新） */
+export interface ClassHandoverRole {
+  oldId: string | null;
+  oldName: string | null;
+  newId: string | null;
+  newName: string | null;
+}
+
+/** 一条交接记录（详情抽屉里按时间倒序展示） */
+export interface ClassHandoverRow {
+  id: string;
+  stage: TeachingStage;
+  stageName: string;
+  classId: string;
+  className: string;
+  deptCode: number | null;
+  headTeacher: ClassHandoverRole;
+  teacher: ClassHandoverRole;
+  assistant: ClassHandoverRole;
+  /** 初高恒为空 */
+  projectManager: ClassHandoverRole;
+  /** 初高恒为空 */
+  employmentTeacher: ClassHandoverRole;
+  handoverDate: string | null;
+  reason: string | null;
+  operatorId: string | null;
+  operatorName: string | null;
+  createTime: string | null;
+}
+
+/** 提交交接的入参：只带「要换的新人」，没带的岗位视为不变 */
+export interface ClassHandoverPayload {
+  stage: TeachingStage;
+  classId: string;
+  handoverDate?: string | null;
+  reason?: string | null;
+  headTeacherId?: string | null;
+  headTeacherName?: string | null;
+  teacherId?: string | null;
+  teacherName?: string | null;
+  assistantId?: string | null;
+  assistantName?: string | null;
+  projectManagerId?: string | null;
+  projectManagerName?: string | null;
+  employmentTeacherId?: string | null;
+  employmentTeacherName?: string | null;
 }
 
 /** 花名册一行（统一结构；各学段「班级↔学生」的关联方式不同，见各仓储注释） */

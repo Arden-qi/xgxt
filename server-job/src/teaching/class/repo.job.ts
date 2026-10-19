@@ -253,6 +253,12 @@ export const repo: ClassRepo = {
             `班级状态不可从「${CLASS_STATUS_NAME[from]}」流转为「${CLASS_STATUS_NAME[body.classStatus]}」`,
           );
         }
+        // ★ 2026-10-19：改状态挪进「编辑班级」后，保存这条路径也要补上原来
+        //   changeStatus 做的事 —— 结业写结业日期 + 记住上一个状态。
+        if (from !== body.classStatus && body.classStatus === CLASS_STATUS.GRADUATED) {
+          if (!payload.close_date) payload.close_date = now;
+          payload.prev_class_status = from;
+        }
       }
       await tbl(db, 'sms_job', T, STAGE).where({ id: body.id }).update(payload);
       return { id: body.id };
@@ -404,8 +410,8 @@ export const repo: ClassRepo = {
 /** 允许流转到的目标状态 */
 function transitionsFrom(from: number): number[] {
   const map: Record<number, number[]> = {
-    [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED, CLASS_STATUS.GRADUATING],
-    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATING],
+    [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED],
+    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATED]: [],
   };

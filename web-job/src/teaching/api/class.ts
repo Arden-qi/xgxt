@@ -160,6 +160,65 @@ export interface ClassOption {
   classStatusName: string;
 }
 
+/* ============================================================
+ * 班级交接（2026-10-19 批注）
+ *   一次交接 = 一个班 5 个岗位同时换人，提交即生效并留记录
+ *   初高没有「项目经理 / 就业老师」两个岗位
+ * ============================================================ */
+export interface ClassHandoverRole {
+  oldId: string | null;
+  oldName: string | null;
+  newId: string | null;
+  newName: string | null;
+}
+
+export interface ClassHandoverRow {
+  id: string;
+  stage: ClassStage;
+  stageName: string;
+  classId: string;
+  className: string;
+  deptCode: number | null;
+  headTeacher: ClassHandoverRole;
+  teacher: ClassHandoverRole;
+  assistant: ClassHandoverRole;
+  projectManager: ClassHandoverRole;
+  employmentTeacher: ClassHandoverRole;
+  handoverDate: string | null;
+  reason: string | null;
+  operatorId: string | null;
+  operatorName: string | null;
+  createTime: string | null;
+}
+
+/** 只带「要换的新人」；没带的岗位视为不变 */
+export interface ClassHandoverPayload {
+  stage: ClassStage;
+  classId: string;
+  handoverDate?: string | null;
+  reason?: string | null;
+  headTeacherId?: string | null;
+  headTeacherName?: string | null;
+  teacherId?: string | null;
+  teacherName?: string | null;
+  assistantId?: string | null;
+  assistantName?: string | null;
+  projectManagerId?: string | null;
+  projectManagerName?: string | null;
+  employmentTeacherId?: string | null;
+  employmentTeacherName?: string | null;
+}
+
+/** 某班的交接记录（详情抽屉用） */
+export function listClassHandovers(stage: ClassStage, classId: string) {
+  return http.get<ClassHandoverRow[]>('/api/teaching/class/handover/list', { stage, classId });
+}
+
+/** 提交交接 */
+export function doClassHandover(payload: ClassHandoverPayload) {
+  return http.post<ClassHandoverRow>('/api/teaching/class/handover', payload);
+}
+
 export function listClasses(params: ClassListParams) {
   return http.get<{ list: ClassRow[]; total: number; page: number; size: number }>(
     '/api/teaching/class/list',
@@ -211,6 +270,33 @@ export const CLASS_STATUS_NAME: Record<number, string> = {
   3: '待结业',
   4: '已结业',
 };
+
+/**
+ * 可供选择的班级状态
+ *   2026-10-19 批注：「待结业」删除（筛选下拉、编辑班级的状态下拉、统计卡片都不再出现）。
+ *   CLASS_STATUS_NAME 里仍保留 3 的中文名 —— 历史数据万一是 3，标签还能正常显示。
+ */
+export const CLASS_STATUS_SELECTABLE = [
+  { value: 1, label: '开放' },
+  { value: 2, label: '封班' },
+  { value: 4, label: '已结业' },
+];
+
+/**
+ * 编辑班级时「班级状态」可选项：当前状态 + 允许流转到的状态（与后端同一张表）
+ *   1 开放 → 1/2；2 封班 → 2/1/4；4 已结业 → 终态（只读）
+ *   （3 待结业 只为兼容历史数据保留 3→4，不作为任何状态的下一跳）
+ */
+export function classStatusOptions(cur: number | null | undefined): Array<{ value: number; label: string }> {
+  const map: Record<number, number[]> = {
+    1: [1, 2],
+    2: [2, 1, 4],
+    3: [3, 4],
+    4: [4],
+  };
+  const list = map[Number(cur) || 1] || [Number(cur) || 1];
+  return list.map((v) => ({ value: v, label: CLASS_STATUS_NAME[v] }));
+}
 
 /** 状态 → Element Plus tag 类型 */
 export const CLASS_STATUS_TAG: Record<number, string> = {

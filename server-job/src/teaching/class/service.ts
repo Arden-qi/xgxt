@@ -18,6 +18,8 @@ import * as repoClassJh from './repo.classJh';
 import * as repoClass from './repo.class';
 import * as repoJob from './repo.job';
 import type {
+  ClassHandoverPayload,
+  ClassHandoverRow,
   ClassListQuery,
   ClassRow,
   ClassSaveBody,
@@ -29,6 +31,14 @@ import { TEACHING_STAGES, TEACHING_STAGE_NAME } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
 import { loadStagePlanOptions } from '../shared/stagePlans';
 import type { ClassDetail, ClassRepo } from './types';
+import {
+  HANDOVER_ROLES,
+  insertHandover,
+  listHandovers,
+  pickNew,
+  type RoleKey,
+  type StaffSlot,
+} from './handover.repo';
 
 const REPOS: Record<TeachingStage, ClassRepo> = {
   jh: repoClassJh.repo,
@@ -221,6 +231,124 @@ export async function listClassOptions(user: any) {
 export async function genClassCodeFor(stage: TeachingStage): Promise<string | null> {
   if (stage !== 'job') return null;
   return repoJob.genClassCode();
+}
+
+/* ============================================================
+ * 班级交接（2026-10-19 批注）
+ *   一次交接 = 一个班把 5 个岗位（班主任/教员/助教/项目经理/就业老师）
+ *   的现任换成新人；提交即生效，并留一条记录给班级详情看。
+ *   初高没有后两个岗位 → 那两个岗位传什么都忽略。
+ * ============================================================ */
+
+/** 读某班的交接记录 */
+export async function listClassHandovers(
+  stage: TeachingStage,
+  classId: string,
+  user: any,
+): Promise<ClassHandoverRow[]> {
+  await assertStageView(user, stage);
+  return listHandovers(stage, classId);
+}
+
+const EMPTY_SLOT: StaffSlot = { id: null, name: null };
+
+/**
+ * 执行交接
+ *
+ * 【口径】
+ *   · 前端只需传「要换的人」；没传的岗位视为不变（不是清空 —— 清空负责人只能用编辑班级）
+ *   · 至少要换一个岗位，否则报错（防止点两下写出一条什么都没变的记录）
+ *   · 交接日期为空 → 默认今天
+ *   · 先改班级负责人，再写记录：改失败就不留记录
+ */
+export async function handoverClass(
+  payload: ClassHandoverPayload,
+  user: any,
+): Promise<ClassHandoverRow> {
+  const stage = assertStage(payload.stage);
+  await assertStageView(user, stage);
+
+  const classId = String(payload.classId ?? '').trim();
+  if (!classId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
+
+  const detail = await pick(stage).detail(classId, user);
+  if (!detail) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在或无权访问');
+  const base = detail.base;
+
+  // 初高的表没有项目经理/就业老师 → 这两个岗位不参与比较与保存
+  const keys: RoleKey[] =
+    stage === 'jh' ? ['headTeacher', 'teacher', 'assistant'] : [...HANDOVER_ROLES];
+
+  const old: Record<RoleKey, StaffSlot> = {
+    headTeacher: { id: base.headTeacherId, name: base.headTeacherName },
+    teacher: { id: base.teacherId, name: base.teacherName },
+    assistant: { id: base.assistantId, name: base.assistantName },
+    projectManager: { id: base.projectManagerId, name: base.projectManagerName },
+    employmentTeacher: { id: base.employmentTeacherId, name: base.employmentTeacherName },
+  };
+
+  const next: Record<RoleKey, StaffSlot> = { ...old };
+  let changed = 0;
+  for (const key of keys) {
+    const picked = pickNew(payload, key);
+    if (!picked.id && !picked.name) continue; // 没选 = 该岗位不变
+    // 只传了 ID 没传姓名（其它调用方）→ 退回保留原名，避免详情里只剩裸 ID
+    const name = picked.name || (picked.id === old[key].id ? old[key].name : null);
+    next[key] = { id: picked.id, name };
+    if (picked.id !== old[key].id || name !== old[key].name) changed += 1;
+  }
+  if (!changed) {
+    throw new BizError(BizCode.PARAM_ERROR, '请至少更换一个岗位的负责人再提交交接');
+  }
+
+  const handoverDate =
+    String(payload.handoverDate ?? '').trim().slice(0, 10) ||
+    new Date().toISOString().slice(0, 10);
+  const reason = String(payload.reason ?? '').trim().slice(0, 255) || null;
+  const userId = user?.userId || '';
+  const userName = user?.userName || '';
+
+  // ① 改班级负责人（走各学段原有仓储；classStatus 不传 → 不触发状态机）
+  const saveBody: ClassSaveBody = {
+    stage,
+    id: classId,
+    className: base.className,
+    deptCode: base.deptCode ?? undefined,
+    phaseCode: base.phaseCode ?? undefined,
+    headTeacherId: next.headTeacher.id,
+    headTeacherName: next.headTeacher.name,
+    teacherId: next.teacher.id,
+    teacherName: next.teacher.name,
+    assistantId: next.assistant.id,
+    assistantName: next.assistant.name,
+  };
+  if (stage !== 'jh') {
+    saveBody.projectManagerId = next.projectManager.id;
+    saveBody.projectManagerName = next.projectManager.name;
+    saveBody.employmentTeacherId = next.employmentTeacher.id;
+    saveBody.employmentTeacherName = next.employmentTeacher.name;
+  }
+  await pick(stage).save(saveBody, userId);
+
+  // ② 留痕（初高缺的两个岗位记空，前端也不展示）
+  return insertHandover({
+    stage,
+    classId,
+    className: base.className,
+    deptCode: base.deptCode,
+    old,
+    next: {
+      headTeacher: next.headTeacher,
+      teacher: next.teacher,
+      assistant: next.assistant,
+      projectManager: stage === 'jh' ? EMPTY_SLOT : next.projectManager,
+      employmentTeacher: stage === 'jh' ? EMPTY_SLOT : next.employmentTeacher,
+    },
+    handoverDate,
+    reason,
+    operatorId: userId || null,
+    operatorName: userName || null,
+  });
 }
 
 /** 学段名（给接口回显用） */

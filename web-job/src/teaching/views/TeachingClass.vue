@@ -5,7 +5,7 @@
       <template #title>
         本页合并了 <b>3 个部门</b>的班级信息（初高部 / 大学部 / 实训）。
         <span class="muted">
-          班级状态码三套一致（1 开放 / 2 封班 / 3 待结业 / 4 已结业）；
+          班级状态码三套一致（1 开放 / 2 封班 / 4 已结业）；
           但「班级编号」「结业日期」只有实训有，「今日出勤率」只有初高有 —— 表单会按部门自动隐藏不适用的字段。
         </span>
       </template>
@@ -19,7 +19,6 @@
         <div class="tcv-card__x">
           <span class="ok">开放 {{ s.openCount }}</span>
           <span>封班 {{ s.closedCount }}</span>
-          <span class="warn">待结业 {{ s.graduatingCount }}</span>
           <span class="danger">已结业 {{ s.graduatedCount }}</span>
         </div>
         <div class="tcv-card__x">在班学生 {{ s.studentCount }} 人</div>
@@ -48,7 +47,8 @@
       </el-form-item>
       <el-form-item label="状态">
         <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px">
-          <el-option v-for="(n, v) in CLASS_STATUS_NAME" :key="v" :label="n" :value="Number(v)" />
+          <!-- 2026-10-19 批注：删除「待结业」选项 -->
+          <el-option v-for="s in CLASS_STATUS_SELECTABLE" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="关键字">
@@ -131,13 +131,12 @@
           <el-tag :type="tagType(row.classStatus)" size="small">{{ row.classStatusName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right" align="center">
+      <el-table-column label="操作" width="220" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDetail(row)">花名册</el-button>
           <el-button v-if="!isReadOnlyUser" link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button v-if="!isReadOnlyUser && row.canChangeStatus" link type="warning" @click="openStatus(row)">
-            改状态
-          </el-button>
+          <!-- 2026-10-19 批注：操作列加【交接】；原来单独的【改状态】移进编辑弹窗 -->
+          <el-button v-if="!isReadOnlyUser" link type="success" @click="openHandover(row)">交接</el-button>
           <el-button v-if="!isReadOnlyUser" link type="danger" @click="doDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -216,6 +215,31 @@
             <template #default="{ row }">{{ row.inClassStatusName || '—' }}</template>
           </el-table-column>
         </el-table>
+
+        <!-- 2026-10-19 批注：交接记录同步到班级详情（按时间倒序，只列真正换了人的岗位） -->
+        <el-divider content-position="left">交接记录（{{ detailHandovers.length }}）</el-divider>
+        <el-empty v-if="!detailHandovers.length" description="暂无交接记录" :image-size="56" />
+        <el-table v-else :data="detailHandovers" border size="small">
+          <el-table-column label="交接日期" width="95" align="center">
+            <template #default="{ row }">{{ row.handoverDate || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="岗位变更" min-width="230">
+            <template #default="{ row }">
+              <div v-for="c in handoverChanges(row)" :key="c.role" class="ho-line">
+                <span class="ho-role">{{ c.role }}</span>
+                <span class="ho-old">{{ c.from || '（空白）' }}</span>
+                <span class="ho-arrow">→</span>
+                <span class="ho-new">{{ c.to || '（空白）' }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="原因" width="130" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.reason || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="操作人" width="70" align="center">
+            <template #default="{ row }">{{ row.operatorName || '—' }}</template>
+          </el-table-column>
+        </el-table>
       </template>
     </el-drawer>
 
@@ -265,6 +289,19 @@
             <el-form-item label="阶段">
               <el-select v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
                 <el-option v-for="p in formPhaseOptions" :key="p.value" :label="p.label" :value="p.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <!-- 2026-10-19 批注：原来的操作列【改状态】移到编辑弹窗里；
+               「待结业」已删除，封班后直接选「已结业」。已结业是终态，下拉禁用。 -->
+          <el-col v-if="form.id" :span="8">
+            <el-form-item label="班级状态">
+              <el-select
+                v-model="form.classStatus"
+                style="width: 100%"
+                :disabled="editStatusFrom === 4"
+              >
+                <el-option v-for="s in editStatusOptions" :key="s.value" :label="s.label" :value="s.value" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -437,33 +474,75 @@
       </template>
     </el-dialog>
 
-    <!-- ============ 改状态 ============ -->
-    <el-dialog v-model="statusVisible" title="变更班级状态" width="440px">
-      <el-form label-width="90px">
-        <el-form-item label="当前状态">
-          <el-tag v-if="statusRow" :type="tagType(statusRow.classStatus)">{{ statusRow.classStatusName }}</el-tag>
-        </el-form-item>
-        <el-form-item label="变更为" required>
-          <el-select v-model="statusTo" placeholder="请选择" style="width: 100%">
-            <el-option
-              v-for="s in allowedStatusList"
-              :key="s.value"
-              :label="s.label"
-              :value="s.value"
-            />
-          </el-select>
+    <!-- ============ 班级交接（2026-10-19 批注） ============ -->
+    <el-dialog v-model="handoverVisible" title="班级交接" width="860px" top="6vh" destroy-on-close>
+      <el-form label-width="110px">
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="班级名称">
+              <el-input :model-value="handoverForm.className" disabled />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="交接日期">
+              <el-date-picker
+                v-model="handoverForm.handoverDate"
+                type="date"
+                value-format="YYYY-MM-DD"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <!-- 原负责人 = 班级当前值（没人的默认空白）；新负责人从「权限管理」用户列表选，
+             留空 = 该岗位不换人。 -->
+        <el-table :data="handoverRoles" border size="small">
+          <el-table-column label="岗位" width="110" align="center">
+            <template #default="{ row }">{{ row.label }}</template>
+          </el-table-column>
+          <el-table-column label="原负责人" width="180">
+            <template #default="{ row }">
+              <span :class="{ 'ho-empty': !row.oldName }">{{ row.oldName || '（空白）' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="新负责人">
+            <template #default="{ row }">
+              <el-select
+                v-model="row.newId"
+                clearable
+                filterable
+                placeholder="不换则留空"
+                :loading="staffLoading"
+                style="width: 100%"
+                @change="onHandoverPick(row)"
+              >
+                <el-option v-for="u in staffOptions" :key="u.id" :label="u.userName" :value="u.id" />
+              </el-select>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-form-item label="交接原因" class="ho-reason">
+          <el-input
+            v-model="handoverForm.reason"
+            type="textarea"
+            :rows="2"
+            maxlength="255"
+            show-word-limit
+            placeholder="例如：原班主任调岗，由李老师接任"
+          />
         </el-form-item>
       </el-form>
       <el-alert
-        v-if="statusTo === 4"
-        type="warning"
+        type="info"
         :closable="false"
         show-icon
-        title="结业是终态：改完不能再退回开放/封班。实训班还会自动写入结业日期。"
+        title="提交后立即生效：班级负责人更新为「新负责人」，并在班级详情的「交接记录」里留一条快照。"
       />
       <template #footer>
-        <el-button @click="statusVisible = false">取消</el-button>
-        <el-button type="primary" :loading="statusSaving" @click="doChangeStatus">确定变更</el-button>
+        <el-button @click="handoverVisible = false">取消</el-button>
+        <el-button type="primary" :loading="handoverSaving" @click="doHandover">确认交接</el-button>
       </template>
     </el-dialog>
   </div>
@@ -477,7 +556,7 @@
  *   · 一个页面 + 学段筛选（不再 3 个页面各一套）
  *   · 「班级编号 / 结业日期 / 交棒岗位 / 备注」按学段自动显隐
  *     —— 由后端 /meta 下发的 hasClassCode / hasCloseDate 决定，**不写死学段判断**
- *   · 状态机统一（1 开放 / 2 封班 / 3 待结业 / 4 已结业），非法流转后端会拦
+ *   · 状态机统一（1 开放 / 2 封班 / 4 已结业；2026-10-19 起「待结业」下线），非法流转后端会拦
  *
  * 【★ 与学生档案页最大的不同：不按名字去重】
  *   「初高 G104」和「大学 G104」是两个不同的班，同名是常态。
@@ -495,15 +574,19 @@ import {
   getClassDetail,
   saveClass,
   deleteClass,
-  changeClassStatus,
   getClassMeta,
   getClassSummary,
   genClassCode,
-  CLASS_STATUS_NAME,
+  listClassHandovers,
+  doClassHandover,
   CLASS_STATUS_TAG,
+  CLASS_STATUS_SELECTABLE,
+  classStatusOptions,
   CLASS_STAGES,
   DEPT_OPTIONS,
   type ClassDetail,
+  type ClassHandoverPayload,
+  type ClassHandoverRow,
   type ClassRow,
   type ClassSaveBody,
   type ClassStage,
@@ -612,10 +695,28 @@ function reset() {
 /* ---------------- 详情 / 花名册 ---------------- */
 const detailVisible = ref(false);
 const detail = ref<ClassDetail | null>(null);
+/** 2026-10-19 批注：详情抽屉里同步展示交接记录 */
+const detailHandovers = ref<ClassHandoverRow[]>([]);
 
 async function openDetail(row: ClassRow) {
   detail.value = await getClassDetail(row.stage, row.classId);
+  // 交接记录失败不阻塞花名册（例如公共库暂时连不上）
+  detailHandovers.value = await listClassHandovers(row.stage, row.classId).catch(() => []);
   detailVisible.value = true;
+}
+
+/** 一条交接记录 →「只列真正换了人的岗位」，详情抽屉太窄，没变的不占行 */
+function handoverChanges(row: ClassHandoverRow): Array<{ role: string; from: string; to: string }> {
+  const all = [
+    { role: '班主任', slot: row.headTeacher },
+    { role: '教员', slot: row.teacher },
+    { role: '助教', slot: row.assistant },
+    { role: '项目经理', slot: row.projectManager },
+    { role: '就业老师', slot: row.employmentTeacher },
+  ];
+  return all
+    .filter((x) => (x.slot.oldId || '') !== (x.slot.newId || '') || (x.slot.oldName || '') !== (x.slot.newName || ''))
+    .map((x) => ({ role: x.role, from: x.slot.oldName || '', to: x.slot.newName || '' }));
 }
 
 /* ---------------- 新增 / 编辑 ---------------- */
@@ -702,6 +803,10 @@ const formPlanOptions = computed(() => planOptionsAll.value.filter((p) => p.dept
 /** 表单当前选中的方案 ID（只用于联动，不入库） */
 const formPlanId = ref('');
 
+/** 打开编辑弹窗时的原始状态 —— 状态下拉的可选项按它算，选完不会越点越多 */
+const editStatusFrom = ref<number | null>(null);
+const editStatusOptions = computed(() => classStatusOptions(editStatusFrom.value));
+
 const formPhaseOptions = computed(() => {
   const plan = planOptionsAll.value.find((p) => p.id === formPlanId.value);
   if (plan) return plan.phases;
@@ -724,6 +829,8 @@ function onFormDeptChange(v: number | undefined) {
   else if (v === DeptCode.UNIVERSITY) form.stage = 'class';
   // ★ 2026-10-16 部门变了 → 原来选的「阶段方案」可能不属于新部门，先清掉
   if (!formPlanOptions.value.some((p) => p.id === formPlanId.value)) formPlanId.value = '';
+  // 2026-10-19 批注：清掉之后默认选中新部门的方案（不允许空着）
+  if (!formPlanId.value) formPlanId.value = formPlanOptions.value[0]?.id || '';
   // 学段变了：阶段按新学段重选（onFormStageChange 会清编号/交棒/备注等学段特有字段）
   if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
   onFormStageChange();
@@ -781,7 +888,9 @@ function onStaffChange(kind: StaffKind, id: string) {
 function openCreate() {
   const stage = (query.stage || stageOptions.value[0]?.value || 'jh') as ClassStage;
   Object.assign(form, emptyForm(stage));
-  formPlanId.value = '';
+  // 2026-10-19 批注：阶段方案要默认选中（该部门的那套方案），不用每次手点
+  formPlanId.value = formPlanOptions.value[0]?.id || '';
+  editStatusFrom.value = null;
   editVisible.value = true;
 }
 
@@ -792,6 +901,7 @@ function openEdit(row: ClassRow) {
     classCode: row.classCode || '',
     deptCode: row.deptCode ?? undefined,
     phaseCode: row.phaseCode ?? undefined,
+    classStatus: row.classStatus,
     headTeacherId: row.headTeacherId || '',
     headTeacherName: row.headTeacherName || '',
     teacherId: row.teacherId || '',
@@ -808,8 +918,11 @@ function openEdit(row: ClassRow) {
     closeDate: row.closeDate || '',
     remark: row.remark || '',
   });
-  // ★ 2026-10-16 反查这个阶段属于哪个方案，让「阶段方案」下拉回显
-  formPlanId.value = planIdOfPhase(row.phaseCode);
+  // ★ 2026-10-16 反查这个阶段属于哪个方案，让「阶段方案」下拉回显；
+  //   2026-10-19 批注：查不到也要默认选中本部门的方案，不能空着
+  formPlanId.value = planIdOfPhase(row.phaseCode) || formPlanOptions.value[0]?.id || '';
+  // 「班级状态」可选项按**打开时的原始状态**算（否则选完一项选项会跟着变）
+  editStatusFrom.value = row.classStatus;
   editVisible.value = true;
 }
 
@@ -858,46 +971,88 @@ async function doDelete(row: ClassRow) {
   load();
 }
 
-/* ---------------- 改状态 ---------------- */
-const statusVisible = ref(false);
-const statusSaving = ref(false);
-const statusRow = ref<ClassRow | null>(null);
-const statusTo = ref<number | undefined>(undefined);
+/* ---------------- 班级交接（2026-10-19 批注） ---------------- */
+type HandoverRoleKey = 'headTeacher' | 'teacher' | 'assistant' | 'projectManager' | 'employmentTeacher';
 
-const allowedStatusList = computed(() =>
-  Object.entries(CLASS_STATUS_NAME).map(([v, label]) => ({
-    value: Number(v),
-    label,
-  })),
-);
-
-async function openStatus(row: ClassRow) {
-  statusRow.value = row;
-  statusTo.value = undefined;
-  // 拉详情拿 allowedStatus（后端算的流转表，前端不自己推）
-  const d = await getClassDetail(row.stage, row.classId);
-  if (d && d.allowedStatus.length === 0) {
-    ElMessage.warning('已结业是终态，不能再改状态');
-    return;
-  }
-  statusVisible.value = true;
+interface HandoverRoleItem {
+  key: HandoverRoleKey;
+  label: string;
+  oldId: string;
+  oldName: string;
+  /** 留空 = 该岗位不换人 */
+  newId: string;
+  newName: string;
 }
 
-async function doChangeStatus() {
-  if (!statusRow.value || statusTo.value === undefined) {
-    ElMessage.warning('请选择目标状态');
+const handoverVisible = ref(false);
+const handoverSaving = ref(false);
+const handoverRoles = ref<HandoverRoleItem[]>([]);
+const handoverForm = reactive({
+  stage: 'jh' as ClassStage,
+  classId: '',
+  className: '',
+  handoverDate: '',
+  reason: '',
+});
+
+/** 今天的 YYYY-MM-DD（交接日期默认值） */
+function todayStr(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function openHandover(row: ClassRow) {
+  Object.assign(handoverForm, {
+    stage: row.stage,
+    classId: row.classId,
+    className: row.className,
+    handoverDate: todayStr(),
+    reason: '',
+  });
+  const all: HandoverRoleItem[] = [
+    { key: 'headTeacher', label: '班主任', oldId: row.headTeacherId || '', oldName: row.headTeacherName || '', newId: '', newName: '' },
+    { key: 'teacher', label: '教员', oldId: row.teacherId || '', oldName: row.teacherName || '', newId: '', newName: '' },
+    { key: 'assistant', label: '助教', oldId: row.assistantId || '', oldName: row.assistantName || '', newId: '', newName: '' },
+    { key: 'projectManager', label: '项目经理', oldId: row.projectManagerId || '', oldName: row.projectManagerName || '', newId: '', newName: '' },
+    { key: 'employmentTeacher', label: '就业老师', oldId: row.employmentTeacherId || '', oldName: row.employmentTeacherName || '', newId: '', newName: '' },
+  ];
+  // 初高没有后两个岗位（那两张表没这两列），不展示
+  handoverRoles.value = row.stage === 'jh' ? all.slice(0, 3) : all;
+  handoverVisible.value = true;
+}
+
+/** 选新人 → 自动带姓名（与编辑班级的选人规则一致） */
+function onHandoverPick(row: HandoverRoleItem) {
+  row.newName = staffOptions.value.find((u) => u.id === row.newId)?.userName || '';
+}
+
+async function doHandover() {
+  const changed = handoverRoles.value.filter((r) => r.newId);
+  if (!changed.length) {
+    ElMessage.warning('请至少选择一个「新负责人」');
     return;
   }
-  statusSaving.value = true;
+  const payload: ClassHandoverPayload = {
+    stage: handoverForm.stage,
+    classId: handoverForm.classId,
+    handoverDate: handoverForm.handoverDate || todayStr(),
+    reason: handoverForm.reason || null,
+  };
+  for (const r of changed) {
+    payload[`${r.key}Id`] = r.newId;
+    payload[`${r.key}Name`] = r.newName;
+  }
+  handoverSaving.value = true;
   try {
-    await changeClassStatus(statusRow.value.stage, statusRow.value.classId, statusTo.value);
-    ElMessage.success('状态已变更');
-    statusVisible.value = false;
+    await doClassHandover(payload);
+    ElMessage.success('交接已生效，已记入交接记录');
+    handoverVisible.value = false;
     load();
   } catch (e) {
-    ElMessage.error((e as Error).message || '变更失败');
+    ElMessage.error((e as Error).message || '交接失败');
   } finally {
-    statusSaving.value = false;
+    handoverSaving.value = false;
   }
 }
 
@@ -955,6 +1110,34 @@ onMounted(() => {
 .tcv-page {
   margin-top: 12px;
   justify-content: flex-end;
+}
+
+/* ---- 交接记录（详情抽屉）---- */
+.ho-line {
+  line-height: 1.6;
+  font-size: 12px;
+}
+.ho-role {
+  display: inline-block;
+  width: 52px;
+  color: #909399;
+}
+.ho-old {
+  color: #606266;
+}
+.ho-arrow {
+  margin: 0 4px;
+  color: #c0c4cc;
+}
+.ho-new {
+  color: #409eff;
+  font-weight: 600;
+}
+.ho-empty {
+  color: #c0c4cc;
+}
+.ho-reason {
+  margin-top: 12px;
 }
 .link {
   color: #409eff;
