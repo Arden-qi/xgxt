@@ -183,32 +183,33 @@ onMounted(() => {
 <template>
   <div class="page-container">
     <el-card shadow="never" class="search-card">
+      <!-- ★ 2026-10-19：筛选全部「选完即查」（@change → handleSearch），不用再点查询；选完不动，用户视角就是筛选没生效 -->
       <el-form :model="query" inline>
         <el-form-item label="关键字">
-          <el-input v-model="query.keyword" placeholder="学号/姓名" clearable style="width: 150px" @keyup.enter="handleSearch" />
+          <el-input v-model="query.keyword" placeholder="学号/姓名" clearable style="width: 150px" @keyup.enter="handleSearch" @clear="handleSearch" />
         </el-form-item>
         <el-form-item label="班级">
-          <el-select v-model="query.classId" placeholder="全部" clearable style="width: 150px">
+          <el-select v-model="query.classId" placeholder="全部" clearable style="width: 150px" @change="handleSearch">
             <el-option v-for="c in classOptions" :key="c.classId" :label="c.className" :value="c.classId" />
           </el-select>
         </el-form-item>
         <el-form-item label="缴费类型">
-          <el-select v-model="query.feeType" placeholder="全部" clearable style="width: 130px">
+          <el-select v-model="query.feeType" placeholder="全部" clearable style="width: 130px" @change="handleSearch">
             <el-option v-for="(name, value) in FEE_TYPE_NAME" :key="value" :label="name" :value="Number(value)" />
           </el-select>
         </el-form-item>
         <el-form-item label="缴费状态">
-          <el-select v-model="query.payStatus" placeholder="全部" clearable style="width: 120px">
+          <el-select v-model="query.payStatus" placeholder="全部" clearable style="width: 120px" @change="handleSearch">
             <el-option v-for="(name, value) in PAY_STATUS_NAME" :key="value" :label="name" :value="Number(value)" />
           </el-select>
         </el-form-item>
         <el-form-item label="仅看紧急">
-          <el-switch v-model="query.isUrgent" />
+          <el-switch v-model="query.isUrgent" @change="handleSearch" />
         </el-form-item>
         <el-form-item label="应缴日期">
-          <el-date-picker v-model="query.startDate" type="date" value-format="YYYY-MM-DD" placeholder="开始" style="width: 140px" />
+          <el-date-picker v-model="query.startDate" type="date" value-format="YYYY-MM-DD" placeholder="开始" style="width: 140px" @change="handleSearch" />
           <span class="sep">~</span>
-          <el-date-picker v-model="query.endDate" type="date" value-format="YYYY-MM-DD" placeholder="结束" style="width: 140px" />
+          <el-date-picker v-model="query.endDate" type="date" value-format="YYYY-MM-DD" placeholder="结束" style="width: 140px" @change="handleSearch" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
