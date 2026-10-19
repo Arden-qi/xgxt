@@ -232,6 +232,9 @@ export async function save(body: ScoreSaveBody, userId: string) {
  * ============================================================
  * ★ 只改传了的字段。备注列是内联编辑的，只传 remark 时**绝不重算分数**——
  *   浮点权重来回乘除会把 85 写成 84.999999，列表上就是 85 变 84.99。
+ * ★ 2026-10-19：结果允许老师手改（通过 / 未通过）——
+ *   传了 examResult 就以老师选的为准（不再按满分比例重判）；
+ *   没传才用公式判出来的结果。老师只改结果不动分数时也走这里。
  */
 export async function updateOne(body: ScoreUpdateBody, userId: string) {
   const row = (await db(S).where({ id: body.id, is_deleted: 0 }).first()) as Record<string, any> | undefined;
@@ -245,6 +248,12 @@ export async function updateOne(body: ScoreUpdateBody, userId: string) {
     body.interviewScore !== undefined ||
     body.otherScore !== undefined;
 
+  /** 结果落库：同时维护 is_passed（老表里两列是配套的） */
+  const setResult = (v: number | null) => {
+    payload.exam_result = v;
+    payload.is_passed = v === null ? null : v === 1 ? 1 : 0;
+  };
+
   if (touched) {
     // 没传的分数项按**原值**参与计算，而不是当 0
     const vals = {
@@ -254,15 +263,17 @@ export async function updateOne(body: ScoreUpdateBody, userId: string) {
       other: body.otherScore !== undefined ? body.otherScore : num(row.score_other),
     };
     const fullTotal = await fullTotalOf(String(row.exam_id));
-    // 初高 judgeMode='auto'：结果由总分按满分比例重判，不接受前端直传
     const { totalScore, examResult } = await calcScores(STAGE, vals, fullTotal);
     payload.score_written = vals.written;
     payload.score_machine = vals.machine;
     payload.score_interview = vals.interview;
     payload.score_other = vals.other;
     payload.score_total = totalScore;
-    payload.exam_result = examResult;
-    payload.is_passed = examResult === null ? null : examResult === 1 ? 1 : 0;
+    // 老师手选的结果优先；没选才用公式按满分比例判出来的
+    setResult(body.examResult !== undefined ? body.examResult : examResult);
+  } else if (body.examResult !== undefined) {
+    // 只改结果、不动分数
+    setResult(body.examResult);
   }
 
   if (body.remark !== undefined) payload.remark = body.remark;

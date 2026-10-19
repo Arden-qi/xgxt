@@ -395,7 +395,13 @@ export interface ScoreUpdateBody {
   machineScore?: number | null;
   interviewScore?: number | null;
   otherScore?: number | null;
-  /** 只有 judgeMode='manual'（大学）能改；初高按公式重判、实训由末班动作用 */
+  /**
+   * 考试结果 1 通过 / 2 未通过 / null 未判断
+   *
+   * ★ 2026-10-19：三个学段都允许老师手改（「编辑」弹窗里的结果下拉）。
+   *   传了就以老师选的为准；没传则维持原判定逻辑：
+   *     初高按满分比例重判 / 大学默认通过 / 实训保持未判断。
+   */
   examResult?: number | null;
   remark?: string | null;
 }

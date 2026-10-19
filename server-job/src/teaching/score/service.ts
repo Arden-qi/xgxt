@@ -99,6 +99,9 @@ export async function updateScore(body: ScoreUpdateBody, user: any) {
   ) {
     throw new BizError(BizCode.PARAM_ERROR, '分数必须在 0 ~ 100 之间');
   }
+  if (body.examResult !== undefined && body.examResult !== null && ![1, 2].includes(Number(body.examResult))) {
+    throw new BizError(BizCode.PARAM_ERROR, '结果只能是 1 通过 / 2 未通过');
+  }
   return REPOS[body.stage].updateOne(body, user?.userId || 'system');
 }
 

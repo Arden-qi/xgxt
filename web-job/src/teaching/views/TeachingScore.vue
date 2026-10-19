@@ -375,15 +375,32 @@ function inputFieldsOf(stage: TeachingStage): string[] {
   for (const p of [...(f.writtenAvg?.parts ?? []), ...f.total.parts]) used.add(p.field);
   return INPUT_FIELDS.filter((x) => used.has(x));
 }
-/** 该学段的「结果」是不是老师手选（只有大学是） */
-function manualJudgeOf(stage: TeachingStage): boolean {
-  return formulas.value?.[stage]?.judgeMode === 'manual';
+/** 该学段的「结果」默认怎么来：auto 按分数重判 / manual 老师手选 / action 由末班置值 */
+function judgeModeOf(stage: TeachingStage): 'auto' | 'manual' | 'action' {
+  return formulas.value?.[stage]?.judgeMode ?? 'auto';
 }
 
 const editFields = computed(() =>
   editRow.value ? inputFieldsOf(editRow.value.stage) : ['written', 'machine', 'interview'],
 );
-const editManualJudge = computed(() => (editRow.value ? manualJudgeOf(editRow.value.stage) : false));
+/**
+ * 老师这次有没有动过「结果」下拉
+ *
+ * ★ 只在下拉真的改过时才把 examResult 发给后端。
+ *   否则初高每次改分数都会把「上次的结果」当成手选值写回去，
+ *   按满分比例自动重判就永久失效了。
+ */
+const editResultTouched = ref(false);
+
+/** 结果下拉旁的说明（按学段口径，避免老师不知道「不选会怎样」） */
+const judgeHint = computed(() => {
+  const st = editRow.value?.stage;
+  if (!st) return '';
+  const mode = judgeModeOf(st);
+  if (mode === 'auto') return '不选则按分数自动判定';
+  if (mode === 'manual') return '老师手选';
+  return '默认未判断';
+});
 
 function openEdit(row: ScoreRow) {
   editRow.value = row;
@@ -393,6 +410,7 @@ function openEdit(row: ScoreRow) {
   editForm.otherScore = row.otherScore;
   editForm.examResult = row.examResult;
   editForm.remark = row.remark ?? '';
+  editResultTouched.value = false;
   editVisible.value = true;
 }
 
@@ -412,8 +430,8 @@ async function submitEdit() {
       machineScore: editForm.machineScore,
       interviewScore: editForm.interviewScore,
       otherScore: editForm.otherScore,
-      // 只有大学能手动改结果；初高由后端按满分比例重判，实训由末班动作置值
-      ...(editManualJudge.value ? { examResult: editForm.examResult } : {}),
+      // ★ 三个学段都能手改结果；只有真的改过才发（没改就让后端按原口径判定）
+      ...(editResultTouched.value ? { examResult: editForm.examResult } : {}),
       remark: editForm.remark.trim() || null,
     });
     ElMessage.success('已保存');
@@ -803,26 +821,23 @@ async function submitRepeat() {
         <el-form-item v-if="editFields.includes('other')" label="其他">
           <el-input-number v-model="editForm.otherScore" :min="0" :max="100" controls-position="right" style="width: 150px" />
         </el-form-item>
-        <el-form-item v-if="editManualJudge" label="结果">
-          <el-select v-model="editForm.examResult" style="width: 150px">
-            <el-option v-for="(n, k) in EXAM_RESULT_NAME" :key="k" :label="n" :value="Number(k)" />
-          </el-select>
+        <el-form-item label="结果">
+          <div class="ts-field-col">
+            <el-select
+              v-model="editForm.examResult"
+              placeholder="未判断"
+              style="width: 150px"
+              @change="editResultTouched = true"
+            >
+              <el-option v-for="(n, k) in EXAM_RESULT_NAME" :key="k" :label="n" :value="Number(k)" />
+            </el-select>
+            <span class="ts-field-hint">{{ judgeHint }}</span>
+          </div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="editForm.remark" type="textarea" :rows="3" maxlength="200" show-word-limit placeholder="记录学生不足 / 问题所在" />
         </el-form-item>
       </el-form>
-      <el-alert
-        v-if="!editManualJudge"
-        type="info"
-        :closable="false"
-        show-icon
-        :title="
-          editRow?.stage === 'job'
-            ? '实训的结果由「末班」动作设置，这里只改分数'
-            : '结果由后端按满分比例自动判定，改完分数会自动重算'
-        "
-      />
       <template #footer>
         <el-button size="small" @click="editVisible = false">取消</el-button>
         <el-button size="small" type="primary" :loading="editSaving" @click="submitEdit">保存</el-button>
@@ -1026,5 +1041,16 @@ async function submitRepeat() {
   font-size: 12px;
   color: var(--el-text-color-secondary, #a2938e);
   margin-bottom: 12px;
+}
+.ts-field-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.ts-field-hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--el-text-color-secondary, #a2938e);
 }
 </style>
