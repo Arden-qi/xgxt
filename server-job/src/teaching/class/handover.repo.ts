@@ -18,9 +18,9 @@ import type {
   ClassHandoverPayload,
   ClassHandoverRole,
   ClassHandoverRow,
-  TeachingStage,
+  ClassStage,
 } from '../shared/dto';
-import { TEACHING_STAGE_NAME } from '../shared/dto';
+import { CLASS_STAGE_NAME } from '../shared/dto';
 
 const T = 't_uni_class_handover';
 
@@ -62,8 +62,8 @@ function roleOf(row: Record<string, any>, key: RoleKey): ClassHandoverRole {
 function mapRow(row: Record<string, any>): ClassHandoverRow {
   return {
     id: String(row.id),
-    stage: row.stage as TeachingStage,
-    stageName: row.stage_name || TEACHING_STAGE_NAME[row.stage as TeachingStage] || '',
+    stage: row.stage as ClassStage,
+    stageName: row.stage_name || CLASS_STAGE_NAME[row.stage as ClassStage] || '',
     classId: String(row.class_id),
     className: String(row.class_name ?? ''),
     deptCode: row.dept_code === null || row.dept_code === undefined ? null : Number(row.dept_code),
@@ -82,7 +82,7 @@ function mapRow(row: Record<string, any>): ClassHandoverRow {
 
 /** 某班的交接记录（新的在前） */
 export async function listHandovers(
-  stage: TeachingStage,
+  stage: ClassStage,
   classId: string,
 ): Promise<ClassHandoverRow[]> {
   const rows = (await commonDb(T)
@@ -93,7 +93,7 @@ export async function listHandovers(
 }
 
 export interface InsertHandoverArgs {
-  stage: TeachingStage;
+  stage: ClassStage;
   classId: string;
   className: string;
   deptCode: number | null;
@@ -116,7 +116,7 @@ export async function insertHandover(a: InsertHandoverArgs): Promise<ClassHandov
     class_id: a.classId,
     class_name: a.className,
     stage: a.stage,
-    stage_name: TEACHING_STAGE_NAME[a.stage] || '',
+    stage_name: CLASS_STAGE_NAME[a.stage] || '',
     dept_code: a.deptCode,
     handover_date: a.handoverDate,
     reason: a.reason,

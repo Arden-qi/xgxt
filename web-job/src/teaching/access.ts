@@ -91,12 +91,16 @@ export const STAGE_ACCESS = {
     jh: { code: 'classjh:student:view', path: null },
     class: { code: 'class:student:view', path: null },
     job: { code: 'job:empArchive:view', path: '/archive/basic-info' },
+    // ★ 2026-10-19：就业部（独立学段，沿用就业模块的档案权限）
+    emp: { code: 'job:empArchive:view', path: null },
     edu: { code: 'edu:student:view', path: '/edu/student' },
   },
   class: {
     jh: { code: 'classjh:classInfo:view', path: null },
     class: { code: 'class:info:view', path: null },
     job: { code: 'job:class:view', path: null },
+    // ★ 2026-10-19：就业部（独立学段，沿用就业模块的班级权限）
+    emp: { code: 'job:class:view', path: null },
   },
   attendance: {
     jh: { code: 'classjh:attendance:view', path: null },

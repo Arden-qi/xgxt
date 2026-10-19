@@ -587,12 +587,13 @@ import {
 import { http } from '@/api/request';
 
 /* ---------------- 部门（2026-10-16 批注：学段改叫部门，判权仍不依赖旧路由） ---------------- */
-const STAGE_ORDER: StudentStage[] = ['jh', 'class', 'job', 'edu'];
+const STAGE_ORDER: StudentStage[] = ['jh', 'class', 'job', 'emp', 'edu'];
 /** 部门名：初高 → 初高部、大学 → 大学部；就业 / 教务 不是部门，保持原名 */
 const STAGE_LABEL: Record<StudentStage, string> = {
   jh: '初高部',
   class: '大学部',
   job: '就业',
+  emp: '就业部',
   edu: '教务',
 };
 
@@ -600,6 +601,8 @@ const STAGE_LABEL: Record<StudentStage, string> = {
 const DEPT_CODE_OF_STAGE: Partial<Record<StudentStage, number>> = {
   jh: DeptCode.JUNIOR_SENIOR,
   class: DeptCode.UNIVERSITY,
+  // ★ 2026-10-19：就业部是独立学段，按部门 3 过滤
+  emp: DeptCode.EMPLOYMENT,
 };
 
 const stageOptions = computed(() => visibleStageOptions('student', STAGE_ORDER, STAGE_LABEL));
@@ -632,6 +635,7 @@ const STATUS_BY_STAGE: Record<StudentStage, number[]> = {
   jh: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
   class: [3, 5, 6, 7, 8],
   job: [6, 7, 9, 10],
+  emp: [6, 7, 9, 10],
   edu: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
 };
 function statusAllowed(stage: StudentStage, s: number): boolean {
@@ -902,6 +906,7 @@ const planOptionsAll = computed<StagePlanOption[]>(
 function onFormDeptChange(v: number | undefined) {
   if (v === DeptCode.JUNIOR_SENIOR) form.stage = 'jh';
   else if (v === DeptCode.UNIVERSITY) form.stage = 'class';
+  else if (v === DeptCode.EMPLOYMENT) form.stage = 'emp';
   // 学段变了：阶段 / 班级按新学段重选
   if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
   if (!formClassOptions.value.some((c) => c.id === form.classId)) {

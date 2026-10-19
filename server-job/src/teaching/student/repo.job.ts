@@ -174,7 +174,11 @@ async function applyScope(qb: any, user: any): Promise<void> {
 }
 
 function buildBase(q: StudentListQuery, user: any) {
-  const qb = tbl(db, 'sms_job', T, STAGE).where('is_deleted', false).whereIn('student_status', VISIBLE_STATUS);
+  // ★ 2026-10-19：就业部（dept_code=3）的学生单独归「就业部」学段，这里要排除
+  const qb = tbl(db, 'sms_job', T, STAGE)
+    .where('is_deleted', false)
+    .andWhereNot('dept_code', 3)
+    .whereIn('student_status', VISIBLE_STATUS);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.studentStatus) qb.andWhere('student_status', q.studentStatus);

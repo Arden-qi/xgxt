@@ -17,18 +17,19 @@ import { BizError } from '../../middleware/errorHandler';
 import * as repoClassJh from './repo.classJh';
 import * as repoClass from './repo.class';
 import * as repoJob from './repo.job';
+import * as repoEmp from './repo.emp';
 import type {
   ClassHandoverPayload,
+  ClassStage,
   ClassHandoverRow,
   ClassListQuery,
   ClassRow,
   ClassSaveBody,
   ClassStageMeta,
   ClassSummary,
-  TeachingStage,
 } from '../shared/dto';
-import { TEACHING_STAGES, TEACHING_STAGE_NAME } from '../shared/dto';
-import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
+import { CLASS_STAGES, CLASS_STAGE_NAME, isClassStage } from '../shared/dto';
+import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { loadStagePlanOptions } from '../shared/stagePlans';
 import type { ClassDetail, ClassRepo } from './types';
 import {
@@ -40,44 +41,52 @@ import {
   type StaffSlot,
 } from './handover.repo';
 
-const REPOS: Record<TeachingStage, ClassRepo> = {
+const REPOS: Record<ClassStage, ClassRepo> = {
   jh: repoClassJh.repo,
   class: repoClass.repo,
   job: repoJob.repo,
+  // ★ 2026-10-19 批注：就业部独立学段（复用 sms_job 表，按 dept_code=3 隔离）
+  emp: repoEmp.repo,
 };
 
 /** 各学段班级页的权限码 */
-const CODES: Record<TeachingStage, string> = {
+const CODES: Record<ClassStage, string> = {
   jh: 'classjh:classInfo:view',
   class: 'class:info:view',
   job: 'job:class:view',
+  // 就业部沿用就业/实训模块的班级查看权限
+  emp: 'job:class:view',
 };
 
 const LABEL = '班级信息';
 
-export function assertStageView(user: any, stage: TeachingStage): Promise<void> {
-  return assertStageCode(user, stage, CODES, LABEL);
+/** 学段所属门户模块（判权时用；就业部沿用 job 模块） */
+const MODULE_OF = (s: ClassStage): string =>
+  s === 'jh' ? 'class-jh' : s === 'class' ? 'class' : 'job';
+
+export function assertStageView(user: any, stage: ClassStage): Promise<void> {
+  return assertStageCodeEx(user, stage, CODES, LABEL, (s) => CLASS_STAGE_NAME[s], MODULE_OF);
 }
 
-export function visibleStages(user: any): Promise<TeachingStage[]> {
-  return visibleStagesBy(user, CODES, LABEL);
+export function visibleStages(user: any): Promise<ClassStage[]> {
+  return visibleStagesEx(user, CLASS_STAGES, CODES, LABEL, (s) => CLASS_STAGE_NAME[s], MODULE_OF);
 }
 
-function pick(stage: TeachingStage): ClassRepo {
+function pick(stage: ClassStage): ClassRepo {
   const r = REPOS[stage];
   if (!r) throw new BizError(BizCode.PARAM_ERROR, `stage 只能是 jh / class / job`);
   return r;
 }
 
 /** 校验 stage 合法 */
-export function assertStage(v: unknown): TeachingStage {
-  if (v !== 'jh' && v !== 'class' && v !== 'job') {
-    throw new BizError(BizCode.PARAM_ERROR, 'stage 只能是 jh / class / job');
+export function assertStage(v: unknown): ClassStage {
+  if (!isClassStage(v)) {
+    throw new BizError(BizCode.PARAM_ERROR, 'stage 只能是 jh / class / job / emp');
   }
   return v;
 }
 
-function optStage(v: unknown): TeachingStage | undefined {
+function optStage(v: unknown): ClassStage | undefined {
   if (v === undefined || v === null || v === '') return undefined;
   return assertStage(v);
 }
@@ -89,8 +98,8 @@ function optStage(v: unknown): TeachingStage | undefined {
 async function mergedRows(
   q: ClassListQuery,
   user: any,
-): Promise<{ rows: ClassRow[]; stages: TeachingStage[] }> {
-  const stages: TeachingStage[] = q.stage ? [q.stage] : await visibleStages(user);
+): Promise<{ rows: ClassRow[]; stages: ClassStage[] }> {
+  const stages: ClassStage[] = q.stage ? [q.stage] : await visibleStages(user);
   if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有班级信息的访问权限');
   if (q.stage) await assertStageView(user, q.stage);
 
@@ -99,8 +108,8 @@ async function mergedRows(
 
   // 学段顺序固定（初高 → 大学 → 实训），再按创建时间倒序
   rows.sort((a, b) => {
-    const sa = TEACHING_STAGES.indexOf(a.stage);
-    const sb = TEACHING_STAGES.indexOf(b.stage);
+    const sa = CLASS_STAGES.indexOf(a.stage);
+    const sb = CLASS_STAGES.indexOf(b.stage);
     if (sa !== sb) return sa - sb;
     const ta = a.createTime || '';
     const tb = b.createTime || '';
@@ -114,7 +123,7 @@ async function mergedRows(
 export async function listClasses(
   q: ClassListQuery,
   user: any,
-): Promise<{ list: ClassRow[]; total: number; page: number; size: number; stages: TeachingStage[] }> {
+): Promise<{ list: ClassRow[]; total: number; page: number; size: number; stages: ClassStage[] }> {
   const { rows, stages } = await mergedRows(q, user);
   const total = rows.length;
   const start = (q.page - 1) * q.size;
@@ -126,7 +135,7 @@ export async function summaryClasses(
   q: ClassListQuery,
   user: any,
 ): Promise<ClassSummary[]> {
-  const stages: TeachingStage[] = q.stage ? [q.stage] : await visibleStages(user);
+  const stages: ClassStage[] = q.stage ? [q.stage] : await visibleStages(user);
   if (!stages.length) return [];
   if (q.stage) await assertStageView(user, q.stage);
 
@@ -136,7 +145,7 @@ export async function summaryClasses(
 
 /** 详情 */
 export async function getClassDetail(
-  stage: TeachingStage,
+  stage: ClassStage,
   id: string,
   user: any,
 ): Promise<ClassDetail | null> {
@@ -151,20 +160,20 @@ export async function saveClass(body: ClassSaveBody, user: any): Promise<{ id: s
 }
 
 /** 删除 */
-export async function removeClass(stage: TeachingStage, id: string, user: any): Promise<void> {
+export async function removeClass(stage: ClassStage, id: string, user: any): Promise<void> {
   await assertStageView(user, stage);
   await pick(stage).remove(id, user?.userId || '');
 }
 
 /** 花名册 */
-export async function listClassRoster(stage: TeachingStage, id: string, user: any) {
+export async function listClassRoster(stage: ClassStage, id: string, user: any) {
   await assertStageView(user, stage);
   return pick(stage).roster(id, user);
 }
 
 /** 改状态 */
 export async function changeClassStatus(
-  stage: TeachingStage,
+  stage: ClassStage,
   id: string,
   to: number,
   user: any,
@@ -202,7 +211,7 @@ export async function listClassMeta(user: any): Promise<ClassStageMeta[]> {
 export async function listClassOptions(user: any) {
   const stages = await visibleStages(user);
   const out: Array<{
-    stage: TeachingStage;
+    stage: ClassStage;
     stageName: string;
     classId: string;
     className: string;
@@ -228,9 +237,10 @@ export async function listClassOptions(user: any) {
 }
 
 /** 班级编号生成（只有实训有；其它学段前端应隐藏该入口） */
-export async function genClassCodeFor(stage: TeachingStage): Promise<string | null> {
-  if (stage !== 'job') return null;
-  return repoJob.genClassCode();
+export async function genClassCodeFor(stage: ClassStage): Promise<string | null> {
+  if (stage === 'job') return repoJob.genClassCode();
+  if (stage === 'emp') return repoEmp.genClassCode();
+  return null;
 }
 
 /* ============================================================
@@ -242,7 +252,7 @@ export async function genClassCodeFor(stage: TeachingStage): Promise<string | nu
 
 /** 读某班的交接记录 */
 export async function listClassHandovers(
-  stage: TeachingStage,
+  stage: ClassStage,
   classId: string,
   user: any,
 ): Promise<ClassHandoverRow[]> {
@@ -350,6 +360,3 @@ export async function handoverClass(
     operatorName: userName || null,
   });
 }
-
-/** 学段名（给接口回显用） */
-export { TEACHING_STAGE_NAME };

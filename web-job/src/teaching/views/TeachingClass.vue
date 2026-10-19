@@ -3,7 +3,7 @@
     <!-- 说明条 -->
     <el-alert class="tcv-tip" type="info" :closable="false" show-icon>
       <template #title>
-        本页合并了 <b>3 个部门</b>的班级信息（初高部 / 大学部 / 实训）。
+        本页合并了 <b>4 个部门</b>的班级信息（初高部 / 大学部 / 实训 / 就业部）。
         <span class="muted">
           班级状态码三套一致（1 开放 / 2 封班 / 4 已结业）；
           但「班级编号」「结业日期」只有实训有，「今日出勤率」只有初高有 —— 表单会按部门自动隐藏不适用的字段。
@@ -603,7 +603,13 @@ import {
 } from '@/teaching/classroom';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
-const STAGE_LABEL: Record<ClassStage, string> = { jh: '初高部', class: '大学部', job: '实训' };
+const STAGE_LABEL: Record<ClassStage, string> = {
+  jh: '初高部',
+  class: '大学部',
+  job: '实训',
+  // ★ 2026-10-19 批注：就业部（独立学段）
+  emp: '就业部',
+};
 
 const stageOptions = computed(() => visibleStageOptions('class', CLASS_STAGES, STAGE_LABEL));
 
@@ -768,7 +774,7 @@ function emptyForm(stage: ClassStage): ClassSaveBody {
     stage,
     className: '',
     classCode: '',
-    deptCode: stage === 'jh' ? 1 : 2,
+    deptCode: stage === 'jh' ? 1 : stage === 'emp' ? 3 : 2,
     phaseCode: undefined,
     headTeacherId: '',
     headTeacherName: '',
@@ -827,6 +833,7 @@ function planIdOfPhase(phaseCode: number | null | undefined): string {
 function onFormDeptChange(v: number | undefined) {
   if (v === DeptCode.JUNIOR_SENIOR) form.stage = 'jh';
   else if (v === DeptCode.UNIVERSITY) form.stage = 'class';
+  else if (v === DeptCode.EMPLOYMENT) form.stage = 'emp';
   // ★ 2026-10-16 部门变了 → 原来选的「阶段方案」可能不属于新部门，先清掉
   if (!formPlanOptions.value.some((p) => p.id === formPlanId.value)) formPlanId.value = '';
   // 2026-10-19 批注：清掉之后默认选中新部门的方案（不允许空着）

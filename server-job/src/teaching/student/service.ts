@@ -19,6 +19,7 @@ import * as repoClassJh from './repo.classJh';
 import * as repoClass from './repo.class';
 import * as repoJob from './repo.job';
 import * as repoEdu from './repo.edu';
+import * as repoEmp from './repo.emp';
 import type {
   StudentDetail,
   StudentListQuery,
@@ -40,6 +41,8 @@ const REPOS: Record<StudentStage, StudentRepo> = {
   jh: repoClassJh.repo,
   class: repoClass.repo,
   job: repoJob.repo,
+  // ★ 2026-10-19 批注：就业部独立学段
+  emp: repoEmp.repo,
   edu: repoEdu.repo,
 };
 
@@ -48,6 +51,7 @@ const CODES: Record<StudentStage, string> = {
   jh: 'classjh:student:view',
   class: 'class:student:view',
   job: 'job:empArchive:view',
+  emp: 'job:empArchive:view',
   edu: 'edu:student:view',
 };
 
@@ -56,6 +60,7 @@ const MODULE: Record<StudentStage, string> = {
   jh: 'class-jh',
   class: 'class',
   job: 'job',
+  emp: 'job',
   edu: 'edu',
 };
 
@@ -189,7 +194,7 @@ export async function getStudentExtras(stage: StudentStage, id: string, user: an
   };
 
   /* 1. 考试成绩（成绩域）—— 成绩/宿舍/考试域只覆盖 jh/class/job 三学段 */
-  if (stage !== 'edu') {
+  if (stage !== 'edu' && stage !== 'emp') {
     try {
       const { listScores } = await import('../score/service');
       const r = await listScores({ stage, studentId: String(id), page: 1, size: 200 }, user);

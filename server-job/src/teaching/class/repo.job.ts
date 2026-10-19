@@ -71,7 +71,7 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
+const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部', 3: '就业部' };
 
 /** 行 → 统一结构 */
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
@@ -140,7 +140,10 @@ async function applyScope(qb: any, user: any): Promise<void> {
 }
 
 function buildBase(q: ClassListQuery) {
-  const qb = tbl(db, 'sms_job', T, STAGE).where('is_deleted', false);
+  // ★ 2026-10-19：就业部（dept_code=3）与实训共用这张表，实训列表要把它排除
+  const qb = tbl(db, 'sms_job', T, STAGE)
+    .where('is_deleted', false)
+    .andWhereNot('dept_code', 3);
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.classStatus) qb.andWhere('class_status', q.classStatus);
   if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);

@@ -13,7 +13,7 @@
  *      **后端进出一律转成统一码**，前端不认识任何学段的原始码。
  */
 
-/** 三个学段 */
+/** 学段 */
 export type TeachingStage = 'jh' | 'class' | 'job';
 
 export const TEACHING_STAGES: TeachingStage[] = ['jh', 'class', 'job'];
@@ -26,6 +26,31 @@ export const TEACHING_STAGE_NAME: Record<TeachingStage, string> = {
 
 export function isTeachingStage(x: unknown): x is TeachingStage {
   return x === 'jh' || x === 'class' || x === 'job';
+}
+
+/**
+ * ★ 2026-10-19 批注：班级域新增「就业部」学段
+ *
+ * 【为什么不直接扩 TeachingStage】
+ *   出勤/考试/成绩/宿舍/退费/审批等域都是按 TeachingStage 穷举仓储的，
+ *   一扩就会要求这些域也实现「就业部」，纯属误伤。
+ *   就业部目前只接「班级管理 + 学生档案」两个入口，所以只扩这两个域的联合类型。
+ *
+ * 【数据口径】复用 sms_job 的表，靠 dept_code=3 隔离（表里的 stage 列是阶段码，不能用来隔离）。
+ */
+export type ClassStage = TeachingStage | 'emp';
+
+export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job', 'emp'];
+
+export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
+  jh: '初高部',
+  class: '大学部',
+  job: '实训',
+  emp: '就业部',
+};
+
+export function isClassStage(x: unknown): x is ClassStage {
+  return x === 'jh' || x === 'class' || x === 'job' || x === 'emp';
 }
 
 /**
@@ -747,19 +772,21 @@ export interface LeaveSummary {
  */
 
 /** 学生档案的四个学段来源 */
-export type StudentStage = 'jh' | 'class' | 'job' | 'edu';
+export type StudentStage = 'jh' | 'class' | 'job' | 'emp' | 'edu';
 
-export const STUDENT_STAGES: StudentStage[] = ['jh', 'class', 'job', 'edu'];
+export const STUDENT_STAGES: StudentStage[] = ['jh', 'class', 'job', 'emp', 'edu'];
 
 export const STUDENT_STAGE_NAME: Record<StudentStage, string> = {
   jh: '初高部',
   class: '大学部',
   job: '就业',
+  /** ★ 2026-10-19 批注：就业部（与就业共用 sms_job，按 dept_code=3 隔离） */
+  emp: '就业部',
   edu: '教务',
 };
 
 export function isStudentStage(x: unknown): x is StudentStage {
-  return x === 'jh' || x === 'class' || x === 'job' || x === 'edu';
+  return x === 'jh' || x === 'class' || x === 'job' || x === 'emp' || x === 'edu';
 }
 
 /**
@@ -770,7 +797,7 @@ export function isStudentStage(x: unknown): x is StudentStage {
  *   规则：以**阶段更靠后**的那条为准 —— job > class > jh > edu。
  *   （edu 放最后：它是教务的同步副本，最陈旧。）
  */
-export const STUDENT_DEDUP_PRIORITY: StudentStage[] = ['job', 'class', 'jh', 'edu'];
+export const STUDENT_DEDUP_PRIORITY: StudentStage[] = ['emp', 'job', 'class', 'jh', 'edu'];
 
 /** 学生档案 · 列表行（统一结构，四个学段共用） */
 export interface StudentRow {
@@ -1052,15 +1079,15 @@ export function canTransitClassStatus(from: number, to: number): boolean {
   return allowed.includes(to);
 }
 
-/** 部门（数据字典固定：1 初高部 2 大学部）—— 三套都有 dept_code */
-export const CLASS_DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
+/** 部门（数据字典固定：1 初高部 2 大学部 3 就业部）—— 三套都有 dept_code */
+export const CLASS_DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部', 3: '就业部' };
 
 /** 出勤率口径 —— ★ 必须显式告诉前端，否则「今日 92%」和「累计 88%」会被误读成同一种 */
 export type AttendanceRateKind = 'today' | 'total' | null;
 
 /** 班级列表行（统一结构，三学段共用） */
 export interface ClassRow {
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   classId: string;
   className: string;
@@ -1114,7 +1141,7 @@ export interface ClassRow {
 }
 
 export interface ClassListQuery {
-  stage?: TeachingStage;
+  stage?: ClassStage;
   deptCode?: number;
   classStatus?: number;
   phaseCode?: number;
@@ -1126,7 +1153,7 @@ export interface ClassListQuery {
 }
 
 export interface ClassSaveBody {
-  stage: TeachingStage;
+  stage: ClassStage;
   /** 有值 = 修改，无值 = 新增 */
   id?: string;
   className: string;
@@ -1154,7 +1181,7 @@ export interface ClassSaveBody {
 
 /** 统计卡片（口径与列表完全一致） */
 export interface ClassSummary {
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   total: number;
   openCount: number;
@@ -1184,7 +1211,7 @@ export interface ClassHandoverRole {
 /** 一条交接记录（详情抽屉里按时间倒序展示） */
 export interface ClassHandoverRow {
   id: string;
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   classId: string;
   className: string;
@@ -1205,7 +1232,7 @@ export interface ClassHandoverRow {
 
 /** 提交交接的入参：只带「要换的新人」，没带的岗位视为不变 */
 export interface ClassHandoverPayload {
-  stage: TeachingStage;
+  stage: ClassStage;
   classId: string;
   handoverDate?: string | null;
   reason?: string | null;
@@ -1239,7 +1266,7 @@ export interface ClassRosterRow {
 
 /** 元信息：某学段支持哪些特性（前端据此隐藏不适用输入框） */
 export interface ClassStageMeta {
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   /** 该学段是否有班级编号（只有实训有） */
   hasClassCode: boolean;

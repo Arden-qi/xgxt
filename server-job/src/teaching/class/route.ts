@@ -22,7 +22,7 @@ import { BizCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
-import type { ClassListQuery, TeachingStage } from '../shared/dto';
+import type { ClassListQuery, ClassStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
 import { normalizeClassroom } from '../shared/format';
 
@@ -52,10 +52,10 @@ function numOrUndef(v: unknown): number | undefined {
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
 }
-function reqStage(v: unknown): TeachingStage {
+function reqStage(v: unknown): ClassStage {
   return svc.assertStage(v);
 }
-function optStage(v: unknown): TeachingStage | undefined {
+function optStage(v: unknown): ClassStage | undefined {
   if (v === undefined || v === null || v === '') return undefined;
   return svc.assertStage(v);
 }
@@ -85,7 +85,7 @@ function requireId(v: unknown): string {
  *   规则：**NOT NULL 列的 null 一律降级成 undefined（= 不修改）**，
  *        所以下面 deptCode / phaseCode / classStatus 都用 numOrUndef（它已经把 null 归成 undefined）。
  */
-function buildSaveBody(b: Record<string, any>, stage: TeachingStage) {
+function buildSaveBody(b: Record<string, any>, stage: ClassStage) {
   // 三张表里这几列都是 NOT NULL，传 null 会炸库或抹数据 → null 一律转 undefined
   const deptCode = numOrUndef(b.deptCode);
   const phaseCode = numOrUndef(b.phaseCode);

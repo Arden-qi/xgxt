@@ -16,6 +16,8 @@ export enum Gender {
 export enum DeptCode {
   JUNIOR_SENIOR = 1,  // 初高部
   UNIVERSITY = 2,     // 大学部
+  /** ★ 2026-10-19 批注新增：就业部（独立学段「就业」，班级/学生同表按部门隔离） */
+  EMPLOYMENT = 3,     // 就业部
 }
 
 /** 学生状态（全系统最重要的字段） */
@@ -225,6 +227,7 @@ export const ROLE_CODE_NAME: Record<string, string> = {
 export const DEPT_NAME: Record<number, string> = {
   [DeptCode.JUNIOR_SENIOR]: '初高部',
   [DeptCode.UNIVERSITY]: '大学部',
+  [DeptCode.EMPLOYMENT]: '就业部',
 };
 
 export const STUDENT_STATUS_NAME: Record<number, string> = {

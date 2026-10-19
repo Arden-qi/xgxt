@@ -55,14 +55,14 @@ function boolTrue(v: unknown): boolean {
 }
 function reqStage(v: unknown): StudentStage {
   if (!isStudentStage(v)) {
-    throw new BizError(BizCode.PARAM_ERROR, 'stage 必填（jh / class / job / edu）');
+    throw new BizError(BizCode.PARAM_ERROR, 'stage 必填（jh / class / job / emp / edu）');
   }
   return v;
 }
 function optStage(v: unknown): StudentStage | undefined {
   if (v === undefined || v === null || v === '') return undefined;
   if (!isStudentStage(v)) {
-    throw new BizError(BizCode.PARAM_ERROR, 'stage 只能是 jh / class / job / edu');
+    throw new BizError(BizCode.PARAM_ERROR, 'stage 只能是 jh / class / job / emp / edu');
   }
   return v;
 }

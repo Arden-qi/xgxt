@@ -48,7 +48,7 @@ const pick = (r: any) => ({
  *   所以它是切读的关键一环，不能漏。
  */
 export async function listClassesByStage(
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
 ): Promise<Array<{ id: string; name: string; deptCode?: number; phaseCode?: number }>> {
   if (stage === 'jh') {
     const rows = (await tbl(classJhDb, 'sms_class_jh', 't_class_info', stage)
@@ -62,9 +62,14 @@ export async function listClassesByStage(
       .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
     return rows.map(pick);
   }
-  const rows = (await tbl(jobDb, 'sms_job', 't_job_class', stage)
-    .where('is_deleted', 0)
-    .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
+  // ★ 2026-10-19：实训与就业部共用 t_job_class —— 就业部只取 dept_code=3，实训排除它
+  const qb = tbl(jobDb, 'sms_job', 't_job_class', stage).where('is_deleted', 0);
+  if (stage === 'emp') qb.andWhere('dept_code', 3);
+  else qb.andWhereNot('dept_code', 3);
+  const rows = (await qb.select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{
+    id: string;
+    name: string;
+  }>;
   return rows.map(pick);
 }
 

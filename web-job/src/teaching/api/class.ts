@@ -17,7 +17,7 @@
 
 import { http } from '@/api/request';
 
-export type ClassStage = 'jh' | 'class' | 'job';
+export type ClassStage = 'jh' | 'class' | 'job' | 'emp';
 
 export type AttendanceRateKind = 'today' | 'total' | null;
 
@@ -310,11 +310,14 @@ export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
   jh: '初高部',
   class: '大学部',
   job: '实训',
+  emp: '就业部',
 };
 
-export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job'];
+export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job', 'emp'];
 
 export const DEPT_OPTIONS = [
   { value: 1, label: '初高部' },
   { value: 2, label: '大学部' },
+  // ★ 2026-10-19 批注：新增就业部（独立学段，班级/学生共用 sms_job）
+  { value: 3, label: '就业部' },
 ];

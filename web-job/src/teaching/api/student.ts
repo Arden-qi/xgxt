@@ -13,7 +13,7 @@ import type { StagePlanOption } from './class';
 
 export type { StagePlanOption };
 
-export type StudentStage = 'jh' | 'class' | 'job' | 'edu';
+export type StudentStage = 'jh' | 'class' | 'job' | 'emp' | 'edu';
 
 export interface StudentRow {
   stage: StudentStage;
