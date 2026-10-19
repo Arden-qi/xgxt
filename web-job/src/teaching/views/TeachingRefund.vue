@@ -59,29 +59,33 @@
           <el-option v-for="(n, v) in REFUND_STATUS_NAME" :key="v" :label="n" :value="Number(v)" />
         </el-select>
       </el-form-item>
+      <!--
+        ★ 2026-10-19 修 bug：原来是一个 daterange 区间选择器，用户带已有区间重开面板、
+          想只改「结束日期」时，EP 把第一次点击当作「新的开始」，高亮立刻塌缩成
+          单日；再点一下确认后输入框变成「D 至 D」——看起来就是「开始日期同步成了
+          结束日期」。EP 区间面板没有「只改一端」的语义（useRangePicker 的
+          selecting 状态机决定），拆成两个独立日期选择器后此问题结构性消失；
+          开始晚于结束时在 onDateChange 里自动调换。
+        ★ 2026-10-19：筛选项拆成「申请日期」「结束日期」两个独立标签（用户要求，
+          不再用「申请日期 至 结束日期」合成一项）；占位符用「不限」与
+          本页其它筛选（全部部门/全部班级）的空态描述风格一致。
+      -->
       <el-form-item label="申请日期">
-        <!--
-          ★ 2026-10-19 修 bug：原来是一个 daterange 区间选择器，用户带已有区间重开面板、
-            想只改「结束日期」时，EP 把第一次点击当作「新的开始」，高亮立刻塌缩成
-            单日；再点一下确认后输入框变成「D 至 D」——看起来就是「开始日期同步成了
-            结束日期」。EP 区间面板没有「只改一端」的语义（useRangePicker 的
-            selecting 状态机决定），拆成两个独立日期选择器后此问题结构性消失；
-            开始晚于结束时在 onDateChange 里自动调换。
-        -->
         <el-date-picker
           v-model="query.startDate"
           type="date"
-          placeholder="开始日期"
+          placeholder="不限"
           value-format="YYYY-MM-DD"
           class="trf-date-start"
           style="width: 135px"
           @change="onDateChange"
         />
-        <span class="trf-date-sep">至</span>
+      </el-form-item>
+      <el-form-item label="结束日期">
         <el-date-picker
           v-model="query.endDate"
           type="date"
-          placeholder="结束日期"
+          placeholder="不限"
           value-format="YYYY-MM-DD"
           class="trf-date-end"
           style="width: 135px"
@@ -739,10 +743,6 @@ async function doFinanceConfirm(row: RefundRow) {
 }
 .trf-filter {
   margin-bottom: 8px;
-}
-.trf-date-sep {
-  margin: 0 4px;
-  color: var(--el-text-color-secondary);
 }
 .trf-page {
   margin-top: 10px;

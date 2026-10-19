@@ -68,11 +68,15 @@ const { check, summary } = makeChecker();
     );
 
     check(
-      '★ 筛选栏有「部门 / 班级 / 状态 / 申请日期」四项',
-      ['部门', '班级', '状态', '申请日期'].every((l) => tpl.includes(`label="${l}"`)),
-      ['部门', '班级', '状态', '申请日期']
+      '★ 筛选栏有「部门 / 班级 / 状态 / 申请日期 / 结束日期」五项',
+      ['部门', '班级', '状态', '申请日期', '结束日期'].every((l) => tpl.includes(`label="${l}"`)),
+      ['部门', '班级', '状态', '申请日期', '结束日期']
         .map((l) => `${l}${tpl.includes(`label="${l}"`) ? '✓' : '✗'}`)
         .join(' '),
+    );
+    check(
+      '★ 「申请日期 至」合成项已拆开（不再有 to 分隔符）',
+      !tpl.includes('trf-date-sep') && !tpl.includes('>至<'),
     );
     const nChange = (tpl.match(/@change="(?:onFilterStageChange|onDateChange|load\(1\))"/g) || []).length;
     check(
