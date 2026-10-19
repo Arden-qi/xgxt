@@ -142,6 +142,21 @@ const { check, summary } = makeChecker();
         refundApi.includes('startDate?: string;') &&
         refundApi.includes('endDate?: string;'),
     );
+    const refundSvc = readFileSync(
+      path.join(ROOT, 'server-job', 'src', 'teaching', 'refund', 'service.ts'),
+      'utf8',
+    );
+    check(
+      '★ 费用项单项上限 10 万：前端输入框 max + doCreate 兜底（2026-10-19）',
+      refundApi.includes('REFUND_ITEM_MAX_YUAN = 100000') &&
+        vue.includes(':max="REFUND_ITEM_MAX_YUAN"') &&
+        vue.includes('单项费用上限 10 万元') &&
+        vue.includes('单项费用最高 10 万元'),
+    );
+    check(
+      '★ 费用项单项上限 10 万：后端 create 兜底（接口绕不过前端）',
+      refundSvc.includes('REFUND_ITEM_MAX_AMOUNT') && refundSvc.includes('单项费用最高 10 万元'),
+    );
 
     /* ---------- C. live：服务就绪（没起则跳过 D/E，静态段已跑完） ---------- */
     const health = await req('http://127.0.0.1:8004/health', { timeout: 4000 });
@@ -230,6 +245,40 @@ const { check, summary } = makeChecker();
       '★ 反向日期区间 total=0（过滤真的生效，不是被后端忽略）',
       r3.json?.code === 200 && Number(r3.json?.data?.total) === 0,
       `total=${r3.json?.data?.total}`,
+    );
+
+    /* ---------- F. 费用项单项上限 10 万（2026-10-19，后端兜底实测） ---------- */
+    const over = await req(`${BASE}/api/teaching/refund/create`, {
+      method: 'POST',
+      headers: H,
+      body: {
+        stage: 'jh',
+        studentId: 'self-check-not-exist',
+        items: [{ feeType: 1, amount: 20000000 }],
+        refundAmount: 20000000,
+        refundReason: '自检-单项超限',
+      },
+    });
+    check(
+      '★ create 单项超 10 万元被拒（后端兜底，接口绕不过）',
+      over.json?.code === 40000 && (over.json?.message || '').includes('10 万元'),
+      `code=${over.json?.code} msg=${over.json?.message}`,
+    );
+    const edge = await req(`${BASE}/api/teaching/refund/create`, {
+      method: 'POST',
+      headers: H,
+      body: {
+        stage: 'jh',
+        studentId: 'self-check-not-exist',
+        items: [{ feeType: 1, amount: 10000000 }],
+        refundAmount: 10000000,
+        refundReason: '自检-恰好上限',
+      },
+    });
+    check(
+      '★ create 单项恰好 10 万元不拦上限（继续走学生校验）',
+      edge.json?.code !== 200 && !(edge.json?.message || '').includes('10 万元'),
+      `code=${edge.json?.code} msg=${edge.json?.message}`,
     );
   } catch (e) {
     check('脚本执行未抛异常', false, e?.message || String(e));

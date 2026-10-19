@@ -449,6 +449,10 @@ export const REFUND_CHAIN_NODES: Array<{ step: number; name: string; roles: stri
   { step: 2, name: '校长审批', roles: '校长' },
 ];
 
+/** 单项退费费用上限：10 万元（单位分，100000 元 × 100）。
+ *  前端费用项输入框的 max 与 service.create 的兜底校验共用这一口径，改这里两处同步。 */
+export const REFUND_ITEM_MAX_AMOUNT = 10000000;
+
 /** 费用项（统一结构：初高/实训只会有 1 项，大学可多项） */
 export interface RefundItem {
   feeType: number;

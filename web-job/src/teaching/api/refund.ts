@@ -89,6 +89,10 @@ export const FEE_TYPE_OPTIONS = [
   { value: 9, label: '其他' },
 ];
 
+/** 单项退费费用上限：10 万元（元）。费用项输入框 max 与 doCreate 兜底共用；
+ *  后端同口径见 server-job dto.ts 的 REFUND_ITEM_MAX_AMOUNT（分），两边同步改 */
+export const REFUND_ITEM_MAX_YUAN = 100000;
+
 export interface RefundItem {
   feeType: number;
   feeTypeName: string;

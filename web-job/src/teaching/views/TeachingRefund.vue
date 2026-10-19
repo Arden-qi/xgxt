@@ -234,6 +234,7 @@
             <el-input-number
               v-model="it.yuan"
               :min="0"
+              :max="REFUND_ITEM_MAX_YUAN"
               :precision="2"
               :step="100"
               controls-position="right"
@@ -247,6 +248,7 @@
           <el-button link type="primary" @click="form.items.push({ feeType: 1, yuan: 0 })">
             + 增加一项
           </el-button>
+          <div class="muted">单项费用上限 10 万元，超出无法填写</div>
         </el-form-item>
         <el-form-item label="退费总额">
           <b class="amt">¥{{ formTotalText }}</b>
@@ -357,6 +359,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   FEE_TYPE_OPTIONS,
   REFUND_DEPARTMENTS,
+  REFUND_ITEM_MAX_YUAN,
   REFUND_STATUS,
   REFUND_STATUS_NAME,
   approveRefund,
@@ -592,6 +595,10 @@ async function doCreate(submit: boolean) {
     feeType: x.feeType,
     amount: Math.round(Number(x.yuan || 0) * 100),
   }));
+  // ★ 单项上限 10 万元：输入框有 max，这里兜底（粘贴/程序赋值仍可能带进来的情况）
+  if (items.some((x) => x.amount > REFUND_ITEM_MAX_YUAN * 100)) {
+    return ElMessage.warning('单项费用最高 10 万元，请调整费用项');
+  }
   const refundAmount = items.reduce((a, x) => a + x.amount, 0);
   if (refundAmount <= 0) return ElMessage.warning('退费金额必须大于 0');
 
