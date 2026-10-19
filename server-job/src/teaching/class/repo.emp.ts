@@ -131,7 +131,7 @@ async function applyScope(qb: any, user: any): Promise<void> {
   }
   if (hasRole(roles, RoleCode.PROJECT_MANAGER)) {
     const mine = (await tbl(db, 'sms_job', T, STAGE)
-      .where({ project_manager_id: uid, is_deleted: false, dept_code: 3 })
+      .where({ project_manager_id: uid, is_deleted: false, stage_key: 'emp' })
       .select('id')) as Array<{ id: string }>;
     const ids = mine.map((c) => c.id);
     if (!ids.length) qb.whereRaw('1 = 0');
@@ -144,12 +144,11 @@ async function applyScope(qb: any, user: any): Promise<void> {
 }
 
 function buildBase(q: ClassListQuery) {
-  // ★ 2026-10-19：就业部与实训共用 t_job_class。
-  //   ⚠️ 这张表的 stage 列是**阶段码**（201/301），不是学段 key —— 不能用它隔离，
-  //   隔离靠 dept_code = 3（就业部）。
+  // ★ 2026-10-19：就业部与实训共用 t_job_class，且两边 dept_code 都是 3（就业部），
+  //   所以隔离只能靠 stage_key（'emp' / 'job'）。
   const qb = tbl(db, 'sms_job', T, STAGE)
     .where('is_deleted', false)
-    .andWhere('dept_code', 3);
+    .andWhere('stage_key', 'emp');
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.classStatus) qb.andWhere('class_status', q.classStatus);
   if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
@@ -297,6 +296,7 @@ export const repo: ClassRepo = {
     await tblIns(db, 'sms_job', T, STAGE, {
       id,
       class_code: classCode,
+      stage_key: 'emp',
       class_name: className, // ★ create 时名称可能被自动占位（见上）
       // ★ 新建默认封班（"开放"已废弃）
       class_status: body.classStatus ?? CLASS_STATUS.CLOSED,

@@ -140,10 +140,11 @@ async function applyScope(qb: any, user: any): Promise<void> {
 }
 
 function buildBase(q: ClassListQuery) {
-  // ★ 2026-10-19：就业部（dept_code=3）与实训共用这张表，实训列表要把它排除
+  // ★ 2026-10-19：实训与就业部共用这张表、dept 都是就业部(3)，
+  //   靠 stage_key 区分（实训='job'，就业部='emp'）
   const qb = tbl(db, 'sms_job', T, STAGE)
     .where('is_deleted', false)
-    .andWhereNot('dept_code', 3);
+    .andWhere('stage_key', 'job');
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.classStatus) qb.andWhere('class_status', q.classStatus);
   if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
@@ -277,7 +278,7 @@ export const repo: ClassRepo = {
     const className =
       String(body.className || '').trim() ||
       `未命名班级-${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
-    const deptCode = Number(body.deptCode ?? 1);
+    const deptCode = Number(body.deptCode ?? 3);
     const dupCode = (await tbl(db, 'sms_job', T, STAGE).where({ class_code: classCode, is_deleted: false }).first()) as
       | Record<string, any>
       | undefined;
@@ -291,6 +292,7 @@ export const repo: ClassRepo = {
     await tblIns(db, 'sms_job', T, STAGE, {
       id,
       class_code: classCode,
+      stage_key: 'job',
       class_name: className, // ★ create 时名称可能被自动占位（见上）
       // ★ 新建默认封班（"开放"已废弃）
       class_status: body.classStatus ?? CLASS_STATUS.CLOSED,

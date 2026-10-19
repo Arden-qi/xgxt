@@ -774,7 +774,8 @@ function emptyForm(stage: ClassStage): ClassSaveBody {
     stage,
     className: '',
     classCode: '',
-    deptCode: stage === 'jh' ? 1 : stage === 'emp' ? 3 : 2,
+    // 2026-10-19：实训与就业部都归「就业部」(3)，两者只靠学段区分
+    deptCode: stage === 'jh' ? 1 : stage === 'class' ? 2 : 3,
     phaseCode: undefined,
     headTeacherId: '',
     headTeacherName: '',
@@ -833,7 +834,10 @@ function planIdOfPhase(phaseCode: number | null | undefined): string {
 function onFormDeptChange(v: number | undefined) {
   if (v === DeptCode.JUNIOR_SENIOR) form.stage = 'jh';
   else if (v === DeptCode.UNIVERSITY) form.stage = 'class';
-  else if (v === DeptCode.EMPLOYMENT) form.stage = 'emp';
+  // 就业部同时覆盖「实训」和「就业」两个学段：已在 job/emp 时不要强行改学段
+  else if (v === DeptCode.EMPLOYMENT && form.stage !== 'job' && form.stage !== 'emp') {
+    form.stage = 'emp';
+  }
   // ★ 2026-10-16 部门变了 → 原来选的「阶段方案」可能不属于新部门，先清掉
   if (!formPlanOptions.value.some((p) => p.id === formPlanId.value)) formPlanId.value = '';
   // 2026-10-19 批注：清掉之后默认选中新部门的方案（不允许空着）

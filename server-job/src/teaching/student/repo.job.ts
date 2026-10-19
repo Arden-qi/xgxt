@@ -174,10 +174,11 @@ async function applyScope(qb: any, user: any): Promise<void> {
 }
 
 function buildBase(q: StudentListQuery, user: any) {
-  // ★ 2026-10-19：就业部（dept_code=3）的学生单独归「就业部」学段，这里要排除
+  // ★ 2026-10-19：实训与就业部共用 t_student_base、dept 都是 3（就业部），
+  //   靠 stage_key 区分（job / emp）
   const qb = tbl(db, 'sms_job', T, STAGE)
     .where('is_deleted', false)
-    .andWhereNot('dept_code', 3)
+    .andWhere('stage_key', 'job')
     .whereIn('student_status', VISIBLE_STATUS);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
@@ -277,7 +278,7 @@ export const repo: StudentRepo = {
     if (birth) payload.age = calcAge(birth);
     else if (body.age !== undefined) payload.age = body.age;
     set('native_place', body.nativePlace);
-    set('dept_code', body.deptCode);
+    set('dept_code', body.deptCode ?? 3);
     set('class_id', body.classId);
     set('class_name', body.className);
     set(phaseCodeCol(), body.phaseCode);
@@ -324,6 +325,7 @@ export const repo: StudentRepo = {
     await tblIns(db, 'sms_job', T, STAGE, {
       id,
       student_no: studentNo,
+      stage_key: 'job',
       ...payload,
       student_status: body.studentStatus ?? StudentStatus.WAIT_EMPLOY,
       repeat_count: 0,

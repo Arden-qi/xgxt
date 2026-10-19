@@ -169,7 +169,7 @@ const E = {
   CST_WAIT_ASSIGN: 1, CST_WAIT_INTERVIEW: 2, CST_TRIAL_WAIT_CLASS: 4,
   CST_TRIAL: 5, CST_FULL_FEE_PENDING: 6, CST_FORMAL: 7,
   CST_NOT_ENROLLED: 11, CST_LOST: 12,
-  DEPT_JH: 1, DEPT_UNIV: 2,
+  DEPT_JH: 1, DEPT_UNIV: 2, DEPT_EMP: 3, // 2026-10-19：就业部（实训也归它）
 };
 
 /* 缴费标准（分）——与财务 t_finance_fee_standard 一致 */
@@ -1198,7 +1198,8 @@ function seedJob(conn) {
 
   // 11.1 实训班
   const classes = [base(JOB_CLASS.id, {
-    class_name: JOB_CLASS.name, class_code: JOB_CLASS.name, dept_code: E.DEPT_UNIV, stage: JOB_CLASS.stage,
+    class_name: JOB_CLASS.name, class_code: JOB_CLASS.name, dept_code: E.DEPT_EMP, stage: JOB_CLASS.stage,
+    stage_key: 'job',
     head_teacher_id: S.job.id, head_teacher_name: S.job.name,
     teacher_id: null, teacher_name: null, assistant_id: null, assistant_name: null,
     classroom: JOB_CLASS.room, open_date: D(-60), close_date: null,
@@ -1214,7 +1215,7 @@ function seedJob(conn) {
   const baseRows = jobStu.map((s) => {
     return base(`JSB-${s.no}`, {
       student_no: s.no, student_name: s.name, gender: s.gender, age: s.age,
-      dept_code: E.DEPT_UNIV, class_id: JOB_CLASS.id, class_name: JOB_CLASS.name,
+      dept_code: E.DEPT_EMP, stage_key: 'job', class_id: JOB_CLASS.id, class_name: JOB_CLASS.name,
       head_teacher_id: S.job.id, head_teacher_name: S.job.name,
       student_status: E.ST_TRAINING, stage: JOB_CLASS.stage,
       phone: phone(seqOf(s.no)), parent_phone: parentPhone(seqOf(s.no)),

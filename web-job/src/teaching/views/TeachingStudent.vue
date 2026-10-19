@@ -601,8 +601,8 @@ const STAGE_LABEL: Record<StudentStage, string> = {
 const DEPT_CODE_OF_STAGE: Partial<Record<StudentStage, number>> = {
   jh: DeptCode.JUNIOR_SENIOR,
   class: DeptCode.UNIVERSITY,
-  // ★ 2026-10-19：就业部是独立学段，按部门 3 过滤
-  emp: DeptCode.EMPLOYMENT,
+  // ★ 2026-10-19：实训与就业部都归「就业部」，部门已经分不开它们，
+  //   所以这两个学段的筛选按**学段**过滤（s:job / s:emp），不按 dept_code。
 };
 
 const stageOptions = computed(() => visibleStageOptions('student', STAGE_ORDER, STAGE_LABEL));
@@ -906,7 +906,10 @@ const planOptionsAll = computed<StagePlanOption[]>(
 function onFormDeptChange(v: number | undefined) {
   if (v === DeptCode.JUNIOR_SENIOR) form.stage = 'jh';
   else if (v === DeptCode.UNIVERSITY) form.stage = 'class';
-  else if (v === DeptCode.EMPLOYMENT) form.stage = 'emp';
+  // 就业部同时覆盖「就业」(job) 与「就业部」(emp) 学段：已属于其中之一时不改学段
+  else if (v === DeptCode.EMPLOYMENT && form.stage !== 'job' && form.stage !== 'emp') {
+    form.stage = 'emp';
+  }
   // 学段变了：阶段 / 班级按新学段重选
   if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
   if (!formClassOptions.value.some((c) => c.id === form.classId)) {
