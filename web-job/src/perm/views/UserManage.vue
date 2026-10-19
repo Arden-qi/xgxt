@@ -31,11 +31,13 @@
  *   ③ 原型的「密码明文回显 / 短信通知 / 批量导入」是纯演示逻辑，
  *      开发版保留同样的 UI 与校验，但导入不落库、短信不真实发送。
  */
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 /* ★ 2026-10-16：模块注册表（新增/编辑账号时勾选「可访问模块」用） */
 import { fetchModules } from '@/portal/api/portal';
 import { PERM_ROUTE } from '@/perm/utils/links';
+/* ★ 2026-10-19：「可访问模块」不再手勾 —— 由所选职位推导（规则见该文件） */
+import { derivePortalModules } from '@/perm/utils/moduleDerive';
 import type {
   PermDeptTreeNode,
   PermModule,
@@ -463,13 +465,15 @@ const showPwd = ref(false);
  *
  * 背景：门户登录要求 t_sys_account 里既有账号、又有至少一个模块，
  *      否则「在账号管理里新建的账号」永远登不进系统。
- *      所以把「可访问模块」做成表单字段：新增时必填，编辑时带回现值。
+ *
+ * ★ 2026-10-19 改口径：新建账号时【不再手勾】——
+ *      界面上那一块勾选区已按用户要求删除，模块改由【所选职位自动推导】
+ *      （derivePortalModules，规则与依据见 utils/moduleDerive.ts）。
+ *      编辑账号不受影响：仍沿用列表带回的原值原样提交。
  * ============================================================ */
 
 /** 模块候选（来自门户模块注册表，只拉一次） */
 const moduleOptions = ref<{ key: string; title: string; desc: string }[]>([]);
-/** 编辑的账号在门户还没有登录账号 → 表单里给个提醒 */
-const portalMissing = ref(false);
 
 /** 懒加载模块注册表 */
 async function ensureModuleOptions(): Promise<void> {
@@ -479,13 +483,6 @@ async function ensureModuleOptions(): Promise<void> {
   } catch {
     /* 提示由请求拦截器统一弹出，这里不阻塞表单 */
   }
-}
-
-/** 勾选 / 取消一个可访问模块 */
-function toggleModule(key: string): void {
-  const i = form.modules.indexOf(key);
-  if (i >= 0) form.modules.splice(i, 1);
-  else form.modules.push(key);
 }
 
 /** 模块 key → 中文名（确认框里展示用） */
@@ -507,7 +504,11 @@ interface UserForm {
   userStatus: string;
   password: string;
   needChangePwd: boolean;
-  /** ★ 2026-10-16：可访问模块（门户登录后能进哪几个模块） */
+  /**
+   * ★ 2026-10-16：可访问模块（门户登录后能进哪几个模块）。
+   * ★ 2026-10-19：新建时不再由用户手勾 —— saveUser() 提交的是 derivedModules；
+   *   这个字段现在只承载【编辑】时从列表带回的原值（原样提交，不被改动）。
+   */
   modules: string[];
 }
 
@@ -534,6 +535,26 @@ const form = reactive<UserForm>({
 /** 多选职位（原型 uRoles），单独用 ref 存放，替换数组才能触发权限预览重算 */
 const formRoleIds = ref<string[]>([]);
 
+/**
+ * ★ 2026-10-19 修：勾选职位后要把该职位在权限库里的功能点拉回来。
+ *
+ * 【为什么必须补这个 watch】
+ *   以前只有 `openEdit()` / `openPreview()` 会调 `ensureRolePerms()` ——
+ *   **新建表单里勾职位从来没人拉**，于是：
+ *     · 「权限预览（随职位勾选实时变化）」在新建时永远是空的（页面自己承诺的功能失效）；
+ *     · 本次新增的「按所选职位推导可访问模块」也拿不到输入 →
+ *       一路走到「推不出来就全开」的兜底 → 新建账号会白拿全部 7 个模块。
+ *   补上这个 watch，两件事一起修好；`ensureRolePerms` 内部按 id 缓存，
+ *   重复勾选不会重复请求。
+ *
+ * ⚠️ 必须写在 `formRoleIds` 声明【之后】—— `<script setup>` 是模块顶层作用域，
+ *    写在声明前会 `Cannot access 'formRoleIds' before initialization`（TDZ），
+ *    整个页面直接白屏（构建/类型检查都发现不了，只有跑起来才炸）。
+ */
+watch(formRoleIds, (ids) => {
+  void ensureRolePerms(ids);
+});
+
 const formTitle = computed(() => {
   // ★ 2026-10-19：编辑账号只改基础信息，副标题不再提「分配职位与部门」
   return formMode.value === 'edit'
@@ -549,6 +570,19 @@ const formMerged = computed<RolePermMap>(() => mergedMap(formRoleIds.value));
 const formTags = computed<ModuleTag[]>(() => moduleTags(formMerged.value));
 const formPermCount = computed(() => actionCount(formMerged.value));
 const formModuleCount = computed(() => formTags.value.filter((t) => t.c > 0).length);
+
+/**
+ * ★ 2026-10-19：新建账号的「可访问模块」= 所选职位自动推导的结果。
+ *
+ * 输入取「有 ≥1 项权限的权限库模块」（与上面「M 个模块可用」同一口径），
+ * 映射表与两条兜底（推导为空 / 跨板块角色 → 全部模块）见 utils/moduleDerive.ts。
+ */
+const derivedModules = computed<string[]>(() =>
+  derivePortalModules(
+    formTags.value.filter((t) => t.c > 0).map((t) => t.key),
+    moduleOptions.value.map((m) => m.key),
+  ),
+);
 
 /** 部门勾选态：选中项 + 其上级（回显）+ 其下级（原型 deptCk 的级联） */
 const deptOn = computed<Set<string>>(() => {
@@ -567,8 +601,8 @@ const deptOn = computed<Set<string>>(() => {
 
 function openAdd(): void {
   formMode.value = 'add';
-  form.modules = []; // ★ 新增：模块从零勾选（不勾就登不进去）
-  portalMissing.value = false;
+  // ★ 2026-10-19：新建不再手勾模块 —— 提交时按「所选职位」推导（见 derivedModules）
+  form.modules = [];
   void ensureModuleOptions();
   Object.assign(form, {
     // ★ 2026-10-16：全部留空 —— 管理员填了才会出现内容
@@ -592,7 +626,6 @@ async function openEdit(row: PermUserListItem): Promise<void> {
   formMode.value = 'edit';
   // ★ 载入该账号当前的门户可访问模块（列表接口已带回，无需再请求）
   form.modules = [...(row.portalModules || [])];
-  portalMissing.value = !row.hasPortalAccount;
   void ensureModuleOptions();
   Object.assign(form, {
     id: row.id,
@@ -737,8 +770,10 @@ function validateForm(): string[] {
   //   编辑模式下它们沿用原值提交、界面上也无法修改，所以校验只对新建账号生效。
   if (formMode.value === 'add') {
     if (!formRoleIds.value.length) errs.push('请至少为该账号分配一个职位');
-    if (!form.modules.length) {
-      errs.push('请至少勾选一个「可访问模块」，否则该账号登录后看不到任何内容');
+    // ★ 2026-10-19：模块改为按职位推导 —— 这里只作兜底断言（正常情况下必有值：
+    //   推导不出结果时会回退「全部模块」，保证账号一定登得进去）。
+    if (!derivedModules.value.length) {
+      errs.push('未能按所选职位推导出「可访问模块」，请检查该职位的权限配置');
     }
     if (!v.deptId) errs.push('请至少选择一个所属部门');
   }
@@ -781,9 +816,11 @@ function submitUserForm(): void {
               },
               {
                 k: '可访问模块',
-                v: form.modules.length
-                  ? form.modules.map((k) => `<span class="tag b">${esc(moduleTitleOf(k))}</span>`).join(' ')
-                  : '<span class="desc">一个都没勾 · 该账号无法登录</span>',
+                v: derivedModules.value.length
+                  ? `${derivedModules.value
+                      .map((k) => `<span class="tag b">${esc(moduleTitleOf(k))}</span>`)
+                      .join(' ')} <span class="desc">· 按所选职位自动开通</span>`
+                  : '<span class="desc">未推导出模块 · 请检查职位权限</span>',
               },
               {
                 k: '所属职位',
@@ -820,7 +857,8 @@ async function saveUser(): Promise<void> {
     gender: form.gender,
     age: Number(form.age), // 校验已保证 16-70，这里收口成数字
     deptId: form.deptId,
-    modules: [...form.modules],
+    // ★ 2026-10-19：新建 = 按职位推导；编辑 = 沿用列表带回的原值（界面不涉及模块）
+    modules: isEdit ? [...form.modules] : [...derivedModules.value],
     roleIds: [...formRoleIds.value],
     userStatus: form.userStatus as UserStatus,
     // ★ 2026-10-16：编辑账号不传密码、也不传「强制首次登录修改密码」——
@@ -1508,7 +1546,7 @@ async function doExport(): Promise<void> {
           gap: '20px',
         }"
       >
-        <!-- 左：基本信息（新建时下方还有 可访问模块 + 所属部门） -->
+        <!-- 左：基本信息（新建时下方还有 所属部门） -->
         <div>
           <div class="sec-t"><span class="bar"></span>基本信息</div>
           <div class="fm" style="grid-template-columns: 1fr 1fr">
@@ -1606,62 +1644,19 @@ async function doExport(): Promise<void> {
             </div>
           </div>
 
-          <!-- ★ 2026-10-19：可访问模块 / 所属部门 / 所属职位 / 权限预览 / 快捷套用
+          <!-- ★ 2026-10-19：所属部门 / 所属职位 / 权限预览 / 快捷套用
                只在【新建账号】时出现 —— 编辑账号只改基础信息。
                编辑时这些字段沿用列表带回的原值一起提交，不会被改动；
                需要调整职位或部门请走列表里的「分配职位」入口。 -->
           <template v-if="formMode === 'add'">
-          <div class="divider"></div>
-          <!-- ★ 2026-10-16 新增：可访问模块 —— 决定「这个账号登录后能看到哪些模块」。
-               门户登录要求至少一个模块，一个都不勾 = 建出来也登不进系统，所以新增时必填。
-               ⚠️ 放在「基本信息」之后：它比「所属部门」更靠前需要被看到，放最后会被折叠线挡住。 -->
-          <div class="sec-t">
-            <span class="bar"></span>可访问模块
-            <span class="desc">（登录门户后能进哪几个模块 · 至少选一个）</span>
-          </div>
-          <div v-if="portalMissing" class="notice w" style="margin-bottom: 9px">
-            ⚠<div>该登录名在门户还没有账号，勾选模块并保存后会一并开通登录。</div>
-          </div>
-          <!-- ⚠️ 这里【不用】.ckgrid / .ck：那两个 class 在样式表里没有容器规则
-               （shared-ui.css 的 .ck 其实是复选框 input），照着写会渲染成一列歪方块。
-               所以做出自包含的 chip 样式，与页面既有写法一致。 -->
-          <div
-            v-if="moduleOptions.length"
-            class="mod-chips"
-            style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px"
-          >
-            <label
-              v-for="m in moduleOptions"
-              :key="m.key"
-              style="
-                display: flex;
-                align-items: center;
-                gap: 6px;
-                padding: 6px 9px;
-                border: 1px solid #e2d7d1;
-                border-radius: 8px;
-                cursor: pointer;
-                font-size: 12px;
-                color: #5f5350;
-                transition: 0.15s;
-              "
-              :style="
-                form.modules.includes(m.key)
-                  ? { borderColor: '#e6a99c', background: '#fdf4f2', color: '#b22a23', fontWeight: 600 }
-                  : {}
-              "
-            >
-              <input
-                type="checkbox"
-                style="width: 14px; height: 14px; accent-color: #cd3a33; cursor: pointer; flex: none"
-                :checked="form.modules.includes(m.key)"
-                @change="toggleModule(m.key)"
-              />
-              <span style="white-space: nowrap">{{ m.title }}</span>
-            </label>
-          </div>
-          <div v-else class="desc">模块列表加载中…（加载失败可关闭弹窗重开）</div>
-
+          <!-- ★ 2026-10-19：原先的「可访问模块」勾选区已按用户要求删除 ——
+               模块改为【按所选职位自动推导】（见 utils/moduleDerive.ts）：
+               ① 权限库模块 → 门户模块 按固定表映射（market→consult / fin→finance /
+                  perm→perm / job→job / train→job / acad→edu / teach→class+class-jh /
+                  approve 不单独给模块）；
+               ② 推到 ≥ 6 个 → 视为跨板块角色（校长 / 系统管理员），直接全开；
+               ③ 一个都推不出来 → 回退全部模块，保证建出来的账号一定登得进去。
+               最终结果会在提交前的确认框里列出来，不会再手勾。 -->
           <div class="divider"></div>
           <div class="sec-t">
             <span class="bar"></span>所属部门 <span class="desc">（该账号归属与可见范围）</span>
