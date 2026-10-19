@@ -264,7 +264,7 @@ const definition: swaggerJsdoc.Options['definition'] = {
           phone: { type: 'string', example: '13800000013', description: '11 位、以 1 开头，全局唯一' },
           gender: { type: 'integer', enum: [1, 2], example: 1, description: '1 男 / 2 女' },
           genderName: { type: 'string', example: '男' },
-          age: { type: 'integer', example: 30, description: '16-70' },
+          age: { type: 'integer', example: 30, description: '20-65' },
           deptId: { type: 'string', example: 'D_ADM' },
           deptName: { type: 'string', example: '行政' },
           roleIds: { type: 'array', items: { type: 'string' }, example: ['R13'], description: '至少 1 个' },

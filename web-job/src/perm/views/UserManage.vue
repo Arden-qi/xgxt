@@ -519,7 +519,7 @@ const form = reactive<UserForm>({
   phone: '',
   /** 0 = 未选（性别必须由管理员选） */
   gender: 0,
-  /** null = 未填（年龄必须由管理员填，16-70） */
+  /** null = 未填（年龄必须由管理员填，20-65） */
   age: null,
   deptId: '',
   /** '' = 未选（下拉第一项是「请选择」） */
@@ -746,7 +746,8 @@ function validateForm(): string[] {
   if (!v.userName) errs.push('请输入姓名');
   else if (!/^[\u4e00-\u9fa5]{2,}$/.test(v.userName)) errs.push('姓名只能是汉字，且不少于 2 个字');
   if (v.gender !== 1 && v.gender !== 2) errs.push('请选择性别');
-  if (!v.age || v.age < 16 || v.age > 70) errs.push('年龄需在 16-70 之间');
+  // ★ 2026-10-19 按用户要求：账号年龄范围收紧为 20-65（与后端 zod 同口径）
+  if (!v.age || v.age < 20 || v.age > 65) errs.push('年龄需在 20-65 之间');
   if (!/^1[3-9]\d{9}$/.test(v.phone || '')) errs.push('手机号格式不正确（11 位，1 开头，请勿输入空格/横线）');
   if (!/^[A-Za-z0-9]{4,20}$/.test(v.account || '')) errs.push('登录账号需 4-20 位字母/数字');
   else if (list.value.some((u) => u.account === v.account && u.id !== v.id)) {
@@ -852,7 +853,7 @@ async function saveUser(): Promise<void> {
     account: form.account,
     phone: form.phone,
     gender: form.gender,
-    age: Number(form.age), // 校验已保证 16-70，这里收口成数字
+    age: Number(form.age), // 校验已保证 20-65，这里收口成数字
     deptId: form.deptId,
     // ★ 2026-10-19：新建 = 按职位推导；编辑 = 沿用列表带回的原值（界面不涉及模块）
     modules: isEdit ? [...form.modules] : [...derivedModules.value],
@@ -1562,7 +1563,7 @@ async function doExport(): Promise<void> {
             </div>
             <div class="f">
               <label>年龄 <span class="req">*</span></label>
-              <input v-model.number="form.age" class="inp" type="number" min="16" max="70" placeholder="16-70" />
+              <input v-model.number="form.age" class="inp" type="number" min="20" max="65" placeholder="20-65" />
             </div>
             <div class="f">
               <label>手机号 <span class="req">*</span></label>

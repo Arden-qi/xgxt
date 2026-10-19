@@ -327,7 +327,8 @@ const addSchema = z.object({
   account: z.string().min(1, '登录账号必填').regex(ACCT_RE, '登录账号为字母/数字，4-20 位'),
   phone: z.string().min(1, '手机号必填').regex(PHONE_RE, '手机号格式不正确'),
   gender: z.coerce.number().int().refine((v) => v === 1 || v === 2, '性别只能是 1(男) 或 2(女)'),
-  age: z.coerce.number().int().min(16, '年龄不得小于 16').max(70, '年龄不得大于 70'),
+  // ★ 2026-10-19 按用户要求：账号年龄范围收紧为 20-65（与前端 validateForm 同口径）
+  age: z.coerce.number().int().min(20, '年龄不得小于 20').max(65, '年龄不得大于 65'),
   deptId: z.string().min(1, '必须选择所属部门'),
   userStatus: z.string().optional(),
   roleIds: z.array(z.string()).min(1, '至少需要分配一个职位'),
