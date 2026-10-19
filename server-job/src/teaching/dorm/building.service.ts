@@ -24,6 +24,12 @@
 import { randomUUID } from 'crypto';
 import { BizCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
+import {
+  DORM_BED_PER_ROOM_DEFAULT,
+  DORM_BED_PER_ROOM_MAX,
+  DORM_FLOOR_MAX,
+  DORM_ROOMS_PER_FLOOR_MAX,
+} from '../shared/dto';
 import { commonDb } from '../../class/db';
 import { db as jobDb } from '../../utils/db';
 import { USE_UNI_TABLE, uniDb } from '../shared/uniTable';
@@ -35,6 +41,21 @@ export interface DormBuildingRow {
   buildingName: string;
   category: number | null;
   sortNo: number;
+  /** 楼层数（0 = 未配置） */
+  floorCount: number;
+  /** 每层房间数（0 = 未配置） */
+  roomsPerFloor: number;
+  /** 每间床位数（生成房间时按这个数建床位） */
+  bedPerRoom: number;
+  /**
+   * ★ 宿舍数：该楼栋名下**当前在用**的房间数（实时 count，不存字段）
+   *
+   * 【为什么不存一列 room_count】
+   *   宿舍管理里删一间，这里的宿舍数就要减 1；手加一间就要加 1。
+   *   存字段 = 每一条加/删路径都要记得同步维护，漏一处就永久漂移。
+   *   → 实时 count 永远对，代价只是每次列表多一次 group by（楼栋就那么几栋）。
+   */
+  roomCount: number;
   remark: string | null;
 }
 
@@ -43,17 +64,63 @@ function str(v: unknown): string | null {
   return String(v);
 }
 
+function intOr(v: unknown, dft: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return dft;
+  return Math.floor(n);
+}
+
+/**
+ * ★★ 各楼栋当前在用的房间数（一次 group by 全查回来）
+ *
+ * 【两套读法，不能混 —— 与 countRoomsOfBuilding 同源】
+ *   开关开（TEACHING_UNI_TABLE=1）→ 三学段合在 `t_uni_dorm_room`，按 building 聚合即可；
+ *   开关关（默认）→ 三学段读的都是 **同一张** `sms_job.t_job_dorm`
+ *     （uniTable.tbl() 开关关时直接返回 db(老表)，不加学段条件）
+ *     → 只能查一次，查三次会得到 3 倍的假数字。
+ */
+async function countRoomsMap(): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!USE_UNI_TABLE) {
+    const rows = await jobDb('t_job_dorm')
+      .where({ is_deleted: false })
+      .groupBy('building')
+      .select('building')
+      .count({ n: '*' });
+    for (const r of rows as any[]) {
+      out.set(String(r.building ?? ''), Number(r.n || 0));
+    }
+    return out;
+  }
+  const rows = await uniDb('t_uni_dorm_room')
+    .where({ is_deleted: false })
+    .groupBy('building')
+    .select('building')
+    .count({ n: '*' });
+  for (const r of rows as any[]) {
+    out.set(String(r.building ?? ''), Number(r.n || 0));
+  }
+  return out;
+}
+
 /** 楼栋列表（按 sort_no → building_name 排，保证下拉顺序稳定） */
 export async function listBuildings(): Promise<DormBuildingRow[]> {
-  const rows = await commonDb(T)
-    .where({ is_deleted: false })
-    .orderBy('sort_no', 'asc')
-    .orderBy('building_name', 'asc');
+  const [rows, counts] = await Promise.all([
+    commonDb(T)
+      .where({ is_deleted: false })
+      .orderBy('sort_no', 'asc')
+      .orderBy('building_name', 'asc'),
+    countRoomsMap(),
+  ]);
   return rows.map((r: any) => ({
     id: String(r.id),
     buildingName: String(r.building_name ?? ''),
     category: r.category === null || r.category === undefined ? null : Number(r.category),
     sortNo: Number(r.sort_no ?? 0),
+    floorCount: intOr(r.floor_count, 0),
+    roomsPerFloor: intOr(r.rooms_per_floor, 0),
+    bedPerRoom: intOr(r.bed_per_room, 4),
+    roomCount: counts.get(String(r.building_name ?? '')) ?? 0,
     remark: str(r.remark),
   }));
 }
@@ -68,7 +135,32 @@ export interface DormBuildingSaveBody {
   buildingName: string;
   category?: number;
   sortNo?: number;
+  /** 楼层数（1 ~ 9）；0 / 不传 = 未配置，不自动生成房间 */
+  floorCount?: number;
+  /** 每层房间数（1 ~ 99） */
+  roomsPerFloor?: number;
+  /** 每间床位数（1 ~ 50，默认 4） */
+  bedPerRoom?: number;
   remark?: string | null;
+}
+
+/**
+ * ★ 楼层 / 每层房间数 / 每间床位数 的校验与归一（2026-10-19）
+ *
+ * 【为什么楼层上限 9、每层上限 99】
+ *   房号格式是「3 位数字，第 1 位楼层 + 后 2 位序号」（101 / 508）——
+ *   3 位数字物理上最多表达到 9 层、每层 99 间。这两个上限是格式决定的硬边界，
+ *   与前端 el-input-number 的 max 必须同步（改一处记得改另一处）。
+ *
+ * 【为什么允许 0】
+ *   老楼栋（1号楼/2号楼/3号楼）的房间是手工加的，没有这套配置 → 0 = 未配置，
+ *   列表显示「—」，编辑时补上数值即可触发补生成。
+ */
+function normalizeRoomConfig(v: unknown, max: number, dft: number): number {
+  if (v === null || v === undefined || v === '') return dft;
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n) || n < 0 || n > max) return dft;
+  return n;
 }
 
 function normalizeCategory(v: unknown): number | null {
@@ -97,6 +189,12 @@ export async function saveBuilding(
     ? Math.floor(Number(body.sortNo))
     : 999;
 
+  const floorCount = normalizeRoomConfig(body.floorCount, DORM_FLOOR_MAX, 0);
+  const roomsPerFloor = normalizeRoomConfig(body.roomsPerFloor, DORM_ROOMS_PER_FLOOR_MAX, 0);
+  const bedPerRoom = normalizeRoomConfig(body.bedPerRoom, DORM_BED_PER_ROOM_MAX, DORM_BED_PER_ROOM_DEFAULT)
+    || DORM_BED_PER_ROOM_DEFAULT;
+  const roomConfig = { floor_count: floorCount, rooms_per_floor: roomsPerFloor, bed_per_room: bedPerRoom };
+
   if (body.id) {
     const cur = await commonDb(T).where({ id: String(body.id), is_deleted: false }).first();
     if (!cur) throw new BizError(BizCode.PARAM_ERROR, '楼栋不存在或已删除');
@@ -110,6 +208,7 @@ export async function saveBuilding(
       building_name: name,
       category,
       sort_no: sortNo,
+      ...roomConfig,
       remark: str(body.remark),
       update_time: new Date(),
       update_by: userId,
@@ -131,6 +230,7 @@ export async function saveBuilding(
       is_deleted: false,
       category,
       sort_no: sortNo,
+      ...roomConfig,
       remark: str(body.remark),
       update_time: new Date(),
       update_by: userId,
@@ -144,6 +244,7 @@ export async function saveBuilding(
     building_name: name,
     category,
     sort_no: sortNo,
+    ...roomConfig,
     remark: str(body.remark),
     is_deleted: false,
     create_time: new Date(),

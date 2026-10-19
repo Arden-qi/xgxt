@@ -48,6 +48,20 @@ export interface DormRepo {
   save(body: DormSaveBody, userId: string): Promise<{ id: string }>;
   remove(id: string, userId: string): Promise<void>;
 
+  /**
+   * ★ 按「楼层数 × 每层房间数」批量生成房间（2026-10-19）
+   *   房号 = 楼层 + 两位序号（1 楼第 8 间 = 108）→ 与 /save 的 3 位数字校验同口径。
+   *   幂等：已存在 → skipped；软删行 → 复活（uk_dorm_no 被软删行占着，不能重建）。
+   */
+  generateRooms(input: {
+    buildingName: string;
+    dormType: number;
+    floorCount: number;
+    roomsPerFloor: number;
+    bedPerRoom: number;
+    userId: string;
+  }): Promise<{ created: number; revived: number; skipped: number }>;
+
   /** 床位列表（含在住学生）—— 三学段取数方式完全不同，见文件头说明 */
   beds(dormId: string, user: any): Promise<DormBedRow[]>;
   /** 在住学生名单（跨房间） */

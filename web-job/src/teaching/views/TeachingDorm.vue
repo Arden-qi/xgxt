@@ -129,7 +129,19 @@
         <template #default="{ row }">
           <el-button link type="primary" @click="openBeds(row)">床位</el-button>
           <el-button v-if="canEdit(row)" link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button v-if="canEdit(row)" link type="danger" @click="doDelete(row)">删除</el-button>
+          <!--
+            ★ 删除的前置条件：房间里没有入住学生（2026-10-19）
+              住着人的房间直接禁用删除按钮 —— 与其让用户点了再吃一个报错，
+              不如在按钮上就把话说清楚。后端 repo.remove() 还会再拦一次（双保险）。
+          -->
+          <el-tooltip
+            v-if="canEdit(row) && row.occupiedCount > 0"
+            content="该宿舍有学生入住，不能删除；请先办理退宿"
+            placement="top"
+          >
+            <span><el-button link type="danger" disabled>删除</el-button></span>
+          </el-tooltip>
+          <el-button v-else-if="canEdit(row)" link type="danger" @click="doDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -934,8 +946,21 @@ async function doSave() {
 }
 
 async function doDelete(row: DormRow) {
+  /**
+   * ★ 前端先挡一次：有学生住着就不能删
+   *   后端 repo.remove() 会同时查「学生主档 dorm_id」和「床位占用」再拦一次，
+   *   这里是前端的前置提示，省得用户走完确认框才吃到报错。
+   */
+  if (row.occupiedCount > 0) {
+    ElMessage.warning('该宿舍还有学生入住，不能删除；请先办理退宿');
+    return;
+  }
   try {
-    await ElMessageBox.confirm(`确认删除房间「${row.roomNo}」？`, '删除确认', { type: 'warning' });
+    await ElMessageBox.confirm(
+      `确认删除房间「${row.roomNo}」？删除后「楼栋设置」里该楼栋的宿舍数会相应减少。`,
+      '删除确认',
+      { type: 'warning' },
+    );
   } catch {
     return;
   }

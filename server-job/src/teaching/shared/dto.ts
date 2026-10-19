@@ -1299,6 +1299,36 @@ export const DORM_CATEGORY_NAME: Record<number, string> = {
   2: '女寝',
 };
 
+/* ============================================================
+ * ★ 楼栋「楼层 / 每层房间数 / 每间床位数」的硬边界（2026-10-19）
+ *
+ * 【为什么这几个上限不是业务口径，而是格式决定】
+ *   宿舍号 = 3 位数字，第 1 位是楼层、后 2 位是房号（101 / 508）。
+ *   3 位数字物理上最多表达到 **9 层**、每层 **99 间**。
+ *   → 楼栋设置里让用户填的楼层数、每层房间数，上限就是这两个数；
+ *     超过就编不出合法房号（要么变成 4 位，要么撞上 /save 的 /^\d{3}$/ 校验）。
+ *
+ * 【★ 为什么放在 dto 而不是某个 service 里】
+ *   building.service（楼栋设置）和 dorm/service（房间生成）**两边都要用同一套边界**，
+ *   而它们之间已经有 repo.uni → building.service 的依赖链，互相 import 会成环。
+ *   → 放在 dto（谁都不依赖它），两边各自 import，天然无环且口径只有一份。
+ * ============================================================ */
+
+/** 楼层数上限（房号第 1 位只能是一位数字） */
+export const DORM_FLOOR_MAX = 9;
+/** 每层房间数上限（房号后 2 位最多表达 99） */
+export const DORM_ROOMS_PER_FLOOR_MAX = 99;
+/** 每间床位数上限（与「新增房间」的床位数口径一致） */
+export const DORM_BED_PER_ROOM_MAX = 50;
+/** 每间床位数默认值 */
+export const DORM_BED_PER_ROOM_DEFAULT = 4;
+/**
+ * ★ 单次生成房间数上限
+ *   生成是「逐间 insert + 逐床 insert」，填错一次就是几千次写库。
+ *   300 间（≈1200 次写）已是宽松值，正常楼栋配置远达不到。
+ */
+export const DORM_GEN_ROOM_MAX = 300;
+
 /** 调宿 / 退宿 业务类型（复用 shared-types 的 DormChangeBizType 口径） */
 export const DORM_CHANGE_NAME: Record<number, string> = {
   1: '调换宿舍',

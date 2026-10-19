@@ -26,6 +26,10 @@ import {
   listDormBuildings,
   saveDormBuilding,
   deleteDormBuilding,
+  DORM_FLOOR_MAX,
+  DORM_ROOMS_PER_FLOOR_MAX,
+  DORM_BED_PER_ROOM_MAX,
+  DORM_BED_PER_ROOM_DEFAULT,
   type DormBuildingRow,
 } from '@/teaching/api/building';
 import { dash, formatDateTime } from '@/class-jh/utils/format';
@@ -102,7 +106,23 @@ const buildingLoading = ref(false);
 const buildingData = ref<DormBuildingRow[]>([]);
 const buildingVisible = ref(false);
 const buildingSubmitting = ref(false);
-const buildingForm = reactive({ id: '', buildingName: '', category: 1 as number, remark: '' });
+/**
+ * 楼栋表单
+ *
+ * ★ floorCount / roomsPerFloor / bedPerRoom（2026-10-19 加）
+ *   填了「楼层数 + 每层房间数」→ 点确定后端按
+ *   「楼层 + 两位序号」自动生成 3 位宿舍号的房间（1 楼第 8 间 = 108）。
+ *   0 表示未配置（老楼栋的房间是手工加的，不动它）。
+ */
+const buildingForm = reactive({
+  id: '',
+  buildingName: '',
+  category: 1 as number,
+  floorCount: 0,
+  roomsPerFloor: 0,
+  bedPerRoom: DORM_BED_PER_ROOM_DEFAULT,
+  remark: '',
+});
 
 const DORM_BUILDING_CATEGORY_OPTIONS = [
   { value: 1, label: '男寝' },
@@ -127,7 +147,15 @@ async function loadBuildings() {
 }
 
 function openBuildingDialog() {
-  Object.assign(buildingForm, { id: '', buildingName: '', category: 1, remark: '' });
+  Object.assign(buildingForm, {
+    id: '',
+    buildingName: '',
+    category: 1,
+    floorCount: 0,
+    roomsPerFloor: 0,
+    bedPerRoom: DORM_BED_PER_ROOM_DEFAULT,
+    remark: '',
+  });
   buildingVisible.value = true;
 }
 
@@ -136,9 +164,22 @@ function openBuildingEdit(row: DormBuildingRow) {
     id: row.id,
     buildingName: row.buildingName,
     category: row.category ?? 1,
+    floorCount: row.floorCount ?? 0,
+    roomsPerFloor: row.roomsPerFloor ?? 0,
+    bedPerRoom: row.bedPerRoom || DORM_BED_PER_ROOM_DEFAULT,
     remark: row.remark || '',
   });
   buildingVisible.value = true;
+}
+
+/**
+ * ★ 按当前表单配置算一下会生成多少间（给弹窗里的提示文案用）
+ *   楼层数或每层房间数为 0（未配置）→ 不生成。
+ */
+function buildingPlanCount(): number {
+  const f = Number(buildingForm.floorCount) || 0;
+  const r = Number(buildingForm.roomsPerFloor) || 0;
+  return f > 0 && r > 0 ? f * r : 0;
 }
 
 async function submitBuilding() {
@@ -149,13 +190,30 @@ async function submitBuilding() {
   }
   buildingSubmitting.value = true;
   try {
-    await saveDormBuilding({
+    const r = await saveDormBuilding({
       id: buildingForm.id || undefined,
       buildingName: name,
       category: buildingForm.category,
+      floorCount: Number(buildingForm.floorCount) || 0,
+      roomsPerFloor: Number(buildingForm.roomsPerFloor) || 0,
+      bedPerRoom: Number(buildingForm.bedPerRoom) || DORM_BED_PER_ROOM_DEFAULT,
       remark: buildingForm.remark || undefined,
     });
-    ElMessage.success(buildingForm.id ? '楼栋已更新' : '新增成功');
+    /**
+     * ★ 提示里要说清楚**实际建了几间**：
+     *   配置 6 层 × 15 间，但其中 3 间之前建过 → 实际只新建 87 间。
+     *   不报数字的话，用户会以为「点了确定但好像没生效」。
+     */
+    const rooms = r?.rooms;
+    if (rooms) {
+      const parts: string[] = [];
+      if (rooms.created) parts.push(`新建 ${rooms.created} 间`);
+      if (rooms.revived) parts.push(`恢复 ${rooms.revived} 间`);
+      if (rooms.skipped) parts.push(`${rooms.skipped} 间已存在`);
+      ElMessage.success(`${buildingForm.id ? '楼栋已更新' : '新增成功'}，自动生成宿舍：${parts.join('，') || '无变化'}`);
+    } else {
+      ElMessage.success(buildingForm.id ? '楼栋已更新' : '新增成功');
+    }
     buildingVisible.value = false;
     loadBuildings();
   } catch {
@@ -340,6 +398,22 @@ onMounted(() => {
               <el-tag v-else type="info" size="small">未设置</el-tag>
             </template>
           </el-table-column>
+          <!-- ★ 楼层 = 该楼配置的楼层数（未配置显示 —） -->
+          <el-table-column label="楼层" width="90" align="center">
+            <template #default="{ row }">
+              <span v-if="row.floorCount">{{ row.floorCount }} 层</span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <!--
+            ★ 宿舍数 = 该楼栋名下**当前在用**的房间数（后端实时统计）
+              宿舍管理里删掉一间，这里刷新就少 1 —— 不用做任何同步。
+          -->
+          <el-table-column label="宿舍数" width="90" align="center">
+            <template #default="{ row }">
+              <b :class="row.roomCount ? 'ok' : 'muted'">{{ row.roomCount }}</b>
+            </template>
+          </el-table-column>
           <el-table-column prop="remark" label="备注" min-width="200">
             <template #default="{ row }">{{ dash(row.remark) }}</template>
           </el-table-column>
@@ -420,7 +494,7 @@ onMounted(() => {
     </el-tabs>
 
     <!-- 新增 / 编辑楼栋 -->
-    <el-dialog v-model="buildingVisible" :title="buildingForm.id ? '编辑楼栋' : '新增楼栋'" width="480px">
+    <el-dialog v-model="buildingVisible" :title="buildingForm.id ? '编辑楼栋' : '新增楼栋'" width="560px">
       <el-form :model="buildingForm" label-width="100px">
         <el-form-item label="楼栋名称" required>
           <el-input v-model="buildingForm.buildingName" maxlength="50" placeholder="如 4号楼" />
@@ -432,6 +506,53 @@ onMounted(() => {
             </el-radio>
           </el-radio-group>
         </el-form-item>
+        <!--
+          ★ 楼层数 / 每层房间数 / 每间床位数（2026-10-19）
+            填了前两项 → 点确定后自动生成「楼层+两位序号」的宿舍号
+            （1 楼第 8 间 = 108、5 楼第 12 间 = 512）。
+            楼层上限 9、每层上限 99 —— 因为宿舍号是 3 位数字，
+            第 1 位只能是一位楼层数，装不下 10 层以上的楼。
+        -->
+        <el-form-item label="楼层数">
+          <el-input-number
+            v-model="buildingForm.floorCount"
+            :min="0"
+            :max="DORM_FLOOR_MAX"
+            :step="1"
+            step-strictly
+            style="width: 140px"
+          />
+          <el-text type="info" size="small" class="ml12">最多 {{ DORM_FLOOR_MAX }} 层（宿舍号首位）</el-text>
+        </el-form-item>
+        <el-form-item label="每层房间数">
+          <el-input-number
+            v-model="buildingForm.roomsPerFloor"
+            :min="0"
+            :max="DORM_ROOMS_PER_FLOOR_MAX"
+            :step="1"
+            step-strictly
+            style="width: 140px"
+          />
+          <el-text type="info" size="small" class="ml12">填 0 表示不自动生成</el-text>
+        </el-form-item>
+        <el-form-item label="每间床位数">
+          <el-input-number
+            v-model="buildingForm.bedPerRoom"
+            :min="1"
+            :max="DORM_BED_PER_ROOM_MAX"
+            :step="1"
+            step-strictly
+            style="width: 140px"
+          />
+        </el-form-item>
+        <el-alert
+          v-if="buildingPlanCount() > 0"
+          type="info"
+          :closable="false"
+          show-icon
+          class="mb12"
+          :title="`确定后将自动生成 ${buildingPlanCount()} 间宿舍（房号 101 ~ ${buildingForm.floorCount}${String(buildingForm.roomsPerFloor).padStart(2, '0')}）；已存在的房间不会重复生成`"
+        />
         <el-form-item label="备注">
           <el-input v-model="buildingForm.remark" maxlength="100" placeholder="选填" />
         </el-form-item>
@@ -492,5 +613,12 @@ onMounted(() => {
 }
 .toolbar {
   margin-bottom: 12px;
+}
+/* 楼栋列表里「未配置 / 0」的弱化显示 */
+.muted {
+  color: #c0c4cc;
+}
+.ok {
+  color: #303133;
 }
 </style>

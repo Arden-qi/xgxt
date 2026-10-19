@@ -32,7 +32,9 @@
  */
 
 import { randomUUID } from 'crypto';
+import { BizCode } from 'shared-types';
 import { db } from '../../utils/db';
+import { BizError } from '../../middleware/errorHandler';
 import {
   DORM_BED_STATUS_NAME,
   DORM_GENDER_NAME,
@@ -351,10 +353,39 @@ export function makeRepo(stage: TeachingStage): DormRepo {
       return { id };
     },
   
+    /**
+     * 删除房间（软删）
+     *
+     * ★★ 前置条件：房间里**没有入住学生**（2026-10-19 加严）
+     *
+     * 【为什么原来那条判据形同虚设】
+     *   旧代码只看床位表 `bed_status = 2`。但「谁住哪」的权威来源是**学生主档
+     *   的 dorm_id**（入住/退宿流程写的就是这一列，见本文件 roomRows 的注释），
+     *   而床位表的 bed_status 常年全是 1（实测 184 行无一为 2）。
+     *   → 结果：明明住着人的房间，旧判据说「没人」，照样删得掉。
+     *
+     * 【现在两条都查，任一命中就拒绝】
+     *   ① 学生主档有在校学生指向本房间（权威口径）
+     *   ② 床位表有床位处于「已住」状态（历史口径，兜底）
+     *   宁可拦得多，也不能把住着人的房间删掉 —— 删了之后学生的 dorm_id
+     *   指向一个软删房间，列表、入住率、换宿全部读到空。
+     */
     async remove(id, userId) {
       const beds = await T_BED().where({ dorm_id: String(id), is_deleted: false });
+      /**
+       * ★ 抛 BizError 而不是普通 Error：
+       *   普通 Error 会被 errorHandler 包装成 50001「服务器错误：…」，
+       *   用户看到的是「系统坏了」；这是一条**业务规则**，应该是 40000 参数/业务错误。
+       */
       if (beds.some((b: any) => Number(b.bed_status) === 2)) {
-        throw new Error('该宿舍还有学生入住，不能删除；请先办理退宿');
+        throw new BizError(BizCode.PARAM_ERROR, '该宿舍还有学生入住，不能删除；请先办理退宿');
+      }
+      const [staying] = await tbl(db, SRC_DB, STUDENT_T, stage)
+        .where({ dorm_id: String(id), is_deleted: false })
+        .whereIn('student_status', IN_SCHOOL_STATUS)
+        .count({ n: '*' });
+      if (Number(staying?.n || 0) > 0) {
+        throw new BizError(BizCode.PARAM_ERROR, '该宿舍还有学生入住，不能删除；请先办理退宿');
       }
       await T_DORM().where({ id: String(id) }).update({
         is_deleted: true,
@@ -362,6 +393,101 @@ export function makeRepo(stage: TeachingStage): DormRepo {
         update_by: userId,
       });
       await T_BED().where({ dorm_id: String(id) }).update({ is_deleted: true });
+    },
+
+    /**
+     * ★★ 按「楼层数 × 每层房间数」批量生成房间（2026-10-19）
+     *
+     * 【房号规则：楼层 + 两位序号，凑成 3 位数字】
+     *   1 楼第 1 间 = 101，1 楼第 12 间 = 112，5 楼第 8 间 = 508。
+     *   与「宿舍号 3 位数字、第 1 位为楼层」的既有校验（/save 的 /^\d{3}$/）
+     *   严格一致 —— 生成的房间必须能被手工编辑那条链路再改一次，
+     *   否则会出现「自动生成出来的房号，人工改不了」的怪事。
+     *
+     * 【★★ 幂等：已存在的房间跳过，软删的房间复活】
+     *   ① 未删除的同 dorm_no 房间 → skipped（不重复建）
+     *     场景：楼栋配置从 5 层改成 6 层，重跑只会补第 6 层，前 5 层原样不动。
+     *   ② 软删的同 dorm_no 房间 → **复活**（不是新建）
+     *     必须复活的原因：`uk_dorm_no` 是数据库唯一索引，**软删行仍占着这个键**，
+     *     直接 insert 会撞 ER_DUP_ENTRY（本项目踩过同款坑，见 save() 注释）。
+     *     用户视角：房间删过一次，再按楼栋配置生成，应该「回来了」而不是报错。
+     *
+     * 【为什么不做事务】
+     *   生成是幂等的，中途失败再点一次确定就能补齐（已建好的会 skipped）。
+     *   真要事务就得把跨库（sms_job 老表 ↔ sms_common 统一表）绑在一起，
+     *   knex 做不到（见 uniTable.tblTrx 的注释）→ 不做假原子性，返回实际数量更诚实。
+     */
+    async generateRooms(input: {
+      buildingName: string;
+      dormType: number;
+      floorCount: number;
+      roomsPerFloor: number;
+      bedPerRoom: number;
+      userId: string;
+    }): Promise<{ created: number; revived: number; skipped: number }> {
+      let created = 0;
+      let revived = 0;
+      let skipped = 0;
+
+      for (let f = 1; f <= input.floorCount; f += 1) {
+        for (let s = 1; s <= input.roomsPerFloor; s += 1) {
+          const roomNo = `${f}${String(s).padStart(2, '0')}`;
+          const dormNo = `${input.buildingName}-${roomNo}`;
+          // ★ 故意不带 is_deleted：软删行也占着 uk_dorm_no，必须看见它（见上）
+          const exist = await T_DORM().where({ dorm_no: dormNo }).first();
+          let id: string;
+
+          if (exist) {
+            if (Number(exist.is_deleted) === 0) {
+              skipped += 1;
+              continue;
+            }
+            id = String(exist.id);
+            await T_DORM().where({ id }).update({
+              building: input.buildingName,
+              room_no: roomNo,
+              bed_count: input.bedPerRoom,
+              dorm_gender: input.dormType,
+              dorm_status: 1,
+              used_count: 0,
+              remark: null,
+              is_deleted: false,
+              update_time: new Date(),
+              update_by: input.userId,
+            });
+            /**
+             * 房间被删时它名下的床位被整批软删了 → 一起复活。
+             * 床位数可能与上次不同，交给下面的 syncBeds 补齐 / 裁剪。
+             */
+            await T_BED().where({ dorm_id: id }).update({ is_deleted: false, bed_status: 1 });
+            revived += 1;
+          } else {
+            id = randomUUID();
+            const now = new Date();
+            await tblIns(db, SRC_DB, DORM_T, stage, {
+              id,
+              dorm_no: dormNo,
+              building: input.buildingName,
+              room_no: roomNo,
+              bed_count: input.bedPerRoom,
+              dorm_gender: input.dormType,
+              dorm_status: 1,
+              used_count: 0,
+              remark: null,
+              is_deleted: false,
+              create_time: now,
+              create_by: input.userId,
+              update_time: now,
+              update_by: input.userId,
+            });
+            created += 1;
+          }
+
+          // 新建即生成床位行（否则前端画不出格子）
+          await syncBeds(id, input.bedPerRoom, input.userId);
+        }
+      }
+      return { created, revived, skipped };
     },
   
     async beds(dormId) {

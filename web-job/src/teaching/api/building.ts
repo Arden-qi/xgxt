@@ -23,6 +23,17 @@ export interface DormBuildingRow {
   /** 1 男寝 / 2 女寝 / null 未分类 */
   category: number | null;
   sortNo: number;
+  /** 楼层数（0 = 未配置） */
+  floorCount: number;
+  /** 每层房间数（0 = 未配置） */
+  roomsPerFloor: number;
+  /** 每间床位数 */
+  bedPerRoom: number;
+  /**
+   * ★ 宿舍数：该楼栋名下**当前在用**的房间数，后端实时 count，不存字段
+   *   → 宿舍管理里删一间，这个数立刻少 1，不用任何同步动作。
+   */
+  roomCount: number;
   remark: string | null;
 }
 
@@ -31,8 +42,33 @@ export interface DormBuildingSavePayload {
   buildingName: string;
   category: number;
   sortNo?: number;
+  /** 楼层数 1 ~ 9（房号第 1 位只能是一位数字） */
+  floorCount?: number;
+  /** 每层房间数 1 ~ 99 */
+  roomsPerFloor?: number;
+  /** 每间床位数 1 ~ 50 */
+  bedPerRoom?: number;
   remark?: string;
 }
+
+/** 保存楼栋后「自动生成房间」的结果（后端返回，用于提示建了几间） */
+export interface DormBuildingRoomGenResult {
+  created: number;
+  revived: number;
+  skipped: number;
+  total: number;
+}
+
+/**
+ * ★ 楼层 / 每层房间数 的上限不是业务拍的，是房号格式决定的：
+ *   宿舍号 = 3 位数字，第 1 位楼层、后 2 位房号（101 / 508）
+ *   → 最多 9 层、每层最多 99 间。改这里必须同步后端 dto 的
+ *     DORM_FLOOR_MAX / DORM_ROOMS_PER_FLOOR_MAX。
+ */
+export const DORM_FLOOR_MAX = 9;
+export const DORM_ROOMS_PER_FLOOR_MAX = 99;
+export const DORM_BED_PER_ROOM_MAX = 50;
+export const DORM_BED_PER_ROOM_DEFAULT = 4;
 
 const BASE = '/api/teaching/building';
 
@@ -42,9 +78,14 @@ export async function listDormBuildings(): Promise<DormBuildingRow[]> {
   return (r as unknown as DormBuildingRow[]) || [];
 }
 
-/** 2. 新增 / 修改楼栋 */
-export function saveDormBuilding(body: DormBuildingSavePayload): Promise<unknown> {
-  return http.post(`${BASE}/save`, body);
+/** 2. 新增 / 修改楼栋（填了楼层数 + 每层房间数，后端会自动生成房间） */
+export function saveDormBuilding(
+  body: DormBuildingSavePayload,
+): Promise<{ id: string; rooms?: DormBuildingRoomGenResult | null }> {
+  return http.post(`${BASE}/save`, body) as Promise<{
+    id: string;
+    rooms?: DormBuildingRoomGenResult | null;
+  }>;
 }
 
 /** 3. 删除楼栋（名下还有宿舍时后端会拒绝） */
