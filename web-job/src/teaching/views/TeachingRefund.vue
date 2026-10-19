@@ -436,6 +436,14 @@ function fmtCent(cent: number) {
   return (Number(cent || 0) / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2 });
 }
 
+/** 今天（本地时区）的 YYYY-MM-DD —— 发起退费的申请日期默认值。
+ *  不用 toISOString()（那是 UTC，凌晨 0~8 点会差一天）。 */
+function todayStr(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 async function load(p = query.page) {
   query.page = p;
   loading.value = true;
@@ -543,7 +551,7 @@ function openCreate() {
   form.stage = (query.stage || deptFilterOptions.value[0]?.value || 'job') as TeachingStage;
   form.studentId = '';
   form.items = [{ feeType: 1, yuan: 0 }];
-  form.applyDate = '';
+  form.applyDate = todayStr(); // ★ 默认当天（2026-10-19 用户要求；后端对空值原本也兜底今天，但表单应直接显示出来）
   form.refundReason = '';
   students.value = [];
   createVisible.value = true;

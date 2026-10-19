@@ -96,6 +96,10 @@ const { check, summary } = makeChecker();
       vue.includes('已自动调换'),
     );
     check(
+      '★ 发起退费的申请日期默认当天（openCreate 里 todayStr()，2026-10-19 用户要求）',
+      vue.includes('form.applyDate = todayStr()') && vue.includes('function todayStr()'),
+    );
+    check(
       '★ 关键字回车 / 清空即查',
       tpl.includes('@keyup.enter="load(1)"') && tpl.includes('@clear="load(1)"'),
     );
