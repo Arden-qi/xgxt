@@ -169,37 +169,12 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
     key: 'fee',
     title: '催费 / 缴费',
     icon: 'Money',
-    desc: '各学段费用催办与缴费台账。',
-    stages: [
-      {
-        stage: '初高',
-        path: '/class-jh/fee',
-        pageCode: 'classjh:fee:view',
-        comp: defineAsyncComponent(() => import('@/class-jh/views/FeeList.vue')),
-        note: '缴费台账 + 催费推送 / 催费记录 + 导出。',
-      },
-      {
-        stage: '大学',
-        path: '/class/urge',
-        pageCode: 'class:urge:view',
-        comp: defineAsyncComponent(() => import('@/class/views/Urge.vue')),
-        note: '催费发起与催缴记录（数据同步自教务，只读投影）。',
-      },
-      {
-        stage: '实训',
-        path: '/fee-call',
-        pageCode: 'job:feeCall:view',
-        comp: defineAsyncComponent(() => import('@/views/FeeCallList.vue')),
-        note: '催费单模型（住宿费 / 保险费 / 餐费）：教务发起 → 班主任催缴回填；只催办不收款。',
-      },
-      {
-        stage: '教务',
-        path: '/edu/fee',
-        pageCode: 'edu:fee:view',
-        comp: defineAsyncComponent(() => import('@/views/edu/PaymentList.vue')),
-        note: '缴费总记录 + 即将到期预警 + 凭证 OCR 识别 + 批量冻结 / 解冻。',
-      },
-    ],
+    desc: '费用催办与缴费台账。',
+    // ★ 2026-10-19 域重组（用户要求）：原四学段页签收成两页——
+    //   「催费」= 初高缴费台账催费侧 + 大学催缴 + 就业催费单 聚合（TeachingFeeUrge，带部门列与部门筛选）；
+    //   「缴费」= 教务缴费总记录（PaymentList 原样，TeachingFeeHub 内页签）。
+    //   老页面/老路由（/class-jh/fee、/class/urge、/fee-call、/edu/fee）未删，可回退。
+    unified: defineAsyncComponent(() => import('@/teaching/views/TeachingFeeHub.vue')),
   },
 
   /* ---------------- 8. 退费 ---------------- */

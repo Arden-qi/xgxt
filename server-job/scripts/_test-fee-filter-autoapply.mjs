@@ -28,6 +28,8 @@ const PAGES = [
   { name: '实训 FeeCallList', rel: 'web-job/src/views/FeeCallList.vue', form: '<el-form :model="query" inline>' },
   { name: '教务 PaymentList·总记录', rel: 'web-job/src/views/edu/PaymentList.vue', form: '<el-form :model="totalQuery" inline>' },
   { name: '教务 PaymentList·即将到期', rel: 'web-job/src/views/edu/PaymentList.vue', form: '<el-form :model="expQuery" inline>' },
+  { name: '催费聚合 TeachingFeeUrge', rel: 'web-job/src/teaching/views/TeachingFeeUrge.vue', form: '<el-form class="tfu-filter" inline>' },
+  { name: '费用中转 TeachingFeeHub', rel: 'web-job/src/teaching/views/TeachingFeeHub.vue', form: null },
 ];
 
 const { check, summary } = makeChecker();
