@@ -60,15 +60,32 @@
         </el-select>
       </el-form-item>
       <el-form-item label="申请日期">
+        <!--
+          ★ 2026-10-19 修 bug：原来是一个 daterange 区间选择器，用户带已有区间重开面板、
+            想只改「结束日期」时，EP 把第一次点击当作「新的开始」，高亮立刻塌缩成
+            单日；再点一下确认后输入框变成「D 至 D」——看起来就是「开始日期同步成了
+            结束日期」。EP 区间面板没有「只改一端」的语义（useRangePicker 的
+            selecting 状态机决定），拆成两个独立日期选择器后此问题结构性消失；
+            开始晚于结束时在 onDateChange 里自动调换。
+        -->
         <el-date-picker
-          v-model="dateRange"
-          type="daterange"
-          range-separator="至"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
+          v-model="query.startDate"
+          type="date"
+          placeholder="开始日期"
           value-format="YYYY-MM-DD"
-          style="width: 240px"
-          @change="onDateRangeChange"
+          class="trf-date-start"
+          style="width: 135px"
+          @change="onDateChange"
+        />
+        <span class="trf-date-sep">至</span>
+        <el-date-picker
+          v-model="query.endDate"
+          type="date"
+          placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          class="trf-date-end"
+          style="width: 135px"
+          @change="onDateChange"
         />
       </el-form-item>
       <el-form-item label="关键字">
@@ -121,16 +138,18 @@
       <el-table-column label="申请日期" width="105" align="center">
         <template #default="{ row }">{{ row.applyDate || '—' }}</template>
       </el-table-column>
+      <!--
+        ★ 结束日期（2026-10-19 用户要求新增）＝ 出款时间（退款流程完结）：
+          初高/实训财务登记出款后有值；大学部表没有出款时间列，显示 —。
+      -->
+      <el-table-column label="结束日期" width="105" align="center">
+        <template #default="{ row }">{{ row.refundTime ? row.refundTime.slice(0, 10) : '—' }}</template>
+      </el-table-column>
       <el-table-column label="状态" width="105" align="center">
         <template #default="{ row }">
           <el-tag :type="tagType(row.approvalStatus)" size="small">
             {{ row.approvalStatusName }}
           </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="当前处理" width="110" align="center">
-        <template #default="{ row }">
-          <span class="muted">{{ row.currentHandlerHint || '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="250" fixed="right" align="center">
@@ -262,9 +281,6 @@
               {{ detail.record.approvalStatusName }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="当前处理">
-            {{ detail.record.currentHandlerHint || '—' }}
-          </el-descriptions-item>
           <el-descriptions-item label="退费原因" :span="2">
             {{ detail.record.refundReason || '—' }}
           </el-descriptions-item>
@@ -312,9 +328,15 @@
  *   汇总卡片 / 部门筛选 / 列表「部门」列 / 详情全走 deptNameOf() 翻成部门名
  *   （初高中 / 大学 / 实训），与 TeachingLeave.vue 同一份口径（REFUND_DEPARTMENTS）。
  *   ⚠️ 列表「部门」列始终显示（原来 v-if="!query.stage"，筛完这列就消失）。
- * ★ 筛选/搜索：部门 / 班级 / 状态 / 申请日期区间 / 关键字 / 只看待我审批，
+ * ★ 筛选/搜索：部门 / 班级 / 状态 / 申请日期（开始/结束）/ 关键字 / 只看待我审批，
  *   全部「选完即查」（@change → load(1)，与 TeachingLeave 同一纪律）。
- *   班级与日期区间走的是后端 list 本来就支持的 classId / startDate / endDate。
+ *   班级与日期走的是后端 list 本来就支持的 classId / startDate / endDate。
+ * ★ 2026-10-19 修 bug：「申请日期」由单个 daterange 拆成「开始/结束」两个独立
+ *   日期选择器——EP 区间面板重开后第一次点击会被当作「新的开始」，想只改
+ *   结束日期时高亮塌缩成单日，再点一下确认后输入框变成「D 至 D」（用户报的
+ *   「开始日期同步成结束日期」）。拆开后结构上不再可能互相污染。
+ * ★ 2026-10-19 列表：新增「结束日期」列（＝ 出款时间，大学部暂无显 —）；
+ *   按用户要求去掉「当前处理」列与详情里的当前处理项。
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
@@ -352,8 +374,6 @@ const summaries = ref<RefundSummary[]>([]);
 const departments = ref<RefundDepartment[]>([...REFUND_DEPARTMENTS]);
 /** 班级下拉候选（/classes 按可见学段下发；选了部门就只列该部门的班） */
 const allClasses = ref<Array<{ stage: TeachingStage; stageName: string; id: string; name: string }>>([]);
-/** 申请日期区间（[开始, 结束]，与 query.startDate / query.endDate 同步） */
-const dateRange = ref<[string, string] | null>(null);
 
 const query = reactive({
   stage: undefined as TeachingStage | undefined,
@@ -461,11 +481,17 @@ function onFilterStageChange() {
   load(1);
 }
 
-/** 申请日期区间 → startDate / endDate（清空 = 不限） */
-function onDateRangeChange(v: unknown) {
-  const r = Array.isArray(v) && v.length === 2 ? ([v[0], v[1]] as [string, string]) : null;
-  query.startDate = r?.[0] || undefined;
-  query.endDate = r?.[1] || undefined;
+/**
+ * 申请日期（开始/结束两个独立选择器）选完即查；
+ * 开始晚于结束自动调换，避免「筛选结果为空却不知道为什么」的困惑。
+ */
+function onDateChange() {
+  if (query.startDate && query.endDate && query.startDate > query.endDate) {
+    const s = query.startDate;
+    query.startDate = query.endDate;
+    query.endDate = s;
+    ElMessage.info('开始日期晚于结束日期，已自动调换');
+  }
   load(1);
 }
 
@@ -477,7 +503,6 @@ function reset() {
   query.onlyMine = false;
   query.startDate = undefined;
   query.endDate = undefined;
-  dateRange.value = null;
   load(1);
 }
 
@@ -714,6 +739,10 @@ async function doFinanceConfirm(row: RefundRow) {
 }
 .trf-filter {
   margin-bottom: 8px;
+}
+.trf-date-sep {
+  margin: 0 4px;
+  color: var(--el-text-color-secondary);
 }
 .trf-page {
   margin-top: 10px;

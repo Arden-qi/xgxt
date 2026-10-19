@@ -59,6 +59,8 @@ const { check, summary } = makeChecker();
     // 部门列：存在，且不带 v-if（筛完不许再消失）
     const deptCol = tpl.match(/<el-table-column([^>]*)label="部门"([^>]*)>/);
     check('★ 列表有「部门」列', !!deptCol, deptCol ? '已找到' : '未找到');
+    check('★ 列表有「结束日期」列（出款时间；2026-10-19 用户要求新增）', tpl.includes('label="结束日期"'));
+    check('★ 「当前处理」列已去掉（2026-10-19 用户要求）', !tpl.includes('label="当前处理"'));
     check(
       '★ 部门列不带 v-if —— 始终显示，筛选后不消失',
       !!deptCol && !/v-if/.test(deptCol[1] + deptCol[2]),
@@ -72,11 +74,22 @@ const { check, summary } = makeChecker();
         .map((l) => `${l}${tpl.includes(`label="${l}"`) ? '✓' : '✗'}`)
         .join(' '),
     );
-    const nChange = (tpl.match(/@change="(?:onFilterStageChange|onDateRangeChange|load\(1\))"/g) || []).length;
+    const nChange = (tpl.match(/@change="(?:onFilterStageChange|onDateChange|load\(1\))"/g) || []).length;
     check(
-      '★ 筛选项「选完即查」（@change → load(1) 至少 5 处：部门/班级/状态/日期/只看待我审批）',
-      nChange >= 5,
+      '★ 筛选项「选完即查」（@change → load(1) 至少 6 处：部门/班级/状态/两个日期/只看待我审批）',
+      nChange >= 6,
       `命中 ${nChange} 处`,
+    );
+    check(
+      '★ 2026-10-19 修复：申请日期 = 两个独立 date 选择器（不再用 daterange，重开面板不再塌缩成单日）',
+      !tpl.includes('type="daterange"') &&
+        tpl.includes('trf-date-start') && tpl.includes('trf-date-end') &&
+        tpl.includes('onDateChange') && !tpl.includes('dateRange'),
+      `daterange 残留=${tpl.includes('type="daterange"')}`,
+    );
+    check(
+      '★ 开始晚于结束自动调换（onDateChange 兕底）',
+      vue.includes('已自动调换'),
     );
     check(
       '★ 关键字回车 / 清空即查',
@@ -149,9 +162,9 @@ const { check, summary } = makeChecker();
         : '干净',
     );
     check(
-      '★ 编译产物保留「部门」筛选与部门列',
-      compiled.includes('全部部门') && /label:\s*"部门"/.test(compiled),
-      `全部部门=${compiled.includes('全部部门')} 部门列=${/label:\s*"部门"/.test(compiled)}`,
+      '★ 编译产物保留「部门」筛选与部门列，且不再有 daterange',
+      compiled.includes('全部部门') && /label:\s*"部门"/.test(compiled) && !/type:\s*"daterange"/.test(compiled),
+      `全部部门=${compiled.includes('全部部门')} 部门列=${/label:\s*"部门"/.test(compiled)} daterange=${/type:\s*"daterange"/.test(compiled)}`,
     );
     const apiJs = await req(`${BASE}/src/teaching/api/refund.ts`, { timeout: 8000 });
     check(
