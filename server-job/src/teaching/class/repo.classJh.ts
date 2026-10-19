@@ -268,10 +268,16 @@ export const repo: ClassRepo = {
     if (!String(body.teacherName || '').trim()) throw new Error('教员姓名必填');
     // 同部门内名称不重复
     const deptCode = Number(body.deptCode ?? 1);
+    // ★ 唯一性检查必须**把软删记录算进去**（统一表 uk_class 占键，同 dorm/repo.uni.ts 约定）
     const dupName = (await tbl(db, 'sms_class_jh', T, STAGE)
-      .where({ class_name: body.className, dept_code: deptCode, is_deleted: false })
+      .where({ class_name: body.className, dept_code: deptCode })
       .first()) as Record<string, any> | undefined;
-    if (dupName) throw new Error(`该部门下已有班级叫「${body.className}」`);
+    if (dupName) {
+      if (Number(dupName.is_deleted) === 1) {
+        throw new Error(`该部门下的班级名「${body.className}」之前已删除过（记录仍占唯一键），不能重复使用`);
+      }
+      throw new Error(`该部门下已有班级叫「${body.className}」`);
+    }
 
     const id = randomUUID();
     await tblIns(db, 'sms_class_jh', T, STAGE, {

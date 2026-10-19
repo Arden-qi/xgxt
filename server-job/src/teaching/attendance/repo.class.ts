@@ -24,7 +24,7 @@ import type {
   AttendanceSaveBody,
 } from '../shared/dto';
 import { UnifiedAttendanceStatus, UNIFIED_STATUS_NAME } from '../shared/dto';
-import { tbl } from '../shared/uniTable';
+import { tbl, tblInsTrx, tblTrx } from '../shared/uniTable';
 
 const T = 't_class_attendance';
 const A = 't_class_attendance_absent';
@@ -65,7 +65,7 @@ export async function list(q: AttendanceListQuery): Promise<AttendanceRow[]> {
 export async function detail(id: string): Promise<AttendanceDetail | null> {
   const rec = (await tbl(db, 'sms_class', T, STAGE).where({ id, is_deleted: 0 }).first()) as Record<string, any> | undefined;
   if (!rec) return null;
-  const raw = (await db(A).where({ attendance_id: id, is_deleted: 0 }).orderBy('student_no')) as Array<
+  const raw = (await tbl(db, 'sms_class', A, STAGE).where({ attendance_id: id, is_deleted: 0 }).orderBy('student_no')) as Array<
     Record<string, any>
   >;
   const details: AttendanceDetailRow[] = raw.map((d) => ({
@@ -99,7 +99,7 @@ export async function save(body: AttendanceSaveBody, userId: string) {
   const now = new Date();
 
   const attendanceId = await db.transaction(async (trx) => {
-    const existing = (await trx(T)
+    const existing = (await tblTrx(trx, 'sms_class', T, STAGE)
       .where({ class_id: body.classId, attendance_date: body.attendanceDate, is_deleted: 0 })
       .first()) as Record<string, any> | undefined;
 
@@ -117,12 +117,11 @@ export async function save(body: AttendanceSaveBody, userId: string) {
     };
 
     if (existing) {
-      await trx(T).where({ id: attId }).update({ ...payload, update_time: now, update_by: userId });
-      await trx(A)
-        .where({ attendance_id: attId, is_deleted: 0 })
-        .update({ is_deleted: 1, update_time: now });
+      await tblTrx(trx, 'sms_class', T, STAGE)
+        .where({ id: attId })
+        .update({ ...payload, update_time: now, update_by: userId });
     } else {
-      await trx(T).insert({
+      await tblInsTrx(trx, 'sms_class', T, STAGE, {
         id: attId,
         ...payload,
         is_deleted: 0,
@@ -131,17 +130,42 @@ export async function save(body: AttendanceSaveBody, userId: string) {
       });
     }
 
+    /**
+     * ★★ 缺勤名单「整体替换」= **按学生 upsert**（P2 修正）
+     *
+     * 原因与初高完全一致（见 `repo.classJh.ts` 里那段长注释）：
+     *   统一表 `t_uni_attendance_detail` 有唯一键
+     *   `uk_attendance_detail(attendance_id, student_id, edu_stage)`，
+     *   而「先整体软删、再插入」会让软删行继续占住唯一键 → `Duplicate entry`。
+     *   老表 `t_class_attendance_absent` 只有普通索引，所以老表模式不报错。
+     */
+    const submittedAbsents = new Set((body.rows ?? []).map((r) => String(r.studentId)));
+    const prevAbsents = (await tblTrx(trx, 'sms_class', A, STAGE)
+      .where({ attendance_id: attId })
+      .select('id', 'student_id')) as Array<Record<string, any>>;
+    const prevAbsentMap = new Map(prevAbsents.map((d) => [String(d.student_id), String(d.id)]));
+
+    // 本次未提交的旧缺勤记录 → 逻辑删除（body.rows 为空即"清空缺勤名单"）
+    const staleAbsents = prevAbsents.filter((d) => !submittedAbsents.has(String(d.student_id)));
+    if (staleAbsents.length) {
+      await tblTrx(trx, 'sms_class', A, STAGE)
+        .whereIn(
+          'id',
+          staleAbsents.map((d) => String(d.id)),
+        )
+        .update({ is_deleted: 1, update_time: now, update_by: userId });
+    }
+
     // 可选：同时登记缺勤名单
     if (body.rows && body.rows.length) {
       const ids = body.rows.map((r) => r.studentId);
-      const students = (await trx(S).whereIn('id', ids).where('is_deleted', 0)) as Array<
+      const students = (await tblTrx(trx, 'sms_class', S, STAGE).whereIn('id', ids).where('is_deleted', 0)) as Array<
         Record<string, any>
       >;
       const stuMap = new Map(students.map((s) => [String(s.id), s]));
       for (const r of body.rows) {
         const stu = stuMap.get(r.studentId);
-        await trx(A).insert({
-          id: randomUUID(),
+        const absentPayload = {
           attendance_id: attId,
           student_id: r.studentId,
           student_no: stu?.student_no ?? null,
@@ -149,14 +173,27 @@ export async function save(body: AttendanceSaveBody, userId: string) {
           class_name: cls.class_name,
           phone: stu?.phone ?? null,
           absent_reason: r.reason ?? '',
-          is_deleted: 0,
-          create_time: now,
-          create_by: userId,
-        });
+        };
+        const prevId = prevAbsentMap.get(String(r.studentId));
+        if (prevId) {
+          await tblTrx(trx, 'sms_class', A, STAGE)
+            .where({ id: prevId })
+            .update({ ...absentPayload, is_deleted: 0, update_time: now, update_by: userId });
+        } else {
+          await tblInsTrx(trx, 'sms_class', A, STAGE, {
+            id: randomUUID(),
+            ...absentPayload,
+            is_deleted: 0,
+            create_time: now,
+            create_by: userId,
+          });
+        }
       }
     }
 
-    await trx(C).where({ id: cls.id }).update({ attendance_rate: attendanceRate, update_time: now });
+    await tblTrx(trx, 'sms_class', C, STAGE)
+      .where({ id: cls.id })
+      .update({ attendance_rate: attendanceRate, update_time: now });
     return attId;
   });
 
@@ -184,7 +221,9 @@ export async function board(classId: string, date: string): Promise<AttendanceBo
     .where({ class_id: classId, attendance_date: date, is_deleted: 0 })
     .first()) as Record<string, any> | undefined;
   const absent = att
-    ? ((await db(A).where({ attendance_id: att.id, is_deleted: 0 })) as Array<Record<string, any>>)
+    ? ((await tbl(db, 'sms_class', A, STAGE).where({ attendance_id: att.id, is_deleted: 0 })) as Array<
+        Record<string, any>
+      >)
     : [];
   const map = new Map(absent.map((d) => [String(d.student_id), d]));
 

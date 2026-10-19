@@ -14,7 +14,10 @@
  *   · 金额 bigint（分）→ mysql2 回来是 string
  *   · 有 `applicant_id / applicant_name`（发起人）
  *
- * ⚠️ 写操作的 `conn` 是 **job 库的事务**，所以表名用全限定名 `sms_class.xxx`。
+ * ⚠️ 写操作的 `conn` 是 **job 库的事务**，而本表在 sms_class
+ *   → 统一走 `tbl*Trx(conn, 'sms_class', 表, STAGE)`：
+ *     开关关时它内部仍拼全限定名 `sms_class.xxx`（与原实现等价），
+ *     开关开时才切到 sms_common 的 `t_uni_*`。
  */
 
 import { randomUUID } from 'crypto';
@@ -24,16 +27,14 @@ import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME } from '../shared/dto';
 import { toRawRefundStatus, toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
-import { tbl } from '../shared/uniTable';
+import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
 
 const T = 't_class_refund_apply';
 const ITEM = 't_class_refund_item';
 const S = 't_class_student';
 const STAGE = 'class' as const;
-
-/** ⚠️ 全限定表名（conn 来自 job 库事务） */
-const WT = 'sms_class.t_class_refund_apply';
-const WITEM = 'sms_class.t_class_refund_item';
+/** 写路径要显式声明库名（conn 来自 job 库事务，默认库不是 sms_class） */
+const SRC = 'sms_class';
 
 /** 申请单号：TF + yyyymmdd + 5 位随机（够用且天然避重） */
 function buildApplyNo(): string {
@@ -97,9 +98,9 @@ async function decorate(
 async function loadItems(ids: string[]): Promise<Record<string, Array<Record<string, any>>>> {
   const map: Record<string, Array<Record<string, any>>> = {};
   if (!ids.length) return map;
-  const rows = (await db(ITEM).whereIn('refund_id', ids).where('is_deleted', 0)) as Array<
-    Record<string, any>
-  >;
+  const rows = (await tbl(db, SRC, ITEM, STAGE)
+    .whereIn('refund_id', ids)
+    .where('is_deleted', 0)) as Array<Record<string, any>>;
   for (const r of rows) {
     const k = String(r.refund_id);
     (map[k] = map[k] || []).push(r);
@@ -142,7 +143,8 @@ export async function findStudent(id: string) {
 
 /** 分页查询 */
 export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; total: number }> {
-  const base = db(T).where('is_deleted', 0);
+  // ★ 切读接入：t_class_refund_apply → t_uni_refund（统一表是超集，列名同名保留）
+  const base = tbl(db, SRC, T, STAGE).where('is_deleted', 0);
   if (q.keyword) {
     base.andWhere((b) => {
       b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
@@ -173,19 +175,20 @@ export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; tot
 
 /** 单条 */
 export async function detail(id: string): Promise<RefundRow | null> {
-  const row = (await db(T).where({ id, is_deleted: 0 }).first()) as
+  const row = (await tbl(db, SRC, T, STAGE).where({ id, is_deleted: 0 }).first()) as
     | Record<string, any>
     | undefined;
   if (!row) return null;
-  const rows = (await db(ITEM).where({ refund_id: id, is_deleted: 0 })) as Array<
-    Record<string, any>
-  >;
+  const rows = (await tbl(db, SRC, ITEM, STAGE).where({
+    refund_id: id,
+    is_deleted: 0,
+  })) as Array<Record<string, any>>;
   return decorate(row, rows);
 }
 
 /** 汇总 */
 export async function aggregate(): Promise<RefundAggregate> {
-  const rows = (await db(T)
+  const rows = (await tbl(db, SRC, T, STAGE)
     .where('is_deleted', 0)
     .select('refund_status')
     .count({ c: '*' })
@@ -230,7 +233,8 @@ export async function insert(
     now.getMinutes(),
   ).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
 
-  await conn(WT).insert({
+  // ★ conn 是 job 库事务 → 必须用 tblInsTrx（切读时会落到 t_uni_refund 并补 edu_stage）
+  await tblInsTrx(conn, SRC, T, STAGE, {
     id,
     create_time: now,
     create_by: input.initiatorId,
@@ -254,7 +258,7 @@ export async function insert(
   });
 
   for (const it of items) {
-    await conn(WITEM).insert({
+    await tblInsTrx(conn, SRC, ITEM, STAGE, {
       id: randomUUID(),
       create_time: now,
       create_by: input.initiatorId,
@@ -275,7 +279,7 @@ export async function setStatus(
   patch: Record<string, any> = {},
 ): Promise<void> {
   const raw = await toRawRefundStatus(STAGE, unifiedStatus);
-  await conn(WT)
+  await tblTrx(conn, SRC, T, STAGE)
     .where({ id })
     .update({
       refund_status: raw,
@@ -291,7 +295,7 @@ export async function setFinance(): Promise<void> {
 
 /** 该学生是否有进行中的退费单 */
 export async function hasPending(studentId: string): Promise<boolean> {
-  const row = await db(T)
+  const row = await tbl(db, SRC, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
     .whereIn('refund_status', [2, 3, 4, 5])
     .first();

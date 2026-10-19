@@ -44,10 +44,20 @@ const T = 't_student_base';
 const CLASS_TABLE = 't_job_class';
 const STAGE = 'job' as const;
 
-/** 就业档案只认这四种状态（原实现口径） */
+/**
+ * 本学段（job）学生档案可见的学籍状态
+ *
+ * ★ 2026-10-15 补 `TRAINING`（实训中 = 8）：
+ *   这个仓储合并前是**「就业档案」页面**（就业老师视角，只认待就业/已就业），
+ *   合并成「学生档案」后它同时要服务**项目经理** ——
+ *   而项目经理的业务定位是「**实训阶段的班主任**」（斌哥 2026-10-15 明确），
+ *   他带的学员在实训期间状态就是 8（TRAINING）。
+ *   原来 8 不在白名单 → 项目经理进得来页面却一条学生都看不到（实测 total=0）。
+ */
 const VISIBLE_STATUS: number[] = [
   StudentStatus.WAIT_EMPLOY,
   StudentStatus.EMPLOYED,
+  StudentStatus.TRAINING,
   StudentStatus.SUSPENDED,
   StudentStatus.QUIT,
 ];

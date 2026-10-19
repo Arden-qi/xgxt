@@ -10,7 +10,7 @@ import { db } from '../../class/db';
 import { calcScores } from '../shared/conf';
 import type { ScoreEntry, ScoreEntryRow, ScoreListQuery, ScoreRow, ScoreSaveBody } from '../shared/dto';
 import { EXAM_RESULT_NAME } from '../shared/dto';
-import { tbl } from '../shared/uniTable';
+import { tbl, tblIns } from '../shared/uniTable';
 
 const G = 't_class_grade';
 const E = 't_class_exam';
@@ -23,9 +23,10 @@ const num = (v: unknown): number | null =>
 
 /** 满分合计 = 该场考试内容项满分的和 */
 async function fullTotalOf(examId: string): Promise<number> {
-  const rows = (await db(EC).where({ exam_id: examId, is_deleted: 0 }).select('full_score')) as Array<
-    Record<string, any>
-  >;
+  // ★ 切读接入：考试内容项子表 t_class_exam_content → t_uni_exam_content（full_score 同名保留）
+  const rows = (await tbl(db, 'sms_class', EC, STAGE)
+    .where({ exam_id: examId, is_deleted: 0 })
+    .select('full_score')) as Array<Record<string, any>>;
   return rows.reduce((a, r) => a + Number(r.full_score || 0), 0);
 }
 
@@ -55,7 +56,10 @@ function mapRow(r: Record<string, any>): ScoreRow {
 }
 
 export async function list(q: ScoreListQuery): Promise<ScoreRow[]> {
-  const qb = db(G).where('is_deleted', 0);
+  // ★ 切读接入：成绩主表 t_class_grade → t_uni_exam_score。
+  //   统一表是老表的超集：written_score / machine_score / interview_score /
+  //   comp_score / exam_result / analysis 全部同名保留 → 只换表、不改列名。
+  const qb = tbl(db, 'sms_class', G, STAGE).where('is_deleted', 0);
   if (q.examId) qb.andWhere('exam_id', q.examId);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.studentId) qb.andWhere('student_id', q.studentId);
@@ -73,7 +77,10 @@ export async function entry(examId: string, classId: string): Promise<ScoreEntry
   const students = (await tbl(db, 'sms_class', STU, STAGE).where({ class_id: clsId, is_deleted: 0 }).orderBy('student_no')) as Array<
     Record<string, any>
   >;
-  const scores = (await db(G).where({ exam_id: examId, is_deleted: 0 })) as Array<Record<string, any>>;
+  const scores = (await tbl(db, 'sms_class', G, STAGE).where({
+    exam_id: examId,
+    is_deleted: 0,
+  })) as Array<Record<string, any>>;
   const smap = new Map(scores.map((s) => [String(s.student_id), s]));
 
   const rows: ScoreEntryRow[] = students.map((st) => {
@@ -128,7 +135,7 @@ export async function save(body: ScoreSaveBody, userId: string) {
     // ★ 大学 judgeMode='manual'：老师手选。该列 NOT NULL → 未传时默认「通过」。
     const finalResult = r.examResult ?? examResult ?? 1;
 
-    const existed = (await db(G)
+    const existed = (await tbl(db, 'sms_class', G, STAGE)
       .where({ exam_id: body.examId, student_id: r.studentId, is_deleted: 0 })
       .first()) as Record<string, any> | undefined;
 
@@ -144,12 +151,15 @@ export async function save(body: ScoreSaveBody, userId: string) {
     };
 
     if (existed) {
-      await db(G).where({ id: existed.id }).update(payload);
+      // update 走 tbl()（已带 edu_stage 过滤）→ 不会跨学段误更新
+      await tbl(db, 'sms_class', G, STAGE).where({ id: existed.id }).update(payload);
     } else {
       const stu = (await tbl(db, 'sms_class', STU, STAGE).where({ id: r.studentId, is_deleted: 0 }).first()) as
         | Record<string, any>
         | undefined;
-      await db(G).insert({
+      // insert 必须走 tblIns：统一表 edu_stage 是 NOT NULL 且无默认值，
+      // 由路由层按开关补（开关关时原样透传，零行为变化）
+      await tblIns(db, 'sms_class', G, STAGE, {
         id: randomUUID(),
         exam_id: body.examId,
         exam_name: exam.exam_name,

@@ -19,12 +19,20 @@ import { getNumberSetting } from '../utils/setting';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ P4 切读层：本文件三张初高表（t_class_fee / t_class_fee_notify /
+//   t_class_student）均已归一，全部走 tbl()/tblIns() 路由；
+//   开关关时与原实现逐字节等价。
+import { tbl, tblIns } from '../../teaching/shared/uniTable';
 
 export const feeRouter = Router();
 
 const FEE_TABLE = 't_class_fee';
 const NOTIFY_TABLE = 't_class_fee_notify';
 const STUDENT_TABLE = 't_class_student';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务初高） */
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 /** 剩余天数（到期日 - 今天）；无到期日返回 null */
 function calcRemainDays(expireDate: any): number | null {
@@ -91,7 +99,7 @@ feeRouter.get(
     const q = (req as any).validated as z.infer<typeof listSchema>;
     const remindDays = await getNumberSetting('feeRemindDays');
 
-    const query = db(FEE_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, FEE_TABLE, STAGE).where('is_deleted', false);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.feeType) query.andWhere('fee_type', q.feeType);
     if (q.payStatus) query.andWhere('pay_status', q.payStatus);
@@ -127,7 +135,7 @@ feeRouter.get(
     const q = (req as any).validated as z.infer<typeof listSchema>;
     const remindDays = await getNumberSetting('feeRemindDays');
 
-    const query = db(FEE_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, FEE_TABLE, STAGE).where('is_deleted', false);
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.feeType) query.andWhere('fee_type', q.feeType);
     if (q.payStatus) query.andWhere('pay_status', q.payStatus);
@@ -164,11 +172,11 @@ feeRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof shareSchema>;
 
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
     // 取最近一笔该类型缴费快照
-    const fee = await db(FEE_TABLE)
+    const fee = await tbl(db, DB, FEE_TABLE, STAGE)
       .where({ student_id: stu.id, fee_type: body.feeType, is_deleted: false })
       .orderBy('expire_date', 'desc')
       .first();
@@ -186,7 +194,7 @@ feeRouter.post(
 
     const notifyId = randomUUID();
     const now = new Date();
-    await db(NOTIFY_TABLE).insert({
+    await tblIns(db, DB, NOTIFY_TABLE, STAGE, {
       id: notifyId,
       student_id: stu.id,
       student_no: stu.student_no,
@@ -227,10 +235,10 @@ feeRouter.get(
   validate(notifyListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof notifyListSchema>;
-    const query = db(NOTIFY_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, NOTIFY_TABLE, STAGE).where('is_deleted', false);
     if (q.studentId) query.andWhere('student_id', q.studentId);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')

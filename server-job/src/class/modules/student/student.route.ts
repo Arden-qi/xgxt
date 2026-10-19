@@ -13,7 +13,7 @@ import { buildStudentNo, now, seqOfStudentNo, uuid } from '../../lib/ids';
 import { GenderName, StageName, StudentStatusName, stageNameOf } from '../../lib/dict';
 import { assertClassAcceptStudent, isRepeatStudent } from '../../lib/classRule';
 import { wrap } from '../../middleware/error';
-import { tbl, tblTrx, tblIns, tblInsTrx, USE_UNI_TABLE } from '../../../teaching/shared/uniTable';
+import { tbl, tblTrx, tblIns, tblInsTrx, USE_UNI_TABLE, phaseCodeCol, readPhaseCode } from '../../../teaching/shared/uniTable';
 import { TransferType } from 'shared-types';
 
 export const studentRouter = Router();
@@ -321,7 +321,7 @@ studentRouter.post(
       teacherName = (cls.teacher_name as string) ?? null;
       assistantId = (cls.assistant_id as string) ?? null;
       assistantName = (cls.assistant_name as string) ?? null;
-      if (stage === null) stage = cls.stage as number;
+      if (stage === null) stage = readPhaseCode(cls) as number | null;
     }
 
     // 学号：不传则自动生成
@@ -360,7 +360,7 @@ studentRouter.post(
       age: b.age ?? null,
       dept_code: b.deptCode,
       student_status: b.studentStatus ?? StudentStatus.STUDYING,
-      stage,
+      [phaseCodeCol()]: stage,
       id_card: b.idCard ?? null,
       phone: b.phone ?? null,
       parent_phone: b.parentPhone ?? null,
@@ -499,11 +499,11 @@ studentRouter.put(
       patch.teacher_name = cls.teacher_name ?? null;
       patch.assistant_id = cls.assistant_id ?? null;
       patch.assistant_name = cls.assistant_name ?? null;
-      if (b.stage === undefined) patch.stage = cls.stage;
+      if (b.stage === undefined) patch[phaseCodeCol()] = readPhaseCode(cls);
     }
 
     const simple: Array<[keyof typeof b, string]> = [
-      ['stage', 'stage'],
+      ['stage', phaseCodeCol()],
       ['education', 'education'],
       ['enrollDate', 'enroll_date'],
       ['idCard', 'id_card'],
@@ -593,7 +593,7 @@ const SORT_COLUMN: Record<string, string> = {
   enrollDate: 'enroll_date',
   studentStatus: 'student_status',
   repeatCount: 'repeat_count',
-  stage: 'stage',
+  stage: phaseCodeCol(),
 };
 
 /** 学生状态 → 综合素质标签（原型「综合素质」列展示用） */
@@ -612,7 +612,7 @@ function toRosterItem(row: Record<string, unknown>): Record<string, unknown> {
   const c = rowToCamel<Record<string, unknown>>(row);
   const gender = row.gender as number;
   const status = row.student_status as number;
-  const stage = row.stage as number | null;
+  const stage = readPhaseCode(row);
   return {
     studentId: c.id,
     studentNo: c.studentNo,
@@ -680,7 +680,7 @@ studentRouter.get(
     if (query.classId) base.where('class_id', query.classId);
     if (query.deptCode) base.where('dept_code', query.deptCode);
     if (query.studentStatus) base.where('student_status', query.studentStatus);
-    if (query.stage) base.where('stage', query.stage);
+    if (query.stage) base.where(phaseCodeCol(), query.stage);
     if (query.studentNo) base.where('student_no', 'like', `%${query.studentNo}%`);
     if (query.studentName) base.where('student_name', 'like', `%${query.studentName}%`);
     if (query.keyword) {
@@ -739,7 +739,7 @@ studentRouter.get(
     if (query.classId) base.where('class_id', query.classId);
     if (query.deptCode) base.where('dept_code', query.deptCode);
     if (query.studentStatus) base.where('student_status', query.studentStatus);
-    if (query.stage) base.where('stage', query.stage);
+    if (query.stage) base.where(phaseCodeCol(), query.stage);
     if (query.studentNo) base.where('student_no', 'like', `%${query.studentNo}%`);
     if (query.studentName) base.where('student_name', 'like', `%${query.studentName}%`);
     if (query.keyword) {
@@ -1043,7 +1043,7 @@ studentRouter.post(
         graduate_school: (stu.graduate_school as string) ?? null,
         home_address: (stu.home_address as string) ?? null,
         intend_dept_code: (target.dept_code as number) ?? (stu.dept_code as number) ?? null,
-        intend_stage: (target.stage as number) ?? (stu.stage as number) ?? null,
+        intend_stage: (readPhaseCode(target) as number | null) ?? (readPhaseCode(stu) as number | null) ?? null,
         intend_class_id: b.targetClassId,
         intend_class_name: target.class_name as string,
         remark: b.reason?.trim() || '班级信息管理发起换班',
@@ -1195,7 +1195,7 @@ studentRouter.post(
 
           const fromClassId = (stu.class_id as string) ?? null;
           const fromClassName = (stu.class_name as string) ?? null;
-          const fromStage = (stu.stage as number) ?? (item.fromStage ?? 0);
+          const fromStage = (readPhaseCode(stu) as number | null) ?? (item.fromStage ?? 0);
           const fromDept = (stu.dept_code as number) ?? (item.fromDeptCode ?? 0);
 
           // ① 落审批记录（升学申请，状态=已接收），成绩快照随档案保存
@@ -1228,7 +1228,7 @@ studentRouter.post(
 
           // ② 更新学生档案：stage / 部门 / 班级归属
           const patch: Record<string, unknown> = {
-            stage: item.toStage,
+            [phaseCodeCol()]: item.toStage,
             dept_code: item.toDeptCode,
           };
           if (item.toClassId) {

@@ -43,10 +43,15 @@ const REPOS: Record<StudentStage, StudentRepo> = {
 };
 
 /** 各学段学生档案页的权限码（= 合并前各学段原页面的权限码，一个都没改） */
-const CODES: Record<StudentStage, string> = {
+const CODES: Record<StudentStage, string | string[]> = {
   jh: 'classjh:student:view',
   class: 'class:student:view',
-  job: 'job:empArchive:view',
+  /* ★ 2026-10-15：job 学段有**两个等价权限码**，任一即可 ——
+   *   · `job:empArchive:view`     就业老师（就业信息档案）
+   *   · `job:classStudent:view`   项目经理（实训-班级学生）
+   *   业务上「项目经理 = 实训阶段的班主任」（斌哥明确），他必须能进「学生档案」，
+   *   但他手里只有 classStudent，原先只认 empArchive → 学段可见性为空 → 403。 */
+  job: ['job:empArchive:view', 'job:classStudent:view'],
   edu: 'edu:student:view',
 };
 

@@ -27,6 +27,19 @@
 
 import { RoleCode, ClassStatus, hasRole } from 'shared-types';
 import { db } from './db';
+// ★ P3 切读层：本文件访问的 3 张表（t_job_class / sms_class.t_class_info /
+//   t_student_base）都已归一 → 走 tbl()；下面那句「拼列限定名」必须跟着换成
+//   统一表名，否则开关开时 SQL 里会出现一个**不存在的表别名**
+//   （如 `t_job_dorm.id`，而 FROM 已经是 `t_uni_dorm_building`）→ Unknown column。
+import { tbl, tblRef } from '../teaching/shared/uniTable';
+
+/** 实训/就业阶段（本文件里全部走 sms_job） */
+const JOB_DB = 'sms_job';
+const JOB_STAGE = 'job' as const;
+
+/** 大学部阶段（班级库） */
+const CLASS_DB = 'sms_class';
+const CLASS_STAGE = 'class' as const;
 
 /** 实训/就业阶段的班级 ID 前缀标记（我们库用 t_job_class） */
 export type Stage = 'university' | 'training' | 'all';
@@ -90,7 +103,7 @@ export async function myTrainingClassIds(user: {
   if (!isPM && !isJob) return [];          // 其他角色不在实训侧兜任何数据
 
   try {
-    const rows = (await db('t_job_class')
+    const rows = (await tbl(db, JOB_DB, 't_job_class', JOB_STAGE)
       .where('is_deleted', 0)
       .andWhere((q: any) => {
         if (isPM) {
@@ -124,7 +137,7 @@ export async function myUniversityClassIds(user: {
   if (stage === 'training') return [];    // 项目经理不看大学 → 空
   if (!user.userId) return [];
   try {
-    const rows = (await db('sms_class.t_class_info')
+    const rows = (await tbl(db, CLASS_DB, 't_class_info', CLASS_STAGE)
       .where('is_deleted', 0)
       .andWhere((q: any) => {
         q.where('head_teacher_id', user.userId)
@@ -159,7 +172,11 @@ export function operatorOf(req: any): { userId: string; roles: string[] } {
   return { userId: u.userId || '', roles: u.roles || [] };
 }
 
-/** 学生主档表（唯一同时挂着 class_id / dorm_id / student_id 的表） */
+/**
+ * 学生主档表（唯一同时挂着 class_id / dorm_id / student_id 的表）
+ *
+ * ★ P3 切读层：在 sms_job（实训库）→ 已归一，子查询走 `tbl(db, JOB_DB, …)`。
+ */
 const STUDENT_TABLE = 't_student_base';
 
 /**
@@ -184,8 +201,23 @@ const STUDENT_TABLE = 't_student_base';
 export type TrainingScopeVia = 'direct' | 'student' | 'dorm';
 
 export interface TrainingScopeOpts {
-  /** 被查的表（带别名就写别名，如 'cs'） */
+  /**
+   * 被查的表（带别名就写别名，如 'cs'）。
+   *
+   * ⚠️ 传别名时**不要**再传 `dbName` —— 别名不是老表名，切读层翻译不了它。
+   */
   table: string;
+  /**
+   * ★ P3 切读层：被查表所在的库（已归一表必填，如 'sms_job'）。
+   *
+   * 【为什么需要它】
+   *   下面要把 `table` 拼成**列限定名**（`${table}.class_id`），
+   *   而切读打开后外层 FROM 已经是统一表名（`t_uni_class_student` 等）
+   *   → 继续拼老表名会得到 `Unknown column 't_job_class_student.class_id'`。
+   *   传了 `dbName` 后由 `tblRef()` 翻译：开关开 → 统一表名；开关关 → 老表名。
+   *   ⚠️ 不传 = 原样使用（别名 / 未归一表），开关关时行为与改造前一字不差。
+   */
+  dbName?: string;
   /**
    * 被查表里用来「挂住」目标的列名：
    *   via=direct  → 默认 class_id
@@ -195,6 +227,17 @@ export interface TrainingScopeOpts {
   column?: string;
   /** 关联方式，默认 direct */
   via?: TrainingScopeVia;
+}
+
+/**
+ * 被查表在 SQL 里的「实际限定名」——即外层 FROM 中那张表的名字
+ *
+ *   · 传了 dbName（已归一表）→ `tblRef()`：开关开返回统一表名，开关关返回原表名
+ *   · 没传（别名如 'cs' / 未归一表）→ 原样返回
+ * → 开关关这条默认路径拼出来的 SQL 与改造前**逐字节相同**。
+ */
+function refOf(opts: { table: string; dbName?: string }): string {
+  return opts.dbName ? tblRef(opts.dbName, opts.table) : opts.table;
 }
 
 /**
@@ -229,13 +272,13 @@ export async function applyTrainingScope(
   if (!ids) return;             // null = 不限，上面已 return，这里是防御
 
   const via = opts.via || 'direct';
-  const col = `${opts.table}.${opts.column || defaultColumnOf(via)}`;
+  const col = `${refOf(opts)}.${opts.column || defaultColumnOf(via)}`;
 
   if (via === 'student') {
     // 本表存 student_id → 换成一串「我班上的学生 id」
     query.whereIn(
       col,
-      db(STUDENT_TABLE).select('id').whereIn('class_id', ids).where('is_deleted', 0),
+      tbl(db, JOB_DB, STUDENT_TABLE, JOB_STAGE).select('id').whereIn('class_id', ids).where('is_deleted', 0),
     );
     return;
   }
@@ -243,7 +286,7 @@ export async function applyTrainingScope(
     // 本表是房间 → 用「我班学生住过的房间 id」反查
     query.whereIn(
       col,
-      db(STUDENT_TABLE)
+      tbl(db, JOB_DB, STUDENT_TABLE, JOB_STAGE)
         .select('dorm_id')
         .whereIn('class_id', ids)
         .whereNotNull('dorm_id')
@@ -275,7 +318,7 @@ function defaultColumnOf(via: TrainingScopeVia): string {
 export async function applyUniversityScope(
   query: any,
   req: any,
-  opts: { table: string; column?: string },
+  opts: { table: string; dbName?: string; column?: string },
 ): Promise<void> {
   const op = operatorOf(req);
   const stage = stageOfRoles(op.roles);
@@ -294,6 +337,6 @@ export async function applyUniversityScope(
     return;
   }
   if (ids) {
-    query.whereIn(`${opts.table}.${opts.column || 'class_id'}`, ids);
+    query.whereIn(`${refOf(opts)}.${opts.column || 'class_id'}`, ids);
   }
 }

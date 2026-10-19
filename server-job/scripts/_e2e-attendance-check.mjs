@@ -27,7 +27,11 @@ const knex = require('knex');
 
 // ★ 第 4 期步骤 1：复用脚手架的「统一表镜像写入」与 NOT NULL 兜底
 //   本脚本是第 2 期独立写法（自带 conn），所以用 mirrorRow(复用连接) 版本
-import { mirrorRow, buildRow as libBuildRow } from './_e2e-lib.mjs';
+// ★ 2026-10-16（P2 出勤归一）：补 `probe` —— 断言侧的表路由。
+//   本脚本原来所有明细断言都直接 `jhDb(...)` 读**老表**，
+//   切读打开后仓储写的是统一表 → 会出现「断言读老表、产品写新表」的
+//   假绿/假红。改用 probe 后，同一份断言在两种模式下都成立。
+import { mirrorRow, buildRow as libBuildRow, probe } from './_e2e-lib.mjs';
 
 const ROOT = path.resolve(process.cwd(), '..');
 const NODE = process.execPath;
@@ -336,6 +340,11 @@ function conn(dbName) {
         is_deleted: 0,
         create_time: now,
       });
+      // ★ 双写：t_uni_attendance_detail（切读模式下仓储读的是这张）
+      {
+        const dRow = await jhDb('t_class_attendance_detail').where({ id: did }).first();
+        await mirror('sms_class_jh', 't_class_attendance_detail', dRow, 'jh');
+      }
     }
 
     const d = await req(`${API}/detail?stage=jh&id=${attId}`, { token: tokenAdmin });
@@ -343,7 +352,7 @@ function conn(dbName) {
     const pairs = [];
     let readOk = details.length === 3;
     for (const row of details) {
-      const rawRow = await jhDb('t_class_attendance_detail')
+      const rawRow = await probe(jhDb, 'sms_class_jh', 't_class_attendance_detail', 'jh')
         .where({ attendance_id: attId, student_id: row.studentId, is_deleted: 0 })
         .first();
       const expect = JH_RAW_TO_NAME[Number(rawRow?.attendance_status)];
@@ -369,7 +378,7 @@ function conn(dbName) {
       },
     });
     if (writeRes.json?.code === 200) {
-      const rows = await jhDb('t_class_attendance_detail')
+      const rows = await probe(jhDb, 'sms_class_jh', 't_class_attendance_detail', 'jh')
         .where({ attendance_id: attId, is_deleted: 0 })
         .orderBy('student_no');
       const expectRaw = [2, 3, 1]; // 统一码 3/7/1 → 初高原码 2/3/1

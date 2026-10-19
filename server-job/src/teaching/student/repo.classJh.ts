@@ -35,6 +35,8 @@ const CLASS_TABLE = 't_class_info';
 const FLOW_TABLE = 't_class_flow';
 const REPEAT_TABLE = 't_class_repeat';
 const STAGE = 'jh' as const;
+/** 初高库（本仓储全部表都在这里） */
+const DB = 'sms_class_jh';
 
 function str(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null;
@@ -108,7 +110,7 @@ function bedText(room: string | null, bed: string | null): string | null {
 
 async function applyScope(qb: any, user: any): Promise<void> {
   const scope = buildClassScope({ user } as any);
-  const classIds = await getScopedClassIds(db, CLASS_TABLE, scope);
+  const classIds = await getScopedClassIds(db, CLASS_TABLE, scope, DB, STAGE);
   if (classIds) {
     if (!classIds.length) qb.whereRaw('1 = 0');
     else qb.whereIn('class_id', classIds);
@@ -160,7 +162,10 @@ export const repo: StudentRepo = {
     if (!(await guard.first())) return null;
 
     const base = mapRow(r);
-    const flows = (await db(FLOW_TABLE)
+    // ★ 切读接入：审批流水 t_class_flow → t_uni_approval。
+    //   下面读的 flow_type / flow_status / apply_time / current_node_name / reject_reason
+    //   在统一表里同名保留（超集），只需换表。
+    const flows = (await tbl(db, 'sms_class_jh', FLOW_TABLE, STAGE)
       .where({ student_id: id, is_deleted: false })
       .orderBy('create_time', 'desc')) as Array<Record<string, any>>;
     const repeats = (await tbl(db, 'sms_class_jh', REPEAT_TABLE, STAGE)

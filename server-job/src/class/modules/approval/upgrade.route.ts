@@ -14,7 +14,7 @@ import { assertClassAccess } from '../../middleware/dataScope';
 import { applySyncScope } from '../shared/syncScope';
 import { logApproval, sendNotify, sendNotifyByRole, STUDY_MANAGER_ROLES } from '../shared/flow';
 import { wrap } from '../../middleware/error';
-import { tbl, tblTrx, tblInsTrx, USE_UNI_TABLE } from '../../../teaching/shared/uniTable';
+import { tbl, tblTrx, tblInsTrx, USE_UNI_TABLE, phaseCodeCol, readPhaseCode } from '../../../teaching/shared/uniTable';
 import { TransferType } from 'shared-types';
 
 /** 本模块只服务大学学段 */
@@ -130,7 +130,7 @@ upgradeRouter.post(
     const maxNo = await maxApplyNo(tbl(db, SRC, 't_class_upgrade_apply', STAGE), 't_class_upgrade_apply', 'SX', ymd);
     const applyNo = buildApplyNo('UPGRADE', seqOfApplyNo(maxNo) + 1);
 
-    const fromStage = (stu.stage as number) ?? 0;
+    const fromStage = readPhaseCode(stu) ?? 0;
     const fromDept = (stu.dept_code as number) ?? 0;
     const id = uuid();
 
@@ -264,7 +264,7 @@ upgradeRouter.post(
       } as never);
 
       const patch: Record<string, unknown> = {
-        stage: apply.to_stage as number,
+        [phaseCodeCol()]: apply.to_stage as number,
         dept_code: apply.to_dept_code as number,
         ...baseUpdate(user),
       };

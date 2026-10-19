@@ -10,7 +10,8 @@
  *      而且要连列表里的 stage 过滤一起验（不能只拦详情）
  *   ③【★ 去重规则】同一个学号在 job 与 class 各有一条 → 「全部」视图只出现 1 条，
  *      且保留**阶段更靠后**的那条（job > class > jh > edu）—— 这条最容易写反
- *   ④【就业口径】job 学段只显示 待就业/已就业/休学/退学 四种状态
+ *   ④【实训口径】job 学段显示 待就业 / 已就业 / 实训中 / 休学 / 退学
+ *      （实训中(8) 于 2026-10-15 纳入：项目经理 = 实训阶段班主任，必须能看到实训学员）
  *   ⑤【统计= 列表】summary 的 total 必须等于同筛选下 list 的 total
  *   ⑥【写操作守门】只读管理员 + 无权学段 都要被拦
  *
@@ -34,8 +35,8 @@ import {
 
 const API = `${BASE}/api/teaching/student`;
 const ST = { WAIT_CONSULT: 1, TRIAL: 3, STUDYING: 5, SUSPENDED: 6, QUIT: 7, TRAINING: 8, WAIT_EMPLOY: 9, EMPLOYED: 10 };
-/** job 学段 VISIBLE_STATUS = 待就业(9) / 已就业(10) / 休学(6) / 退学(7) */
-const JOB_VISIBLE = [ST.WAIT_EMPLOY, ST.EMPLOYED, ST.SUSPENDED, ST.QUIT];
+/** job 学段 VISIBLE_STATUS = 实训中(8) / 待就业(9) / 已就业(10) / 休学(6) / 退学(7) */
+const JOB_VISIBLE = [ST.TRAINING, ST.WAIT_EMPLOY, ST.EMPLOYED, ST.SUSPENDED, ST.QUIT];
 
 const { check, summary } = makeChecker();
 
@@ -154,15 +155,17 @@ async function mkStudent(db, table, over = {}) {
       dept_code: 1,
     });
 
-    // 就业口径夹具：状态=实训中(8)，**不在** VISIBLE_STATUS 里 → 列表不该出现
-    const hiddenJob = await mkStudent(dbJob, 't_student_base', {
+    // 实训口径夹具：状态=实训中(8)。
+    // ★ 2026-10-15 起 TRAINING(8) 已进 VISIBLE_STATUS（项目经理 = 实训阶段班主任，
+    //   必须能看到实训中的学员）→ 该学生**应当**出现在 job 列表里。
+    await mkStudent(dbJob, 't_student_base', {
       student_no: 'U0005',
-      student_name: '自检-就业口径外',
+      student_name: '自检-实训中',
       student_status: ST.TRAINING,
       dept_code: 1,
     });
 
-    check('夹具写入 7 条学生（4 学段 + 重复号 2 + 口径外1）', true);
+    check('夹具写入 7 条学生（4 学段 + 重复号 2 + 实训中1）', true);
 
     /* ---- 班级夹具：三个学段的班级表演示库是空的，不造就没有下拉项 ---- */
     const mkClass = async (db, dbName, table, name) => {
@@ -196,7 +199,7 @@ async function mkStudent(db, table, over = {}) {
     check('大学库命中 U0002', has('class', 'U0002'));
     check('就业库命中 U0003', has('job', 'U0003'));
     check('教务库命中 U0004', has('edu', 'U0004'));
-    check('★ 就业口径：实训中(8) 不在列表里', !has('job', 'U0005'));
+    check('★ 实训口径：实训中(8) 在列表里（项目经理=实训班主任）', has('job', 'U0005'));
 
     /* ============ D. ★ 学段隔离（安全边界） ============ */
     const rJhSeesJob = await req(`${API}/list?stage=job&page=1&size=50`, { token: tJhHead });

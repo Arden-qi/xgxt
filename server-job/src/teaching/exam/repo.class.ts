@@ -16,7 +16,8 @@ import type {
   ExamSaveBody,
 } from '../shared/dto';
 import { EXAM_CONTENT_TYPE_NAME, EXAM_TYPE_NAME } from '../shared/dto';
-import { tbl, tblTrx, useUni } from '../shared/uniTable';
+import { tbl, tblInsTrx, tblTrx } from '../shared/uniTable';
+import { assertExamNotDuplicated } from './uniExamUnique';
 
 const T = 't_class_exam';
 const CT = 't_class_exam_content';
@@ -99,6 +100,22 @@ export async function save(body: ExamSaveBody, userId: string) {
     | undefined;
   if (!cls) throw new Error('班级不存在');
 
+  /**
+   * ★ 同班同日同名查重（任务 #20）
+   *
+   * 原来靠统一表的 `uk_exam(exam_name, exam_date, edu_stage)` 兜底，但那个唯一键
+   * ① 老表根本没有（违反铁律⑧「不凭空加唯一索引」）；
+   * ② 不含 `class_id` → 两个班同一天各有一场「期中考试」会被**误拦**；
+   * ③ 让「开关关放行 / 开关开拒绝」行为不一致。
+   * → 已由迁移 `20261016_007` 删除，改由本函数在写入前查重（两种模式同一段逻辑）。
+   */
+  await assertExamNotDuplicated(db, STAGE, {
+    classIds: [classId],
+    examName: body.examName,
+    examDate: body.examDate,
+    excludeId: body.id,
+  });
+
   const now = new Date();
   const payload = {
     exam_name: body.examName,
@@ -115,15 +132,11 @@ export async function save(body: ExamSaveBody, userId: string) {
     let id = body.id;
     if (id) {
       await tblTrx(trx, 'sms_class', T, STAGE).where({ id }).update(payload);
-      await tblTrx(trx, 'sms_class', CT, STAGE)
-        .where({ exam_id: id, is_deleted: 0 })
-        .update({ is_deleted: 1, update_time: now });
     } else {
       id = randomUUID();
-      await tblTrx(trx, 'sms_class', T, STAGE).insert({
+      await tblInsTrx(trx, 'sms_class', T, STAGE, {
         id,
         ...payload,
-        ...(useUni(STAGE) ? { edu_stage: STAGE } : {}),
         creator_id: userId,
         creator_name: null,
         is_deleted: 0,
@@ -131,18 +144,68 @@ export async function save(body: ExamSaveBody, userId: string) {
         create_by: userId,
       });
     }
+
+    /**
+     * ★★ 考试内容「整体替换」= **按 (exam_id, exam_content_type) upsert**（与 P2 出勤同款修正）
+     *
+     * 【为什么不能「先整体软删、再插入」】
+     *   统一表 `t_uni_exam_content` 上有唯一键
+     *     `uk_exam_content (exam_id, exam_content_type, edu_stage)`
+     *   —— 这是**刻意的业务约束**：一场考试里一种内容项只应有一行。
+     *   而软删只是把 `is_deleted` 置 1，**行还在、唯一键仍被占住**
+     *   → 紧接着的 insert 必报
+     *     `Duplicate entry '...' for key 't_uni_exam_content.uk_exam_content'`
+     *
+     * 【为什么老表模式一直"看起来正常"】
+     *   老表 `t_class_exam_content` 只有 `idx_ec_exam(exam_id)` 普通索引，
+     *   没有 (exam_id, exam_content_type) 唯一约束 → 软删 + 重插能过，
+     *   只是悄悄堆历史行。属「老表宽松掩盖了代码缺陷」，切读统一表才炸出来。
+     *
+     * 【改法】
+     *   已存在（含软删行）→ 原地 update 并复活 `is_deleted: 0`
+     *   不存在 → insert
+     *   本次未提交的旧内容项 → 逻辑删除（保留审计）
+     */
+    const prevContents = (await tblTrx(trx, 'sms_class', CT, STAGE)
+      .where({ exam_id: id })
+      .select('id', 'exam_content_type')) as Array<Record<string, any>>;
+    const prevByType = new Map(prevContents.map((r) => [Number(r.exam_content_type), String(r.id)]));
+    const submittedTypes = new Set((body.contents ?? []).map((c) => Number(c.type)));
+
+    const staleIds = prevContents
+      .filter((r) => !submittedTypes.has(Number(r.exam_content_type)))
+      .map((r) => String(r.id));
+    if (staleIds.length) {
+      await tblTrx(trx, 'sms_class', CT, STAGE)
+        .whereIn('id', staleIds)
+        .update({ is_deleted: 1, update_time: now, update_by: userId });
+    }
+
     for (const c of body.contents ?? []) {
-      await tblTrx(trx, 'sms_class', CT, STAGE).insert({
-        id: randomUUID(),
-        ...(useUni(STAGE) ? { edu_stage: STAGE } : {}),
-        exam_id: id,
-        exam_content_type: Number(c.type),
+      const type = Number(c.type);
+      const contentPayload = {
         full_score: c.fullScore ?? 0,
-        content_name: c.name ?? EXAM_CONTENT_TYPE_NAME[Number(c.type)] ?? null,
-        is_deleted: 0,
-        create_time: now,
-        create_by: userId,
-      });
+        content_name: c.name ?? EXAM_CONTENT_TYPE_NAME[type] ?? null,
+        update_time: now,
+        update_by: userId,
+      };
+      const prevId = prevByType.get(type);
+      if (prevId) {
+        // 复用原行（软删过的行唯一键仍被占用，必须原地复活而不是新建）
+        await tblTrx(trx, 'sms_class', CT, STAGE)
+          .where({ id: prevId })
+          .update({ ...contentPayload, is_deleted: 0 });
+      } else {
+        await tblInsTrx(trx, 'sms_class', CT, STAGE, {
+          id: randomUUID(),
+          exam_id: id,
+          exam_content_type: type,
+          ...contentPayload,
+          is_deleted: 0,
+          create_time: now,
+          create_by: userId,
+        });
+      }
     }
     return id!;
   });

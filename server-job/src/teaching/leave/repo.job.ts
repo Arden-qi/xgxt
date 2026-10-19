@@ -34,8 +34,10 @@ const SRC = 'sms_job';
 /** ★ 老表所在库（切读路由层 tbl() 需要「库名.表名」） */
 const WT = 'sms_job.t_job_student_leave';
 
-/** ★ 班级库（大学部）学生表 —— 跨库全限定名（与实训原实现同款做法） */
-const CLASS_DB_STUDENT = 'sms_class.t_class_student';
+/** ★ 班级库（大学部）学生表 —— 跨库；切读时对应 t_uni_student 的 'class' 分区 */
+const CLASS_DB = 'sms_class';
+const CLASS_TABLE = 't_class_student';
+const CLASS_STAGE = 'class' as const;
 
 async function decorate(row: Record<string, any>): Promise<LeaveRow> {
   const biz = (await toUnifiedLeaveBiz(STAGE, row.biz_type)) ?? 0;
@@ -275,8 +277,10 @@ async function applyStudentStatus(conn: any, row: Record<string, any>, operatorI
   await tblTrx(conn, SRC, S, STAGE).where({ id: row.student_id }).update(patch);
 
   // ★ 跨库同步（同一事务，要么都成要么都滚）
+  //   ⚠️ 目标表是**大学**的 t_class_student，学段必须是 'class'
+  //      （不是本仓储的 STAGE='job'）—— 切读时要写进 t_uni_student 的 class 分区。
   if (row.student_no) {
-    await conn(CLASS_DB_STUDENT)
+    await tblTrx(conn, CLASS_DB, CLASS_TABLE, CLASS_STAGE)
       .where({ student_no: row.student_no, is_deleted: false })
       .update({ student_status: newStatus, update_time: new Date(), update_by: operatorId });
   }

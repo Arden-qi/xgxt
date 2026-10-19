@@ -587,12 +587,27 @@ app.use(
 );
 
 // ★ 考试管理（第二个合并的业务域）—— 结构完全同构
+//   ★ 2026-10-15 补 `job:examScore:view`：
+//     成绩管理页（/teaching/score）要给「考试下拉」读考试列表，调的是本域
+//     `GET /api/teaching/exam/list`。但项目经理/班主任/教员/助教手里只有**成绩码**
+//     `job:examScore:view`，没有**考试管理码** `job:exam:view`（那个是校长专用）——
+//     于是他们一进成绩管理页就弹「您没有该操作的权限」（实测）。
+//     这与 examScore.route.ts 头部记载的历史坑**完全同源**（当年靠单开 exam-options 规避，
+//     第 2 期统一接口后规避失效，老 bug 复现）。
+//     业务上「能看成绩 → 就必须能读到该学段的考试列表来选考试」，故把成绩码并入白名单。
+//     ⚠️ 这只是放宽「进本域」；真正的数据范围仍由 service.ts 的 visibleStages/assertStageView
+//        按学段再校验一次，读不到非本学段的考试。
 app.use(
   '/api/teaching/exam',
   authMiddleware,
   denyReadOnlyAdmin,
   denyApprovalOnlyWrite,
-  requireAnyPage(['classjh:exam:view', 'class:exam:view', 'job:exam:view']),
+  requireAnyPage([
+    'classjh:exam:view',
+    'class:exam:view',
+    'job:exam:view',
+    'job:examScore:view',
+  ]),
   teachingExamRouter,
 );
 
@@ -634,6 +649,14 @@ app.use(
 
 // ★ 学生档案（第六个合并的业务域）—— ★ 唯一有 **4 个学段** 的域（多一个「教务」）
 //   权限码：classjh:student:view / class:student:view / job:empArchive:view / edu:student:view
+//   ★ 2026-10-15 补 `job:classStudent:view`：
+//     项目经理（RM_PROJECT，角色码 R11）手里攥的是 [`job:classStudent:view`]（实训-班级学生），
+//     而原清单只认 `job:empArchive:view`（就业信息档案，那是**就业老师**的码）——
+//     于是项目经理点「学生档案」一律 40302。
+//     业务上「**项目经理 = 实训阶段的班主任**」（斌哥 2026-10-15 明确），
+//     他必须能看自己带的班的学生 → 把实训学段的等价码补进白名单。
+//     ⚠️ 教训：合并域的权限白名单要**覆盖该域在各学段的全部等价权限码**，
+//        漏一个 = 那个学段的角色集体进不来（而且报的是「无权限」，极易误判成没数据）。
 app.use(
   '/api/teaching/student',
   authMiddleware,
@@ -642,6 +665,7 @@ app.use(
   requireAnyPage([
     'classjh:student:view',
     'class:student:view',
+    'job:classStudent:view',
     'job:empArchive:view',
     'edu:student:view',
   ]),

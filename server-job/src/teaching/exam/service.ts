@@ -27,11 +27,24 @@ const REPOS: Record<TeachingStage, Repo> = {
   job: repoJob,
 };
 
-/** 各学段考试页的权限码（= 合并前各学段考试页的权限码） */
+/**
+ * 各学段考试页的权限码（= 合并前各学段考试页的权限码）
+ *
+ * ★ 2026-10-15：job 学段补 `job:examScore:view`（成绩管理码），双码任一即可。
+ *   原因：**成绩管理页**（/teaching/score）要给「考试下拉」读考试列表，
+ *   调的是本域的 `GET /api/teaching/exam/list`（前端统一封装 teaching/api/exam.ts）。
+ *   但项目经理/班主任/教员/助教手里只有**成绩码** `job:examScore:view`，
+ *   没有**考试管理码** `job:exam:view`（那个是校长专用）——
+ *   于是他们一进成绩管理页就报「没有考试管理的访问权限」（实测踩到，
+ *   报错却出现在「成绩管理」页，极易误判成成绩域的问题）。
+ *   业务上「能看成绩 → 就必须能读到该学段的考试列表来选考试」。
+ *   ⚠️ 两点都改才算修好：本文件（学段级校验）+ app.ts 的路由白名单
+ *      （`requireAnyPage`）。只改一处会在另一处被同一条件拦下。
+ */
 const CODES: StageCodeMap = {
   jh: 'classjh:exam:view',
   class: 'class:exam:view',
-  job: 'job:exam:view',
+  job: ['job:exam:view', 'job:examScore:view'],
 };
 const LABEL = '考试管理';
 

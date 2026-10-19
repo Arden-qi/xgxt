@@ -178,10 +178,10 @@ attendanceRouter.post(
           ...baseUpdate(user),
         });
         await tblTrx(trx, SRC, ATT_T, STAGE).where({ id: attendanceId }).update(patch as never);
-        // 明细整体替换
-        await tblTrx(trx, SRC, ABS_T, STAGE)
-          .where({ attendance_id: attendanceId })
-          .update(await uniUpdCols(db, SRC, ABS_T, { is_deleted: 1, ...baseUpdate(user) }) as never);
+        // ⚠️ 明细「整体替换」的软删移到下面统一做（按学生 upsert）——
+        //    「先整体软删、再插入」在统一表上必撞唯一键
+        //    `t_uni_attendance_detail.uk_attendance_detail(attendance_id, student_id, edu_stage)`
+        //    （软删行仍占键）。老表只有普通索引，所以老表模式一直"看起来正常"。
       } else {
         attendanceId = baseInsert(user).id as string;
         await tblInsTrx(trx, SRC, ATT_T, STAGE, {
@@ -199,13 +199,35 @@ attendanceRouter.post(
         });
       }
 
+      // 缺勤明细按（本次考勤 + 学生）upsert：已存在则原地更新（含复活软删行），否则插入
+      const submittedAbsents = new Set(b.absents.map((a) => String(a.studentId)));
+      const prevAbsents = (await tblTrx(trx, SRC, ABS_T, STAGE)
+        .where({ attendance_id: attendanceId })
+        .select('id', 'student_id')) as Array<Record<string, unknown>>;
+      const prevAbsentMap = new Map(
+        prevAbsents.map((d) => [String(d.student_id), String(d.id)]),
+      );
+      const staleAbsents = prevAbsents.filter((d) => !submittedAbsents.has(String(d.student_id)));
+      if (staleAbsents.length) {
+        await tblTrx(trx, SRC, ABS_T, STAGE)
+          .whereIn(
+            'id',
+            staleAbsents.map((d) => String(d.id)),
+          )
+          .update(
+            (await uniUpdCols(db, SRC, ABS_T, {
+              is_deleted: 1,
+              ...baseUpdate(user),
+            })) as never,
+          );
+      }
+
       for (const a of b.absents) {
         const stu = (await tblTrx(trx, SRC, STU_T, STAGE).where({ id: a.studentId, is_deleted: 0 }).first()) as
           | Record<string, unknown>
           | undefined;
         if (!stu) throw Errors.studentNotFound(`缺勤学员不存在：${a.studentId}`);
-        await tblInsTrx(trx, SRC, ABS_T, STAGE, {
-          ...baseInsert(user),
+        const absentPayload = {
           attendance_id: attendanceId,
           student_id: a.studentId,
           student_no: stu.student_no as string,
@@ -213,7 +235,24 @@ attendanceRouter.post(
           class_name: cls.class_name as string,
           phone: (stu.phone as string) ?? null,
           absent_reason: a.absentReason,
-        });
+        };
+        const prevId = prevAbsentMap.get(String(a.studentId));
+        if (prevId) {
+          await tblTrx(trx, SRC, ABS_T, STAGE)
+            .where({ id: prevId })
+            .update(
+              (await uniUpdCols(db, SRC, ABS_T, {
+                ...absentPayload,
+                is_deleted: 0,
+                ...baseUpdate(user),
+              })) as never,
+            );
+        } else {
+          await tblInsTrx(trx, SRC, ABS_T, STAGE, {
+            ...baseInsert(user),
+            ...absentPayload,
+          });
+        }
       }
 
       // 班级出勤率取最近一次

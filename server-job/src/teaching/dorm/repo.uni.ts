@@ -704,7 +704,23 @@ export function makeRepo(stage: TeachingStage): DormRepo {
     }
     if (beds.length < target) {
       const dorm = await T_DORM().where({ id: dormId }).first();
-      const start = beds.reduce((mx: number, b: any) => Math.max(mx, Number(b.bed_no ?? 0)), 0);
+      /**
+       * ★★ 续号必须把**软删床位**也算进来（否则撞 uk_dorm_bed）
+       *
+       * 【原来为什么错】
+       *   上面 `beds` 是 `is_deleted: false` 的活跃床位，`start` 取它们的最大 bed_no。
+       *   但裁剪时删掉的是 `free.slice(0, surplus)`（**无 orderBy，顺序不保证**）——
+       *   完全可能删掉编号最大的那几张。
+       *   于是「4 张床 → 裁到 2 张（删了 3/4 床）→ 再扩到 4 张」时：
+       *     active = [1,2] → start = 2 → 新增 bed_no 3、4
+       *   → 与「已软删但仍在表里、且占着 uk_dorm_bed(room_id, bed_no, edu_stage)」的
+       *     3/4 号床**撞唯一键**。老表 `t_job_dorm_bed` 无此唯一索引，一直掩盖着。
+       *
+       * 【改法】取号范围改用**全量**（含软删）床位的最大 bed_no。
+       *   软删的号段从此不再复用 —— 与「唯一键永久占位」的语义保持一致。
+       */
+      const allBeds = (await T_BED().where({ dorm_id: dormId }).select('bed_no')) as Array<Record<string, any>>;
+      const start = allBeds.reduce((mx: number, b: any) => Math.max(mx, Number(b.bed_no ?? 0)), 0);
       const rows = [];
       for (let i = start + 1; i <= target; i += 1) {
         rows.push({

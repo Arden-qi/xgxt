@@ -51,6 +51,10 @@ import { sendNotice, NOTICE_TYPE } from '../utils/notice';
 import { applyTrainingScope, myTrainingClassIds, operatorOf } from '../utils/stageScope';
 // ★ 信息流转：催费单新增/处理 → 推送班级管理模块（只读副本）
 import { syncFeeCallToClass } from '../services/urge-sync.service';
+// ★ P3 切读层：本文件三张表（t_job_fee_call / t_student_base / t_job_class）都已归一，
+//   全部走 tbl()/tblInsTrx() 路由（student-options 的别名 join 走 tblAs()/tblRef()）；
+//   开关关时与原实现等价。
+import { tbl, tblAs, tblInsTrx, tblRef } from '../teaching/shared/uniTable';
 
 export const feeCallRouter = Router();
 
@@ -58,6 +62,10 @@ export const feeCallRouter = Router();
 const TABLE = 't_job_fee_call';
 const STUDENT_TABLE = 't_student_base';
 const CLASS_TABLE = 't_job_class';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 /** 可发起催费的学生状态（在校生都行）*/
 const ALLOW_STATUS: number[] = [
@@ -175,8 +183,8 @@ feeCallRouter.get(
     const q = (req as any).validated;
     const operator = getOperator(req);
 
-    const base = db(TABLE).where('is_deleted', false);
-    await applyTrainingScope(base, req, { table: TABLE });
+    const base = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
+    await applyTrainingScope(base, req, { table: TABLE, dbName: DB });
 
     if (q.keyword) {
       base.andWhere((b: any) => {
@@ -200,7 +208,7 @@ feeCallRouter.get(
     const isEduAdmin = hasRole(operator.roles, RoleCode.ACAD_STAFF);
 
     if (!isAdmin && isPM && !isEduAdmin) {
-      const myClasses = await db(CLASS_TABLE)
+      const myClasses = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ project_manager_id: operator.userId, is_deleted: false })
         // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
         // .whereNot('class_status', ClassStatus.GRADUATED)
@@ -214,7 +222,7 @@ feeCallRouter.get(
       base.andWhere('head_teacher_id', operator.userId);
     }
 
-    const [{ c: total }] = await base.clone().count({ c: '*' });
+    const [{ c: total }] = (await base.clone().count({ c: '*' })) as Array<{ c: number }>;
     const rows = await base
       .clone()
       .orderBy([{ column: 'call_status', order: 'asc' }, { column: 'due_date', order: 'asc' }])
@@ -237,10 +245,10 @@ feeCallRouter.get(
     const { id } = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.FEE_CALL_NOT_FOUND, '催费单不存在');
 
-    const history = await db(TABLE)
+    const history = await tbl(db, DB, TABLE, STAGE)
       .where({ student_id: row.student_id, is_deleted: false })
       .whereNot('id', id)
       .orderBy('create_time', 'desc')
@@ -279,8 +287,8 @@ feeCallRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated;
 
-    const query = db(`${STUDENT_TABLE} as s`)
-      .leftJoin(`${CLASS_TABLE} as c`, 's.class_id', 'c.id')
+    const query = tblAs(db, DB, STUDENT_TABLE, STAGE, 's')
+      .leftJoin(`${tblRef(DB, CLASS_TABLE)} as c`, 's.class_id', 'c.id')
       .where('s.is_deleted', false)
       .whereIn('s.student_status', ALLOW_STATUS);
 
@@ -361,7 +369,7 @@ feeCallRouter.post(
     }
 
     // ③ 学生校验
-    const stu = await db(STUDENT_TABLE).where({ id: body.studentId, is_deleted: false }).first();
+    const stu = await tbl(db, DB, STUDENT_TABLE, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
     if (!ALLOW_STATUS.includes(stu.student_status)) {
       throw new BizError(BizCode.STUDENT_STATUS_NOT_ALLOW, '该学生当前状态不允许发起催费');
@@ -373,7 +381,7 @@ feeCallRouter.post(
     }
 
     // ⑤ 同类费用不能有未完成的重复催费
-    const dup = await db(TABLE)
+    const dup = await tbl(db, DB, TABLE, STAGE)
       .where({ student_id: stu.id, fee_type: body.feeType, is_deleted: false })
       .whereNot('call_status', FeeCallStatus.PAID)
       .first();
@@ -386,13 +394,13 @@ feeCallRouter.post(
 
     // ⑥ 班级信息
     let cls: any = null;
-    if (stu.class_id) cls = await db(CLASS_TABLE).where({ id: stu.class_id, is_deleted: false }).first();
+    if (stu.class_id) cls = await tbl(db, DB, CLASS_TABLE, STAGE).where({ id: stu.class_id, is_deleted: false }).first();
 
     const id = randomUUID();
     const now = new Date();
 
     await db.transaction(async (trx) => {
-      await trx(TABLE).insert({
+      await tblInsTrx(trx, DB, TABLE, STAGE, {
         id,
         create_time: now,
         create_by: operator.userId,
@@ -478,7 +486,7 @@ feeCallRouter.post(
     const body = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.FEE_CALL_NOT_FOUND, '催费单不存在');
 
     // ★ 权限：只能处理自己班的
@@ -492,7 +500,7 @@ feeCallRouter.post(
       throw new BizError(BizCode.FEE_CALL_STATUS_NOT_ALLOW, '该催费单已完成，不能重复处理');
     }
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       call_status: body.callStatus,
       handle_time: new Date(),
       handle_remark: body.handleRemark || null,
@@ -524,7 +532,7 @@ feeCallRouter.post(
     const { id } = (req as any).validated;
     const operator = getOperator(req);
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.FEE_CALL_NOT_FOUND, '催费单不存在');
 
     const isApplicant = row.applicant_id === operator.userId;
@@ -537,7 +545,7 @@ feeCallRouter.post(
       throw new BizError(BizCode.FEE_CALL_STATUS_NOT_ALLOW, '已缴清的催费单不能作废');
     }
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: operator.userId,
@@ -557,7 +565,7 @@ feeCallRouter.get(
   wrap(async (req, res) => {
     const operator = getOperator(req);
 
-    const base = db(TABLE).where('is_deleted', false);
+    const base = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
 
     // 班主任只看自己的班
     const isHeadTeacher = operator.roles.includes(RoleCode.TEACH_HEAD);
@@ -567,15 +575,15 @@ feeCallRouter.get(
       base.andWhere('head_teacher_id', operator.userId);
     }
 
-    const [{ c: total }] = await base.clone().count({ c: '*' });
-    const [{ c: pending }] = await base.clone().andWhere('call_status', FeeCallStatus.PENDING).count({ c: '*' });
-    const [{ c: calling }] = await base.clone().andWhere('call_status', FeeCallStatus.CALLING).count({ c: '*' });
-    const [{ c: done }] = await base.clone().andWhere('call_status', FeeCallStatus.PAID).count({ c: '*' });
-    const [{ c: overdue }] = await base
+    const [{ c: total }] = (await base.clone().count({ c: '*' })) as Array<{ c: number }>;
+    const [{ c: pending }] = (await base.clone().andWhere('call_status', FeeCallStatus.PENDING).count({ c: '*' })) as Array<{ c: number }>;
+    const [{ c: calling }] = (await base.clone().andWhere('call_status', FeeCallStatus.CALLING).count({ c: '*' })) as Array<{ c: number }>;
+    const [{ c: done }] = (await base.clone().andWhere('call_status', FeeCallStatus.PAID).count({ c: '*' })) as Array<{ c: number }>;
+    const [{ c: overdue }] = (await base
       .clone()
       .whereNot('call_status', FeeCallStatus.PAID)
       .andWhere('due_date', '<', today())
-      .count({ c: '*' });
+      .count({ c: '*' })) as Array<{ c: number }>;
 
     res.json(
       ok({

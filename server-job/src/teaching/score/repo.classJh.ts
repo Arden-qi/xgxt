@@ -10,12 +10,14 @@ import { db } from '../../class-jh/utils/db';
 import { calcScores } from '../shared/conf';
 import type { ScoreEntry, ScoreEntryRow, ScoreListQuery, ScoreRow, ScoreSaveBody } from '../shared/dto';
 import { EXAM_RESULT_NAME } from '../shared/dto';
-import { tbl } from '../shared/uniTable';
+import { tbl, tblIns } from '../shared/uniTable';
 
+/* ★ P6 补切（2026-10-16）：与 repo.job.ts 同批——成绩表此前是裸 db()（teaching 目录被扫描器跳过） */
 const S = 't_class_exam_score';
 const E = 't_class_exam';
 const STU = 't_class_student';
 const STAGE = 'jh' as const;
+const DB = 'sms_class_jh';
 
 const num = (v: unknown): number | null =>
   v === null || v === undefined || v === '' ? null : Number(v);
@@ -71,7 +73,7 @@ async function mapRow(r: Record<string, any>, nameMap: Map<string, string>): Pro
 }
 
 export async function list(q: ScoreListQuery): Promise<ScoreRow[]> {
-  const qb = db(S).where('is_deleted', 0);
+  const qb = tbl(db, DB, S, STAGE).where('is_deleted', 0);
   if (q.examId) qb.andWhere('exam_id', q.examId);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.studentId) qb.andWhere('student_id', q.studentId);
@@ -90,7 +92,7 @@ export async function entry(examId: string, classId: string): Promise<ScoreEntry
   const students = (await tbl(db, 'sms_class_jh', STU, STAGE).where({ class_id: clsId, is_deleted: 0 }).orderBy('student_no')) as Array<
     Record<string, any>
   >;
-  const scores = (await db(S).where({ exam_id: examId, is_deleted: 0 })) as Array<Record<string, any>>;
+  const scores = (await tbl(db, DB, S, STAGE).where({ exam_id: examId, is_deleted: 0 })) as Array<Record<string, any>>;
   const smap = new Map(scores.map((s) => [String(s.student_id), s]));
   const fullTotal = await fullTotalOf(examId);
 
@@ -152,7 +154,7 @@ export async function save(body: ScoreSaveBody, userId: string) {
     };
     const { totalScore, examResult } = await calcScores(STAGE, vals, fullTotal);
 
-    const existed = (await db(S)
+    const existed = (await tbl(db, DB, S, STAGE)
       .where({ exam_id: body.examId, student_id: r.studentId, is_deleted: 0 })
       .first()) as Record<string, any> | undefined;
 
@@ -170,10 +172,11 @@ export async function save(body: ScoreSaveBody, userId: string) {
     };
 
     if (existed) {
-      await db(S).where({ id: existed.id }).update(payload);
+      await tbl(db, DB, S, STAGE).where({ id: existed.id }).update(payload);
     } else {
       const stu = stuMap.get(r.studentId);
-      await db(S).insert({
+      // ★ 必须用 tblIns：统一表 edu_stage NOT NULL 无默认
+      await tblIns(db, DB, S, STAGE, {
         id: randomUUID(),
         exam_id: body.examId,
         exam_type: exam.exam_type,

@@ -122,7 +122,11 @@ function buildBase(q: StudentListQuery, user: any) {
   if (q.classId) qb.where('class_id', q.classId);
   if (q.deptCode) qb.where('dept_code', q.deptCode);
   if (q.studentStatus) qb.where('student_status', q.studentStatus);
-  if (q.phaseCode) qb.where('stage', q.phaseCode);
+  // ★ 阶段码列名按开关取：老表 `stage` / 统一表 `stage_code`。
+  //   原来硬编码 'stage' —— 切读后统一表的 `stage` 是「同名不同义」的遗留列
+  //   （真正的阶段码在 stage_code）→ 按阶段筛选会**静默查不到任何行**，且不报错。
+  //   三学段同类仓储（repo.job / repo.classJh / class/repo.*）早已用 phaseCodeCol()，此处是漏网。
+  if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
   if (q.keyword) {
     const k = q.keyword;
     qb.where(function (this: any) {
@@ -159,7 +163,10 @@ export const repo: StudentRepo = {
     const base = mapRow(r);
     const [repeats, grades] = await Promise.all([
       notDeleted(tbl(db, 'sms_class', REPEAT_TABLE, STAGE)).where('student_id', id).orderBy('repeat_time', 'desc'),
-      notDeleted(db(GRADE_TABLE)).where('student_id', id).orderBy('create_time', 'desc'),
+      // ★ 切读接入：成绩子表 t_class_grade → t_uni_exam_score。
+      //   此处读的 written_score / machine_score / interview_score / comp_score / exam_result
+      //   在统一表里**同名保留**（统一表是超集），所以只需换表、不必改列名。
+      notDeleted(tbl(db, 'sms_class', GRADE_TABLE, STAGE)).where('student_id', id).orderBy('create_time', 'desc'),
     ]);
 
     return {

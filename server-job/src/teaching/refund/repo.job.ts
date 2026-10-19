@@ -21,9 +21,11 @@ import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME } from '../shared/dto';
 import { toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
-import { tbl } from '../shared/uniTable';
+import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
 
 const T = 't_job_refund';
+/** 写路径显式声明的库名（conn 来自 job 库事务，表也在 sms_job） */
+const SRC = 'sms_job';
 const S = 't_student_base';
 const C = 't_job_class';
 const STAGE = 'job' as const;
@@ -114,7 +116,8 @@ export async function findStudent(id: string) {
 
 /** 分页查询 */
 export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; total: number }> {
-  const base = db(T).where('is_deleted', 0);
+  // ★ 切读接入：t_job_refund → t_uni_refund（超集，列名同名保留）
+  const base = tbl(db, SRC, T, STAGE).where('is_deleted', 0);
   if (q.keyword) {
     base.andWhere((b) => {
       b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
@@ -138,7 +141,7 @@ export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; tot
 
 /** 单条 */
 export async function detail(id: string): Promise<RefundRow | null> {
-  const row = (await db(T).where({ id, is_deleted: 0 }).first()) as
+  const row = (await tbl(db, SRC, T, STAGE).where({ id, is_deleted: 0 }).first()) as
     | Record<string, any>
     | undefined;
   return row ? decorate(row) : null;
@@ -146,7 +149,7 @@ export async function detail(id: string): Promise<RefundRow | null> {
 
 /** 汇总 */
 export async function aggregate(): Promise<RefundAggregate> {
-  const rows = (await db(T)
+  const rows = (await tbl(db, SRC, T, STAGE)
     .where('is_deleted', 0)
     .select('approval_status')
     .count({ c: '*' })
@@ -178,12 +181,13 @@ export async function aggregate(): Promise<RefundAggregate> {
  * 写入：新建业务单
  *
  * ⚠️ `conn` 可能是 **job 库的事务**（service 层为「业务单 + 审批单」开的事务）。
- *    本表就在 sms_job，所以表名不需要库前缀。
+ *    本表就在 sms_job，但切读层统一走 `sms_job.t_job_refund` 全限定名 ——
+ *    与 `conn('t_job_refund')` 在当前连接下等价，切读时才会落到 sms_common 的 `t_uni_refund`。
  */
 export async function insert(conn: any, input: RefundWriteInput): Promise<string> {
   const id = randomUUID();
   const now = new Date();
-  await conn(T).insert({
+  await tblInsTrx(conn, SRC, T, STAGE, {
     id,
     create_time: now,
     create_by: input.initiatorId,
@@ -219,7 +223,7 @@ export async function setStatus(
   unifiedStatus: number,
   patch: Record<string, any> = {},
 ): Promise<void> {
-  await conn(T)
+  await tblTrx(conn, SRC, T, STAGE)
     .where({ id })
     .update({ approval_status: unifiedStatus, update_time: new Date(), ...patch });
 }
@@ -231,7 +235,7 @@ export async function setFinance(
   financeRemark: string | null,
   refundTime: string | null,
 ): Promise<void> {
-  await conn(T)
+  await tblTrx(conn, SRC, T, STAGE)
     .where({ id })
     .update({
       finance_remark: financeRemark,
@@ -242,7 +246,7 @@ export async function setFinance(
 
 /** 校验：该学生是否有进行中的退费单（大学那条"禁止重复"规则的统一版） */
 export async function hasPending(studentId: string): Promise<boolean> {
-  const row = await db(T)
+  const row = await tbl(db, SRC, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
     .whereIn('approval_status', [2, 3])
     .first();

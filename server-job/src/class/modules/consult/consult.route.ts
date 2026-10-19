@@ -21,6 +21,8 @@ import {
   tblIns,
   tblInsTrx,
   USE_UNI_TABLE,
+  phaseCodeCol,
+  readPhaseCode,
 } from '../../../teaching/shared/uniTable';
 
 /**
@@ -467,7 +469,7 @@ consultRouter.post(
     let teacherName: string | null = null;
     let assistantId: string | null = null;
     let assistantName: string | null = null;
-    let stage = b.stage ?? ((push.intend_stage as number) ?? null);
+    let stage: number | null = b.stage ?? ((push.intend_stage as number) ?? null);
 
     if (classId) {
       const cls = (await notDeleted(CLS()).where('id', classId).first()) as
@@ -484,7 +486,7 @@ consultRouter.post(
       teacherName = (cls.teacher_name as string) ?? null;
       assistantId = (cls.assistant_id as string) ?? null;
       assistantName = (cls.assistant_name as string) ?? null;
-      if (stage === null) stage = cls.stage as number;
+      if (stage === null) stage = readPhaseCode(cls) as number | null;
     }
     if (deptCode === null) {
       throw Errors.param('请选择要归入的班级（用于确定部门与学习阶段）');
@@ -526,7 +528,7 @@ consultRouter.post(
           ...baseUpdate(user),
         };
         if (isRepeatIn) patch.repeat_count = nextRepeat;
-        if (stage !== null && stage !== undefined) patch.stage = stage;
+        if (stage !== null && stage !== undefined) patch[phaseCodeCol()] = stage;
         if (b.studentStatus) patch.student_status = b.studentStatus;
         if (b.dormId) {
           patch.dorm_id = b.dormId;
@@ -654,7 +656,7 @@ consultRouter.post(
         age: (b.age as number) ?? ((push.age as number) ?? null),
         dept_code: deptCode,
         student_status: b.studentStatus ?? StudentStatus.TRIAL,
-        stage,
+        [phaseCodeCol()]: stage,
         phone: b.phone ?? ((push.phone as string) ?? null),
         parent_phone: b.parentPhone ?? ((push.parent_phone as string) ?? null),
         education: b.education ?? ((push.education as string) ?? null),

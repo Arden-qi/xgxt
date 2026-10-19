@@ -29,11 +29,18 @@ import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { BizError } from '../middleware/errorHandler';
 import { pushNotification } from '../utils/empNotice';
+// ★ P3 切读层：本文件两张表（t_review / t_student_base）都已归一，
+//   全部走 tbl()/tblIns() 路由；开关关时与原实现逐字节等价。
+import { tbl, tblIns } from '../teaching/shared/uniTable';
 
 export const reviewRouter = Router();
 
 const TABLE = 't_review';
 const STUDENT = 't_student_base';
+
+/** ★ 统一表 edu_stage 取值（本路由只服务实训） */
+const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 const SELECT_FIELDS = [
   'id', 'student_id', 'student_no', 'student_name', 'class_name',
@@ -88,7 +95,7 @@ reviewRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
 
-    const query = db(TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
 
     if (q.studentId) query.andWhere('student_id', q.studentId);
     if (q.studentName) query.andWhere('student_name', 'like', `%${q.studentName}%`);
@@ -98,7 +105,7 @@ reviewRouter.get(
     if (q.startDate) query.andWhere('review_time', '>=', `${q.startDate} 00:00`);
     if (q.endDate) query.andWhere('review_time', '<=', `${q.endDate} 23:59`);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
 
     const rows = await query
       .clone()
@@ -122,7 +129,7 @@ reviewRouter.get(
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
 
-    const row = await db(TABLE)
+    const row = await tbl(db, DB, TABLE, STAGE)
       .where({ id, is_deleted: false })
       .first([
         ...SELECT_FIELDS,
@@ -183,7 +190,7 @@ reviewRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
 
-    const student = await db(STUDENT).where({ id: body.studentId, is_deleted: false }).first();
+    const student = await tbl(db, DB, STUDENT, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!student) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在，请重新选择');
 
     // ★ 2026-10-02（斌哥）：面试结论选了「已发 offer」→ 复盘结论只能是「已签约入职」
@@ -191,7 +198,7 @@ reviewRouter.post(
     assertOfferConclusion(body.interviewConclusion, body.reviewConclusion);
 
     const id = randomUUID();
-    await db(TABLE).insert({
+    await tblIns(db, DB, TABLE, STAGE, {
       id,
       student_id: body.studentId,
       student_no: student.student_no,
@@ -247,16 +254,16 @@ reviewRouter.put(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
 
-    const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '复盘记录不存在或已被删除');
 
-    const student = await db(STUDENT).where({ id: body.studentId, is_deleted: false }).first();
+    const student = await tbl(db, DB, STUDENT, STAGE).where({ id: body.studentId, is_deleted: false }).first();
     if (!student) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在，请重新选择');
 
     // ★ 2026-10-02（斌哥）：同 add —— 服务端兜底校验「发 offer 必须配已签约入职」
     assertOfferConclusion(body.interviewConclusion, body.reviewConclusion);
 
-    await db(TABLE).where({ id: body.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update({
       student_id: body.studentId,
       student_no: student.student_no,
       student_name: student.student_name,
@@ -293,10 +300,10 @@ reviewRouter.delete(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '复盘记录不存在或已被删除');
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
@@ -312,10 +319,10 @@ reviewRouter.put(
   wrap(async (req, res) => {
     const { id } = req.params;
 
-    const row = await db(TABLE).where({ id, is_deleted: false }).first();
+    const row = await tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.PARAM_ERROR, '复盘记录不存在');
 
-    await db(TABLE).where({ id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id }).update({
       audio_name: null,
       audio_data: null,
       update_time: new Date(),

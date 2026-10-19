@@ -12,13 +12,17 @@ import { db } from '../../utils/db';
 import { calcScores } from '../shared/conf';
 import type { ScoreEntry, ScoreEntryRow, ScoreListQuery, ScoreRow, ScoreSaveBody } from '../shared/dto';
 import { EXAM_RESULT_NAME } from '../shared/dto';
-import { tbl } from '../shared/uniTable';
+import { tbl, tblIns, tblRef, uniDb, USE_UNI_TABLE } from '../shared/uniTable';
 
+/* ★ P6 补切（2026-10-16）：本文件此前是「半切」——exam 查询走了 tbl，成绩表/花名册
+   还是裸 db()；teaching 目录被 _uni-bare-scan 整体跳过，扫描器没抓到。
+   开关开下 save 写老表、断言读统一表 → written_avg=undefined（score 套件实锤）。 */
 const S = 't_job_exam_score';
 const E = 't_job_exam';
 const CS = 't_job_class_student';
 const STU = 't_student_base';
 const STAGE = 'job' as const;
+const DB = 'sms_job';
 
 const num = (v: unknown): number | null =>
   v === null || v === undefined || v === '' ? null : Number(v);
@@ -48,10 +52,14 @@ function mapRow(r: Record<string, any>): ScoreRow {
   };
 }
 
-/** 当天在班学生（花名册 status=1） */
+/** 当天在班学生（花名册 status=1）
+ *  ★ join 场景：开关开时统一表在 sms_common，必须用 uniDb 连接（tblRef 只换表名不换库） */
+function joinDb() {
+  return USE_UNI_TABLE ? uniDb : db;
+}
 async function roster(classId: string) {
-  return (await db(`${CS} as cs`)
-    .leftJoin(`${STU} as s`, 'cs.student_id', 's.id')
+  return (await joinDb()(`${tblRef(DB, CS)} as cs`)
+    .leftJoin(`${tblRef(DB, STU)} as s`, 'cs.student_id', 's.id')
     .where('cs.class_id', classId)
     .andWhere('cs.status', 1)
     .andWhere('cs.is_deleted', 0)
@@ -60,7 +68,7 @@ async function roster(classId: string) {
 }
 
 export async function list(q: ScoreListQuery): Promise<ScoreRow[]> {
-  const qb = db(S).where('is_deleted', 0);
+  const qb = tbl(db, DB, S, STAGE).where('is_deleted', 0);
   if (q.examId) qb.andWhere('exam_id', q.examId);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.studentId) qb.andWhere('student_id', q.studentId);
@@ -79,7 +87,7 @@ export async function entry(examId: string, classId: string): Promise<ScoreEntry
   if (!clsId) throw new Error('该考试没有班级');
 
   const students = await roster(clsId);
-  const scores = (await db(S).where({ exam_id: examId, class_id: clsId, is_deleted: 0 })) as Array<
+  const scores = (await tbl(db, DB, S, STAGE).where({ exam_id: examId, class_id: clsId, is_deleted: 0 })) as Array<
     Record<string, any>
   >;
   const smap = new Map(scores.map((s) => [String(s.student_id), s]));
@@ -138,14 +146,14 @@ export async function save(body: ScoreSaveBody, userId: string) {
     // ★ 实训 judgeMode='action'：默认 null「未判断」，由「标末班」动作置 2（可撤销回 null）
     const finalResult = r.examResult ?? examResult ?? null;
 
-    const stu = (await db(`${CS} as cs`)
-      .leftJoin(`${STU} as s`, 'cs.student_id', 's.id')
+    const stu = (await joinDb()(`${tblRef(DB, CS)} as cs`)
+      .leftJoin(`${tblRef(DB, STU)} as s`, 'cs.student_id', 's.id')
       .where('cs.student_id', r.studentId)
       .andWhere('cs.is_deleted', 0)
       .select('cs.student_no', 'cs.student_name', 'cs.class_id', 'cs.class_name')
       .first()) as Record<string, any> | undefined;
 
-    const existed = (await db(S)
+    const existed = (await tbl(db, DB, S, STAGE)
       .where({ exam_id: body.examId, student_id: r.studentId, is_deleted: 0 })
       .first()) as Record<string, any> | undefined;
 
@@ -164,9 +172,10 @@ export async function save(body: ScoreSaveBody, userId: string) {
     };
 
     if (existed) {
-      await db(S).where({ id: existed.id }).update(payload);
+      await tbl(db, DB, S, STAGE).where({ id: existed.id }).update(payload);
     } else {
-      await db(S).insert({
+      // ★ 必须用 tblIns：统一表 edu_stage NOT NULL 无默认，且要剔除老表专有列
+      await tblIns(db, DB, S, STAGE, {
         id: randomUUID(),
         exam_id: body.examId,
         exam_name: exam.exam_name,

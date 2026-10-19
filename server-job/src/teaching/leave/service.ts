@@ -55,10 +55,17 @@ import {
 } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
 import { classNameOf, listClassesOfStages } from '../shared/classOptions';
+import { tbl, tblTrx } from '../shared/uniTable';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption } from './types';
 import * as repoJh from './repo.classJh';
 import * as repoClass from './repo.class';
 import * as repoJob from './repo.job';
+
+/* ★ 切读层：审批单 t_job_approval 在 sms_job（学段固定 job），已归一 → 全部切读。
+   ⚠️ `db(常量)`/`trx(常量)` 形态是扫描器盲区（裸扫只认字符串字面量），
+      与 refund/service.ts 同批修掉（2026-10-16）。 */
+const APPROVAL_DB = 'sms_job';
+const APPROVAL_STAGE = 'job' as const;
 
 /** 业务类型 → 审批业务类型（三条链，来自 shared-types 的 APPROVAL_CHAINS） */
 function bizToApproval(bizType: number): string {
@@ -135,7 +142,7 @@ export function toOperator(user: any): Operator {
 /** 批量取审批单（三条链 btype 不同，都要捞） */
 async function loadApprovals(ids: string[]): Promise<Record<string, Record<string, any>>> {
   if (!ids.length) return {};
-  const rows = (await db(APPROVAL_TABLE)
+  const rows = (await tbl(db, APPROVAL_DB, APPROVAL_TABLE, APPROVAL_STAGE)
     .whereIn('biz_type', [
       ApprovalBizType.SUSPEND,
       ApprovalBizType.QUIT,
@@ -380,7 +387,7 @@ async function ensureApproval(
   row: LeaveRow,
   op: Operator,
 ): Promise<string> {
-  const existed = (await trx(APPROVAL_TABLE)
+  const existed = (await tblTrx(trx, APPROVAL_DB, APPROVAL_TABLE, APPROVAL_STAGE)
     .where({ biz_id: bizId, is_deleted: false })
     .whereIn('biz_type', [ApprovalBizType.SUSPEND, ApprovalBizType.QUIT, ApprovalBizType.RESUME])
     .first()) as Record<string, any> | undefined;
@@ -405,7 +412,7 @@ async function ensureApproval(
       : row.approvalStatus === LEAVE_STATUS.PENDING_MANAGER
         ? 1
         : 0;
-  await trx(APPROVAL_TABLE).where({ id }).update({
+  await tblTrx(trx, APPROVAL_DB, APPROVAL_TABLE, APPROVAL_STAGE).where({ id }).update({
     status: row.approvalStatus,
     current_step: step,
     current_handler_hint:
@@ -461,6 +468,16 @@ export async function approve(
   await assertStageView(user, stage);
   const op = toOperator(user);
   const row = await mustGet(stage, id);
+
+  // ① ★ 复学：参数完整性校验**前置**到 doApprove 之前。
+  //    复学链只有 1 步（shared-types approval.ts：学管 → APPROVED），走到 approve 必然 finished。
+  //    必须先拦：doApprove 写统一表（tblTrx）会**脱离本事务**（见 uniTable.ts tblTrx 的跨库注释），
+  //    先批后校验会让「审批单已永久 finished、而复学班/副作用没做」成为脏状态
+  //    （2026-10-16 _e2e-leave-check 开关开实锤：apR1 被拦后单子却已通过）。
+  //    权限校验仍在 doApprove 里，前置的只是「参数是否存在」，越权者碰不到数据。
+  if (row.bizType === LEAVE_BIZ_TYPE.RESUME && !body.newClassId) {
+    throw new BizError(BizCode.PARAM_ERROR, '复学审批必须选定复学班级');
+  }
 
   let finished = false;
   let nextStatus: number = row.approvalStatus;

@@ -264,14 +264,25 @@ export const repo: ClassRepo = {
     if (!String(body.headTeacherId || '').trim()) throw new Error('班主任必填');
     if (!String(body.openDate || '').trim()) throw new Error('开班日期必填');
     const deptCode = Number(body.deptCode ?? 1);
-    const dupCode = (await tbl(db, 'sms_job', T, STAGE).where({ class_code: classCode, is_deleted: false }).first()) as
+    // ★ 唯一性检查必须**把软删记录算进去**（统一表 uk 占键，同 dorm/repo.uni.ts 约定）
+    const dupCode = (await tbl(db, 'sms_job', T, STAGE).where({ class_code: classCode }).first()) as
       | Record<string, any>
       | undefined;
-    if (dupCode) throw new Error(`班级编号「${classCode}」已存在`);
+    if (dupCode) {
+      if (Number(dupCode.is_deleted) === 1) {
+        throw new Error(`班级编号「${classCode}」之前已删除过（记录仍占唯一键），不能重复使用`);
+      }
+      throw new Error(`班级编号「${classCode}」已存在`);
+    }
     const dupName = (await tbl(db, 'sms_job', T, STAGE)
-      .where({ class_name: body.className, dept_code: deptCode, is_deleted: false })
+      .where({ class_name: body.className, dept_code: deptCode })
       .first()) as Record<string, any> | undefined;
-    if (dupName) throw new Error(`该部门下已有班级叫「${body.className}」`);
+    if (dupName) {
+      if (Number(dupName.is_deleted) === 1) {
+        throw new Error(`该部门下的班级名「${body.className}」之前已删除过（记录仍占唯一键），不能重复使用`);
+      }
+      throw new Error(`该部门下已有班级叫「${body.className}」`);
+    }
 
     const id = randomUUID();
     await tblIns(db, 'sms_job', T, STAGE, {

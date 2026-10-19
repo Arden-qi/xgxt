@@ -16,6 +16,7 @@ import type {
 } from '../shared/dto';
 import { EXAM_CONTENT_TYPE_NAME, EXAM_STATUS_NAME, EXAM_TYPE_NAME } from '../shared/dto';
 import { tbl, tblIns } from '../shared/uniTable';
+import { assertExamNotDuplicated } from './uniExamUnique';
 
 const T = 't_class_exam';
 const F = 't_class_exam_field';
@@ -99,6 +100,14 @@ export async function save(body: ExamSaveBody, userId: string, userName: string)
     | Record<string, any>
     | undefined;
   if (!cls) throw new Error('班级不存在');
+
+  /** ★ 同班同日同名查重（任务 #20，见 repo.class.ts 同类注释与迁移 20261016_007） */
+  await assertExamNotDuplicated(db, STAGE, {
+    classIds: [classId],
+    examName: body.examName,
+    examDate: body.examDate,
+    excludeId: body.id,
+  });
 
   const types = (body.contents ?? []).map((c) => Number(c.type));
   const fullMap: Record<string, number> = {};

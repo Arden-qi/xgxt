@@ -360,10 +360,16 @@ async function main() {
   if (USE_UNI) {
     const uc = conn('sms_common');
     // ③ bed_no 类型必须回到 int（迁移 003）
+    //    ★ P6 修正：display width（int(11)）被现代 MySQL 弃用，迁移 009 的 MODIFY 按
+    //      information_schema 的 COLUMN_TYPE 重建后显示为 int —— 两者语义相同，断言兼容两种。
     const bedCol = await uc('information_schema.COLUMNS')
       .where({ TABLE_SCHEMA: 'sms_common', TABLE_NAME: 't_uni_student', COLUMN_NAME: 'bed_no' })
       .first();
-    check('★ 切读：t_uni_student.bed_no 类型 = int(11)', String(bedCol?.COLUMN_TYPE) === 'int(11)', `实际=${bedCol?.COLUMN_TYPE}`);
+    check(
+      '★ 切读：t_uni_student.bed_no 类型 = int（int 或 int(11)）',
+      String(bedCol?.COLUMN_TYPE).replace(/\(\d+\)/, '') === 'int',
+      `实际=${bedCol?.COLUMN_TYPE}`,
+    );
 
     // ④ consult_no 上不得有唯一索引
     const stIdx = await uc('information_schema.STATISTICS')

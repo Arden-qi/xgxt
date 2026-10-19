@@ -18,6 +18,12 @@ import { getAllSettings, SETTING_DEFAULTS } from '../utils/setting';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ P4 切读层：本文件四张表（t_class_setting / t_class_stage / t_class_op_log /
+//   t_class_student）均已归一，全部走 tbl()/tblIns() 路由；开关关时与原实现逐字节等价。
+import { tbl, tblIns, phaseCodeCol } from '../../teaching/shared/uniTable';
+
+const DB = 'sms_class_jh';
+const STAGE = 'jh' as const;
 
 export const settingRouter = Router();
 export const stageRouter = Router();
@@ -47,7 +53,7 @@ settingRouter.get(
   '/detail',
   checkPermission('class:setting:view'),
   wrap(async (_req, res) => {
-    const rows = await db(SETTING_TABLE).where('is_deleted', false).select('*');
+    const rows = await tbl(db, DB, SETTING_TABLE, STAGE).where('is_deleted', false).select('*');
     const byKey = new Map<string, any>(rows.map((r: any) => [r.setting_key, r]));
 
     const keys = new Set<string>([...Object.keys(SETTING_DEFAULTS), ...rows.map((r: any) => r.setting_key)]);
@@ -80,15 +86,15 @@ settingRouter.put(
 
     for (const [key, value] of Object.entries(body)) {
       const strVal = typeof value === 'boolean' ? String(value) : String(value);
-      const existed = await db(SETTING_TABLE).where({ setting_key: key, is_deleted: false }).first();
+      const existed = await tbl(db, DB, SETTING_TABLE, STAGE).where({ setting_key: key, is_deleted: false }).first();
       if (existed) {
-        await db(SETTING_TABLE).where({ id: existed.id }).update({
+        await tbl(db, DB, SETTING_TABLE, STAGE).where({ id: existed.id }).update({
           setting_value: strVal,
           update_time: now,
           update_by: req.user?.userId || 'system',
         });
       } else {
-        await db(SETTING_TABLE).insert({
+        await tblIns(db, DB, SETTING_TABLE, STAGE, {
           id: randomUUID(),
           setting_key: key,
           setting_name: SETTING_NAME[key] ?? key,
@@ -125,7 +131,7 @@ stageRouter.get(
   validate(z.object({ deptCode: z.coerce.number().int().optional() })),
   wrap(async (req, res) => {
     const q = (req as any).validated as { deptCode?: number };
-    const query = db(STAGE_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, STAGE_TABLE, STAGE).where('is_deleted', false);
     if (q.deptCode) query.andWhere('dept_code', q.deptCode);
 
     const rows = await query.select('*').orderBy('sort_no', 'asc').orderBy('stage_code', 'asc');
@@ -165,14 +171,14 @@ stageRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof stageAddSchema>;
 
-    const dup = await db(STAGE_TABLE)
+    const dup = await tbl(db, DB, STAGE_TABLE, STAGE)
       .where({ stage_code: body.stageCode, dept_code: body.deptCode, is_deleted: false })
       .first();
     if (dup) throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, '该部门下阶段编码已存在');
 
     const id = randomUUID();
     const now = new Date();
-    await db(STAGE_TABLE).insert({
+    await tblIns(db, DB, STAGE_TABLE, STAGE, {
       id,
       stage_code: body.stageCode,
       stage_name: body.stageName,
@@ -198,13 +204,16 @@ stageRouter.delete(
   checkPermission('class:setting:edit'),
   wrap(async (req, res) => {
     const { id } = req.params;
-    const stage = await db(STAGE_TABLE).where({ id, is_deleted: false }).first();
+    const stage = await tbl(db, DB, STAGE_TABLE, STAGE).where({ id, is_deleted: false }).first();
     if (!stage) throw new BizError(BizCode.SETTING_NOT_FOUND, '阶段不存在');
 
-    const used = await db(STUDENT_TABLE).where({ stage: stage.stage_code, is_deleted: false }).first();
+    // ★ #23 方案B：t_class_student 的「阶段码」列名按开关取（老表 stage ↔ 统一表 stage_code）
+    const used = await tbl(db, DB, STUDENT_TABLE, STAGE)
+      .where({ [phaseCodeCol()]: stage.stage_code, is_deleted: false })
+      .first();
     if (used) throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, '该阶段下仍有学生，禁止删除');
 
-    await db(STAGE_TABLE).where({ id }).update({
+    await tbl(db, DB, STAGE_TABLE, STAGE).where({ id }).update({
       is_deleted: true,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
@@ -234,13 +243,13 @@ opLogRouter.get(
   validate(opLogListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof opLogListSchema>;
-    const query = db(OP_LOG_TABLE).where('is_deleted', false);
+    const query = tbl(db, DB, OP_LOG_TABLE, STAGE).where('is_deleted', false);
     if (q.bizType) query.andWhere('biz_type', q.bizType);
     if (q.studentId) query.andWhere('student_id', q.studentId);
     if (q.startDate) query.andWhere('op_time', '>=', `${q.startDate} 00:00:00`);
     if (q.endDate) query.andWhere('op_time', '<=', `${q.endDate} 23:59:59`);
 
-    const [{ total }] = await query.clone().count({ total: '*' });
+    const [{ total }] = (await query.clone().count({ total: '*' })) as Array<{ total: number }>;
     const rows = await query
       .clone()
       .select('*')

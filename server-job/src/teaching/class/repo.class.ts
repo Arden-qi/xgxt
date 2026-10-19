@@ -215,10 +215,25 @@ export const repo: ClassRepo = {
 
     // 同部门内名称不重复（与实训一致的口径；但**没有编号唯一性检查** —— 那张表没编号列）
     const deptCode = Number(body.deptCode ?? 2);
+    /**
+     * ★★ 唯一性检查必须**把软删记录算进去**（与 `teaching/dorm/repo.uni.ts` 同款约定）
+     *
+     *   统一表 `t_uni_class` 有 `uk_class(class_name, dept_code, edu_stage)`，
+     *   而软删只是把 `is_deleted` 置 1 —— **行还在表里、唯一键仍被占着**。
+     *   若这里只查 `is_deleted: false`，会出现「查着不重复、插入却报
+     *   ER_DUP_ENTRY / 50002 数据已存在」→ 用户看到的现象是
+     *   「这个班明明删了，却再也建不出来」，而且越删越死。
+     *   → 因此**不带 is_deleted 条件**，把冲突提前在这里报成友好提示。
+     */
     const dupName = (await tbl(db, 'sms_class', T, STAGE)
-      .where({ class_name: body.className, dept_code: deptCode, is_deleted: false })
+      .where({ class_name: body.className, dept_code: deptCode })
       .first()) as Record<string, any> | undefined;
-    if (dupName) throw new Error(`该部门下已有班级叫「${body.className}」`);
+    if (dupName) {
+      if (Number(dupName.is_deleted) === 1) {
+        throw new Error(`该部门下的班级名「${body.className}」之前已删除过（记录仍占唯一键），不能重复使用`);
+      }
+      throw new Error(`该部门下已有班级叫「${body.className}」`);
+    }
 
     const id = randomUUID();
     await tblIns(db, 'sms_class', T, STAGE, {

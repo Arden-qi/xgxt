@@ -16,6 +16,7 @@ import type {
 } from '../shared/dto';
 import { EXAM_CONTENT_TYPE_NAME, EXAM_TYPE_NAME } from '../shared/dto';
 import { tbl, tblIns } from '../shared/uniTable';
+import { assertExamNotDuplicated } from './uniExamUnique';
 
 const T = 't_job_exam';
 const C = 't_job_class';
@@ -88,6 +89,14 @@ export async function save(body: ExamSaveBody, userId: string) {
   >;
   if (!classes.length) throw new Error('班级不存在');
   const names = classes.map((c) => String(c.class_name ?? '')).join('、');
+
+  /** ★ 同日同名 + 班级有交集即算重复（任务 #20，见 repo.class.ts 同类注释与迁移 20261016_007） */
+  await assertExamNotDuplicated(db, STAGE, {
+    classIds: classes.map((c) => String(c.id)),
+    examName: body.examName,
+    examDate: body.examDate,
+    excludeId: body.id,
+  });
 
   const now = new Date();
   const payload = {
