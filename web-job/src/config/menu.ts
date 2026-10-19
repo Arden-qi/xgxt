@@ -116,6 +116,10 @@ const DOMAIN_TO_STAGE_DOMAIN: Record<string, string> = {
   exam: 'exam',
   score: 'score',
   dorm: 'dorm',
+  // ★ 2026-10-19：fee 域改 unified 后不再有 stages，菜单显隐改走业务域权限码
+  //   （与其它八域同款；不映射会退回 hasPage('/teaching/fee')，后端页面清单里
+  //   没有 /teaching/* → 菜单被静默过滤，即「催费/缴费菜单消失」的根因）
+  fee: 'fee',
   refund: 'refund',
   approval: 'leave',
 };
