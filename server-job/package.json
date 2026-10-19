@@ -20,6 +20,7 @@
     "seed:portal": "node scripts/seed-portal-accounts.mjs",
     "seed:portal:clean": "node scripts/seed-portal-accounts.mjs clean",
     "seed:class-jh": "node scripts/seed-class-jh-demo.js",
+    "seed:class-job": "node scripts/seed-class-job-demo.mjs",
     "seed:all": "node scripts/seed-all-demo.mjs",
     "seed:all:dry": "node scripts/seed-all-demo.mjs --dry",
     "fix:perm": "node scripts/fix-perm-accounts.mjs",
