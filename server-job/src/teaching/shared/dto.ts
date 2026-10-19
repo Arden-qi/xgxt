@@ -1069,6 +1069,15 @@ export interface ClassRow {
   phaseCode: number | null;
   phaseName: string;
 
+  /**
+   * ★ 2026-10-16 新增：阶段方案（表单里「阶段方案 + 阶段」两个下拉的落库值）
+   *   老班级没有方案时为 null，回显退回 phaseName（阶段码名称）。
+   */
+  schemeId: string | null;
+  schemeStageId: string | null;
+  /** 方案里的阶段名称（冗余存一份，列表/详情直接回显） */
+  schemeStageName: string | null;
+
   headTeacherId: string | null;
   headTeacherName: string | null;
   teacherId: string | null;
@@ -1131,6 +1140,10 @@ export interface ClassSaveBody {
   classCode?: string | null;
   deptCode?: number | null;
   phaseCode?: number | null;
+  /** ★ 2026-10-16：阶段方案（可选；不选方案的老流程照样能用） */
+  schemeId?: string | null;
+  schemeStageId?: string | null;
+  schemeStageName?: string | null;
   headTeacherId?: string | null;
   headTeacherName?: string | null;
   teacherId?: string | null;

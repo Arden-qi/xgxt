@@ -166,7 +166,7 @@
           <el-descriptions-item v-if="detail.base.classCode" label="班级编号">
             {{ detail.base.classCode }}
           </el-descriptions-item>
-          <el-descriptions-item label="阶段">{{ detail.base.phaseName || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="阶段">{{ phaseTextOf(detail.base) }}</el-descriptions-item>
           <el-descriptions-item label="班主任">{{ detail.base.headTeacherName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="教员">{{ detail.base.teacherName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="助教">{{ detail.base.assistantName || '—' }}</el-descriptions-item>
@@ -226,7 +226,7 @@
     <el-dialog
       v-model="editVisible"
       :title="form.id ? '编辑班级' : '新增班级'"
-      width="820px"
+      width="900px"
       top="6vh"
       destroy-on-close
     >
@@ -256,14 +256,43 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="部门">
-              <el-select v-model="form.deptCode" style="width: 100%">
+              <el-select v-model="form.deptCode" style="width: 100%" @change="onFormDeptChange">
                 <el-option v-for="d in DEPT_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col v-if="formPhaseOptions.length" :span="8">
+          <!-- ★ 2026-10-16：阶段方案（选项按「部门」过滤；在 系统设置 · 阶段方案 页维护） -->
+          <el-col :span="8">
+            <el-form-item label="阶段方案">
+              <el-select
+                v-model="form.schemeId"
+                clearable
+                placeholder="请选择方案"
+                style="width: 100%"
+                @change="onSchemeChange"
+              >
+                <el-option v-for="s in formSchemeOptions" :key="s.id" :label="s.schemeName" :value="s.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <!-- ★ 选了方案 → 阶段选项 = 方案里的阶段；没选方案 → 退回老的阶段选项（历史数据仍可编辑） -->
+          <el-col v-if="form.schemeId || formPhaseOptions.length" :span="8">
             <el-form-item label="阶段">
-              <el-select v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
+              <el-select
+                v-if="form.schemeId"
+                v-model="form.schemeStageId"
+                clearable
+                placeholder="请选择阶段"
+                style="width: 100%"
+                @change="onSchemeStageChange"
+              >
+                <!-- 选中后只显示阶段名称（宽度有限）；下拉里带一列灰字「学制X月」 -->
+                <el-option v-for="p in formSchemeStageOptions" :key="p.id" :label="p.stageName" :value="p.id">
+                  <span>{{ p.stageName }}</span>
+                  <span v-if="p.studyMonths" class="stage-months">学制{{ p.studyMonths }}月</span>
+                </el-option>
+              </el-select>
+              <el-select v-else v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
                 <el-option v-for="p in formPhaseOptions" :key="p.value" :label="p.label" :value="p.value" />
               </el-select>
             </el-form-item>
@@ -438,6 +467,7 @@ import {
   changeClassStatus,
   getClassMeta,
   getClassSummary,
+  getSchemeOptions,
   genClassCode,
   CLASS_STATUS_NAME,
   CLASS_STATUS_TAG,
@@ -449,6 +479,7 @@ import {
   type ClassStage,
   type ClassStageMeta,
   type ClassSummary,
+  type SchemeOption,
 } from '@/teaching/api/class';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
@@ -567,6 +598,10 @@ function emptyForm(stage: ClassStage): ClassSaveBody {
     classCode: '',
     deptCode: stage === 'jh' ? 1 : 2,
     phaseCode: undefined,
+    // ★ 2026-10-16：阶段方案（null = 未选，老班级/不选方案时为 null）
+    schemeId: null,
+    schemeStageId: null,
+    schemeStageName: null,
     headTeacherId: '',
     headTeacherName: '',
     teacherId: '',
@@ -589,23 +624,84 @@ const form = reactive<ClassSaveBody>(emptyForm('jh'));
 /** 表单里的阶段选项（按表单当前学段取，不是筛选的） */
 const formPhaseOptions = computed(() => metaList.value.find((m) => m.stage === form.stage)?.phaseOptions || []);
 
+/* ---------------- ★ 2026-10-16：阶段方案（方案 + 方案里的阶段） ---------------- */
+
+/**
+ * 方案选项（系统设置 · 阶段方案页维护）
+ *
+ * 【为什么按部门过滤】
+ *   方案分部门（1 初高部 / 2 大学部）—— 与表单里的「部门」联动：
+ *   选了初高部的班，只会列出初高部的方案。
+ * 【数据从哪来】统一接口 /api/teaching/class/scheme-options（三个学段共用一份）。
+ */
+const schemeOptions = ref<SchemeOption[]>([]);
+
+async function loadSchemeOptions() {
+  try {
+    schemeOptions.value = await getSchemeOptions();
+  } catch {
+    // 拿不到方案不影响建班（退回老的「阶段」阶段码选项）
+    schemeOptions.value = [];
+  }
+}
+
+/** 表单里按当前部门过滤后的方案 */
+const formSchemeOptions = computed(() =>
+  schemeOptions.value.filter((s) => !form.deptCode || s.deptCode === form.deptCode),
+);
+
+/** 当前选中方案里的阶段（=「阶段」下拉的选项来源） */
+const formSchemeStageOptions = computed(() => {
+  const scheme = schemeOptions.value.find((s) => s.id === form.schemeId);
+  return scheme?.stages || [];
+});
+
+/** 切换方案：清掉上一个方案选中的阶段（阶段是方案内的，不跨方案复用） */
+function onSchemeChange() {
+  form.schemeStageId = null;
+  form.schemeStageName = null;
+}
+
+/** 切换部门：方案是按部门维护的，跨部门的选中值要一起清掉 */
+function onFormDeptChange() {
+  form.schemeId = null;
+  form.schemeStageId = null;
+  form.schemeStageName = null;
+}
+
+/** 选中方案里的阶段：把阶段名冗余存一份（列表/详情直接回显） */
+function onSchemeStageChange(id: string | null) {
+  const hit = formSchemeStageOptions.value.find((s) => s.id === id);
+  form.schemeStageName = hit ? hit.stageName : null;
+}
+
+/** 列表/详情里「阶段」列的回显：优先方案阶段名，老班级退回阶段码名称 */
+function phaseTextOf(row: Pick<ClassRow, 'schemeStageName' | 'phaseName'>): string {
+  return row.schemeStageName || row.phaseName || '—';
+}
+
 const rules: FormRules = {
   className: [{ required: true, message: '班级名称必填', trigger: 'blur' }],
 };
 
-function openCreate() {
+async function openCreate() {
   const stage = (query.stage || stageOptions.value[0]?.value || 'jh') as ClassStage;
   Object.assign(form, emptyForm(stage));
+  // ★ 方案选项每次打开弹窗都刷新（刚在系统设置里建完方案，回来就能选到）
+  await loadSchemeOptions();
   editVisible.value = true;
 }
 
-function openEdit(row: ClassRow) {
+async function openEdit(row: ClassRow) {
   Object.assign(form, emptyForm(row.stage), {
     id: row.classId,
     className: row.className,
     classCode: row.classCode || '',
     deptCode: row.deptCode ?? undefined,
     phaseCode: row.phaseCode ?? undefined,
+    schemeId: row.schemeId,
+    schemeStageId: row.schemeStageId,
+    schemeStageName: row.schemeStageName,
     headTeacherId: row.headTeacherId || '',
     headTeacherName: row.headTeacherName || '',
     teacherId: row.teacherId || '',
@@ -706,12 +802,23 @@ async function doChangeStatus() {
   }
 }
 
-onMounted(() => load(1));
+onMounted(() => {
+  load(1);
+  // 阶段方案选项（表单用）—— 先取一次，打开弹窗时还会再刷新
+  loadSchemeOptions();
+});
 </script>
 
 <style scoped>
 .tcv {
   padding: 12px;
+}
+/* 「阶段」下拉里右侧的学制标注 */
+.stage-months {
+  float: right;
+  margin-left: 12px;
+  color: #909399;
+  font-size: 12px;
 }
 .tcv-tip {
   margin-bottom: 10px;
