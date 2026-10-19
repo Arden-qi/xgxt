@@ -380,6 +380,56 @@ export interface ScoreSummaryItem {
   passRate: number;
 }
 
+/**
+ * 单行改分（成绩列表「编辑」）
+ *
+ * ★ 只改「传了的字段」：没传 = 保持原值。
+ *   —— 备注列是内联编辑的，只传 remark 时**不能**把分数重算一遍再写回去
+ *      （浮点权重来回算会把 85 变成 84.999…）。
+ */
+export interface ScoreUpdateBody {
+  stage: TeachingStage;
+  /** 成绩行 id */
+  id: string;
+  writtenScore?: number | null;
+  machineScore?: number | null;
+  interviewScore?: number | null;
+  otherScore?: number | null;
+  /** 只有 judgeMode='manual'（大学）能改；初高按公式重判、实训由末班动作用 */
+  examResult?: number | null;
+  remark?: string | null;
+}
+
+/**
+ * 末班（成绩列表「末班」）
+ *
+ * 【规则】结果必须已是「未通过」才能末班；
+ *   目标班级学段：初高 → 只能初高；大学 → 只能大学；实训 → 三学段任意。
+ */
+export interface ScoreRepeatBody {
+  stage: TeachingStage;
+  /** 成绩行 id */
+  scoreId: string;
+  /** 目标班级所属学段 */
+  targetStage: TeachingStage;
+  targetClassId: string;
+  /** YYYY-MM-DD；不传默认今天 */
+  repeatDate?: string;
+  /** 末班原因（下拉选项，或「其他」手填） */
+  repeatReason: string;
+  /** 学员不足说明：拼进末班原因，并同步写成绩备注 */
+  shortcoming?: string;
+}
+
+export interface ScoreRepeatResult {
+  repeatCount: number;
+  fromClassName: string | null;
+  toClassName: string;
+  toStageName: string;
+  /** 目标班有无班主任可通知（本版不发站内信，仅回传便于前端提示） */
+  notified: boolean;
+}
+
 /* ============================================================
  * 退费域（第 4 个合并的业务域）
  * ============================================================
