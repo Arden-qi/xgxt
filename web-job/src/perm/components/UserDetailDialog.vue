@@ -16,6 +16,12 @@
  *
  * ⚠️ 「查看权限 / 编辑权限」不再跳「职位权限分配」页（跳过去还不知道要点哪个职位），
  *    直接在本弹窗之上叠一层权限树弹窗（PermTreeDialog），就地看 / 就地改。
+ *
+ * ★ 2026-10-19：底部「去编辑」按钮改成可关的 —— 传 `:show-edit="false"` 即隐藏。
+ *   · 「账号管理」页关掉了它：列表行操作里本来就有独立的「编辑」，
+ *     弹窗底部再来一个是重复入口（用户要求删掉）。
+ *   · 「部门管理」「职位管理」仍显示：其中「职位管理 → 职位下人员 → 账号详情」
+ *     里它是那一页唯一的编辑入口，因此不能直接全局删除，只能做成开关。
  */
 import { computed, ref, watch } from 'vue';
 import type { PermModule, PermRoleListItem, PermUserListItem, RolePermMap } from 'shared-types/perm';
@@ -32,13 +38,20 @@ const props = withDefaults(
     userId: string;
     /** 列表行数据：先渲染、再补最新（可选） */
     fallback?: PermUserListItem | null;
+    /**
+     * 是否显示底部「去编辑」按钮（默认 true）。
+     * ★ 2026-10-19：「账号管理」页传 false —— 那里列表已有独立「编辑」入口。
+     */
+    showEdit?: boolean;
   }>(),
-  { fallback: null },
+  // ★ `showEdit` 默认 true：不传的页面（部门管理 / 职位管理）行为完全不变
+  { fallback: null, showEdit: true },
 );
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void;
-  /** 点「去编辑」时抛出，由调用方决定怎么编辑（多数页面是跳账号管理） */
+  /** 点「去编辑」时抛出，由调用方决定怎么编辑（多数页面是跳账号管理）。
+   *  仅当 `showEdit` 为 true 时按钮才渲染，也就是说关掉后这个事件不会触发。 */
   (e: 'edit', userId: string): void;
 }>();
 
@@ -445,7 +458,11 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
 
     <template #footer>
       <div class="lft">账号 ID：{{ detail?.id || '—' }}</div>
-      <button class="btn" type="button" @click="emit('edit', props.userId)">去编辑</button>
+      <!-- ★ 2026-10-19：账号管理页 `:show-edit="false"` 不再渲染它（重复入口）；
+           部门管理 / 职位管理 照旧显示。 -->
+      <button v-if="showEdit" class="btn" type="button" @click="emit('edit', props.userId)">
+        去编辑
+      </button>
       <button class="btn pri" type="button" @click="visible = false">关闭</button>
     </template>
   </ProtoDialog>

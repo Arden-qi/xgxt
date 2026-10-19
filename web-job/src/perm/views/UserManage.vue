@@ -421,6 +421,9 @@ function onConfirmOk(): void {
 /* ============================================================
  * 四、账号详情 —— 复用 @/perm/components/UserDetailDialog.vue
  *
+ * ★ 2026-10-19：传 `:show-edit="false"` 隐藏弹窗底部的「去编辑」按钮
+ *   （按钮本身仍在共享组件里，部门管理 / 职位管理照旧显示）。
+ *
  * 【2026-10-07 重构】原来这里自己写了一份内联详情弹窗，而「部门管理」「职位管理」
  * 里点「账号详情」只是 router.push('/user') —— 同一件事三种做法、其中两种是坏的
  * （不弹详情，还得自己再搜一次那个账号）。现在三处统一走同一个组件。
@@ -440,17 +443,11 @@ function openUserDetail(row: PermUserListItem): void {
   userDetailOpen.value = true;
 }
 
-/** 详情里的「去编辑」→ 关掉详情，打开编辑表单（复用本页的 openEdit） */
-async function editFromDetail(id: string): Promise<void> {
-  userDetailOpen.value = false;
-  try {
-    const d = await userApi.detail(id);
-    // 同上：详情接口的返回比契约声明的更宽（列表项形态）
-    await openEdit({ ...d } as unknown as PermUserListItem);
-  } catch {
-    /* 已提示 */
-  }
-}
+/*
+ * ★ 2026-10-19：这里原先有个 `editFromDetail()`（详情底部的「去编辑」→ 打开编辑表单），
+ * 随按钮一起删掉了 —— 本页详情弹窗现在传 `:show-edit="false"`，事件不会再触发，
+ * 留着就是死代码。账号的编辑入口改由列表行操作里的「编辑」承担（见 openEdit 的调用点）。
+ */
 
 /* ============================================================
  * 五、新建 / 编辑账号（原型 openUserForm 第 2078~2187 行）
@@ -1529,11 +1526,13 @@ async function doExport(): Promise<void> {
          ⚠️ 2026-10-07 起改用 @/perm/components/UserDetailDialog.vue ——
          「账号管理 / 部门管理 / 职位管理」三处点「账号详情」看到的是同一个弹窗，
          内容也一致（基本信息 + 所属职位 + 有效权限明细），这里不再自己写一份。 -->
+    <!-- ★ 2026-10-19：`:show-edit="false"` —— 本页不显示详情里的「去编辑」按钮
+         （列表行操作已有独立「编辑」，重复）。其余两处入口保持默认为显示。 -->
     <UserDetailDialog
       v-model="userDetailOpen"
       :user-id="userDetailId"
       :fallback="userDetailRow"
-      @edit="editFromDetail"
+      :show-edit="false"
     />
 
     <!-- ==================== 新建 / 编辑账号（原型 openUserForm 第 2078~2187 行） ==================== -->
