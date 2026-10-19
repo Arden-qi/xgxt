@@ -343,10 +343,43 @@ const definition: swaggerJsdoc.Options['definition'] = {
           parentItemName: { type: 'string', nullable: true, example: '教质/学术审批', description: '二级功能点的父功能点名' },
           actions: { type: 'array', items: { $ref: '#/components/schemas/PermActionItem' } },
           remark: { type: 'string', nullable: true },
+          isCustom: {
+            type: 'boolean',
+            example: false,
+            description: 'true = 管理员自建（可改可删）；false / 缺省 = 系统预置，只读',
+          },
           checked: {
             type: 'array',
             items: { type: 'string' },
             description: '该职位在此功能点下已勾选的动作名（职位权限详情接口返回）',
+          },
+        },
+      },
+      PermItemSavePayload: {
+        type: 'object',
+        description: '新增 / 修改自建权限点的入参（模块 → 功能点 → 动作，与预置格式一致）',
+        required: ['itemName', 'actions'],
+        properties: {
+          moduleKey: { type: 'string', example: 'market', description: '已有板块标识；新建板块传 __new__' },
+          moduleName: { type: 'string', example: '招生管理', description: '新建板块时的名称' },
+          moduleIcon: { type: 'string', example: '🎓' },
+          moduleSort: { type: 'integer', example: 9 },
+          itemName: { type: 'string', example: '招生报名登记' },
+          parentItemName: { type: 'string', nullable: true },
+          remark: { type: 'string', nullable: true },
+          actions: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              required: ['actionName'],
+              properties: {
+                actionCode: { type: 'string', example: 'view', description: '留空时后端按 baseAction 自动补' },
+                actionName: { type: 'string', example: '查看' },
+                baseAction: { type: 'integer', enum: [1, 2, 3, 4, 5, 6], example: 1 },
+                remark: { type: 'string', nullable: true },
+              },
+            },
           },
         },
       },

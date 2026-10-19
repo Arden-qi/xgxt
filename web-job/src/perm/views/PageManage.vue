@@ -117,8 +117,13 @@ const activeRoleId = ref('');
 const collapsed = ref<Record<string, boolean>>({});
 /** 左栏每个板块下职位列表的折叠态（默认展开，让职位一眼可见） */
 const treeOpen = ref<Record<string, boolean>>({});
-/** 左栏「其他职位」分组折叠态 */
-const orphanOpen = ref(true);
+/**
+ * 左栏「兜底职位」分组的折叠态（key = 部门名）
+ *
+ * 说明：不在任何板块里露面的职位，按**部门**分组展示（如「招生部」），
+ * 而不是统一塞进「其他职位」——这样新加的部门/职位一眼能对上号。
+ */
+const orphanDeptOpen = ref<Record<string, boolean>>({});
 
 /** 板块模式草稿：`板块key||页面path` → 是否打勾 */
 const draft = ref<Record<string, boolean>>({});
@@ -411,6 +416,33 @@ function isTreeOpen(moduleKey: string): boolean {
   return treeOpen.value[moduleKey] !== false;
 }
 
+/**
+ * 兜底职位按部门分组（按部门首次出现顺序；无部门名的排最后）
+ *
+ * 为什么不直接用 boards 里的分组：orphanRoles 是「在所有板块都看不到任何页面」的职位，
+ * 后端不会把它们挂进任何 board，所以前端要自己按 deptName 归一次组。
+ */
+const orphanDeptGroups = computed<{ deptName: string; roles: PermRoleSummary[] }[]>(() => {
+  const map = new Map<string, PermRoleSummary[]>();
+  tree.value.orphanRoles.forEach((r) => {
+    const d = (r.deptName || '').trim() || '未归属部门';
+    const arr = map.get(d);
+    if (arr) arr.push(r);
+    else map.set(d, [r]);
+  });
+  const groups = Array.from(map.entries()).map(([deptName, roles]) => ({ deptName, roles }));
+  // 「未归属部门」永远排最后，正常部门保持后端返回的相对顺序
+  return groups.sort((a, b) => Number(a.deptName === '未归属部门') - Number(b.deptName === '未归属部门'));
+});
+
+function isOrphanDeptOpen(deptName: string): boolean {
+  return orphanDeptOpen.value[deptName] !== false;
+}
+
+function toggleOrphanDept(deptName: string): void {
+  orphanDeptOpen.value = { ...orphanDeptOpen.value, [deptName]: !isOrphanDeptOpen(deptName) };
+}
+
 function expandAll(): void {
   collapsed.value = {};
 }
@@ -683,29 +715,44 @@ const currentBoardName = computed(
                 </template>
               </div>
 
-              <!-- 兜底：不属于任何板块的职位 -->
+              <!--
+                兜底：在任何板块都看不到页面的职位 → 按「部门」分组显示
+                （原来统一叫「其他职位」，新加部门/职位后看不出归属，改成部门名）
+              -->
               <div v-if="tree.orphanRoles.length" class="pg-node" style="margin-top: 6px">
-                <div class="rl-item" @click="orphanOpen = !orphanOpen">
-                  <span class="pg-fold">{{ orphanOpen ? '▾' : '▸' }}</span>
-                  <span>其他职位</span>
-                  <span class="cnt">{{ tree.orphanRoles.length }}</span>
-                </div>
-                <template v-if="orphanOpen">
-                  <div
-                    v-for="r in tree.orphanRoles"
-                    :key="'orphan-' + r.roleId"
-                    class="rl-item rl-sub"
-                    :class="{ on: mode === 'role' && r.roleId === activeRoleId }"
-                    @click="selectRole(r)"
-                  >
-                    <span class="rl-avatar">{{ r.roleName.slice(0, 1) }}</span>
-                    <span>
-                      <b v-if="roleDirty(r.roleId)" style="color: #A66A1F">●</b>
-                      {{ r.roleName }}
+                <div class="desc" style="padding: 2px 6px 5px">暂未分配页面的职位（按部门）</div>
+                <div v-for="g in orphanDeptGroups" :key="'orphan-dept-' + g.deptName" class="pg-node">
+                  <div class="rl-item" @click="toggleOrphanDept(g.deptName)">
+                    <span class="pg-fold">{{ isOrphanDeptOpen(g.deptName) ? '▾' : '▸' }}</span>
+                    <span
+                      style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
+                      :title="g.deptName"
+                    >
+                      🏢 {{ g.deptName }}
                     </span>
-                    <span class="cnt">{{ r.enabledCount }}/{{ r.total }}</span>
+                    <span class="cnt">{{ g.roles.length }}</span>
                   </div>
-                </template>
+                  <template v-if="isOrphanDeptOpen(g.deptName)">
+                    <div
+                      v-for="r in g.roles"
+                      :key="'orphan-' + r.roleId"
+                      class="rl-item rl-sub"
+                      :class="{ on: mode === 'role' && r.roleId === activeRoleId }"
+                      @click="selectRole(r)"
+                    >
+                      <span class="rl-avatar">{{ r.roleName.slice(0, 1) }}</span>
+                      <span
+                        style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
+                        :title="`${r.roleName} · ${r.deptName}`"
+                      >
+                        <b v-if="roleDirty(r.roleId)" style="color: #A66A1F">●</b>
+                        {{ r.roleName }}
+                        <span v-if="r.configured" class="tag p" style="margin-left: 3px">已配置</span>
+                      </span>
+                      <span class="cnt">{{ r.enabledCount }}/{{ r.total }}</span>
+                    </div>
+                  </template>
+                </div>
               </div>
 
               <div class="desc" style="padding: 9px 6px 2px">

@@ -86,6 +86,12 @@ export async function loadModules(force = false): Promise<PermModule[]> {
       parentItemName: m.parent_item_name || undefined,
       actions: actByMenu.get(m.id) || [],
       remark: m.remark || undefined,
+      /**
+       * ★ 2026-10-19：标记「用户自建」。
+       * ⚠️ 老库没有 is_custom 列时这里取到 undefined → 一律按预置处理（只读），
+       *    这是安全的降级方向：不会误让预置权限可删。
+       */
+      isCustom: !!m.is_custom,
     };
     mod.items.push(item);
     mod.itemCount = (mod.itemCount || 0) + 1;

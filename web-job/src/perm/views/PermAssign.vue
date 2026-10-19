@@ -29,6 +29,7 @@ import type {
 import { assignApi, roleApi, userApi } from '@/perm/api/perm';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
 import ProtoConfirm from '@/perm/components/ProtoConfirm.vue';
+import PermItemDialog from '@/perm/components/PermItemDialog.vue';
 import { toast } from '@/perm/utils/toast';
 
 /* ============================================================
@@ -275,6 +276,45 @@ onMounted(async () => {
     await Promise.all([loadTree(currentRoleId.value), loadDetail(currentRoleId.value)]);
   }
 });
+
+/* ============================================================
+ * 3.5 新增 / 管理权限点（★ 2026-10-19）
+ *
+ * 【要解决的事】预置权限树是「系统能力清单」，新部门（招生部）＋新职位
+ *   （招生老师）常常需要清单里没有的功能点。这个弹窗让管理员自己加，
+ *   加的格式与预置完全一致（板块 → 功能点 → 动作），存完立刻能勾选。
+ *
+ * ⚠️ 保存后必须重取权限树：模块里多了一个功能点，
+ *    `treeRows` / 草稿的 key 集合都变了。
+ * ⚠️ 如果权限树弹窗还开着（在本弹窗里点「新增权限」进来的场景），
+ *    要保留用户已经勾好的草稿，只给新功能点补空数组。
+ * ============================================================ */
+
+const itemAdminOpen = ref(false);
+
+async function onItemSaved(): Promise<void> {
+  if (!currentRoleId.value) return;
+  const draftBefore = treeOpen.value ? { ...draft.value } : null;
+  try {
+    const res = await assignApi.tree(currentRoleId.value);
+    modules.value = res.modules;
+    perms.value = { ...res.perms };
+    treeStats.value = res.stats;
+    if (treeOpen.value && draftBefore) {
+      const next: Record<string, string[]> = {};
+      modules.value.forEach((m) =>
+        m.items.forEach((it) => {
+          const k = keyOf(m.moduleKey, it.itemName);
+          next[k] = k in draftBefore ? [...draftBefore[k]] : [...(perms.value[k] || [])];
+        }),
+      );
+      setDraft(next);
+    }
+    await loadRoles();
+  } catch {
+    /* 已提示 */
+  }
+}
 
 /* ============================================================
  * 4. 权限树弹窗（原型 TREE_DRAFT / renderPermTree / treeAct / treeItem / treeMod）
@@ -581,6 +621,7 @@ async function openRoleUsers(): Promise<void> {
           <span class="desc">左侧选择职位 → 右侧勾选权限 → 保存生效</span>
           <button class="btn" type="button" @click="openTree('view')">全屏查看</button>
           <button class="btn" type="button" @click="resetOpen = true">重置为预置</button>
+          <button class="btn wn" type="button" @click="itemAdminOpen = true">＋ 新增权限</button>
           <button class="btn pri" type="button" @click="openTree('edit')">编辑该职位权限</button>
         </div>
       </div>
@@ -657,6 +698,7 @@ async function openRoleUsers(): Promise<void> {
                 <button class="btn xs" type="button" @click="openTree('edit')">＋ 配置权限</button>
                 <button class="btn xs" type="button" @click="openCopy">从其他职位复制</button>
                 <button class="btn xs" type="button" @click="openRoleUsers">查看账号（{{ userCount }}）</button>
+                <button class="btn xs" type="button" @click="itemAdminOpen = true">＋ 新增权限</button>
                 <span class="cl">共 {{ treeStats.modCount }} 个模块 / {{ treeStats.actionCount }} 个权限点</span>
               </div>
 
@@ -764,6 +806,7 @@ async function openRoleUsers(): Promise<void> {
                     @change="onItemChange(row, $event)"
                   />
                   <span class="nm">{{ row.item.itemName }}</span>
+                  <span v-if="row.item.isCustom" class="tag b" style="flex: none; margin-left: 4px">自建</span>
                   <span class="cnt">{{ rowSel(row).length }}/{{ row.codes.length }}</span>
                 </div>
 
@@ -822,6 +865,7 @@ async function openRoleUsers(): Promise<void> {
           <b style="color: var(--brand)">{{ treeStat.m }}</b> 个模块
         </div>
         <template v-if="!treeView">
+          <button class="btn" type="button" @click="itemAdminOpen = true">＋ 新增权限</button>
           <button class="btn" type="button" @click="treeSelectAll(true)">全选</button>
           <button class="btn" type="button" @click="treeSelectAll(false)">取消</button>
           <button class="btn" type="button" @click="treeClearAsk">一键清空</button>
@@ -939,5 +983,8 @@ async function openRoleUsers(): Promise<void> {
       ok-text="确认保存"
       @ok="doSaveTree"
     />
+
+    <!-- ==================== 新增/维护权限点（自建权限） ==================== -->
+    <PermItemDialog v-model="itemAdminOpen" @saved="onItemSaved" />
   </div>
 </template>
