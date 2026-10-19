@@ -151,10 +151,11 @@ export const MENU: MenuNode[] = [
         title: '待接收学员',
         path: '/class/consult',
         pageCode: 'class:consult:view',
-        owner: '大学部',
+        // ★ 2026-10-19：初高也走「推送 → 班主任接收」，这一页两个学段共用
+        owner: '初高中部 / 大学部',
         stage: '已完成',
-        phase: '大学',
-        desc: '咨询端推来的待接收学员：接收 / 拒绝。',
+        phase: '初高 / 大学',
+        desc: '咨询端推来的待接收学员：接收 / 拒绝（初高、大学共用）。',
       },
 
       domainNode('attendance'),

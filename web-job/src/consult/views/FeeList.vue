@@ -345,11 +345,8 @@ async function submitAssign() {
   }
   const opt = assignClassOptions.value.find((o) => o.value === f.classId);
   await ElMessageBox.confirm(
-    `确认把「${f.order.studentName}」分入「${opt?.label ?? f.classId}」？${
-      f.side === 'univ'
-        ? '将推送到该班班主任的「待接收学员」，同意后入班。'
-        : '将直接进入该初高班级。'
-    }`,
+    `确认把「${f.order.studentName}」分入「${opt?.label ?? f.classId}」？` +
+      '将推送到该班班主任的「待接收学员」，班主任接收后入班。',
     '确认分班',
     { type: 'warning' },
   );
@@ -360,11 +357,7 @@ async function submitAssign() {
       f.classId,
       f.side === 'jh' ? 'class-jh' : 'class',
     );
-    ElMessage.success(
-      f.side === 'jh'
-        ? `「${f.order.studentName}」已直接进入初高对应班级`
-        : `「${f.order.studentName}」已推送到「待接收学员」，待班主任接收`,
-    );
+    ElMessage.success(`「${f.order.studentName}」已推送到「待接收学员」，待班主任接收`);
     assignVisible.value = false;
     load();
   } finally {

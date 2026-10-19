@@ -1127,7 +1127,7 @@ const ASSIGN_STATE_TEXT: Record<AssignState, string> = {
   pending: '已推送，待班主任接收',
   received: '已接收（已入班）',
   rejected: '已被驳回，可重新分班',
-  jh: '已直接进入初高班级',
+  jh: '已进入初高班级',
   unknown: '分班状态未知',
 };
 
@@ -1207,10 +1207,7 @@ async function assignBlockReason(stu: Record<string, any>): Promise<string | nul
   const no = consultNoOf(stu);
   const [univ, jh] = await Promise.all([classSync.consultStatus([no]), classSync.jhEnrolledStatus([no])]);
 
-  const j = (jh.ok ? jh.data : {}) as Record<string, any>;
-  if (j[no]) {
-    return `「${stu.student_name}」已直接进入教学管理（初高）「${j[no].className ?? '对应班级'}」，不能再分派到其他班级；如需换班请先在初高侧处理`;
-  }
+  // ★ 2026-10-19：先看推送单（初高现在也走推送，pending/received 都在这里）
   const u = (univ.ok ? univ.data : {}) as Record<string, any>;
   const hit = u[no];
   if (hit) {
@@ -1222,6 +1219,12 @@ async function assignBlockReason(stu: Record<string, any>): Promise<string | nul
       return `「${stu.student_name}」已分班到「${hit.intendClassName ?? ''}」，正在等待班主任接收，不能重复分派；如要改派请先让该班班主任驳回`;
     }
     // st === 3（已驳回）→ 放行，允许重新分派
+  }
+
+  // 历史上「初高直建入班」的老数据没有推送单 → 仍按初高学籍表兜底拦一次
+  const j = (jh.ok ? jh.data : {}) as Record<string, any>;
+  if (j[no]) {
+    return `「${stu.student_name}」已进入教学管理（初高）「${j[no].className ?? '对应班级'}」，不能再分派到其他班级；如需换班请先在初高侧处理`;
   }
   return null;
 }
@@ -1284,88 +1287,88 @@ studentRouter.post(
       if (blocked) throw new BizError(BizCode.INVALID_STATUS, blocked);
     }
 
-    // ---- 分流：初高 = 直接入班；大学部 = 推「待接收学员」等班主任同意 ----
+    /* ---- 分流：初高 / 大学部 都推「待接收学员」，由对应学段的班主任接收 ----
+     *
+     * ★ 2026-10-19 行为变更（用户口径）：
+     *   「接收权限放宽到初高中、大学，初高中、大学接收来自咨询的学生」
+     *   原来初高是**分班即入班**（直接建档，班主任无感知）；
+     *   现在初高也走推送 → 初高班主任在「待接收学员」里接收后建档。
+     *   两个学段的差别只剩「目标班属于哪个库」，接收端按 intend_dept_code 分流。
+     */
     let result;
     let msg: string;
 
-    // 目标班名（记回咨询侧 + 大学部推送带班名）
+    /**
+     * 目标班属于哪个学段 / 叫什么
+     *
+     * ⚠️ 不能用 `stu.dept_code` 兜底 —— 那是**学生自己的部门**，
+     *    咨询库里一个初高意向的学生可以被分到大学班（实测踩过：
+     *    dept_code=1 的学生分到 U2601，推送单标成初高 → 接收端跑去初高库找人
+     *    → 「目标班级不存在」）。
+     *   所以两个学段的开放班级都查一遍，**以班级实际归属为准**。
+     */
     let targetName: string | null = null;
+    let targetDept: number | null = null;
     if (classId) {
-      if (module === 'class-jh') {
-        // 初高 toClassInfo 字段是 { classId, className }
-        const jh = (await classSync.classJhOpenOptions()).data as any[] | undefined;
-        targetName = jh?.find((c: any) => c.classId === classId)?.className ?? null;
+      const [jhOpt, univOpt] = await Promise.all([
+        classSync.classJhOpenOptions(),
+        classSync.classOpenOptions(),
+      ]);
+      const jhHit = ((jhOpt.data as any[]) || []).find((c: any) => c.classId === classId);
+      if (jhHit) {
+        targetName = jhHit.className ?? null;
+        targetDept = 1;
       } else {
-        // 大学部 toClassItem 是 rowToCamel 展开：{ id, className }
-        const univ = (await classSync.classOpenOptions()).data as any[] | undefined;
-        targetName = univ?.find((c: any) => c.id === classId)?.className ?? null;
+        const univHit = ((univOpt.data as any[]) || []).find((c: any) => c.id === classId);
+        if (univHit) {
+          targetName = univHit.className ?? null;
+          targetDept = 2;
+        }
       }
     }
+    const isJhTarget = targetDept === 1;
 
-    if (classId && module === 'class-jh') {
-      // 初高侧的目标班级必须是「初高的开放班级」——直接把 classId 传给初高，
-      // 那边 loadClass + 封班校验兜底（classId 对不上初高库会报班级不存在）
-      result = await classSync.consultCreateJh({
+    result = await classSync.consultPush([
+      {
         consultNo,
         studentName: stu.student_name,
-        gender: stu.gender ?? undefined,
+        gender: stu.gender ?? null,
         phone: stu.phone || null,
         parentPhone: stu.parent_phone || null,
         age: stu.age ?? null,
-        school: stu.school || null,
-        address: stu.address || null,
-        classId,
+        // 学历字段咨询侧没有，留空由班主任接收时补
+        origin: stu.source_remark || null,
+        graduateSchool: stu.school || null,
+        homeAddress: stu.address || null,
+        // ★ 目标学段：初高 1 / 大学部 2（接收端据此决定往哪个库建档）
+        //   以「目标班级实际归属」为准，查不到才退回学生自己的部门
+        intendDeptCode: targetDept ?? (stu.dept_code ?? null),
+        intendClassId: classId ?? (stu.class_id || null),
+        intendClassName: targetName ?? (stu.class_name || null),
         remark: stu.remark || null,
-      });
-      if (!result.ok) {
-        throw new BizError(
-          BizCode.DOWNSTREAM_ERROR,
-          `分班到教学管理（初高）失败：${result.message}`,
-        );
-      }
-      const dup = Boolean((result.data as any)?.duplicate);
-      msg = dup
-        ? `「${stu.student_name}」已在初高「${targetName ?? '对应班级'}」里了（未重复建档）`
-        : `「${stu.student_name}」已直接进入教学管理（初高）「${targetName ?? '对应班级'}」`;
-    } else {
-      result = await classSync.consultPush([
-        {
-          consultNo,
-          studentName: stu.student_name,
-          gender: stu.gender ?? null,
-          phone: stu.phone || null,
-          parentPhone: stu.parent_phone || null,
-          age: stu.age ?? null,
-          // 学历字段咨询侧没有，留空由班主任接收时补
-          origin: stu.source_remark || null,
-          graduateSchool: stu.school || null,
-          homeAddress: stu.address || null,
-          intendDeptCode: stu.dept_code ?? null,
-          intendClassId: classId ?? (stu.class_id || null),
-          intendClassName: targetName ?? (stu.class_name || null),
-          remark: stu.remark || null,
-          pushTime: formatTime(new Date()),
-        },
-      ]);
+        pushTime: formatTime(new Date()),
+        // ★ 2026-10-19：「意向阶段」已删除，不再往推送单里塞 intendStage
+      },
+    ]);
 
-      // 用户点出来的动作 → 失败必须让他知道（不能像财务那样静默记日志）
-      if (!result.ok) {
-        throw new BizError(
-          BizCode.DOWNSTREAM_ERROR,
-          `推送到班级管理失败：${result.message}。请确认班级管理模块已启动（CLASS_URL），或联系学管模块负责人。`,
-        );
-      }
-
-      const inserted = Number(result.data?.inserted ?? 0);
-      const skipped = Number(result.data?.skipped ?? 0);
-      const reopened = Number(result.data?.reopened ?? 0);
-      msg =
-        reopened > 0
-          ? `已把「${stu.student_name}」重新推送到班级管理的「待接收学员」（原驳回单已重新激活），请班主任重新接收`
-          : inserted > 0
-            ? `已把「${stu.student_name}」推送到班级管理的「待接收学员」，请班主任接收并建档`
-            : `「${stu.student_name}」已在班级管理的「待接收学员」里了（未重复推送）`;
+    // 用户点出来的动作 → 失败必须让他知道（不能像财务那样静默记日志）
+    if (!result.ok) {
+      throw new BizError(
+        BizCode.DOWNSTREAM_ERROR,
+        `推送到班级管理失败：${result.message}。请确认班级管理模块已启动（CLASS_URL），或联系学管模块负责人。`,
+      );
     }
+
+    const inserted = Number(result.data?.inserted ?? 0);
+    const skipped = Number(result.data?.skipped ?? 0);
+    const reopened = Number(result.data?.reopened ?? 0);
+    const where = isJhTarget ? '教学管理（初高）' : '班级管理（大学部）';
+    msg =
+      reopened > 0
+        ? `已把「${stu.student_name}」重新推送到${where}的「待接收学员」（原驳回单已重新激活），请班主任重新接收`
+        : inserted > 0
+          ? `已把「${stu.student_name}」推送到${where}的「待接收学员」，请班主任接收并建档`
+          : `「${stu.student_name}」已在${where}的「待接收学员」里了（未重复推送）`;
 
     await addHistory(id, operator.userName, `分班：${msg}`, operator.roleTitle, 'ENROLL_TO_CLASS');
 
@@ -1376,12 +1379,7 @@ studentRouter.post(
         .update({ class_id: classId, class_name: targetName, update_time: new Date() });
     }
 
-    const inserted = Number(result.data?.inserted ?? 0);
-    const skipped = Number(result.data?.skipped ?? 0);
-    const reopened = Number(result.data?.reopened ?? 0);
-    // ★ 初高分班直建时透传 duplicate（true=已入档未重复建）
-    const duplicate = Boolean((result.data as any)?.duplicate);
-    res.json(ok({ consultNo, inserted, skipped, reopened, duplicate }, msg));
+    res.json(ok({ consultNo, inserted, skipped, reopened }, msg));
   }),
 );
 
