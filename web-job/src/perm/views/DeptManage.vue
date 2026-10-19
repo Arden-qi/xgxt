@@ -541,7 +541,9 @@ function gotoUserEdit(id: string): void {
           <span class="bar"></span>部门结构 <span class="sub">用于职位归属与账号划分</span>
         </div>
         <div class="r">
-          <button class="btn" type="button" @click="openAdd">＋ 新建部门</button>
+          <!-- ★ 2026-10-19 按用户要求：主操作按钮统一成品牌红（与「新建职位」「新建账号」一致）——
+               原来是普通白底按钮 class="btn"，与职位管理 / 账号管理的主按钮观感不一致。 -->
+          <button class="btn pri" type="button" @click="openAdd">＋ 新建部门</button>
         </div>
       </div>
       <div class="card-b p0">
