@@ -171,8 +171,8 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
     icon: 'Money',
     desc: '费用催办与缴费台账。',
     // ★ 2026-10-19 域重组（用户要求）：原四学段页签收成两页——
-    //   「催费」= 初高缴费台账催费侧 + 大学催缴 + 就业催费单 聚合（TeachingFeeUrge，带部门列与部门筛选）；
-    //   「缴费」= 教务缴费总记录（PaymentList 原样，TeachingFeeHub 内页签）。
+    //   「催费」= 原「初高」缴费台账页（FeeList）改名，功能不变；
+    //   「缴费」= 教务缴费总记录（PaymentList 原样）。页签显隐沿用原权限码（见 access.ts fee 域）。
     //   老页面/老路由（/class-jh/fee、/class/urge、/fee-call、/edu/fee）未删，可回退。
     unified: defineAsyncComponent(() => import('@/teaching/views/TeachingFeeHub.vue')),
   },

@@ -1,34 +1,37 @@
 <template>
   <div class="tfh">
     <!--
-      ★ 2026-10-19 域重组：原四个学段页签（初高缴费台账 / 大学催缴 / 实训催费单 / 教务缴费）
-        收成两个业务页签——
-        · 「催费」= TeachingFeeUrge：初高缴费台账催费侧 + 大学催缴 + 就业催费单 聚合，
-          带部门列与部门筛选（就业=实训催费单，两部门共用 sms_job 库）；
-        · 「缴费」= 教务缴费总记录（PaymentList 原样，需 edu:fee:view 权限才显示页签）。
-        老页面与老路由（/class-jh/fee、/class/urge、/fee-call、/edu/fee）未删，可随时回退。
+      ★ 2026-10-19 域重组（按用户二次要求调整）：页签只有两个——
+        · 「催费」= 原「初高」页（FeeList：缴费台账 + 催费推送/催缴记录 + 导出）改的名，
+          功能一行没动；中途试过跨部门聚合页（TeachingFeeUrge），因丢失初高功能已撤下删除；
+        · 「缴费」= 教务缴费总记录（PaymentList 原样）。
+        页签显隐沿用原学段页签的权限码（stageVisible('fee', 'jh' / 'edu')）。
+        老页面/老路由（/class-jh/fee、/class/urge、/fee-call、/edu/fee）未删，可回退。
     -->
     <el-tabs v-model="tab" class="tfh-tabs">
-      <el-tab-pane label="催费" name="urge">
-        <TeachingFeeUrge v-if="tab === 'urge'" />
+      <el-tab-pane v-if="showUrge" label="催费" name="urge">
+        <FeeList v-if="tab === 'urge'" />
       </el-tab-pane>
-      <el-tab-pane v-if="canPay" label="缴费" name="pay" lazy>
+      <el-tab-pane v-if="showPay" label="缴费" name="pay" lazy>
         <PaymentList />
       </el-tab-pane>
     </el-tabs>
+    <el-empty v-if="!showUrge && !showPay" description="当前账号没有催费/缴费相关权限" :image-size="60" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { canAct } from '@/store/permission';
-import TeachingFeeUrge from './TeachingFeeUrge.vue';
-import PaymentList from '@/views/edu/PaymentList.vue';
+import { ref, defineAsyncComponent } from 'vue';
+import { stageVisible } from '../access';
 
-const tab = ref('urge');
+const tab = ref(stageVisible('fee', 'jh') ? 'urge' : 'pay');
 
-/** 缴费页签需要教务缴费查看权限（PaymentList 内部还有更细的操作权限控制） */
-const canPay = canAct('edu:fee:view', true);
+const FeeList = defineAsyncComponent(() => import('@/class-jh/views/FeeList.vue'));
+const PaymentList = defineAsyncComponent(() => import('@/views/edu/PaymentList.vue'));
+
+/** 页签显隐沿用原学段页签的权限码（初高缴费台账 / 教务缴费总记录） */
+const showUrge = stageVisible('fee', 'jh');
+const showPay = stageVisible('fee', 'edu');
 </script>
 
 <style scoped>
