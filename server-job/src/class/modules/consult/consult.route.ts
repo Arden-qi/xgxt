@@ -20,7 +20,6 @@ import {
   tblTrx,
   tblIns,
   tblInsTrx,
-  USE_UNI_TABLE,
   phaseCodeCol,
   readPhaseCode,
 } from '../../../teaching/shared/uniTable';

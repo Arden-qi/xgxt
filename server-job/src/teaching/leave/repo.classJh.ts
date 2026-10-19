@@ -38,9 +38,6 @@ const STAGE = 'jh' as const;
 /** ★ 老表所在库（切读路由层 tbl() 的第一个参数） */
 const SRC = 'sms_class_jh';
 
-/** ★ 全限定表名（conn 来自 job 库事务） */
-const WT = 'sms_class_jh.t_class_flow';
-const WS = 'sms_class_jh.t_class_student';
 
 /** ★ 本域只关心这三类流程（其余 4 类是初高独有，不属于本次合并范围） */
 const IN_SCOPE = [1, 2, 5];

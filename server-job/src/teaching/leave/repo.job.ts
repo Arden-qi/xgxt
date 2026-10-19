@@ -32,8 +32,6 @@ const S = 't_student_base';
 const STAGE = 'job' as const;
 /** ★ 老表所在库（切读路由层 tbl() 的第一个参数） */
 const SRC = 'sms_job';
-/** ★ 老表所在库（切读路由层 tbl() 需要「库名.表名」） */
-const WT = 'sms_job.t_job_student_leave';
 
 /** ★ 班级库（大学部）学生表 —— 跨库；切读时对应 t_uni_student 的 'class' 分区 */
 const CLASS_DB = 'sms_class';

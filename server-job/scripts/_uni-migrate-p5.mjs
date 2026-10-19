@@ -68,16 +68,64 @@ async function main() {
   const dbJh = await conn('sms_class_jh');
   const dbJob = await conn('sms_job');
 
-  /* 0. 备份检查 */
-  const backupDir = path.join(process.cwd(), 'exports', 'p5-backup');
-  if (!fs.existsSync(path.join(backupDir, 'sms_common.sql'))) {
-    console.error('✗ 未找到备份 exports/p5-backup/ —— 先跑 node scripts/_uni-p5-backup.mjs');
+  /* 0. 备份检查
+        ★ 2026-10-19：P8 时备份目录从 p5-backup 改名为 p8-final-backup，
+          本脚本原先只认旧名 → seed 链路的「搬迁」步骤一直静默失败（数据没进统一表）。
+          现在两个名字都认，优先新名。 */
+  const backupCandidates = ['p8-final-backup', 'p5-backup'].map((d) =>
+    path.join(process.cwd(), 'exports', d),
+  );
+  const backupDir = backupCandidates.find((d) => fs.existsSync(path.join(d, 'sms_common.sql')));
+  if (!backupDir) {
+    console.error(
+      '✗ 未找到备份（exports/p8-final-backup 或 exports/p5-backup）—— 先跑 node scripts/_uni-p5-backup.mjs',
+    );
     process.exit(1);
   }
+  console.log(`备份目录：${path.relative(process.cwd(), backupDir)}\n`);
 
   const pairs = parseUniMap();
   const uniTables = [...new Set(pairs.map(([, u]) => u))];
   console.log(`映射 ${pairs.length} 条 / 目标表 ${uniTables.length} 张\n`);
+
+  /* 0.5 ★ 破坏性预检（P8 后老表已 DROP，本脚本会 TRUNCATE 全部统一表）
+         —— 必须在清空之前确认「源表都还在、且确实有数据可搬」，
+            否则「先清空、再发现没数据」= 直接丢数据。
+         预期用法：seed 链路「临时重建老表 → 灌数据 → 本脚本 → 清除老表」；
+         手动跑若源表为空/缺失，一律中止；确实要清空请显式加 --force。 */
+  const FORCE = process.argv.includes('--force');
+  const sources = [...new Set(pairs.map(([o]) => o))];
+  const missing = [];
+  let totalRows = 0;
+  for (const key of sources) {
+    const [dbName, table] = key.split('.');
+    try {
+      const [[r]] = await dbJob.query(`select count(*) c from \`${dbName}\`.\`${table}\``);
+      totalRows += Number(r.c);
+    } catch (e) {
+      missing.push(`${key}（${e.code || e.message}）`);
+    }
+  }
+  if (missing.length) {
+    console.error(
+      `✗ 中止：${missing.length}/${sources.length} 张源表不存在，未做任何清空。\n` +
+        missing.slice(0, 8).map((x) => `   · ${x}`).join('\n') +
+        (missing.length > 8 ? `\n   …等 ${missing.length} 张` : '') +
+        '\n  P8 之后老表已 DROP —— 若要重灌演示数据请跑 `node scripts/seed-all-demo.mjs`（它会临时重建老表）。',
+    );
+    process.exit(1);
+  }
+  if (totalRows === 0 && !FORCE) {
+    console.error(
+      `✗ 中止：${sources.length} 张源表全部为 0 行，而本脚本会先 TRUNCATE 全部统一表（当前 ${uniTables.length} 张）——` +
+        '\n  继续执行只会把统一表清空。\n' +
+        '  · 想灌演示数据：node scripts/seed-all-demo.mjs\n' +
+        '  · 确认要在这个状态下强制执行：加 --force',
+    );
+    process.exit(1);
+  }
+  console.log(`源表预检通过：${sources.length} 张 / 共 ${totalRows} 行${FORCE ? '（--force）' : ''}\n`);
+
 
   /* 1.5 清理历轮自检套件的夹具残留（备份已做；「自检-」/「【冒烟】」开头的班/学生
          在老表无唯一约束下跨轮共存，合并进统一表会撞 uk_class —— 本就不该搬迁） */

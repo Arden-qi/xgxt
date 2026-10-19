@@ -143,6 +143,15 @@ async function cleanup() {
       await c.destroy();
     }
   }
+  /* ★ 2026-10-19 修：上面只按老表清单删，`mirrorToUni` 登记的 **统一表镜像行**（db='sms_common'）
+       从来没被删过 → 每跑一轮就在 t_uni_student / t_uni_class 里留一批「自检住宿xxx」。
+       这里按登记顺序倒着补删一遍（先子后主）。 */
+  for (const [fdb, ftable, id] of [...fixtures].reverse()) {
+    if (fdb !== 'sms_common') continue;
+    const c = conn(fdb);
+    await c(ftable).where({ id }).del().catch(() => {});
+    await c.destroy();
+  }
 }
 
 /* ============================================================

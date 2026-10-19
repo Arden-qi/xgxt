@@ -16,7 +16,7 @@ import { wrap } from '../../middleware/error';
 //   合并版里两边在同一进程、同一个 db 连接，所以直接函数调用复用接收逻辑，
 //   不用绕 HTTP、不用管内部令牌、不用等 8003 那边推。
 import { processHandoff } from '../../../routes/upgrade.route';
-import { tbl, tblTrx, tblIns, tblInsTrx, USE_UNI_TABLE, phaseCodeCol, readPhaseCode } from '../../../teaching/shared/uniTable';
+import { tbl, tblTrx, tblIns, tblInsTrx, phaseCodeCol, readPhaseCode } from '../../../teaching/shared/uniTable';
 // ★ 第 4 期第 4 批：transfer_type 语义拆分（方案 B）需要这两个枚举
 //   TransferType  = 「为什么换」（事由）→ 岗位交接统一填 1=调岗
 //   ClassPostType = 「换的是哪个岗位」→ 写进新列 post_transfer_type
@@ -445,26 +445,18 @@ classRouter.post(
         ...baseInsert(user),
         class_id: b.classId,
         class_name: cls.class_name as string,
-        transfer_type: USE_UNI_TABLE ? TransferType.REASSIGN : b.transferType,
+        transfer_type: TransferType.REASSIGN,
         transfer_time: now(),
         reason: b.reason ?? `更换${target.label}`,
       };
 
-      if (USE_UNI_TABLE) {
-        /* 岗位另存新列（迁移 20261011_001）；不适用时留 NULL 是诚实的表达 */
-        transferRow.post_transfer_type = postType[b.transferType];
-        /* 岗位交接的「人」写 old_ / new_ 系列 12 列，不碰被借用走的 from_user_ / to_user_ */
-        transferRow[uc.old[0]] = fromUserId;
-        transferRow[uc.old[1]] = fromUserName;
-        transferRow[uc.neo[0]] = b.toUserId;
-        transferRow[uc.neo[1]] = toUserName;
-      } else {
-        /* 老表原样：4 列都是「负责人ID / 负责人姓名」语义 */
-        transferRow.from_user_id = fromUserId;
-        transferRow.from_user_name = fromUserName;
-        transferRow.to_user_id = b.toUserId;
-        transferRow.to_user_name = toUserName;
-      }
+      /* 岗位另存新列（迁移 20261011_001）；不适用时留 NULL 是诚实的表达 */
+      transferRow.post_transfer_type = postType[b.transferType];
+      /* 岗位交接的「人」写 old_ / new_ 系列 12 列，不碰被借用走的 from_user_ / to_user_ */
+      transferRow[uc.old[0]] = fromUserId;
+      transferRow[uc.old[1]] = fromUserName;
+      transferRow[uc.neo[0]] = b.toUserId;
+      transferRow[uc.neo[1]] = toUserName;
 
       await tblInsTrx(trx, SRC, 't_class_transfer', STAGE, transferRow as never);
     });

@@ -86,7 +86,12 @@ export function stageAccessibleByCode(pageCode?: StageCode, fallbackPath?: strin
  *   结果永远是 false，等于白跑一趟；更糟的是会让人以为「还在兜底其实早没了」。
  *
  *   **保留 path 的 4 条**：就业·信息档案 / 就业基地宿舍 / 教务·学生档案 / 教务·宿舍
- *   —— 这些域本期**没有合并**，页面和路由都还在，是当前唯一可用的兜底。
+ *   —— 这些域本期**没有合并，页面和路由都还在**，是当前唯一可用的兜底。
+ *
+ * ★ 2026-10-19（P7 收尾）：其中「就业·信息档案 `/archive/basic-info`」与
+ *   「就业基地宿舍 `/archive/dorm-assign`」两个页面已下线（统一页已覆盖），
+ *   对应 path 已置 null；仍保留兜底的只剩「教务·学生档案 `/edu/student`」
+ *   与「教务·宿舍」两条。别再把已删路由写回 path —— 那只会让兜底永远为 false。
  */
 /**
  * ★ 2026-10-15：判权改为支持**多码任一**（`string | string[]`）
@@ -110,7 +115,7 @@ export const STAGE_ACCESS = {
   student: {
     jh: { code: 'classjh:student:view', path: null },
     class: { code: 'class:student:view', path: null },
-    job: { code: ['job:empArchive:view', 'job:classStudent:view'], path: '/archive/basic-info' },
+    job: { code: ['job:empArchive:view', 'job:classStudent:view'], path: null },
     edu: { code: 'edu:student:view', path: '/edu/student' },
   },
   class: {

@@ -16,7 +16,6 @@ import {
   tblTrx,
   tblInsTrx,
   uniUpdCols,
-  USE_UNI_TABLE,
 } from '../../../teaching/shared/uniTable';
 
 const SRC = 'sms_class';
@@ -331,37 +330,31 @@ attendanceRouter.get(
     //   MySQL 结果集里**后面的 t.class_name 会覆盖前面的 a.class_name**，
     //   所以老表实际返回的是主表的班级名。
     //   → 切读分支必须**同样不加别名**，否则同一字段两分支含义不同（前端会时好时坏）。
-    const base = USE_UNI_TABLE
-      ? commonDb('t_uni_attendance_detail as a')
-          .leftJoin('t_uni_attendance as t', 'a.attendance_id', 't.id')
-          .where('a.edu_stage', STAGE)
-          .where('t.edu_stage', STAGE)
-          .where('a.is_deleted', 0)
-          .where('t.is_deleted', 0)
-          // 显式列清单而非 a.*：切读时 a.* 会带出 edu_stage/stage_code/parent_phone 等
-          // 老表不存在的列，前端拿到的结构会与老表模式不同
-          .select(
-            'a.id',
-            'a.create_time',
-            'a.create_by',
-            'a.update_time',
-            'a.update_by',
-            'a.is_deleted',
-            'a.attendance_id',
-            'a.student_id',
-            'a.student_no',
-            'a.student_name',
-            'a.phone',
-            'a.absent_reason',
-            't.attendance_date',
-            't.class_id',
-            't.class_name',
-          )
-      : db('t_class_attendance_absent as a')
-          .leftJoin('t_class_attendance as t', 'a.attendance_id', 't.id')
-          .where('a.is_deleted', 0)
-          .where('t.is_deleted', 0)
-          .select('a.*', 't.attendance_date', 't.class_id', 't.class_name');
+    const base = commonDb('t_uni_attendance_detail as a')
+      .leftJoin('t_uni_attendance as t', 'a.attendance_id', 't.id')
+      .where('a.edu_stage', STAGE)
+      .where('t.edu_stage', STAGE)
+      .where('a.is_deleted', 0)
+      .where('t.is_deleted', 0)
+      // 显式列清单而非 a.*：a.* 会带出 edu_stage/stage_code/parent_phone 等列，
+      // 前端拿到的结构与历史契约不同
+      .select(
+        'a.id',
+        'a.create_time',
+        'a.create_by',
+        'a.update_time',
+        'a.update_by',
+        'a.is_deleted',
+        'a.attendance_id',
+        'a.student_id',
+        'a.student_no',
+        'a.student_name',
+        'a.phone',
+        'a.absent_reason',
+        't.attendance_date',
+        't.class_id',
+        't.class_name',
+      );
 
     applyDataScope(base, user, { classIdColumn: 't.class_id' });
     if (query.classId) base.where('t.class_id', query.classId);

@@ -79,6 +79,7 @@ function reg(db, table, id) {
   /** 本次自检创建的两张单（finally 里清理审批轨迹要用） */
   let jobId;
   let clsId;
+  let jhId;
 
   try {
     /* ============ A. 环境 ============ */
@@ -111,6 +112,10 @@ function reg(db, table, id) {
       });
       await dbJh('t_class_refund').insert(row);
       reg('sms_class_jh', 't_class_refund', row.id);
+      /* ★ P8 后老表已 DROP：夹具只保留统一表那一份 ——
+         产品若还读老表，本节断言必红（此前本套件正是因为老表还在而被"假绿"掩盖）。 */
+      await mirror('sms_class_jh', 't_class_refund', row, 'jh');
+      await dbJh('t_class_refund').where({ id: row.id }).del();
       return row.id;
     };
 
@@ -155,6 +160,74 @@ function reg(db, table, id) {
       pick(jhRaw4)?.canApprove === false,
       `canApprove=${pick(jhRaw4)?.canApprove}`,
     );
+
+    /* ============ B2. ★ 初高：写路径（P8 后老表已 DROP，只认统一表） ============
+       【为什么单独加这一段】
+         `repo.classJh.ts` 曾有 7 处裸访 `t_class_refund`（list/detail/aggregate/
+         insert/setStatus/setFinance/hasPending），P8 DROP 后初高退费整域 50002。
+         此前本节只读路径 + 老表夹具还在 → 被"假绿"掩盖；现在老表行插完即删，
+         产品只要回退到读老表，下面每条都会红。
+         ------------------------------------------------------------ */
+    const jhStu = await buildRow(dbJh, 't_class_student', {
+      student_no: 'JT' + Math.random().toString(36).slice(2, 7).toUpperCase(),
+      student_name: '自检-初高生',
+      student_status: 1,
+      is_deleted: 0,
+    });
+    await dbJh('t_class_student').insert(jhStu);
+    reg('sms_class_jh', 't_class_student', jhStu.id);
+    await mirror('sms_class_jh', 't_class_student', jhStu, 'jh');
+    await dbJh('t_class_student').where({ id: jhStu.id }).del();
+
+    const cJh = await req(`${API}/create`, {
+      method: 'POST',
+      token: tJhHead,
+      body: {
+        stage: 'jh',
+        studentId: jhStu.id,
+        items: [{ feeType: 1, amount: 100000 }],
+        refundAmount: 100000,
+        refundReason: '自检-初高退费',
+        submit: true,
+      },
+    });
+    check('初高：发起退费（老表已 DROP，写路径必须走统一表）', cJh.json?.code === 200, cJh.json?.message || '');
+    jhId = cJh.json?.data?.id;
+    if (jhId) {
+      regUniRefund(jhId);
+      const jhRow = await uniDb('t_uni_refund').where({ id: jhId }).first();
+      check(
+        '★ 初高：退费单落在 t_uni_refund 且 edu_stage=jh',
+        !!jhRow && jhRow.edu_stage === 'jh',
+        jhRow ? `edu_stage=${jhRow.edu_stage}` : '统一表没有该行',
+      );
+      check(
+        '初高：发起并提交 → refund_status = 2（待学管）',
+        Number(jhRow?.refund_status) === 2,
+        `refund_status=${jhRow?.refund_status}`,
+      );
+    }
+
+    const dJh = await req(`${API}/detail?id=${jhId}`, { token: tJhHead });
+    check('初高：详情可读（detail 走统一表）', dJh.json?.code === 200 && !!dJh.json?.data, dJh.json?.message || '');
+
+    const aJh = await req(`${API}/approve`, {
+      method: 'POST',
+      token: tDean,
+      body: { stage: 'jh', id: jhId, comment: '自检-学管同意' },
+    });
+    check('初高：学管审批（setStatus 写统一表）', aJh.json?.code === 200, aJh.json?.message || '');
+    const jhAfter = jhId ? await uniDb('t_uni_refund').where({ id: jhId }).first() : null;
+    check(
+      '初高：审批后状态推进（不再是 1/2）',
+      Number(jhAfter?.refund_status) >= 2,
+      `refund_status=${jhAfter?.refund_status}`,
+    );
+    // 审批单登记清理（产品写进 t_uni_approval_main）
+    const apJh = jhId
+      ? await uniDb('t_uni_approval_main').where({ biz_type: 'refund', biz_id: jhId }).first()
+      : null;
+    if (apJh) regUniApproval(apJh.id);
 
     /* ============ C. 实训：全链路（蓝本） ============ */
     const jobStu = await buildRow(dbJob, 't_student_base', {
@@ -335,11 +408,11 @@ function reg(db, table, id) {
     /* ============ E. 三学段审批单在同一张表 ============ */
     const allAp = await approvalT()
       .where({ biz_type: BIZ_REFUND, is_deleted: 0 })
-      .whereIn('biz_id', [jobId, clsId].filter(Boolean));
+      .whereIn('biz_id', [jobId, clsId, jhId].filter(Boolean));
     check(
-      `★ 真正统一：实训 + 大学的审批单都在${USE_UNI ? ' sms_common.t_uni_approval_main' : ' sms_job.t_job_approval'}`,
-      allAp.length === 2,
-      `找到 ${allAp.length} 条`,
+      `★ 真正统一：初高 + 实训 + 大学的审批单都在${USE_UNI ? ' sms_common.t_uni_approval_main' : ' sms_job.t_job_approval'}`,
+      allAp.length === 3,
+      `找到 ${allAp.length} 条（期望 3：jh/class/job 各一）`,
     );
 
     /* ============ F. 权限 ============ */
@@ -405,14 +478,14 @@ function reg(db, table, id) {
         await uniDb('t_uni_approval_log')
           .whereIn(
             'approval_id',
-            uniDb('t_uni_approval_main').select('id').whereIn('biz_id', [jobId, clsId].filter(Boolean)),
+            uniDb('t_uni_approval_main').select('id').whereIn('biz_id', [jobId, clsId, jhId].filter(Boolean)),
           )
           .del();
       } else {
         await dbJob('t_job_approval_log')
           .whereIn(
             'approval_id',
-            dbJob('t_job_approval').select('id').whereIn('biz_id', [jobId, clsId].filter(Boolean)),
+            dbJob('t_job_approval').select('id').whereIn('biz_id', [jobId, clsId, jhId].filter(Boolean)),
           )
           .del();
       }

@@ -37,9 +37,6 @@ const STAGE = 'class' as const;
 /** ★ 老表所在库（切读路由层 tbl() 的第一个参数） */
 const SRC = 'sms_class';
 
-/** ★ 全限定表名（conn 来自 job 库事务） */
-const WT = 'sms_class.t_class_suspend_apply';
-const WS = 'sms_class.t_class_student';
 
 /** ★ 大学只有 休学(1) / 退学(2) */
 const IN_SCOPE = [1, 2];

@@ -12,7 +12,7 @@ import { db } from '../../utils/db';
 import { calcScores } from '../shared/conf';
 import type { ScoreEntry, ScoreEntryRow, ScoreListQuery, ScoreRow, ScoreSaveBody } from '../shared/dto';
 import { EXAM_RESULT_NAME } from '../shared/dto';
-import { tbl, tblIns, tblRef, uniDb, USE_UNI_TABLE } from '../shared/uniTable';
+import { tbl, tblIns, tblRef, uniDb } from '../shared/uniTable';
 
 /* ★ P6 补切（2026-10-16）：本文件此前是「半切」——exam 查询走了 tbl，成绩表/花名册
    还是裸 db()；teaching 目录被 _uni-bare-scan 整体跳过，扫描器没抓到。
@@ -55,7 +55,7 @@ function mapRow(r: Record<string, any>): ScoreRow {
 /** 当天在班学生（花名册 status=1）
  *  ★ join 场景：开关开时统一表在 sms_common，必须用 uniDb 连接（tblRef 只换表名不换库） */
 function joinDb() {
-  return USE_UNI_TABLE ? uniDb : db;
+  return uniDb;
 }
 async function roster(classId: string) {
   return (await joinDb()(`${tblRef(DB, CS)} as cs`)

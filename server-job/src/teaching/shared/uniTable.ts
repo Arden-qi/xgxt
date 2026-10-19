@@ -54,7 +54,14 @@ import type { TeachingStage } from '../shared/dto';
  *   ③ 学段列改名 stage → edu_stage   —— ✅ 20261010_022
  *   ④ 加环境变量启动跑对比回归       —— ⏳ 步骤 2 本步
  */
-export const USE_UNI_TABLE = process.env.TEACHING_UNI_TABLE === '1';
+/**
+ * ★ P8（2026-10-19）后：教学域老表已全部 DROP，统一表是**唯一真源**。
+ *   所以开关语义从「显式 1 才开」改为「**默认开，只有显式 0 才关**」——
+ *   否则一旦某环境忘了配 TEACHING_UNI_TABLE（.env 不入库），
+ *   散落在各路由的列名分支就会退回老列名，读出 undefined（静默错值，不报错）。
+ *   保留 0 的唯一用途：极端情况下做「纯统一表 vs 旧列名」的对照排查。
+ */
+export const USE_UNI_TABLE = process.env.TEACHING_UNI_TABLE !== '0';
 
 /** 某学段是否该走统一表（当前是全局开关，学段粒度留待后续细化） */
 export function useUni(stage: TeachingStage): boolean {
