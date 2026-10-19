@@ -376,9 +376,18 @@
               </el-form-item>
             </el-col>
           </template>
+          <!-- 2026-10-19 批注：教室按「楼栋-房间号」规定格式输出，例如 A-201。
+               输入宽容（A栋-102 / 教学楼 A-102 / a102 都能写），失焦即归一；
+               认不出来的格式保存时会被拦下并提示正确写法。 -->
           <el-col :span="8">
-            <el-form-item :label="curMeta?.classroomLabel || '教室'">
-              <el-input v-model="form.classroom" />
+            <el-form-item :label="curMeta?.classroomLabel || '教室'" prop="classroom">
+              <el-input
+                v-model="form.classroom"
+                :placeholder="`例如：${CLASSROOM_EXAMPLE}`"
+                maxlength="20"
+                clearable
+                @blur="onClassroomBlur"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -502,6 +511,13 @@ import {
   type ClassSummary,
   type StagePlanOption,
 } from '@/teaching/api/class';
+// 教室「楼栋-房间号」格式：归一 + 校验（前后端同一套规则，见文件头注释）
+import {
+  CLASSROOM_EXAMPLE,
+  CLASSROOM_TIP,
+  isClassroomValid,
+  normalizeClassroom,
+} from '@/teaching/classroom';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
 const STAGE_LABEL: Record<ClassStage, string> = { jh: '初高部', class: '大学部', job: '实训' };
@@ -625,7 +641,26 @@ const rules = computed<FormRules>(() => ({
   employmentTeacherName: isTrainPhase.value
     ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
     : [],
+  /**
+   * 2026-10-19 批注：教室必须输出成「楼栋-房间号」，例如 A-201。
+   * 校验看的是**归一后**的值 —— 输入 A栋-102 / 教学楼 A-102 也算合规（失焦时会自动改成 A-102），
+   * 只有认不出来的写法（比如只写 102、带中文描述的一串）才会被拦。
+   */
+  classroom: [
+    {
+      validator: (_rule, value, callback) => {
+        if (isClassroomValid(value)) callback();
+        else callback(new Error(CLASSROOM_TIP));
+      },
+      trigger: 'blur',
+    },
+  ],
 }));
+
+/** 教室失焦即归一：A栋-102 / 教学楼 A-102 / a102 → A-102（不改变语义，只统一写法） */
+function onClassroomBlur() {
+  form.classroom = normalizeClassroom(form.classroom);
+}
 
 function emptyForm(stage: ClassStage): ClassSaveBody {
   return {
@@ -791,6 +826,8 @@ async function doGenCode() {
 }
 
 async function doSave() {
+  // 教室在提交前再归一一次：只用键盘 Enter 提交时不一定触发过 blur
+  form.classroom = normalizeClassroom(form.classroom);
   // 校验不通过就别往下走：原来直接 await validate() 会把 reject 抛成未捕获异常，
   // 界面上只有字段下面那行红字，看不到任何提示（加了「实训必填」规则后更容易踩到）
   if (formRef.value) {

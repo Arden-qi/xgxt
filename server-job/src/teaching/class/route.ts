@@ -24,6 +24,7 @@ import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 import type { ClassListQuery, TeachingStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
+import { normalizeClassroom } from '../shared/format';
 
 export const teachingClassRouter = Router();
 
@@ -107,7 +108,8 @@ function buildSaveBody(b: Record<string, any>, stage: TeachingStage) {
     employmentTeacherId: strOrNull(b.employmentTeacherId),
     employmentTeacherName: strOrNull(b.employmentTeacherName),
     universityNo: strOrNull(b.universityNo),
-    classroom: strOrNull(b.classroom),
+    // ★ 2026-10-19 教室统一成「楼栋-房间号」（A栋-102 / 教学楼 A-102 → A-102）
+    classroom: normalizeClassroom(strOrNull(b.classroom)),
     openDate: dateStr(b.openDate),
     closeDate: dateStr(b.closeDate),
     classStatus,
