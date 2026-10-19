@@ -35,6 +35,21 @@ const API = `${BASE}/api/teaching/leave`;
 const BIZ = { SUSPEND: 1, QUIT: 2, RESUME: 3 };
 const ALL_BIZ_TYPES = ['suspend', 'quit', 'resume'];
 
+/**
+ * ★ 异动日期用「今天」，不要写死日期
+ *
+ * 后端已加「异动日期只能是今天 ± 10 天」的校验（防手滑把 2026 写成 2025 之类，
+ * 见 shared/format.ts 的 LEAVE_DATE_WINDOW_DAYS）。写死的 '2026-10-09'
+ * 当天跑没问题，过几天再跑就会被这条校验拦下 —— 那是**测试自己过期**，
+ * 不是业务坏了，会浪费大量排查时间。所以统一取当天。
+ */
+const TODAY = (() => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
+})();
+
 const { check, summary } = makeChecker();
 const fixtures = [];
 // ★ 第4期步骤2：切读时数据落在统一表，登记必须跟着改指向，否则清理删不掉
@@ -179,7 +194,7 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
         stage: 'job',
         studentId: jobStu.id,
         bizType: BIZ.QUIT,
-        leaveDate: '2026-10-09',
+        leaveDate: TODAY,
         leaveReason: '自检-实训退学',
         submit: true,
       },
@@ -252,7 +267,7 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
         stage: 'jh',
         studentId: jhStu.id,
         bizType: BIZ.QUIT,
-        leaveDate: '2026-10-09',
+        leaveDate: TODAY,
         leaveReason: '自检-初高退学',
         submit: true,
       },
@@ -308,7 +323,7 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
         stage: 'class',
         studentId: clsStu.id,
         bizType: BIZ.SUSPEND,
-        leaveDate: '2026-10-09',
+        leaveDate: TODAY,
         leaveReason: '自检-大学休学',
         submit: true,
       },
@@ -347,8 +362,30 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
       `student_status=${clsStuAfter?.student_status}`,
     );
 
-    /* ============ G. 复学（实训）：必须选班 ============ */
+    /* ============ G. 复学（实训）：**发起申请时必填复学班** ============ */
     const rStu = await mkStudent(dbJob, 't_student_base', '自检-复学生', 6);
+
+    // G1. ★ 绕过前端：复学不填复学班 → 必须被拦（2026-10-16 起建单就必填）
+    const cResNoCls = await req(`${API}/create`, {
+      method: 'POST',
+      token: tPm,
+      body: {
+        stage: 'job',
+        studentId: rStu.id,
+        bizType: BIZ.RESUME,
+        leaveDate: TODAY,
+        leaveReason: '自检-复学（不填班，应被拒）',
+        submit: true,
+      },
+    });
+    check(
+      '★ 复学：建单不填复学班 → 必须被拦（「复学必须填写复学班级」）',
+      cResNoCls.json?.code !== 200 &&
+        String(cResNoCls.json?.message || '').includes('复学班级'),
+      `code=${cResNoCls.json?.code} ${cResNoCls.json?.message || ''}`,
+    );
+
+    // G2. 建单时带上复学班 → 通过，且班级落到单上
     const cRes = await req(`${API}/create`, {
       method: 'POST',
       token: tPm,
@@ -356,37 +393,68 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
         stage: 'job',
         studentId: rStu.id,
         bizType: BIZ.RESUME,
-        leaveDate: '2026-10-09',
+        leaveDate: TODAY,
+        newClassId: jobCls.id,
         leaveReason: '自检-复学',
         submit: true,
       },
     });
-    check('复学：项目经理发起', cRes.json?.code === 200, cRes.json?.message || '');
+    check('复学：项目经理发起（发起时填复学班）', cRes.json?.code === 200, cRes.json?.message || '');
     const resId = cRes.json?.data?.id;
     if (resId) reg('sms_job', 't_job_student_leave', resId);
+    const resRow1 = await probe(dbJob, 'sms_job', 't_job_student_leave').where({ id: resId }).first();
+    check(
+      '★ 复学：建单时填的复学班已落到单上（new_class_id）',
+      String(resRow1?.new_class_id || '') === String(jobCls.id),
+      `new_class_id=${resRow1?.new_class_id}`,
+    );
 
+    // G3. ★ 终审**不传** newClassId → 用发起时填的班（不再强制审批人重选）
     const apR1 = await req(`${API}/approve`, {
       method: 'POST',
       token: tDean,
-      body: { stage: 'job', id: resId, comment: '同意' }, // ★ 故意不传 newClassId
+      body: { stage: 'job', id: resId, comment: '同意' }, // 故意不传 newClassId
     });
     check(
-      '★ 复学：终审不传复学班 → 必须被拦（不能悄悄通过）',
-      apR1.json?.code !== 200,
+      '★ 复学：终审不传复学班 → 用建单时填的班，正常通过',
+      apR1.json?.code === 200 && apR1.json?.data?.finished === true,
       `code=${apR1.json?.code} ${apR1.json?.message || ''}`,
     );
-
-    const apR2 = await req(`${API}/approve`, {
-      method: 'POST',
-      token: tDean,
-      body: { stage: 'job', id: resId, comment: '同意', newClassId: jobCls.id },
-    });
-    check('★ 复学：传了复学班 → 通过', apR2.json?.code === 200, apR2.json?.message || '');
     const rStuAfter = await probe(dbJob, 'sms_job', 't_student_base').where({ id: rStu.id }).first();
     check(
       '★ 复学：副作用 → 学生状态 = 8（实训中）且回到复学班',
       Number(rStuAfter?.student_status) === 8 && String(rStuAfter?.class_id) === String(jobCls.id),
       `status=${rStuAfter?.student_status} class_id=${rStuAfter?.class_id}`,
+    );
+
+    // G4. ★ 老单兜底：单上没有复学班（建单后才可能发生）+ 终审也不传 → 必须被拦，不悄悄通过
+    const rStu2 = await mkStudent(dbJob, 't_student_base', '自检-复学生2', 6);
+    const cRes2 = await req(`${API}/create`, {
+      method: 'POST',
+      token: tPm,
+      body: {
+        stage: 'job',
+        studentId: rStu2.id,
+        bizType: BIZ.RESUME,
+        leaveDate: TODAY,
+        newClassId: jobCls.id,
+        leaveReason: '自检-复学（老单兜底）',
+        submit: true,
+      },
+    });
+    const resId2 = cRes2.json?.data?.id;
+    if (resId2) reg('sms_job', 't_job_student_leave', resId2);
+    // 模拟「建单时没填班」的老单：直接把单上的复学班清空
+    await dbJob('t_job_student_leave').where({ id: resId2 }).update({ new_class_id: null });
+    const apR2 = await req(`${API}/approve`, {
+      method: 'POST',
+      token: tDean,
+      body: { stage: 'job', id: resId2, comment: '同意' }, // 单上也没班、审批也不传
+    });
+    check(
+      '★ 复学：单上无班 + 终审不传 → 必须被拦（不能悄悄通过）',
+      apR2.json?.code !== 200 && String(apR2.json?.message || '').includes('复学班级'),
+      `code=${apR2.json?.code} ${apR2.json?.message || ''}`,
     );
 
     /* ============ H. 大学不支持复学 ============ */

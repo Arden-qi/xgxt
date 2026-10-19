@@ -46,7 +46,7 @@ function calcRemainDays(expireDate: any): number | null {
 }
 
 /** 未结清状态 */
-const UNPAID_STATUSES = [PayStatus.UNPAID, PayStatus.OVERDUE, PayStatus.FROZEN];
+const UNPAID_STATUSES = [PayStatus.UNPAID, PayStatus.FROZEN];
 
 /** 缴费台账行 → 实体（含派生 remainDays/isUrgent） */
 function toFee(r: any, remindDays: number) {

@@ -40,9 +40,13 @@ import { teachingRoutes } from '@/teaching/routes';
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    name: 'Home',
-    // 首页跳到「当前身份有权限的第一个页面」——具体去哪由守卫算
-    component: () => import('@/views/Placeholder.vue'),
+    name: 'Workbench',
+    // ★ 2026-10-16 用户指令：「将工作台放置首页，每个角色进来第一个页面就是工作台」
+    //   首页不再是“跳到第一个有权限页面”的空壳，而是真正的工作台页：
+    //   初高 KPI + 待办（有权限才显示）+ 按权限自适应的快捷入口。
+    //   不挂 pageCode/module —— 能登录就能进（守卫不拦截）。
+    component: () => import('@/views/Workbench.vue'),
+    meta: { title: '工作台' },
   },
 
   /* ============ 统一登录（门户 · 全系统唯一入口） ============ */
@@ -304,12 +308,13 @@ const routes: RouteRecordRaw[] = [
    *    pageCode 用 classjh:*（清单见后端 config/pagePermissions.ts）
    *    接口前缀 /api/class-jh/*（本模块 api 层已改好）
    */
+  /* ★ 2026-10-16 工作台迁到系统首页（/）：
+   *   原 /class-jh/dashboard（初高工作台页）整体上移为首页工作台，
+   *   这里留重定向 —— 老书签 / 侧栏老入口不失效。原页面权限码
+   *   classjh:dashboard:view 保留在 pagePermissions/pageRegistry 里，
+   *   现在用来控制「首页工作台是否显示初高 KPI 块」。 */
+  { path: '/class-jh/dashboard', redirect: '/' },
   {
-    path: '/class-jh/dashboard',
-    name: 'ClassJhDashboard',
-    component: () => import('@/class-jh/views/Dashboard.vue'),
-    meta: { title: '工作台', pageCode: 'classjh:dashboard:view' },
-  },{
     path: '/class-jh/fee',
     name: 'ClassJhFee',
     component: () => import('@/class-jh/views/FeeList.vue'),
@@ -320,8 +325,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/class-jh/views/SettingList.vue'),
     meta: { title: '系统设置', pageCode: 'classjh:setting:view' },
   },
-  // 进模块根路径 → 落到工作台（守卫会按权限再兜底一次）
-  { path: '/class-jh', redirect: '/class-jh/dashboard' },
+  // 进模块根路径 → 落到系统首页工作台（★ 2026-10-16 工作台已迁到 /）
+  { path: '/class-jh', redirect: '/' },
 
   /* ============ ★ 教学管理 · 合并入口（第 1 期）============
    *   每个业务域一个入口，页面顶部是「初高 / 大学 / 实训 / 就业 / 教务」学段页签。
@@ -390,23 +395,10 @@ router.beforeEach(async (to) => {
     return { path: '/no-permission', query: { from: to.fullPath } };
   }
 
-  // 3. 首页 → 有权限的第一个页面
-  if (to.path === '/') {
-    // 优先：门户建议落地（第一个可见模块的第一页）
-    const portalFirst = portalLandingPath();
-    if (portalFirst && portalFirst !== '/no-permission') {
-      return { path: portalFirst };
-    }
-    // 兜底：就业/教务/班级/初高 里第一个有权限的静态页
-    //   ★ 2026-10-05：这里也要过一遍「模块门槛」，否则一个只挂 class-jh 的账号
-    //     会先被送到大学部的 /class/roster，再被下方 step 5 弹回初高（多一次跳转）。
-    const first = myPages.value.find((p) => {
-      if (p.path.includes('/:')) return false;
-      const m = moduleOfPageCode(p.code);
-      return !m || moduleAllowed(m);
-    });
-    return first ? { path: first.path } : { path: '/no-permission' };
-  }
+  // 3. 首页 → 工作台
+  //    ★ 2026-10-16 起 / 本身就是工作台页（每个角色登录后第一个页面），
+  //    原「跳到第一个有权限页面」的逻辑整体移除；无 pageCode 的路由
+  //    在下方 step 5 里天然放行。
 
   // 4. 新模块页（市场咨询/财务/权限）：按门户 visibleModules 判定
   const mod = to.meta?.module as string | undefined;

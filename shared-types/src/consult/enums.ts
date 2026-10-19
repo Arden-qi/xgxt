@@ -55,7 +55,6 @@ export enum PayStatus {
   UNPAID = 1,    // 待缴
   PAID = 2,      // 待核对（已上传凭证，等财务核对）
   VERIFIED = 3,  // 已缴（财务核对通过、已入账）
-  OVERDUE = 4,   // 逾期
   FROZEN = 5,    // 冻结
 }
 
@@ -266,7 +265,6 @@ export const PAY_STATUS_NAME: Record<number, string> = {
   [PayStatus.UNPAID]: '待缴',
   [PayStatus.PAID]: '待核对',
   [PayStatus.VERIFIED]: '已缴',
-  [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
 };
 

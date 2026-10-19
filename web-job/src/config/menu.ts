@@ -128,16 +128,11 @@ export const MENU: MenuNode[] = [
     owner: '初高中部 / 大学部 / 实训就业',
     stage: '已完成',
     children: [
-      /* ---------- 各学段独有（不参与合并） ---------- */
-      {
-        title: '工作台',
-        path: '/class-jh/dashboard',
-        pageCode: 'classjh:dashboard:view',
-        owner: '初高中部',
-        stage: '已完成',
-        phase: '初高',
-        desc: '在读人数、今日出勤率、临期缴费与待办事项。',
-      },
+      /* ---------- 各学段独有（不参与合并） ----------
+       * ★ 2026-10-16 原「工作台」菜单项已上移为系统首页
+       *   （侧栏置顶项，见 config/sideMenu.ts 的 WORKBENCH_GROUP；
+       *   页面本体迁到 views/Workbench.vue，/class-jh/dashboard 老路由重定向到首页）。
+       *   首页工作台的初高 KPI 块仍用 classjh:dashboard:view 权限码判显隐。 */
 
       /* ---------- 9 个合并业务域 ---------- */
       domainNode('student'),
