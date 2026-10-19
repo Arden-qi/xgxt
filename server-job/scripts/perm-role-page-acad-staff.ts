@@ -1,0 +1,78 @@
+/**
+ * 教务老师（R08 / ACAD_STAFF）页面权限：只保留「学生档案」+「宿舍管理」
+ *
+ * 【做什么】往 `sms_perm.t_perm_role_page` 给 R08 写显式台账行：
+ *   /edu/student（学生档案）enabled=1
+ *   /edu/dorm   （宿舍管理） enabled=1
+ *   其余所有页面            enabled=0  ← 显式去勾
+ *
+ * 【为什么必须显式写 0】本表是「增量覆盖」语义（见 rolePage.service.ts 头部注释）：
+ *   一个角色**一行都没有** → 完全沿用默认（= 现在教务能看到 40 条权限码对应的所有页面）。
+ *   只有显式 enabled=0 才能真正把页面藏起来。
+ *
+ * 【不改什么】`t_perm_role_perm` 的 40 条权限码**不动**（用户确认的范围：只改页面分配），
+ *   所以教务老师在页面之外要用的审批 / 核算能力不受影响。
+ */
+import { db } from '../src/perm/utils/db.js';
+
+const ROLE_ID = 'R08';
+/** ★ 保留的页面（path 必须和 pageRegistry 里的一致） */
+const KEEP = ['/edu/student', '/edu/dorm'];
+
+async function main() {
+  // 1. 先看看要写哪些
+  const pages: any[] = await db('t_perm_page')
+    .where({ is_deleted: 0 })
+    .select('id', 'module_key', 'page_key', 'page_title', 'page_path');
+  console.log(`页面总数：${pages.length}`);
+  console.log('保留：', pages.filter((p) => KEEP.includes(p.page_path)).map((p) => `${p.module_key}${p.page_path}（${p.page_title}）`).join(' | '));
+  const off = pages.filter((p) => !KEEP.includes(p.page_path));
+  console.log(`去勾：${off.length} 个页面`);
+
+  // 2. 现有行（含软删，唯一键会撞）
+  const exist: any[] = await db('t_perm_role_page').where({ role_id: ROLE_ID });
+  const map = new Map(exist.map((r) => [`${r.module_key}||${r.page_path}`, r]));
+  console.log(`R08 现有台账行：${exist.length}（含软删 ${exist.filter((r) => Number(r.is_deleted) === 1).length}）`);
+
+  const now = new Date();
+  let inserted = 0;
+  let updated = 0;
+  for (const p of pages) {
+    const enabled = KEEP.includes(p.page_path) ? 1 : 0;
+    const key = `${p.module_key}||${p.page_path}`;
+    const cur = map.get(key);
+    if (cur) {
+      await db('t_perm_role_page').where({ id: cur.id }).update({
+        enabled,
+        is_deleted: false,
+        update_time: now,
+        update_by: 'script:perm-role-page',
+      });
+      updated += 1;
+    } else {
+      await db('t_perm_role_page').insert({
+        id: (await import('crypto')).randomUUID(),
+        create_time: now,
+        create_by: 'script:perm-role-page',
+        update_time: now,
+        update_by: 'script:perm-role-page',
+        is_deleted: false,
+        role_id: ROLE_ID,
+        module_key: p.module_key,
+        page_path: p.page_path,
+        enabled,
+      });
+      inserted += 1;
+    }
+  }
+  console.log(`写入完成：新增 ${inserted} 行、更新 ${updated} 行`);
+
+  // 3. 回读校验
+  const after: any[] = await db('t_perm_role_page').where({ role_id: ROLE_ID, is_deleted: 0 });
+  const on = after.filter((r) => Number(r.enabled) === 1);
+  console.log(`回读：R08 生效行 ${after.length}，其中 enabled=1 的 ${on.length} 行 →`, on.map((r) => `${r.module_key}${r.page_path}`).join(' | '));
+}
+
+main()
+  .catch((e) => console.error('ERR', e))
+  .finally(() => process.exit(0));

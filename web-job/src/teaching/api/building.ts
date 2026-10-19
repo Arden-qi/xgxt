@@ -60,13 +60,15 @@ export interface DormBuildingRoomGenResult {
 }
 
 /**
- * ★ 楼层 / 每层房间数 的上限不是业务拍的，是房号格式决定的：
- *   宿舍号 = 3 位数字，第 1 位楼层、后 2 位房号（101 / 508）
- *   → 最多 9 层、每层最多 99 间。改这里必须同步后端 dto 的
- *     DORM_FLOOR_MAX / DORM_ROOMS_PER_FLOOR_MAX。
+ * ★ 楼层数 / 每层房间数 / 每间床位数 三项统一封顶 50（2026-10-19 定的口径）
+ *
+ * 【房号怎么编】楼层 + 两位序号，长度跟着楼层位数走：
+ *   ≤ 9 层 → 3 位（1 楼第 8 间 = 108）
+ *   ≥ 10 层 → 4 位（10 楼第 8 间 = 1008、50 楼第 12 间 = 5012）
+ * 改这里必须同步后端 dto 的 DORM_FLOOR_MAX / DORM_ROOMS_PER_FLOOR_MAX。
  */
-export const DORM_FLOOR_MAX = 9;
-export const DORM_ROOMS_PER_FLOOR_MAX = 99;
+export const DORM_FLOOR_MAX = 50;
+export const DORM_ROOMS_PER_FLOOR_MAX = 50;
 export const DORM_BED_PER_ROOM_MAX = 50;
 export const DORM_BED_PER_ROOM_DEFAULT = 4;
 

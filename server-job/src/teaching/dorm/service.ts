@@ -446,7 +446,7 @@ export async function generateRoomsForBuilding(
   if (!Number.isInteger(floorCount) || floorCount < 1 || floorCount > DORM_FLOOR_MAX) {
     throw new BizError(
       BizCode.PARAM_ERROR,
-      `楼层数必须是 1 ~ ${DORM_FLOOR_MAX} 之间的整数（宿舍号是 3 位数字，第 1 位为楼层）`,
+      `楼层数必须是 1 ~ ${DORM_FLOOR_MAX} 之间的整数`,
     );
   }
   if (!Number.isInteger(roomsPerFloor) || roomsPerFloor < 1 || roomsPerFloor > DORM_ROOMS_PER_FLOOR_MAX) {

@@ -98,8 +98,13 @@ export const DEFAULT_DORM_STAGE: DormStage = 'job';
 export const DORM_BED_COUNT_MIN = 1;
 export const DORM_BED_COUNT_MAX = 50;
 
-/** ★ 宿舍号规则：3 位数字，第 1 位是楼层、后 2 位是房号（如 308） */
-export const DORM_ROOM_NO_RE = /^\d{3}$/;
+/**
+ * ★ 宿舍号规则：楼层 + 两位序号
+ *   ≤ 9 层 → 3 位（1 楼第 8 间 = 108、5 楼第 12 间 = 512）
+ *   ≥ 10 层 → 4 位（10 楼第 8 间 = 1008、50 楼第 12 间 = 5012）
+ *   → 楼层是一位数就是 3 位、两位数就是 4 位，与后端 `dormRoomNo()` 同口径。
+ */
+export const DORM_ROOM_NO_RE = /^\d{3,4}$/;
 
 /** 床位状态 1 空闲 / 2 已占用 / 3 停用 */
 export const DORM_BED_STATUS_NAME: Record<number, string> = {

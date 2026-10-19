@@ -32,7 +32,7 @@ import { BizError } from '../../middleware/errorHandler';
 import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 import type { DormListQuery, TeachingStage } from '../shared/dto';
-import { UnifiedDormStatus } from '../shared/dto';
+import { DORM_ROOM_NO_ANY_RE, UnifiedDormStatus } from '../shared/dto';
 
 export const teachingDormRouter = Router();
 
@@ -205,10 +205,15 @@ teachingDormRouter.post(
      *   改 DOM），而且 ① 这类规则一旦绕过，dorm_no 唯一键会存进「A-1-3O8」这种脏值。
      */
     const roomNo = String(b.roomNo ?? '').trim();
-    if (!/^\d{3}$/.test(roomNo)) {
+    /**
+     * ★ 房号 = 楼层 + 两位序号，长度跟着楼层位数走（见 dto 的 `dormRoomNo()`）：
+     *     ≤ 9 层 → 3 位（108）；≥ 10 层 → 4 位（1008）
+     *   所以这里是 3~4 位，不是死板的 3 位。
+     */
+    if (!DORM_ROOM_NO_ANY_RE.test(roomNo)) {
       throw new BizError(
         BizCode.PARAM_ERROR,
-        '宿舍号必须是 3 位数字：第 1 位为楼层、后 2 位为房号（如 308）',
+        '宿舍号必须是 3~4 位数字：楼层 + 两位房号（如 308 = 3 楼 08 室，1008 = 10 楼 08 室）',
       );
     }
     const dormType = numOrUndef(b.dormType);

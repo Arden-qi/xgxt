@@ -110,8 +110,8 @@ const buildingSubmitting = ref(false);
  * 楼栋表单
  *
  * ★ floorCount / roomsPerFloor / bedPerRoom（2026-10-19 加）
- *   填了「楼层数 + 每层房间数」→ 点确定后端按
- *   「楼层 + 两位序号」自动生成 3 位宿舍号的房间（1 楼第 8 间 = 108）。
+ *   填了「楼层数 + 每层房间数」→ 点确定后端按「楼层 + 两位序号」自动生成宿舍号
+ *   （1 楼第 8 间 = 108；10 楼第 8 间 = 1008，楼层两位数时房号自动变 4 位）。
  *   0 表示未配置（老楼栋的房间是手工加的，不动它）。
  */
 const buildingForm = reactive({
@@ -146,10 +146,30 @@ async function loadBuildings() {
   }
 }
 
+/**
+ * ★ 楼栋名自动顺延（2026-10-19）
+ *   扫一遍现有楼栋名里「数字 + 号楼」的编号，取最大值 +1 预填（1/2/3 号楼 → 4 号楼）。
+ *   预填只是默认值，用户可以在输入框里改（比如把 4 改成 8）。
+ *
+ * 【为什么只认「^数字号楼$」】楼栋名是自由文本，可能有「培训楼」「专家公寓」这类，
+ *   它们不参与编号排队 —— 否则建一个「培训楼」就会把序号顶到奇怪的位置。
+ *   一条都没匹配上 → 从 1 号楼开始。
+ */
+function nextBuildingName(): string {
+  const nums = buildingData.value
+    .map((b) => /^(\d+)\s*号楼$/.exec(String(b.buildingName || '').trim()))
+    .filter((m): m is RegExpExecArray => !!m)
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  const max = nums.length ? Math.max(...nums) : 0;
+  return `${max + 1}号楼`;
+}
+
 function openBuildingDialog() {
   Object.assign(buildingForm, {
     id: '',
-    buildingName: '',
+    // ★ 自动顺延（用户可改）
+    buildingName: nextBuildingName(),
     category: 1,
     floorCount: 0,
     roomsPerFloor: 0,
@@ -498,6 +518,7 @@ onMounted(() => {
       <el-form :model="buildingForm" label-width="100px">
         <el-form-item label="楼栋名称" required>
           <el-input v-model="buildingForm.buildingName" maxlength="50" placeholder="如 4号楼" />
+          <el-text type="info" size="small" class="ml12">默认按已有楼栋顺延，编号可自行修改</el-text>
         </el-form-item>
         <el-form-item label="类别" required>
           <el-radio-group v-model="buildingForm.category">
@@ -508,10 +529,9 @@ onMounted(() => {
         </el-form-item>
         <!--
           ★ 楼层数 / 每层房间数 / 每间床位数（2026-10-19）
-            填了前两项 → 点确定后自动生成「楼层+两位序号」的宿舍号
-            （1 楼第 8 间 = 108、5 楼第 12 间 = 512）。
-            楼层上限 9、每层上限 99 —— 因为宿舍号是 3 位数字，
-            第 1 位只能是一位楼层数，装不下 10 层以上的楼。
+            填了前两项 → 点确定后自动生成「楼层 + 两位序号」的宿舍号
+            （1 楼第 8 间 = 108、5 楼第 12 间 = 512；10 楼第 8 间 = 1008）。
+            三项上限都是 50；楼层 ≥ 10 时房号自动变成 4 位，不用额外配置。
         -->
         <el-form-item label="楼层数">
           <el-input-number
@@ -522,7 +542,7 @@ onMounted(() => {
             step-strictly
             style="width: 140px"
           />
-          <el-text type="info" size="small" class="ml12">最多 {{ DORM_FLOOR_MAX }} 层（宿舍号首位）</el-text>
+          <el-text type="info" size="small" class="ml12">最多 {{ DORM_FLOOR_MAX }} 层</el-text>
         </el-form-item>
         <el-form-item label="每层房间数">
           <el-input-number
