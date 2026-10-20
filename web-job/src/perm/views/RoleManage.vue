@@ -48,7 +48,7 @@ import type {
   RoleStatus,
   RoleType,
 } from 'shared-types/perm';
-import { assignApi, deptApi, exportApi, roleApi, userApi } from '@/perm/api/perm';
+import { deptApi, exportApi, roleApi, userApi } from '@/perm/api/perm';
 import { useOptionStore } from '@/perm/stores/option';
 import { usePermStore } from '@/perm/stores/perm';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
@@ -321,21 +321,18 @@ async function openDetail(row: PermRoleListItem): Promise<void> {
 
 /* ============================================================
  * 六、权限树（原型 openPermTree / renderPermTree / treeXxx / updatePermStat）
- *    三种模式：
- *      view —— 只读查看（列表「权限数」）
- *      edit —— 编辑并保存（详情「编辑权限」）  → assignApi.save
+ *    两种模式（★ 2026-10-20：原为三种，edit 随「职位详情 → 编辑权限」按钮一起删除）：
+ *      view —— 只读查看（列表「权限数」）。编辑权限改去「职位权限分配」页
  *      form —— 职位表单草稿（表单「＋ 配置权限」）→ 应用到表单
  * ============================================================ */
 
-type TreeMode = 'view' | 'edit' | 'form';
+type TreeMode = 'view' | 'form';
 
 const treeOpen = ref(false);
 const treeMode = ref<TreeMode>('view');
 const treeTitle = ref('');
 const treeDraft = ref<RolePermMap>({});
-const treeTargetId = ref('');
 const treeRoleName = ref('');
-const treeUserCount = ref(0);
 /** 模块折叠（原型 treeTog） */
 const collapsed = reactive<Record<string, boolean>>({});
 
@@ -413,52 +410,36 @@ function collapseAll(): void {
   });
 }
 
-function openTreeWith(
-  id: string,
-  roleName: string,
-  mode: TreeMode,
-  perms: RolePermMap,
-  userCount: number,
-): void {
-  treeTargetId.value = id;
+function openTreeWith(roleName: string, perms: RolePermMap): void {
   treeRoleName.value = roleName;
-  treeUserCount.value = userCount;
-  treeMode.value = mode;
+  treeMode.value = 'view';
   treeDraft.value = clonePerms(perms);
   collapseAll();
 
-  const em = `<span class="em">${esc(roleName)}</span>`;
-  treeTitle.value =
-    mode === 'view'
-      ? `查看权限 · ${em} <span class="tag n" style="font-weight:400">只读模式</span>`
-      : `编辑权限 · ${em} <span class="tag n" style="font-weight:400">改动需点击「保存」生效</span>`;
+  /* ★ 2026-10-20 只剩「查看权限」一种口径：原来按 mode 分两套标题，
+     编辑模式随详情弹窗那个按钮一起删掉了。 */
+  treeTitle.value = `查看权限 · <span class="em">${esc(roleName)}</span> <span class="tag n" style="font-weight:400">只读模式</span>`;
   treeOpen.value = true;
 }
 
-/** 列表「权限数」→ 查看权限 */
-async function openPermTree(row: PermRoleListItem, mode: 'view' | 'edit'): Promise<void> {
+/** 列表「权限数」→ 查看权限（只读；编辑权限请去「职位权限分配」页） */
+async function openPermTree(row: PermRoleListItem): Promise<void> {
   try {
     const d = await roleApi.detail(row.id);
-    openTreeWith(row.id, row.roleName, mode, d.perms || {}, row.userCount);
+    openTreeWith(row.roleName, d.perms || {});
   } catch {
     /* 已提示 */
   }
 }
 
-/** 详情弹窗底部「编辑权限」（原型先关详情再开权限树）；「查看完整权限树」按钮已随 2026-10-16 界面清理移除 */
-function openPermTreeFromDetail(mode: 'view' | 'edit'): void {
-  const d = detail.value;
-  if (!d) return;
-  detailOpen.value = false;
-  openTreeWith(d.id, d.roleName, mode, d.perms || {}, d.userCount || 0);
-}
+/* ★ 2026-10-20 删除 openPermTreeFromDetail()：它只服务「职位详情」底栏那个
+   「编辑权限」按钮，按钮已按用户要求删除 → 函数失去唯一调用方，属死代码。
+   权限编辑入口现在只剩「职位权限分配」页（那边是完整的编辑 UI）。 */
 
 /** 表单「＋ 配置权限」（原型 openFormPermTree） */
 function openFormTree(): void {
   treeMode.value = 'form';
-  treeTargetId.value = '';
   treeRoleName.value = form.roleName;
-  treeUserCount.value = 0;
   treeDraft.value = clonePerms(draftPerms.value);
   collapseAll();
   treeTitle.value =
@@ -552,38 +533,12 @@ function applyFormPerm(): void {
   toast(`已应用 ${countActions(draftPerms.value)} 项权限到表单`);
 }
 
-/** 编辑模式：保存权限（原型 treeSave），走 assignApi.save 全量覆盖 */
-function saveRolePerms(): void {
-  const n = treeActionCount.value;
-  openConfirm(
-    {
-      title: '保存权限配置',
-      icon: '💾',
-      msg: `确认保存 ${treeRoleName.value} 的权限配置？`,
-      detail: [
-        { k: '职位', v: esc(treeRoleName.value) },
-        { k: '勾选动作', v: `<b>${n}</b> 项` },
-        { k: '影响账号', v: `<b>${treeUserCount.value}</b> 个账号` },
-      ],
-      tip: '保存后立即生效，相关账号下次刷新页面即可看到新菜单。',
-      okText: '确认保存',
-    },
-    () => {
-      void doSaveRolePerms(n);
-    },
-  );
-}
-
-async function doSaveRolePerms(n: number): Promise<void> {
-  try {
-    await assignApi.save(treeTargetId.value, cleanPerms(treeDraft.value));
-    treeOpen.value = false;
-    toast(`已保存 ${n} 项权限，${treeUserCount.value} 个账号已生效`);
-    await Promise.all([load(), loadOverview()]);
-  } catch {
-    /* 已提示 */
-  }
-}
+/* ★ 2026-10-20 删除 saveRolePerms() / doSaveRolePerms()：
+   这两个只服务权限树的「编辑模式」，而编辑模式的唯一入口是
+   「职位详情 → 编辑权限」按钮（已按用户要求删除）。
+   按钮没了 → 编辑模式不可达 → 保存链路成死代码，一并清掉。
+   连带的 assignApi 已从 import 移除（本页再无调用）。
+   权限编辑走「职位权限分配」页（assignApi.save 在那里仍是主路径）。 */
 
 /* ============================================================
  * 七、停用 / 启用（原型 toggleRole）
@@ -647,7 +602,7 @@ function delRole(row: PermRoleListItem): void {
         icon: '🚫',
         iconBg: 'var(--dg-l)',
         msg: '系统预置职位不可删除',
-        desc: `「${esc(row.roleName)}」是系统预置的 <b>${overview.value?.presetTotal ?? 0}</b> 个基础职位之一，只能编辑权限或停用。`,
+        desc: `「${esc(row.roleName)}」是系统预置的 <b>${overview.value?.presetTotal ?? 0}</b> 个基础职位之一，只能停用，或到「职位权限分配」页调整它的权限。`,
         tip: '如确认不再需要，可改为"停用"，效果等同但可随时恢复。',
         okText: '改为停用该职位',
         okClass: 'wn',
@@ -1352,7 +1307,7 @@ async function doExport(): Promise<void> {
                 <td>{{ r.deptName || '—' }}</td>
                 <td class="num">{{ r.userCount }} 人</td>
                 <td class="num">
-                  <span class="lk" @click="openPermTree(r, 'view')">{{ r.permCount }} 项</span>
+                  <span class="lk" @click="openPermTree(r)">{{ r.permCount }} 项</span>
                 </td>
                 <td>
                   <span v-if="r.roleStatus === '启用'" class="tag g">启用</span>
@@ -1460,9 +1415,10 @@ async function doExport(): Promise<void> {
 
       <template #footer>
         <div class="lft">职位 ID：{{ detail?.id || '—' }}</div>
-        <!-- ★ 2026-10-20 按用户要求互换位置：编辑权限（主操作）在左，「关闭」贴右。
-             其余弹窗仍是「关闭在左、主操作在右」的原型口径，没跟着改。 -->
-        <button class="btn pri" type="button" @click="openPermTreeFromDetail('edit')">编辑权限</button>
+        <!-- ★ 2026-10-20 按用户要求删掉这里的「编辑权限」按钮。
+             职责归位：本弹窗是「职位详情」（只读查看），
+             改权限请回「职位权限分配」页（那边有 全选 / 一键清空 / 保存权限 的完整编辑 UI），
+             不在详情里再开一个编辑入口 —— 与「详情＝只读」的语义一致。 -->
         <button class="btn" type="button" @click="detailOpen = false">关闭</button>
       </template>
     </ProtoDialog>
@@ -1594,11 +1550,11 @@ async function doExport(): Promise<void> {
                   改一处必须同步另一处（上轮只改了 PermAssign 导致本页漏改）。 -->
           <button class="btn" type="button" @click="treeClear">一键清空</button>
         </template>
+        <!-- 编辑模式已删（2026-10-20），文案只剩两种：表单模式「放弃」、只读模式「关闭」 -->
         <button class="btn" type="button" @click="treeOpen = false">
-          {{ treeMode === 'form' ? '放弃' : treeMode === 'edit' ? '取消' : '关闭' }}
+          {{ treeMode === 'form' ? '放弃' : '关闭' }}
         </button>
         <button v-if="treeMode === 'form'" class="btn pri" type="button" @click="applyFormPerm">应用到表单</button>
-        <button v-else-if="treeMode === 'edit'" class="btn pri" type="button" @click="saveRolePerms">保存权限</button>
       </template>
     </ProtoDialog>
 

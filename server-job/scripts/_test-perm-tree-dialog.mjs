@@ -214,11 +214,18 @@ const ROLE_TREE = roleTreeStart >= 0 && roleTreeEnd > roleTreeStart ? ROLE.slice
 check('职位管理页也能取到自己的权限树弹窗', ROLE_TREE.length > 500, `${ROLE_TREE.length} 字符`);
 
 check(
-  '★ RoleManage 只剩一个「关弹窗」按钮（treeOpen = false），其文案在 edit 模式下是「取消」',
-  count(ROLE_TREE, '@click="treeOpen = false"') === 1 &&
-    /\{\{\s*treeMode === 'form' \? '放弃' : treeMode === 'edit' \? '取消' : '关闭'\s*\}\}/.test(ROLE_TREE),
-  `treeOpen=false 按钮 ${count(ROLE_TREE, '@click="treeOpen = false"')} 个；` +
-    `文案三元 = ${/\{\{\s*treeMode[^}]*\}\}/.test(ROLE_TREE) ? '在' : '缺'}`,
+  '★ RoleManage 只剩一个「关弹窗」按钮（treeOpen = false）',
+  count(ROLE_TREE, '@click="treeOpen = false"') === 1,
+  `treeOpen=false 按钮 ${count(ROLE_TREE, '@click="treeOpen = false"')} 个`,
+);
+
+/* 文案口径随编辑模式一起变了（2026-10-20 第三轮）：
+   编辑模式删除后只剩两种 —— 表单模式「放弃」、只读模式「关闭」。 */
+check(
+  'RoleManage 关闭按钮文案只剩「放弃（表单模式）／关闭」',
+  /\{\{\s*treeMode === 'form' \? '放弃' : '关闭'\s*\}\}/.test(ROLE_TREE) &&
+    !ROLE_TREE.includes("'取消'"),
+  `三元 = ${/\{\{\s*treeMode[^}]*\}\}/.exec(ROLE_TREE)?.[0].replace(/\s+/g, ' ') || '缺'}`,
 );
 
 /* ⚠️ 这条不能数字面「>取消</button>」：本页关闭按钮的文案是三元插值
@@ -230,9 +237,9 @@ check(
 );
 
 check(
-  'RoleManage 保留的那个「取消」是关闭弹窗（treeOpen = false）',
-  /@click="treeOpen = false">取消<\/button>/.test(ROLE_TREE) ||
-    /@click="treeOpen = false"\s*>/.test(ROLE_TREE),
+  'RoleManage 那个按钮确实是「关弹窗」（treeOpen = false），不是勾选操作',
+  /@click="treeOpen = false"/.test(ROLE_TREE) &&
+    count(ROLE_TREE, '@click="treeOpen = false"') === 1,
 );
 
 check(
@@ -249,10 +256,21 @@ check(
 );
 
 check(
-  'RoleManage 底栏仍保留：全选 / 一键清空 / 保存权限',
-  ROLE_TREE.includes('treeSelectAll()') &&
-    ROLE_TREE.includes('treeClear') &&
-    ROLE_TREE.includes('>保存权限</button>'),
+  'RoleManage 底栏仍保留：全选 / 一键清空（表单模式「＋ 配置权限」要用）',
+  ROLE_TREE.includes('treeSelectAll()') && ROLE_TREE.includes('treeClear'),
+);
+
+/* ★ 2026-10-20 第三轮：详情弹窗「编辑权限」删掉后，本页权限树的编辑模式不可达，
+   底栏那个「保存权限」按钮随之删除。这里钉住"它不该回来"，
+   但「职位权限分配」页（PermAssign）的保存按钮必须还在 —— 那是权限编辑的主路径。 */
+check(
+  'RoleManage 底栏不再有「保存权限」按钮（编辑模式已删）',
+  !ROLE_TREE.includes('>保存权限</button>'),
+);
+
+check(
+  'PermAssign 的「保存权限」仍在（权限编辑主路径没被连带删掉）',
+  FOOT.includes('treeSaveAsk') && ASSIGN.includes('>保存权限</button>'),
 );
 
 check(
