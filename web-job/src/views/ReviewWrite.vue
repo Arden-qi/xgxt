@@ -90,11 +90,21 @@ async function loadData() {
   }
 }
 
+/**
+ * ★ 2026-10-20：筛选条件只改 query，不自动查 —— 只有点「查询」才发请求。
+ *   （下拉 / 输入框都不再挂 @change/@input，避免选条件时列表乱跳）
+ */
 function handleSearch() {
   query.page = 1;
   loadData();
 }
 
+/**
+ * 重置 = 清空条件 + 回到第 1 页 + 重查。
+ * 之所以这里还 loadData()：条件已清空、页码已归 1，若不同步重查，
+ * 表里会留着上一次的筛选结果、和分页「第 1 页」对不上。
+ * （它不是"自动查"——是用户主动点按钮触发的）
+ */
 function handleReset() {
   query.page = 1;
   query.studentName = '';
@@ -391,9 +401,11 @@ onMounted(() => {
         <el-form-item label="姓名">
           <el-input v-model="query.studentName" placeholder="请输入姓名" clearable style="width: 150px" @keyup.enter="handleSearch" />
         </el-form-item>
-        <!-- ★ 2026-10-16：班级筛选下拉 -->
+        <!-- ★ 2026-10-16：班级筛选下拉
+             ★ 2026-10-20：去掉 @change —— 选完班级不再自动查，
+               条件全部选好后点「查询」才生效（用户要求：必须点查询按钮才查询） -->
         <el-form-item label="班级">
-          <el-select v-model="query.classId" clearable filterable placeholder="全部班级" style="width: 180px" @change="handleSearch">
+          <el-select v-model="query.classId" clearable filterable placeholder="全部班级" style="width: 180px">
             <el-option v-for="c in classOptions" :key="c.id" :label="c.className" :value="c.id" />
           </el-select>
         </el-form-item>
