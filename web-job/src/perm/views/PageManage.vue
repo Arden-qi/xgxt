@@ -679,8 +679,16 @@ const currentBoardName = computed(
                   :class="{ on: mode === 'board' && b.moduleKey === activeKey }"
                   @click="selectBoard(b.moduleKey)"
                 >
-                  <span class="pg-fold" @click.stop="toggleTree(b.moduleKey)">
-                    {{ isTreeOpen(b.moduleKey) ? '▾' : '▸' }}
+                  <!--
+                    ⚠️ 没有职位可展开的板块（目前只有「工作台」：locked + 人人可见 + 无权限码）
+                    不画箭头、不响应点击 —— 但保留 12px 的空 span，否则标题会左移、与其它板块错位。
+                  -->
+                  <span
+                    class="pg-fold"
+                    :style="{ cursor: b.roles.length ? 'pointer' : 'default' }"
+                    @click.stop="b.roles.length && toggleTree(b.moduleKey)"
+                  >
+                    {{ b.roles.length ? (isTreeOpen(b.moduleKey) ? '▾' : '▸') : '' }}
                   </span>
                   <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
                     <b v-if="boardCards.find((c) => c.moduleKey === b.moduleKey)?.dirty" style="color: #A66A1F">●</b>
@@ -711,7 +719,9 @@ const currentBoardName = computed(
                     </span>
                     <span class="cnt">{{ r.enabledCount }}/{{ r.total }}</span>
                   </div>
-                  <div v-if="!b.roles.length" class="rl-none">（本板块暂无职位）</div>
+                  <!-- 「本板块暂无职位」只在**本该有职位**的板块显示；
+                       单页板块（工作台）后端刻意不展开职位，这里也不该提示「暂无」 -->
+                  <div v-if="!b.roles.length && b.total > 1" class="rl-none">（本板块暂无职位）</div>
                 </template>
               </div>
 

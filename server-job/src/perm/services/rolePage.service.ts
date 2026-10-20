@@ -168,20 +168,35 @@ export async function loadRoleTree(): Promise<PermRoleTreeResult> {
 
   const boards: PermRoleTreeBoard[] = PAGE_REGISTRY.map((b) => {
     const roleList: PermRoleSummary[] = [];
-    for (const r of roles) {
-      const n = countIn(r.id, b.moduleKey);
-      if (n === 0) continue; // 这个职位在本板块一个页面都看不到 → 不挂在这里
-      roleList.push({
-        roleId: r.id,
-        roleCode: r.roleCode,
-        roleName: r.roleName,
-        deptName: r.deptName,
-        roleType: r.roleType,
-        enabled: r.enabled,
-        configured: configuredRoleIds.has(r.id),
-        enabledCount: n,
-        total: b.pages.length,
-      });
+    /**
+     * ★ 2026-10-20：工作台**不按职位展开**（左栏直接跳过这一段）
+     *
+     * 【为什么】
+     *   工作台是全站首页：locked（不可取消）、人人可见、也没有页面权限码。
+     *   一旦按职位列出来，14 个职位全是「1/1」——14 行一模一样的数字，
+     *   把下面真正要配的页面全淹掉了（用户截图框掉的就是这一段）。
+     *
+     * 【它本来也不可配】
+     *   默认值恒为 true（见 rolePageDefaults 的 case 'workbench'）且 locked，
+     *   保存时「与默认一致 → 不落行」，所以给它配什么都写不出差异行。
+     *   列出来只会让管理员误以为这里能改。
+     */
+    if (b.moduleKey !== 'workbench') {
+      for (const r of roles) {
+        const n = countIn(r.id, b.moduleKey);
+        if (n === 0) continue; // 这个职位在本板块一个页面都看不到 → 不挂在这里
+        roleList.push({
+          roleId: r.id,
+          roleCode: r.roleCode,
+          roleName: r.roleName,
+          deptName: r.deptName,
+          roleType: r.roleType,
+          enabled: r.enabled,
+          configured: configuredRoleIds.has(r.id),
+          enabledCount: n,
+          total: b.pages.length,
+        });
+      }
     }
     return {
       moduleKey: b.moduleKey,

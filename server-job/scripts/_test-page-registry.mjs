@@ -61,6 +61,7 @@ const ROLE_SVC = P('server-job/src/perm/services/rolePage.service.ts');
 const DEFAULTS = P('server-job/src/utils/rolePageDefaults.ts');
 const LEDGER = P('server-job/src/utils/rolePageLedger.ts');
 const TYPES = P('shared-types/src/perm/page.ts');
+const PAGE_MANAGE = P('web-job/src/perm/views/PageManage.vue');
 
 const regSrc = stripComments(read(REG));
 
@@ -221,6 +222,26 @@ check('工作台页面 locked（不可取消，否则把人锁在门外）', /lo
 check(
   '职位模式默认值显式给了 workbench = true（否则界面显示「工作台 0/1」）',
   /case 'workbench':[\s\S]{0,600}?visible = true;/.test(defaults),
+);
+
+/* ============================================================
+ * ⑥ 左栏：工作台不按职位展开（2026-10-20 用户截图框掉的那 14 行）
+ * ============================================================ */
+
+const roleSvcSrc = stripComments(read(ROLE_SVC));
+const pageManage = stripComments(read(PAGE_MANAGE));
+
+check(
+  '职位树里工作台不枚举职位（否则 14 个职位全是 1/1，把真要配的页面淹掉）',
+  /if \(b\.moduleKey !== 'workbench'\) \{/.test(roleSvcSrc),
+);
+check(
+  '左栏展开箭头按「有没有职位」决定（空职位板块不画 ▸/▾）',
+  /\{\{ b\.roles\.length \? \(isTreeOpen\(b\.moduleKey\) \? '▾' : '▸'\) : '' \}\}/.test(pageManage),
+);
+check(
+  '「本板块暂无职位」只在多页板块提示（单页的工作台不该冒出这句）',
+  /v-if="!b\.roles\.length && b\.total > 1" class="rl-none"/.test(pageManage),
 );
 
 /* ---- 汇总 ---- */
