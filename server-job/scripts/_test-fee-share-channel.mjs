@@ -58,25 +58,23 @@ const createdNotifyIds = [];
     );
     check('① 后端校验用的码表由下拉派生（一处口径两处用，不会写歪）', /SHARE_CHANNEL_PUSH_CODES[^=\n]*=\s*SHARE_CHANNEL_PUSH_OPTIONS\.map/.test(enums));
 
+    /**
+     * ★ 2026-10-20 用户要求：催费推送 / 催费记录已下线，**操作列整列去掉**。
+     *   接口（/fee/share、/fee/notify/list）与 t_class_fee_notify 表保留
+     *   —— 将来接真实短信发送时直接复用这条链路，所以本脚本继续测接口契约；
+     *   但页面上不能再有任何入口，否则等于没去掉。
+     */
     check(
-      '② 催费推送下拉遍历 SHARE_CHANNEL_PUSH_OPTIONS',
-      feeList.includes('SHARE_CHANNEL_PUSH_OPTIONS') && /v-for="opt in SHARE_CHANNEL_PUSH_OPTIONS"/.test(feeList),
+      '② 催费页已去掉催费推送 / 记录入口（操作列整列移除）',
+      !/label="操作"/.test(feeList) &&
+        !feeList.includes('shareForm') &&
+        !feeList.includes('SHARE_CHANNEL_PUSH_OPTIONS') &&
+        !feeList.includes('shareFee') &&
+        !feeList.includes('fetchFeeNotifyList') &&
+        !feeList.includes('openNotify'),
+      '检查 label="操作" / shareForm / shareFee / fetchFeeNotifyList / openNotify 均已消失',
     );
-    check(
-      '② 不再有遍历全量渠道（SHARE_CHANNEL_NAME）的下拉',
-      !/SHARE_CHANNEL_NAME/.test(feeList),
-    );
-
-    check('③ 弹窗字段叫 sendContent（不再是 remark）', /shareForm\.sendContent/.test(feeList) && !/shareForm\.remark/.test(feeList));
-    check('③ 界面文案为「发送内容」', /label="发送内容"/.test(feeList));
-    check('③ 催费推送表单里不再有「备注」', !/<el-form-item label="备注">/.test(feeList));
-    const contentInput = /v-model="shareForm\.sendContent"[\s\S]{0,400}?\/>/.exec(feeList)?.[0] || '';
-    check(
-      '③ 发送内容有占位提示 + 字数上限（500 与后端一致）',
-      contentInput.includes('type="textarea"') && /placeholder="[^"]{6,}"/.test(contentInput) && contentInput.includes('maxlength="500"'),
-      contentInput.replace(/\s+/g, ' ').slice(0, 120),
-    );
-    check('③ 催费记录列表能看到发送内容（填了什么不落地就没人知道）', /<el-table-column label="发送内容"[\s\S]{0,200}?dash\(row\.remark\)/.test(feeList));
+    check('② 导出入口保留（只去掉推送与记录，不是把整页功能砍了）', feeList.includes('handleExport') && feeList.includes('导出'));
 
     check(
       '④ 后端校验用 SHARE_CHANNEL_PUSH_CODES（不再是 1..3 硬编码）',
@@ -217,8 +215,11 @@ const createdNotifyIds = [];
       `status=${fe.status} len=${fe.raw.length}`,
     );
     check(
-      '★ 编译产物引用 PUSH_OPTIONS、「发送内容」，且不再引用全量 SHARE_CHANNEL_NAME',
-      fe.raw.includes('SHARE_CHANNEL_PUSH_OPTIONS') && fe.raw.includes('发送内容') && !fe.raw.includes('SHARE_CHANNEL_NAME'),
+      // ⚠️ 只判「控件文案」：模板里的说明注释会被编译成 _createCommentVNode("...催费推送...")，
+      //    那是注释不是按钮，用带引号的精确串避免误判。
+      '★ 编译产物里确实没有「催费推送 / 发送内容」入口（不是只改了源码）',
+      fe.status === 200 && !fe.raw.includes('"催费推送"') && !fe.raw.includes('"发送内容"') && fe.raw.includes('导出'),
+      `status=${fe.status} len=${fe.raw.length}`,
     );
   } catch (e) {
     check('脚本执行未抛异常', false, e?.message || String(e));

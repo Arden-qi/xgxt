@@ -1,15 +1,20 @@
 <script setup lang="ts">
 /**
- * 催费管理页（缴费台账 / 催费推送 / 催费记录 / 导出）
+ * 催费管理页（缴费台账 / 导出）
+ *
+ * ★ 2026-10-20 用户要求：去掉「催费推送」和「催费记录」功能，操作列整列移除
+ *   → 后端 /fee/share、/fee/notify/list 接口**保留但页面不再有入口**（能力留着，
+ *     将来接真实短信发送时直接复用这条链路；数据表 t_class_fee_notify 也照旧保留，
+ *     「催费次数」列仍按它统计）。
  */
 
 import { computed, ref, reactive, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Search, Refresh, Download, Bell, Promotion } from '@element-plus/icons-vue';
-import { FEE_TYPE_NAME, PAY_STATUS_NAME, PayStatus, SHARE_CHANNEL_PUSH_OPTIONS, ShareChannel } from 'shared-types/class-jh';
-import type { FeeRecord, FeeListQuery, FeeNotify, FeeNotifyListQuery, ClassInfo } from 'shared-types/class-jh';
-import { fetchFeeList, fetchFeeNotifyList, exportFee, shareFee } from '@/class-jh/api/fee';
-import { urgeList, urgeLogList } from '@/class/api/student';
+import { Search, Refresh, Download } from '@element-plus/icons-vue';
+import { FEE_TYPE_NAME, PAY_STATUS_NAME, PayStatus } from 'shared-types/class-jh';
+import type { FeeRecord, FeeListQuery, ClassInfo } from 'shared-types/class-jh';
+import { fetchFeeList, exportFee } from '@/class-jh/api/fee';
+import { urgeList } from '@/class/api/student';
 import { fetchFeeCallList } from '@/api/feeCall';
 import { fetchClassOptions } from '@/class-jh/api/classInfo';
 import { exportCsv } from '@/class-jh/utils/exportCsv';
@@ -101,10 +106,6 @@ function isPastDate(dateStr?: string | null): boolean {
   const p = (n: number) => String(n).padStart(2, '0');
   const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
   return d < today;
-}
-
-function isJhRow(row: FeeRow) {
-  return !row.dept || row.dept === '初高';
 }
 
 /** 大学催缴行 → 台账行形状（公共列直接复用现有表格） */
@@ -279,109 +280,6 @@ function handleReset() {
   loadData();
 }
 
-/* ============ 催费推送 ============ */
-const shareVisible = ref(false);
-const shareSubmitting = ref(false);
-const shareRow = ref<FeeRecord | null>(null);
-const shareText = ref('');
-const shareResultVisible = ref(false);
-const shareForm = reactive({
-  shareChannel: ShareChannel.WECHAT,
-  // ★ 2026-10-20 用户要求：原「备注」改叫「发送内容」（就是实际发给家长的那段话）
-  sendContent: '',
-});
-
-function handleShare(row: FeeRecord) {
-  shareRow.value = row;
-  shareForm.shareChannel = ShareChannel.WECHAT;
-  shareForm.sendContent = '';
-  shareText.value = '';
-  shareVisible.value = true;
-}
-
-async function submitShare() {
-  if (!shareRow.value) return;
-  shareSubmitting.value = true;
-  try {
-    const res = await shareFee({
-      studentId: shareRow.value.studentId,
-      feeType: shareRow.value.feeType,
-      shareChannel: shareForm.shareChannel,
-      sendContent: shareForm.sendContent.trim() || undefined,
-    });
-    shareText.value = res.shareText;
-    shareVisible.value = false;
-    shareResultVisible.value = true;
-    loadData();
-  } catch {
-    /* 错误已统一处理 */
-  } finally {
-    shareSubmitting.value = false;
-  }
-}
-
-async function copyShareText() {
-  try {
-    await navigator.clipboard.writeText(shareText.value);
-    ElMessage.success('已复制催费文案');
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本复制');
-  }
-}
-
-/* ============ 催费记录 ============ */
-const notifyVisible = ref(false);
-const notifyLoading = ref(false);
-const notifyData = ref<FeeNotify[]>([]);
-const notifyTotal = ref(0);
-const notifyQuery = reactive<FeeNotifyListQuery & { page: number; size: number }>({
-  page: 1,
-  size: 10,
-  studentId: undefined,
-});
-
-async function loadNotify() {
-  notifyLoading.value = true;
-  try {
-    const data = await fetchFeeNotifyList(notifyQuery);
-    notifyData.value = data.list;
-    notifyTotal.value = data.total;
-  } catch {
-    /* 错误已统一处理 */
-  } finally {
-    notifyLoading.value = false;
-  }
-}
-
-function openNotify(studentId?: string) {
-  notifyQuery.page = 1;
-  notifyQuery.studentId = studentId;
-  notifyVisible.value = true;
-  loadNotify();
-}
-
-/* ============ 大学/就业的催缴记录 ============ */
-const urgeLogVisible = ref(false);
-const urgeLogLoading = ref(false);
-const urgeLogRows = ref<any[]>([]);
-const urgeLogRow = ref<FeeRow | null>(null);
-
-async function openUrgeLog(row: FeeRow) {
-  urgeLogRow.value = row;
-  urgeLogVisible.value = true;
-  urgeLogRows.value = [];
-  if (row.dept === 'employ') return; // 就业：回填信息就在催费单上
-  urgeLogLoading.value = true;
-  try {
-    const data = await urgeLogList({ page: 1, size: 50, studentId: row.studentId });
-    urgeLogRows.value = data.list;
-  } catch {
-    /* 错误已统一处理 */
-  } finally {
-    urgeLogLoading.value = false;
-  }
-}
-
 /* ============ 导出 ============ */
 async function handleExport() {
   try {
@@ -469,7 +367,6 @@ onMounted(() => {
 
     <el-card shadow="never" class="table-card">
       <div class="toolbar">
-        <el-button v-if="query.dept === 'jh'" :icon="Bell" @click="openNotify()">催费记录</el-button>
         <el-button v-if="query.dept === 'jh'" :icon="Download" @click="handleExport">导出</el-button>
         <!-- ★ 2026-10-20 用户要求：催费列表来自财务管理 · 缴费管理，到期日到 20 天才进列表 -->
         <span v-if="urgeWindowDays && query.dept !== 'class' && query.dept !== 'employ'" class="window-hint">
@@ -526,15 +423,7 @@ onMounted(() => {
         <el-table-column label="催费次数" width="90" align="center">
           <template #default="{ row }">{{ row.urgeCount ?? '—' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="140" align="center" fixed="right">
-          <template #default="{ row }">
-            <template v-if="isJhRow(row)">
-              <el-button link type="primary" size="small" :icon="Promotion" @click="handleShare(row)">催费推送</el-button>
-              <el-button link type="info" size="small" @click="openNotify(row.studentId)">记录</el-button>
-            </template>
-            <el-button v-else link type="info" size="small" @click="openUrgeLog(row)">催缴记录</el-button>
-          </template>
-        </el-table-column>
+        <!-- ★ 2026-10-20 用户要求：去掉催费推送 / 催费记录 / 催缴记录，操作列整列移除 -->
       </el-table>
 
       <el-pagination
@@ -549,103 +438,6 @@ onMounted(() => {
       />
     </el-card>
 
-    <!-- 催费推送 -->
-    <el-dialog v-model="shareVisible" title="催费推送" width="480px">
-      <el-form :model="shareForm" label-width="100px">
-        <el-form-item label="学生">
-          <el-input :model-value="shareRow ? `${shareRow.studentNo} ${shareRow.studentName}` : ''" disabled />
-        </el-form-item>
-        <el-form-item label="缴费类型">
-          <el-input :model-value="shareRow?.feeTypeName" disabled />
-        </el-form-item>
-        <el-form-item label="触达渠道">
-          <!-- ★ 2026-10-20 用户要求：下拉只留 短信 / 微信（站内消息已下线） -->
-          <el-select v-model="shareForm.shareChannel" style="width: 100%">
-            <el-option v-for="opt in SHARE_CHANNEL_PUSH_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="发送内容">
-          <el-input
-            v-model="shareForm.sendContent"
-            type="textarea"
-            :rows="3"
-            maxlength="500"
-            show-word-limit
-            placeholder="实际发给家长的内容，留空则只发送系统自动生成的催费提醒"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="shareVisible = false">取消</el-button>
-        <el-button type="primary" :loading="shareSubmitting" @click="submitShare">生成文案</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 催费文案 -->
-    <el-dialog v-model="shareResultVisible" title="催费文案" width="480px">
-      <el-input v-model="shareText" type="textarea" :rows="6" readonly />
-      <template #footer>
-        <el-button @click="shareResultVisible = false">关闭</el-button>
-        <el-button type="primary" @click="copyShareText">复制文案</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 催费记录 -->
-    <el-dialog v-model="notifyVisible" title="催费记录" width="960px">
-      <el-table v-loading="notifyLoading" :data="notifyData" border stripe size="small" empty-text="暂无催费记录">
-        <el-table-column type="index" label="序号" width="60" align="center" />
-        <el-table-column prop="studentNo" label="学号" width="120" />
-        <el-table-column prop="studentName" label="姓名" width="90" />
-        <el-table-column prop="feeTypeName" label="缴费类型" width="100" />
-        <el-table-column label="金额" width="110" align="right">
-          <template #default="{ row }">{{ formatAmount(row.feeAmount) }}</template>
-        </el-table-column>
-        <el-table-column prop="shareChannelName" label="渠道" width="90" />
-        <!-- ★ 2026-10-20：原「备注」改叫「发送内容」，这里同步展示，否则填了什么看不到 -->
-        <el-table-column label="发送内容" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">{{ dash(row.remark) }}</template>
-        </el-table-column>
-        <el-table-column label="催费时间" width="170">
-          <template #default="{ row }">{{ row.notifyTime }}</template>
-        </el-table-column>
-        <el-table-column label="操作人">
-          <template #default="{ row }">{{ dash(row.notifyUserName) }}</template>
-        </el-table-column>
-      </el-table>
-      <el-pagination
-        v-model:current-page="notifyQuery.page"
-        v-model:page-size="notifyQuery.size"
-        :total="notifyTotal"
-        layout="total, prev, pager, next"
-        style="margin-top: 12px; justify-content: flex-end"
-        @current-change="loadNotify"
-      />
-    </el-dialog>
-
-    <!-- 大学/就业的催缴记录 -->
-    <el-dialog v-model="urgeLogVisible" :title="'催缴记录 · ' + (urgeLogRow?.dept || '') + ' ' + (urgeLogRow?.studentName || '')" width="640px">
-      <el-table v-if="urgeLogRow?.dept === '大学'" v-loading="urgeLogLoading" :data="urgeLogRows" border stripe size="small" empty-text="暂无催缴记录">
-        <el-table-column type="index" label="序号" width="60" align="center" />
-        <el-table-column label="渠道" width="110">
-          <template #default="{ row }">{{ row.channelName || row.channel || '—' }}</template>
-        </el-table-column>
-        <el-table-column label="时间" width="170">
-          <template #default="{ row }">{{ row.urgeTime || row.createTime || '—' }}</template>
-        </el-table-column>
-        <el-table-column label="备注">
-          <template #default="{ row }">{{ dash(row.remark) }}</template>
-        </el-table-column>
-      </el-table>
-      <el-descriptions v-else :column="1" border size="small">
-        <el-descriptions-item label="缴费类型">{{ urgeLogRow?.feeTypeName || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="金额">{{ urgeLogRow ? formatAmount(urgeLogRow.feeAmount) : '—' }}</el-descriptions-item>
-        <el-descriptions-item label="状态">{{ urgeLogRow?.payStatusName || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="应缴日期">{{ formatDate(urgeLogRow?.expireDate) }}</el-descriptions-item>
-        <el-descriptions-item label="催缴说明">{{ dash(urgeLogRow?.raw?.callReason) }}</el-descriptions-item>
-        <el-descriptions-item label="回填时间">{{ dash(urgeLogRow?.raw?.handleTime) }}</el-descriptions-item>
-        <el-descriptions-item label="回填备注">{{ dash(urgeLogRow?.raw?.handleRemark) }}</el-descriptions-item>
-      </el-descriptions>
-    </el-dialog>
   </div>
 </template>
 
