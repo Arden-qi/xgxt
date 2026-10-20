@@ -1,24 +1,26 @@
 /**
- * 教务老师「宿舍管理」入口校验
+ * 教务老师「宿舍管理」入口校验（2026-10-20 版）
  * ============================================================
  *
- * 【背景】3dfb416 给 R08（ACAD_STAFF）写角色页面台账时，只保留了
- *   /edu/student 与 /edu/dorm，其余 54 页全部 enabled=0。
- *   而 `applyLedgerToCodes()` 会把「置 0 页面」对应的权限码一起摘掉，
- *   于是教务手上的 classjh:dorm:view / class:dorm:view / job:dorm:view 全没了。
+ * 【背景】前一版（3dfb416 + 2026-10-19 的 menu 补丁）给教务老师单开了一个
+ *   独立的「教务宿舍」入口（/edu/dorm）。本版按用户要求改为：
+ *   · 去掉教务自己的 /edu/dorm 入口；
+ *   · 把合并后的宿舍管理页（/teaching/dorm）同步给教务老师。
  *
- *   但合并域菜单「宿舍管理」（/teaching/dorm）的显隐只认这三个码
- *   （STAGE_ACCESS.dorm 里根本没有 edu 学段），
- *   → 教务老师的宿舍入口**静默消失**：不报错、权限码 edu:dorm:view 还在，就是不显示。
- *
- * 【本次修法】在 config/menu.ts 补一个独立入口「教务宿舍」（/edu/dorm），
- *   走 hasPage + pageEnabled 的通用判定，只认 edu:dorm:view。
+ * 【做法】
+ *   ① 前端 menu.ts 删除「教务宿舍」(/edu/dorm) 菜单项，仅保留合并域 domainNode('dorm')；
+ *   ② R08 台账：/edu/dorm 置 0（摘 edu:dorm:view），/dorm 与 /class-jh/dorm 置 1
+ *      （补回 job:dorm:view / classjh:dorm:view —— 这两个码教务本就在
+ *      pagePermissionSource 的 ACAD_STAFF 里持有，只是被 3dfb416 的台账摘掉了）。
  *
  * 【本脚本验证四件事】
- *   ① 静态：菜单项 / 路由 / 页面注册表 / 后端挂载 四处齐全且 pageCode 一致
- *   ② 运行时：教务老师登录后确实拿到 edu:dorm:view（且确实没有三学段 dorm 码）
- *   ③ 运行时：教务老师调 /api/edu/dorm/* 真闸放行（不是"菜单有、接口 403"）
- *   ④ 反证：教务老师调 /api/teaching/dorm/* 应被拒（证明两套宿舍确实是分开的）
+ *   ① 静态：menu.ts 已无「教务宿舍」入口；合并域 dorm 仍在；
+ *           edu:dorm:view 在 pageRegistry/app.ts 仍登记（页面本身保留给其它角色）；
+ *           /api/teaching/dorm 仍只认三个学段码（不含 edu）。
+ *   ② 运行时：教务老师登录后 my-pages 含 classjh:dorm:view / job:dorm:view（合并页可见），
+ *           且不再含 edu:dorm:view（独立教务宿舍入口消失）。
+ *   ③ 运行时：教务老师调 /api/teaching/dorm/list 真闸放行（合并宿舍可达）。
+ *   ④ 反证：教务老师调 /api/edu/dorm/list 应被拒（403，教务已无教务宿舍）。
  *
  * 用法（项目根目录执行，后端需在 8004 监听）：
  *   node tools/verify-acad-dorm-menu.mjs
@@ -63,38 +65,33 @@ async function req(method, url, { token, body } = {}) {
 /* ============================================================
  * ① 静态校验
  * ============================================================ */
-console.log('=== ① 静态：四处配置是否齐全 ===');
+console.log('=== ① 静态：四处配置是否到位 ===');
 
 const menuSrc = read('web-job/src/config/menu.ts');
-const menuHit = menuSrc.match(
+const oldEntry = menuSrc.match(
   /\{\s*title:\s*'教务宿舍'[\s\S]{0,400}?path:\s*'\/edu\/dorm'[\s\S]{0,200}?pageCode:\s*'edu:dorm:view'/,
 );
-check('config/menu.ts 有「教务宿舍」入口（path=/edu/dorm, pageCode=edu:dorm:view）', !!menuHit);
-
-const routerSrc = read('web-job/src/router/index.ts');
-const routeHit = routerSrc.match(
-  /path:\s*'\/edu\/dorm'[\s\S]{0,200}?pageCode:\s*'edu:dorm:view'/,
-);
-check('router/index.ts 注册了 /edu/dorm 且 meta.pageCode 一致', !!routeHit);
+check('config/menu.ts 已去掉「教务宿舍」独立入口', !oldEntry);
+check('config/menu.ts 仍保留合并域 domainNode(\'dorm\')', /domainNode\('dorm'\)/.test(menuSrc));
 
 const regSrc = read('server-job/src/perm/config/pageRegistry.ts');
 const regHit = regSrc.match(/path:\s*'\/edu\/dorm'[\s\S]{0,120}?pageCode:\s*'edu:dorm:view'/);
-check('pageRegistry 登记了 edu:/edu/dorm（台账层能按 path 反查到码）', !!regHit);
+check('pageRegistry 仍登记 edu:/edu/dorm（页面保留给其它角色）', !!regHit);
 
 const appSrc = read('server-job/src/app.ts');
 const mountHit = appSrc.match(
   /app\.use\(\s*'\/api\/edu\/dorm'[\s\S]{0,200}?requirePage\('edu:dorm:view'\)/,
 );
-check("app.ts 挂载 /api/edu/dorm 并挂 requirePage('edu:dorm:view')", !!mountHit);
+check("app.ts 仍挂载 /api/edu/dorm 并挂 requirePage('edu:dorm:view')（页面本身保留）", !!mountHit);
 
-// 反证用的口径：合并宿舍页不认 edu 码
+// 合并宿舍页只认三个学段码（不含 edu）—— 这是教务能进合并页、不能进 edu 页的根因
 const teachHit = appSrc.match(
   /app\.use\(\s*'\/api\/teaching\/dorm'[\s\S]{0,400}?requireAnyPage\(\[([^\]]+)\]\)/,
 );
 const teachCodes = teachHit ? teachHit[1] : '';
 check(
-  '/api/teaching/dorm 的权限码不含 edu:dorm:view（证明教务宿舍必须单开入口）',
-  !!teachCodes && /classjh:dorm:view/.test(teachCodes) && !/edu:dorm:view/.test(teachCodes),
+  '/api/teaching/dorm 的权限码只认三个学段码（不含 edu:dorm:view）',
+  !!teachCodes && /classjh:dorm:view/.test(teachCodes) && /job:dorm:view/.test(teachCodes) && !/edu:dorm:view/.test(teachCodes),
   teachCodes.replace(/\s+/g, ' '),
 );
 
@@ -111,42 +108,33 @@ if (login.status !== 200 || !login.body?.data?.token) {
   process.exit(failed ? 1 : 0);
 }
 const token = login.body.data.token;
-check(
-  `登录 ${ACAD_ACCOUNT}（教务老师）`,
-  true,
-  `modules=${JSON.stringify(login.body.data.modules || login.body.data.visibleModules?.map((m) => m.key))}`,
-);
+check(`登录 ${ACAD_ACCOUNT}（教务老师）`, true, `modules=${JSON.stringify(login.body.data.modules)}`);
 
 const myPages = await req('GET', '/api/job/auth/my-pages', { token });
 const perms = myPages.body?.data?.permissions || [];
-const paths = (myPages.body?.data?.pages || []).map((p) => p.path);
-check('拿到 edu:dorm:view', perms.includes('edu:dorm:view'));
-check('my-pages 下发 /edu/dorm 页面', paths.includes('/edu/dorm'), `共 ${paths.length} 页`);
-const hasStageCodes = ['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view'].filter((c) =>
-  perms.includes(c),
-);
+const stageCodes = ['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view'];
+const heldStage = stageCodes.filter((c) => perms.includes(c));
+check('拿到 classjh:dorm:view（合并页·初高学段可见，教务已授权 class-jh 模块）', perms.includes('classjh:dorm:view'));
+// 注：job:dorm:view 由教务在 pagePermissionSource 持有，但门户未给教务授权 job 模块，
+// 被「模块门槛」滤掉 → 合并页只显示初高页签、看不到实训页签（门户级配置，非本任务范围）。
+check('至少持有一个合并宿舍学段码（合并页对教务可见）', heldStage.length >= 1, heldStage.join(',') || '无');
+check('不再持有 edu:dorm:view（独立教务宿舍入口已消失）', !perms.includes('edu:dorm:view'));
+
+console.log('\n=== ③ 运行时：合并宿舍页真闸放行 ===');
+const teach = await req('GET', '/api/teaching/dorm/list', { token });
+const teachCode = teach.body?.code;
 check(
-  '三学段 dorm 码已被台账摘除（= 合并域入口对他不可见，故必须单开入口）',
-  hasStageCodes.length === 0,
-  hasStageCodes.length ? `仍持有 ${hasStageCodes.join(',')}` : '三个码都没有',
+  'GET /api/teaching/dorm/list 放行（200）',
+  teach.status === 200 && (teachCode === 0 || teachCode === 200),
+  `HTTP ${teach.status} code=${teachCode ?? '-'}`,
 );
 
-console.log('\n=== ③ 运行时：教务宿舍接口真闸放行 ===');
-// 这组接口就是「教务宿舍」页（views/edu/DormList.vue）打开时实际会调的：
-//   宿舍总名单 / 分派宿舍 / 申请审批 三个 Tab 各取一个。
-// ⚠️ edu 侧的成功码是 200（不是 0），两种都算通过。
-for (const u of ['/api/edu/dorm/list', '/api/edu/dorm/assign/list', '/api/edu/dorm/approval-stats']) {
-  const r = await req('GET', u, { token });
-  const code = r.body?.code;
-  check(`GET ${u}`, r.status === 200 && (code === 0 || code === 200), `HTTP ${r.status} code=${code ?? '-'}`);
-}
-
-console.log('\n=== ④ 反证：合并宿舍页对教务应拒绝（两套宿舍确实分开）===');
-const teach = await req('GET', '/api/teaching/dorm/rooms', { token });
+console.log('\n=== ④ 反证：独立教务宿舍页对教务应拒绝（403）===');
+const edu = await req('GET', '/api/edu/dorm/list', { token });
 check(
-  'GET /api/teaching/dorm/rooms 被拒（403）',
-  teach.status === 403 || (teach.body?.code ?? 0) !== 0,
-  `HTTP ${teach.status} code=${teach.body?.code ?? '-'}`,
+  'GET /api/edu/dorm/list 被拒（403）',
+  edu.status === 403 || (edu.body?.code ?? 0) !== 0,
+  `HTTP ${edu.status} code=${edu.body?.code ?? '-'}`,
 );
 
 console.log(`\n${failed === 0 ? '✅ 全部通过' : `❌ ${failed} 项未通过`}`);

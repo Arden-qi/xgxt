@@ -1,23 +1,33 @@
 /**
- * 教务老师（R08 / ACAD_STAFF）页面权限：只保留「学生档案」+「宿舍管理」
+ * 教务老师（R08 / ACAD_STAFF）页面权限：保留「学生档案」+「合并宿舍（初高/实训）」
  *
  * 【做什么】往 `sms_perm.t_perm_role_page` 给 R08 写显式台账行：
- *   /edu/student（学生档案）enabled=1
- *   /edu/dorm   （宿舍管理） enabled=1
- *   其余所有页面            enabled=0  ← 显式去勾
+ *   /edu/student（学生档案）     enabled=1
+ *   /class-jh/dorm（初高宿舍）   enabled=1  ← 合并域「宿舍管理」的 jh 学段
+ *   /dorm        （实训宿舍）    enabled=1  ← 合并域「宿舍管理」的 job 学段
+ *   其余所有页面               enabled=0  ← 显式去勾
  *
  * 【为什么必须显式写 0】本表是「增量覆盖」语义（见 rolePage.service.ts 头部注释）：
  *   一个角色**一行都没有** → 完全沿用默认（= 现在教务能看到 40 条权限码对应的所有页面）。
  *   只有显式 enabled=0 才能真正把页面藏起来。
  *
- * 【不改什么】`t_perm_role_perm` 的 40 条权限码**不动**（用户确认的范围：只改页面分配），
+ * 【2026-10-20 调整】把「教务自己的宿舍」(/edu/dorm) 去掉，改用三学段合并页
+ *   /teaching/dorm（= 后端 /api/teaching/dorm，requireAnyPage 认
+ *   classjh:dorm:view / class:dorm:view / job:dorm:view）。
+ *   教务老师本就在 pagePermissionSource.ts 的 ACAD_STAFF 里持有
+ *   classjh:dorm:view 与 job:dorm:view（初高调宿审批 + 实训宿舍审批），
+ *   3dfb416 把这两个页面置 0 时被 applyLedgerToCodes 一并摘掉，导致合并页消失；
+ *   本脚本把它们重新 enabled=1，合并宿舍即对教务老师可见。
+ *   /edu/dorm 置 0 → edu:dorm:view 被摘掉 → 教务不再有独立教务宿舍入口。
+ *
+ * 【不改什么】`t_perm_role_perm` 的权限码**不动**（只改页面分配），
  *   所以教务老师在页面之外要用的审批 / 核算能力不受影响。
  */
 import { db } from '../src/perm/utils/db.js';
 
 const ROLE_ID = 'R08';
 /** ★ 保留的页面（path 必须和 pageRegistry 里的一致） */
-const KEEP = ['/edu/student', '/edu/dorm'];
+const KEEP = ['/edu/student', '/class-jh/dorm', '/dorm'];
 
 async function main() {
   // 1. 先看看要写哪些

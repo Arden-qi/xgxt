@@ -162,37 +162,6 @@ export const MENU: MenuNode[] = [
       domainNode('score'),
       domainNode('dorm'),
 
-      /* ★ 2026-10-19：教务学段的宿舍 = **独立的一套**，不在这三学段合并页里
-       *
-       * 【为什么必须单开一个入口】
-       *   合并域「宿舍管理」（/teaching/dorm）只合并了 初高 / 大学 / 实训 三套，
-       *   后端 `/api/teaching/dorm` 的 `requireAnyPage()` 也只认
-       *   classjh:dorm:view / class:dorm:view / job:dorm:view 三个码，
-       *   **不含 edu:dorm:view**（对比「学生档案」——它是唯一把 edu 并进来的域）。
-       *
-       *   教务老师（ACAD_STAFF）手上只有 `edu:dorm:view`。
-       *   3dfb416 给 R08 写台账时把其余 54 页全置 0（含 /dorm、/class-jh/dorm），
-       *   而 `applyLedgerToCodes()` 会把置 0 页面对应的权限码一起摘掉
-       *   → jh / class / job 三个 dorm 码全没了
-       *   → 合并域菜单的 `mergedDomainMenuAllowed('dorm')` 三个学段全 false
-       *   → 教务老师的「宿舍管理」**静默消失**（不报错，就是不显示）。
-       *
-       * 【本入口的口径】
-       *   · 走 `hasPage('/edu/dorm')` + `pageEnabled('/edu/dorm')` 通用判定，
-       *     只有持有 edu:dorm:view **且** 台账没关掉它的角色才看得到
-       *     （教务老师 / 教务管理员 / 校长 / 系统管理员）。
-       *   · 命名带「教务」前缀，避免与三学段合并页撞名（UI 审查 2.2 的命名撞车问题）。
-       */
-      {
-        title: '教务宿舍',
-        path: '/edu/dorm',
-        pageCode: 'edu:dorm:view',
-        icon: 'House',
-        owner: '教务',
-        stage: '已完成',
-        phase: '教务',
-        desc: '教务学段的宿舍：总名单 / 分派 / 调宿·退宿审批 / 退宿名单。与「宿舍管理」是两套独立数据，不共用房间与床位。',
-      },
       domainNode('fee'),
       domainNode('refund'),
       domainNode('approval'),
