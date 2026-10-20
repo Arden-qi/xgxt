@@ -1,5 +1,7 @@
 <template>
   <div class="tdv">
+    <el-tabs v-model="mainTab" class="tdv-main-tabs">
+      <el-tab-pane label="宿舍房间" name="rooms">
     <!-- 说明条 -->
     <el-alert class="tdv-tip" type="info" :closable="false" show-icon>
       <template #title>
@@ -453,6 +455,13 @@
         title="审批动作在「教学管理 → 审批中心 → 宿舍调宿」里处理，这里只做查询。"
       />
     </el-dialog>
+      </el-tab-pane>
+
+      <!-- ★ 2026-10-20 新增：教务给各班分派宿舍（左右两栏男寝 / 女寝） -->
+      <el-tab-pane label="班级分派" name="allocate" lazy>
+        <DormAllocate />
+      </el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
@@ -529,6 +538,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { isReadOnlyUser } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
+/** ★ 2026-10-20 宿舍管理的第二个子页面：班级分派 */
+import DormAllocate from './DormAllocate.vue';
 import {
   listDormBuildings as fetchBuildingSettings,
   type DormBuildingRow,
@@ -565,6 +576,9 @@ import {
 } from '@/teaching/api/dorm';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
+/** ★ 2026-10-20 子页面页签：宿舍房间（原页面） / 班级分派（教务给各班分宿舍） */
+const mainTab = ref<'rooms' | 'allocate'>('rooms');
+
 const STAGE_LABEL: Record<DormStage, string> = { jh: '初高', class: '大学', job: '实训' };
 
 const DORM_STAGE_ORDER: DormStage[] = ['jh', 'class', 'job'];
