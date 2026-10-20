@@ -87,8 +87,10 @@ const { check, summary } = makeChecker();
       /function callToRow[\s\S]*?parentPhone: r\.parentPhone \?\? null[\s\S]*?\n}/.test(feeList),
     );
     check(
+      // 表头格式变了（2026-10-20 加实缴/方式/缴费日期/备注列后拆成多行），
+      // 断言改成「学号 → 手机号 → 家长手机号 依次出现」，不再依赖一行内的字面串。
       '★ 导出 CSV 表头也含手机号 / 家长手机号（与列表列一致）',
-      feeList.includes("'手机号', '家长手机号'"),
+      /'学号'[\s\S]{0,80}'手机号'[\s\S]{0,40}'家长手机号'/.test(feeList),
     );
 
     /* ================= B. live ================= */

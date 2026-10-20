@@ -407,6 +407,14 @@ export interface FeeRecord extends BaseEntity {
   /** 是否紧急（派生，按配置阈值） */
   isUrgent?: boolean;
   voucherUrl?: string;
+  /** 缴费方式 1微信支付 2支付宝 3现金（★ 2026-10-20 登记缴费；未登记为 null） */
+  payMethod?: number | null;
+  /** 双返回 */
+  payMethodName?: string | null;
+  /** 实缴金额（分）；与 feeAmount（应缴）分开存，允许部分缴 */
+  paidAmount?: number | null;
+  /** 缴费备注（转账单号/说明） */
+  payRemark?: string | null;
 }
 
 /** 催费记录 */

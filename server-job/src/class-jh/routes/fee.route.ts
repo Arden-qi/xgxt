@@ -1,17 +1,24 @@
 /**
  * 催费管理路由（教学管理初高）
  *
- * 覆盖：list（含 remainDays/isUrgent，按配置阈值）/ export / share（写 notify + 文案）/ notify/list。
+ * 覆盖：list（含 remainDays/isUrgent，按配置阈值）/ export / voucher（上传缴费凭证）/
+ *      share（写 notify + 文案）/ notify/list。
  * 表：t_class_fee、t_class_fee_notify。
  * 挂载：/api/class/fee。
+ *
+ * ★ 2026-10-20：催费推送 / 催费记录在页面上已下线（操作列改成「上传缴费凭证」），
+ *   但 share / notify/list 的接口与数据保留，便于后续接真实短信发送时复用。
  */
 
 import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   BizCode,
   FEE_TYPE_NAME,
+  PAY_METHOD_NAME,
   PAY_STATUS_NAME,
   SHARE_CHANNEL_NAME,
   SHARE_CHANNEL_PUSH_CODES,
@@ -22,6 +29,7 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { nameOf } from '../utils/enumName';
 import { getNumberSetting } from '../utils/setting';
+import { writeOpLog } from '../utils/opLog';
 import { boolFlag } from '../../utils/query';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
@@ -112,6 +120,11 @@ function toFee(r: any, remindDays: number) {
     remainDays,
     isUrgent,
     voucherUrl: r.voucher_url,
+    /* ★ 2026-10-20 登记缴费写入的三项（未登记为 null，前端显示 —） */
+    payMethod: r.pay_method ?? null,
+    payMethodName: r.pay_method ? nameOf(PAY_METHOD_NAME, r.pay_method) : null,
+    paidAmount: r.paid_amount ?? null,
+    payRemark: r.pay_remark ?? null,
   };
 }
 
@@ -386,6 +399,165 @@ feeRouter.get(
     const withContact = mergeArchive(list, contacts);
 
     res.json(ok(withContact));
+  }),
+);
+
+/* ============================================================
+ * 2.5 登记缴费（上传缴费凭证）
+ *   POST /api/class-jh/fee/voucher
+ *
+ * ★ 2026-10-20 用户要求：操作列恢复，里面放「上传缴费凭证」，
+ *   表单五项：缴费方式（微信支付/支付宝/现金）、缴费金额、缴费时间（默认当天、不能选未来）、
+ *   备注、缴费截图（从本地选图片）。
+ *
+ * 【怎么存】沿用咨询/财务已有的做法：前端把图片读成 base64 传过来，
+ *   后端解码落盘到 `uploads/voucher/`，返回相对地址 `/uploads/voucher/xxx.jpg`。
+ *   `<img src>` 带不上 Authorization 头，所以凭证必须走静态托管（app.ts 已挂 /uploads）。
+ *
+ * 【写两处，别只写副本】
+ *   · `t_class_fee`（初高台账，页面读的是它）：凭证 / 方式 / 实缴金额 / 缴费日期 / 备注
+ *   · `sms_finance.t_finance_fee`（财务权威源）：只反写 voucher_url / pay_date / remark
+ *   只写副本的话，财务下次把这张单再推一遍会把 voucher_url 覆盖回去，用户登记的凭证就"消失"了。
+ *   财务那张单能不能找到，靠 `source_system='finance'` + `source_id` 判断；
+ *   演示数据是 `source_system='local'`（没有财务单），就只写副本，不算失败。
+ *   ⚠️ 财务侧 pay_status 不在这里流转（那是财务核对流程的事，财务侧还有"凭证唯一性""已核对不许改"等规则），
+ *     本接口只负责把凭证和信息登记进去。
+ *
+ * 【状态怎么变】
+ *   登记了「金额 + 时间 + 截图」就等于报缴了 → 未结清（待缴 1 / 逾期 4）推进成「已缴(2)」，
+ *   已核对的单不动（3 已核对 / 2 已缴保持原状，只更新凭证与实缴信息）。
+ *   这样列表里的「逾期 / 紧急」会随登记消失，符合"这笔钱已经收到了"的业务事实。
+ * ============================================================ */
+
+const paymentSchema = z.object({
+  feeId: z.string().min(1, '缴费单必填'),
+  /** 缴费方式 1微信支付 2支付宝 3现金 */
+  payMethod: z.coerce.number().int().min(1).max(3, '缴费方式只能是 微信支付 / 支付宝 / 现金'),
+  /** 实缴金额（分）。允许与应缴金额不同（部分缴），但必须为正数 */
+  paidAmount: z.coerce.number().int().positive('缴费金额必须大于 0'),
+  /** 缴费时间 YYYY-MM-DD（默认当天；不能晚于今天，由后端再兜一次） */
+  payDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '缴费时间格式应为 YYYY-MM-DD'),
+  /** 备注（转账单号 / 说明） */
+  remark: z.string().max(200, '备注最多 200 字').optional(),
+  /** 形如 data:image/png;base64,xxxx */
+  dataUrl: z.string().min(1, '请上传缴费截图'),
+});
+
+/** 凭证图片体积上限（5MB，与咨询/财务一致） */
+const VOUCHER_MAX_BYTES = 5 * 1024 * 1024;
+
+/** YYYY-MM-DD（本地时区），用于"不能选未来"的判断 */
+function todayStr(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+feeRouter.post(
+  '/voucher',
+  checkPermission('class:fee:add'),
+  validate(paymentSchema),
+  wrap(async (req, res) => {
+    const body = (req as any).validated as z.infer<typeof paymentSchema>;
+    const operator = req.user;
+
+    /* ---- 1. 缴费时间不能是未来（前端已禁选，这里再兜一层：接口可能被直接调） ---- */
+    if (body.payDate > todayStr()) {
+      throw new BizError(BizCode.PARAM_ERROR, '缴费时间不能晚于今天');
+    }
+
+    /* ---- 2. 准备落盘 ---- */
+    const row = await db(FEE_TABLE).where({ id: body.feeId, is_deleted: false }).first();
+    if (!row) throw new BizError(BizCode.FEE_NOT_FOUND, '缴费单不存在或已被删除');
+
+    const matched = /^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/i.exec(body.dataUrl);
+    if (!matched) {
+      throw new BizError(BizCode.FORMAT_ERROR, '缴费截图只支持 PNG / JPG / WEBP / GIF 图片');
+    }
+    const ext = matched[1].toLowerCase().replace('jpeg', 'jpg');
+    const buffer = Buffer.from(matched[2], 'base64');
+    if (!buffer.length) throw new BizError(BizCode.PARAM_ERROR, '图片内容为空，请重新选择');
+    if (buffer.length > VOUCHER_MAX_BYTES) {
+      throw new BizError(BizCode.PARAM_ERROR, '图片不能超过 5MB，请压缩后重试');
+    }
+
+    const fileName = `jh_fee_${Date.now()}_${randomUUID().slice(0, 8)}.${ext}`;
+    const uploadDir = path.resolve(process.cwd(), 'uploads/voucher');
+    fs.mkdirSync(uploadDir, { recursive: true });
+    fs.writeFileSync(path.join(uploadDir, fileName), buffer);
+    const voucherUrl = `/uploads/voucher/${fileName}`;
+
+    /* ---- 3. 写初高台账（含状态推进） ---- */
+    const before = {
+      payStatus: row.pay_status,
+      payDate: row.pay_date ?? null,
+      voucherUrl: row.voucher_url ?? null,
+      payMethod: row.pay_method ?? null,
+      paidAmount: row.paid_amount ?? null,
+    };
+    // 未结清（待缴/逾期）→ 已缴；已缴/已核对保持（只补凭证与实缴信息）
+    const rawStatus = Number(row.pay_status ?? 1);
+    const nextStatus = rawStatus === PayStatus.UNPAID || rawStatus === PayStatus.OVERDUE
+      ? PayStatus.PAID
+      : rawStatus;
+
+    await db(FEE_TABLE)
+      .where({ id: row.id })
+      .update({
+        voucher_url: voucherUrl,
+        pay_method: body.payMethod,
+        paid_amount: body.paidAmount,
+        pay_date: body.payDate,
+        pay_remark: body.remark ?? null,
+        pay_status: nextStatus,
+        update_time: new Date(),
+        update_by: operator?.userId ?? null,
+      });
+
+    /* ---- 4. 财务侧反写（best-effort）：只写凭证/日期/备注，状态交给财务核对流程 ---- */
+    let financeSynced = false;
+    if (row.source_system === 'finance' && row.source_id) {
+      try {
+        const affected = await db('sms_finance.t_finance_fee')
+          .where({ id: String(row.source_id), is_deleted: false })
+          .update({
+            voucher_url: voucherUrl,
+            pay_date: body.payDate,
+            remark: body.remark ?? null,
+          });
+        financeSynced = Number(affected) > 0;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[fee-payment] 反写财务缴费单失败（不影响本次登记）：', (e as Error).message);
+      }
+    }
+
+    /* ---- 5. 留痕 ---- */
+    await writeOpLog({
+      module: 'fee',
+      bizType: '登记缴费',
+      bizId: row.id,
+      studentId: row.student_id,
+      classId: row.class_id,
+      opUserId: operator?.userId,
+      opUserName: operator?.userName,
+      opDesc: `登记缴费：${nameOf(PAY_METHOD_NAME, body.payMethod)} ${(body.paidAmount / 100).toFixed(2)} 元（${fileName}）`,
+      beforeValue: before,
+      afterValue: {
+        payStatus: nextStatus,
+        payDate: body.payDate,
+        voucherUrl,
+        payMethod: body.payMethod,
+        paidAmount: body.paidAmount,
+      },
+    });
+
+    res.json(
+      ok(
+        { feeId: row.id, voucherUrl, payStatus: nextStatus, financeSynced },
+        '缴费登记成功',
+      ),
+    );
   }),
 );
 

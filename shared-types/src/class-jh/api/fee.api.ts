@@ -53,6 +53,41 @@ export interface FeeShareData {
 }
 export type FeeShareResponse = ApiResponse<FeeShareData>;
 
+/* ---------------- 登记缴费（上传缴费凭证） ---------------- */
+
+/**
+ * 登记缴费入参（★ 2026-10-20 用户要求：操作列「上传缴费凭证」）
+ *
+ * 表单五件事：缴费方式 / 缴费金额 / 缴费时间 / 备注 / 缴费截图。
+ * 截图走 base64（与咨询、财务的做法一致）：前端把本地图片读成 dataURL 传上来，
+ * 后端解码写 `uploads/voucher/`，返回相对地址 `/uploads/voucher/xxx.jpg`。
+ */
+export interface FeePaymentPayload {
+  /** 缴费台账行 ID（t_class_fee.id） */
+  feeId: string;
+  /** 缴费方式：1 微信支付 / 2 支付宝 / 3 现金（枚举 PayMethod） */
+  payMethod: number;
+  /** 实缴金额（单位：分） */
+  paidAmount: number;
+  /** 缴费时间 YYYY-MM-DD，默认当天，**只能选当天及以前** */
+  payDate: string;
+  /** 备注（转账单号 / 说明），可空 */
+  remark?: string;
+  /** 缴费截图 data:image/png;base64,xxxx（PNG / JPG / WEBP / GIF，≤ 5MB） */
+  dataUrl: string;
+}
+
+/** 登记缴费响应 */
+export interface FeePaymentResult {
+  feeId: string;
+  /** 相对地址，直接给 <img src> 用 */
+  voucherUrl: string;
+  /** 登记后的缴费状态（1待缴 2已缴…）：正常会变成「已缴」 */
+  payStatus: number;
+  /** 是否同时写回了财务缴费单（演示数据 source_system='local' 时为 false） */
+  financeSynced: boolean;
+}
+
 /* ---------------- 催费记录 ---------------- */
 
 /** 催费记录列表查询参数 */

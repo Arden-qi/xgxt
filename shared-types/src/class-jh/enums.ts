@@ -320,6 +320,26 @@ export const FEE_TYPE_NAME: Record<number, string> = {
   [FeeType.TRIAL_FEE]: '试学费',
 };
 
+/**
+ * 缴费方式（★ 2026-10-20 催费页「登记缴费」）
+ *
+ * ⚠️ 别和 `FeeType`（缴费类型：学费/住宿费/餐费…）搞混：
+ *   FeeType 是「交的是什么钱」，PayMethod 是「怎么交的」。
+ *   用户口语把它叫「缴费类型」，但选项是 微信支付/支付宝/现金 —— 本质是支付方式，
+ *   所以库里单开一列 `t_class_fee.pay_method`，绝不复用 `fee_type`（否则财务对账口径会乱）。
+ */
+export enum PayMethod {
+  WECHAT = 1, // 微信支付
+  ALIPAY = 2, // 支付宝
+  CASH = 3,   // 现金
+}
+
+export const PAY_METHOD_NAME: Record<number, string> = {
+  [PayMethod.WECHAT]: '微信支付',
+  [PayMethod.ALIPAY]: '支付宝',
+  [PayMethod.CASH]: '现金',
+};
+
 export const PAY_STATUS_NAME: Record<number, string> = {
   [PayStatus.UNPAID]: '待缴',
   [PayStatus.PAID]: '已缴',

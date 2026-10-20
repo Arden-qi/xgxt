@@ -65,16 +65,18 @@ const createdNotifyIds = [];
      *   但页面上不能再有任何入口，否则等于没去掉。
      */
     check(
-      '② 催费页已去掉催费推送 / 记录入口（操作列整列移除）',
-      !/label="操作"/.test(feeList) &&
-        !feeList.includes('shareForm') &&
+      '② 催费页已下线催费推送 / 记录入口（操作列改成了「上传缴费凭证」）',
+      !feeList.includes('shareForm') &&
         !feeList.includes('SHARE_CHANNEL_PUSH_OPTIONS') &&
         !feeList.includes('shareFee') &&
         !feeList.includes('fetchFeeNotifyList') &&
         !feeList.includes('openNotify'),
-      '检查 label="操作" / shareForm / shareFee / fetchFeeNotifyList / openNotify 均已消失',
+      '检查 shareForm / shareFee / fetchFeeNotifyList / openNotify 均已消失',
     );
-    check('② 导出入口保留（只去掉推送与记录，不是把整页功能砍了）', feeList.includes('handleExport') && feeList.includes('导出'));
+    check(
+      '② 操作列保留但只放登记缴费；导出入口也在',
+      /label="操作"/.test(feeList) && feeList.includes('上传缴费凭证') && feeList.includes('handleExport') && feeList.includes('导出'),
+    );
 
     check(
       '④ 后端校验用 SHARE_CHANNEL_PUSH_CODES（不再是 1..3 硬编码）',

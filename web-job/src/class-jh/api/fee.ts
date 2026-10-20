@@ -11,6 +11,8 @@ import type {
   FeeShareData,
   FeeNotify,
   FeeNotifyListQuery,
+  FeePaymentPayload,
+  FeePaymentResult,
 } from 'shared-types/class-jh';
 
 /**
@@ -28,6 +30,17 @@ export function fetchFeeList(query: FeeListQuery): Promise<FeeListPage> {
 /** 催费导出 */
 export function exportFee(query: FeeListQuery): Promise<FeeRecord[]> {
   return http.get<FeeRecord[]>('/api/class-jh/fee/export', query);
+}
+
+/**
+ * 登记缴费（上传缴费凭证）
+ *
+ * ★ 2026-10-20 用户要求：操作列「上传缴费凭证」——
+ *   缴费方式（微信支付/支付宝/现金）+ 缴费金额 + 缴费时间（默认当天、不能选未来）+ 备注 + 截图。
+ *   截图在前端读成 dataURL 一起提交，后端落盘 uploads/voucher 后返回相对地址。
+ */
+export function submitFeePayment(payload: FeePaymentPayload): Promise<FeePaymentResult> {
+  return http.post<FeePaymentResult>('/api/class-jh/fee/voucher', payload);
 }
 
 /** 催费推送（生成可复制文案） */

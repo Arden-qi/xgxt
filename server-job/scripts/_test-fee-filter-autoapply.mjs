@@ -72,13 +72,14 @@ function unwired(section) {
       feeSrc.includes('fetchFeeList(') && feeSrc.includes('urgeList(') && feeSrc.includes('fetchFeeCallList('),
     );
     check(
-      // ★ 2026-10-20 用户要求：催费推送 / 催费记录已下线，操作列整列去掉；
+      // ★ 2026-10-20 用户要求（两轮）：催费推送/记录下线 → 操作列恢复成「登记缴费（上传缴费凭证）」；
       //   导出仍只在初高视图出现（这条口径没变）。
-      '★ 初高功能保留：导出按钮在初高视图；推送/记录入口已按用户要求移除',
+      '★ 初高功能保留：导出在初高视图；操作列只放登记缴费，不再有推送/记录',
       feeSrc.includes('v-if="query.dept === \'jh\'"') &&
         feeSrc.includes('handleExport') &&
-        !feeSrc.includes('isJhRow(row)') &&
-        !feeSrc.includes('label="操作"'),
+        feeSrc.includes('上传缴费凭证') &&
+        !feeSrc.includes('handleShare') &&
+        !feeSrc.includes('openNotify'),
     );
 
     /* ---------- A3. 催费次数列（2026-10-19 用户要求） ---------- */

@@ -1,19 +1,20 @@
 <script setup lang="ts">
 /**
- * 催费管理页（缴费台账 / 导出）
+ * 催费管理页（缴费台账 / 登记缴费·上传缴费凭证 / 导出）
  *
- * ★ 2026-10-20 用户要求：去掉「催费推送」和「催费记录」功能，操作列整列移除
- *   → 后端 /fee/share、/fee/notify/list 接口**保留但页面不再有入口**（能力留着，
- *     将来接真实短信发送时直接复用这条链路；数据表 t_class_fee_notify 也照旧保留，
- *     「催费次数」列仍按它统计）。
+ * ★ 2026-10-20 用户要求（两轮）：
+ *   ① 催费推送 / 催费记录下线 → 操作列整列移除；
+ *   ② 操作列**恢复**，只放「上传缴费凭证」= 登记缴费（缴费方式 / 金额 / 时间 / 备注 / 截图）。
+ *   后端 /fee/share、/fee/notify/list 接口**保留但页面不再有入口**（将来接真实短信发送时复用；
+ *   数据表 t_class_fee_notify 也照旧保留，「催费次数」列仍按它统计）。
  */
 
 import { computed, ref, reactive, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Search, Refresh, Download } from '@element-plus/icons-vue';
-import { FEE_TYPE_NAME, PAY_STATUS_NAME, PayStatus } from 'shared-types/class-jh';
+import { Search, Refresh, Download, Plus } from '@element-plus/icons-vue';
+import { FEE_TYPE_NAME, PAY_METHOD_NAME, PAY_STATUS_NAME, PayMethod, PayStatus } from 'shared-types/class-jh';
 import type { FeeRecord, FeeListQuery, ClassInfo } from 'shared-types/class-jh';
-import { fetchFeeList, exportFee } from '@/class-jh/api/fee';
+import { fetchFeeList, exportFee, submitFeePayment } from '@/class-jh/api/fee';
 import { urgeList } from '@/class/api/student';
 import { fetchFeeCallList } from '@/api/feeCall';
 import { fetchClassOptions } from '@/class-jh/api/classInfo';
@@ -280,13 +281,151 @@ function handleReset() {
   loadData();
 }
 
+/* ============ 登记缴费（上传缴费凭证） ============ */
+const paymentVisible = ref(false);
+const paymentSubmitting = ref(false);
+const paymentRow = ref<FeeRow | null>(null);
+/** 截图查看弹窗 */
+const voucherViewVisible = ref(false);
+const voucherViewUrl = ref('');
+/** el-upload 实例（重开弹窗要清空上一张，否则limit=1选不了新图） */
+const voucherUploadRef = ref<any>(null);
+
+/** 表单：金额按「元」录入，提交时 ×100 转成分 */
+const paymentForm = reactive({
+  payMethod: PayMethod.WECHAT as number,
+  amountYuan: 0,
+  payDate: '',
+  remark: '',
+});
+/** 本地选中的截图文件（el-upload 不自动上传，自己读成 base64 再提交） */
+const voucherFile = ref<File | null>(null);
+
+/** 缴费方式下拉：微信支付 / 支付宝 / 现金 */
+const payMethodOptions = computed(() =>
+  Object.entries(PAY_METHOD_NAME).map(([value, label]) => ({ value: Number(value), label: String(label) })),
+);
+
+/** 今天 YYYY-MM-DD（缴费时间默认值） */
+function todayStr(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 缴费时间只能选今天及以前（未来的日期不可点） */
+function disabledFutureDate(date: Date): boolean {
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return date.getTime() > end.getTime();
+}
+
+/** 打开登记缴费弹窗：金额默认带出应缴金额，时间默认今天 */
+function openPayment(row: FeeRow) {
+  paymentRow.value = row;
+  paymentForm.payMethod = PayMethod.WECHAT;
+  paymentForm.amountYuan = Number(((row.paidAmount ?? row.feeAmount) || 0) / 100);
+  paymentForm.payDate = todayStr();
+  paymentForm.remark = '';
+  voucherFile.value = null;
+  voucherUploadRef.value?.clearFiles?.();
+  paymentVisible.value = true;
+}
+
+/** 选图（el-upload 只做本地选择，不发请求） */
+function onVoucherChange(file: any) {
+  const raw: File | undefined = file?.raw;
+  if (!raw) return;
+  if (!/^image\//.test(raw.type)) {
+    ElMessage.warning('缴费截图只能是图片');
+    return;
+  }
+  if (raw.size > 5 * 1024 * 1024) {
+    ElMessage.warning('图片不能超过 5MB，请压缩后重试');
+    return;
+  }
+  voucherFile.value = raw;
+}
+
+function onVoucherRemove() {
+  voucherFile.value = null;
+}
+
+/** File → dataURL（后端收 base64 落盘） */
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('图片读取失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function submitPayment() {
+  if (!paymentRow.value) return;
+  if (!paymentForm.payDate) {
+    ElMessage.warning('请选择缴费时间');
+    return;
+  }
+  if (!paymentForm.amountYuan || paymentForm.amountYuan <= 0) {
+    ElMessage.warning('请填写正确的缴费金额');
+    return;
+  }
+  if (!voucherFile.value) {
+    ElMessage.warning('请上传缴费截图');
+    return;
+  }
+  paymentSubmitting.value = true;
+  try {
+    const dataUrl = await readAsDataUrl(voucherFile.value);
+    await submitFeePayment({
+      feeId: paymentRow.value.feeId,
+      payMethod: paymentForm.payMethod,
+      paidAmount: Math.round(paymentForm.amountYuan * 100),
+      payDate: paymentForm.payDate,
+      remark: paymentForm.remark.trim() || undefined,
+      dataUrl,
+    });
+    ElMessage.success('缴费登记成功');
+    paymentVisible.value = false;
+    loadData();
+  } catch {
+    /* 错误已统一处理 */
+  } finally {
+    paymentSubmitting.value = false;
+  }
+}
+
+/** 查看已上传的凭证（相对地址由 Vite 代理 /uploads 转发到后端） */
+function viewVoucher(url?: string | null) {
+  if (!url) return;
+  voucherViewUrl.value = /^https?:\/\//i.test(url) ? url : url.startsWith('/') ? url : `/${url}`;
+  voucherViewVisible.value = true;
+}
+
 /* ============ 导出 ============ */
 async function handleExport() {
   try {
     const list = await exportFee(query);
     exportCsv(
       '催费台账',
-      ['学号', '姓名', '手机号', '家长手机号', '班级', '缴费类型', '应缴金额', '缴费状态', '应缴日期', '剩余天数', '是否紧急'],
+      [
+        '学号',
+        '姓名',
+        '手机号',
+        '家长手机号',
+        '班级',
+        '缴费类型',
+        '应缴金额',
+        '实缴金额',
+        '缴费方式',
+        '缴费状态',
+        '应缴日期',
+        '缴费日期',
+        '备注',
+        '剩余天数',
+        '是否紧急',
+      ],
       list.map((r) => [
         r.studentNo,
         r.studentName,
@@ -295,8 +434,12 @@ async function handleExport() {
         r.className,
         r.feeTypeName,
         formatAmount(r.feeAmount),
+        r.paidAmount == null ? '' : formatAmount(r.paidAmount),
+        r.payMethodName || '',
         r.payStatusName,
         formatDate(r.expireDate),
+        formatDate(r.payDate),
+        r.payRemark || '',
         r.remainDays ?? '',
         r.isUrgent ? '是' : '否',
       ]),
@@ -397,6 +540,10 @@ onMounted(() => {
         <el-table-column label="应缴金额" width="120" align="right">
           <template #default="{ row }">{{ formatAmount(row.feeAmount) }}</template>
         </el-table-column>
+        <!-- ★ 2026-10-20 登记缴费写入的实缴金额（未登记显示 —，允许与应缴不同＝部分缴） -->
+        <el-table-column label="实缴金额" width="120" align="right">
+          <template #default="{ row }">{{ row.paidAmount == null ? '—' : formatAmount(row.paidAmount) }}</template>
+        </el-table-column>
         <el-table-column label="缴费状态" width="100" align="center">
           <template #default="{ row }">
             <!-- ★ 2026-10-20：就业按统一缴费状态展示；原始催缴状态（待催缴/催缴中/已缴清）放 title 备查 -->
@@ -407,8 +554,14 @@ onMounted(() => {
             >{{ row.payStatusName }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="缴费方式" width="110" align="center">
+          <template #default="{ row }">{{ dash(row.payMethodName) }}</template>
+        </el-table-column>
         <el-table-column label="应缴日期" width="120">
           <template #default="{ row }">{{ formatDate(row.expireDate) }}</template>
+        </el-table-column>
+        <el-table-column label="缴费日期" width="120">
+          <template #default="{ row }">{{ formatDate(row.payDate) }}</template>
         </el-table-column>
         <el-table-column label="剩余天数" width="100" align="center">
           <template #default="{ row }">{{ dash(row.remainDays) }}</template>
@@ -423,7 +576,21 @@ onMounted(() => {
         <el-table-column label="催费次数" width="90" align="center">
           <template #default="{ row }">{{ row.urgeCount ?? '—' }}</template>
         </el-table-column>
-        <!-- ★ 2026-10-20 用户要求：去掉催费推送 / 催费记录 / 催缴记录，操作列整列移除 -->
+        <!-- ★ 2026-10-20 用户要求：操作列恢复，只放「上传缴费凭证」（= 登记缴费）；
+             催费推送 / 催费记录 / 催缴记录已下线，不要再加回来 -->
+        <el-table-column label="操作" width="160" align="center" fixed="right">
+          <template #default="{ row }">
+            <template v-if="!row.dept || row.dept === '初高'">
+              <el-button link type="primary" size="small" @click="openPayment(row)">
+                {{ row.voucherUrl ? '重新登记' : '上传缴费凭证' }}
+              </el-button>
+              <el-button v-if="row.voucherUrl" link type="success" size="small" @click="viewVoucher(row.voucherUrl)">
+                查看
+              </el-button>
+            </template>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
       </el-table>
 
       <el-pagination
@@ -438,6 +605,88 @@ onMounted(() => {
       />
     </el-card>
 
+    <!-- 登记缴费（上传缴费凭证） -->
+    <el-dialog v-model="paymentVisible" title="上传缴费凭证" width="560px">
+      <el-form :model="paymentForm" label-width="96px">
+        <el-form-item label="学生">
+          <el-input :model-value="paymentRow ? `${paymentRow.studentNo} ${paymentRow.studentName}` : ''" disabled />
+        </el-form-item>
+        <el-form-item label="缴费项目">
+          <el-input
+            :model-value="paymentRow ? `${paymentRow.feeTypeName}（应缴 ${formatAmount(paymentRow.feeAmount)}）` : ''"
+            disabled
+          />
+        </el-form-item>
+        <el-form-item label="缴费方式" required>
+          <el-radio-group v-model="paymentForm.payMethod">
+            <el-radio v-for="o in payMethodOptions" :key="o.value" :value="o.value">{{ o.label }}</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="缴费金额" required>
+          <el-input-number
+            v-model="paymentForm.amountYuan"
+            :min="0.01"
+            :max="10000000"
+            :precision="2"
+            :step="100"
+            controls-position="right"
+            style="width: 200px"
+          />
+          <span class="field-unit">元（默认带出应缴金额，可改为实际收到的金额）</span>
+        </el-form-item>
+        <el-form-item label="缴费时间" required>
+          <el-date-picker
+            v-model="paymentForm.payDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            :clearable="false"
+            :disabled-date="disabledFutureDate"
+            placeholder="默认当天"
+            style="width: 200px"
+          />
+          <span class="field-unit">只能选今天及以前</span>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="paymentForm.remark"
+            type="textarea"
+            :rows="2"
+            maxlength="200"
+            show-word-limit
+            placeholder="转账单号 / 其他说明，可留空"
+          />
+        </el-form-item>
+        <el-form-item label="缴费截图" required>
+          <el-upload
+            ref="voucherUploadRef"
+            :auto-upload="false"
+            :limit="1"
+            accept="image/*"
+            list-type="picture-card"
+            :on-change="onVoucherChange"
+            :on-remove="onVoucherRemove"
+          >
+            <el-icon><Plus /></el-icon>
+          </el-upload>
+          <div class="upload-tip">从本地选择图片：jpg / png / webp，单张不超过 5MB</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="paymentVisible = false">取消</el-button>
+        <el-button type="primary" :loading="paymentSubmitting" @click="submitPayment">提交</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 查看缴费凭证 -->
+    <el-dialog v-model="voucherViewVisible" title="缴费凭证" width="640px">
+      <div class="voucher-wrap">
+        <img v-if="voucherViewUrl" :src="voucherViewUrl" alt="缴费凭证" class="voucher-img" />
+      </div>
+      <template #footer>
+        <el-button @click="voucherViewVisible = false">关闭</el-button>
+        <el-button type="primary" tag="a" :href="voucherViewUrl" target="_blank" rel="noopener">新窗口打开</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -468,6 +717,25 @@ onMounted(() => {
 .dept-hint {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+/* 登记缴费弹窗内的说明文字 / 凭证预览 */
+.field-unit {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.upload-tip {
+  width: 100%;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.voucher-wrap {
+  text-align: center;
+}
+.voucher-img {
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 6px;
 }
 .table-card :deep(.el-card__body) {
   padding: 16px;
