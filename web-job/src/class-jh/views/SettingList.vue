@@ -30,7 +30,7 @@ const settingSaving = ref(false);
 const settingValues = reactive<Record<string, string>>({});
 
 /** 数字型设置键 */
-const NUMBER_KEYS = ['attendanceTargetRate', 'feeRemindDays', 'refundThresholdAmount', 'closedClassIntakeTypes'];
+const NUMBER_KEYS = ['attendanceTargetRate', 'feeRemindDays', 'feeUrgeWindowDays', 'refundThresholdAmount', 'closedClassIntakeTypes'];
 /** 布尔型设置键 */
 const BOOLEAN_KEYS = ['allowStudentAdd'];
 

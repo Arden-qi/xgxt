@@ -84,6 +84,30 @@ function toFee(r: any, remindDays: number) {
 }
 
 /**
+ * 催费列表窗口判断（★ 2026-10-20 用户要求：到期日到 20 天才进催费列表）
+ *
+ * 【数据从哪来】催费列表的内容来自财务管理 · 缴费管理：财务的缴费单
+ *   (`sms_finance.t_finance_fee`) 在新增/回传凭证/核对/打回时，由
+ *   `finance/services/class-sync.ts` 的 `syncFeeToJh()` 幂等同步成本表的副本
+ *   （`sms_class_jh.t_class_fee`，含 `expire_date` 到期日期）。
+ *
+ * 【窗口口径】到期日距今 ≤ feeUrgeWindowDays 天（默认 20）才进列表；
+ *   已逾期（remainDays 为负）**照常进**，越逾期越该催。
+ *
+ * 【为什么放在读侧，而不是同步侧】
+ *   同步只在财务单发生写操作时触发一次，「某笔单哪天进入 20 天窗口」没有任何事件，
+ *   本仓库也没有定时任务 —— 只有读侧过滤才能做到「今天进窗口，今天的列表立刻就有」。
+ *
+ * 【到期日为空的单不进列表】上游咨询建单没传 expireDate（落 NULL），
+ *   没有到期日就无法判断「还差几天」，按用户口径不作为催费对象。
+ *   这类单仍留在 t_class_fee 里（财务追溯、学生详情缴费情况要用），
+ *   只是不出现在催费列表 / 导出结果里。
+ */
+function withinUrgeWindow(row: { remainDays: number | null }, windowDays: number): boolean {
+  return row.remainDays !== null && row.remainDays <= windowDays;
+}
+
+/**
  * 批量取学生的**档案信息**：`studentId → { 学号/姓名/班级/部门/电话 }`
  *
  * ⚠️ 两条纪律：
@@ -215,6 +239,8 @@ feeRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
     const remindDays = await getNumberSetting('feeRemindDays');
+    // ★ 催费列表窗口天数（默认 20）：到期日距今 ≤ N 天才进列表
+    const windowDays = await getNumberSetting('feeUrgeWindowDays');
 
     const query = db(FEE_TABLE).where('is_deleted', false);
     // ★ 2026-10-20：班级筛选同时认「单据快照」和「档案现状」（学生换班后仍能筛到）
@@ -239,7 +265,10 @@ feeRouter.get(
 
     // isUrgent 为派生值，先取全量（当前筛选）再内存过滤分页
     const allRows = await query.clone().select('*').orderBy('expire_date', 'asc');
-    let list = allRows.map((r: any) => toFee(r, remindDays));
+    // ★ 窗口过滤：只留到期日在 N 天内（含逾期）的单；到期日为空的单不进列表
+    let list = allRows
+      .map((r: any) => toFee(r, remindDays))
+      .filter((x: any) => withinUrgeWindow(x, windowDays));
     if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
 
     const total = list.length;
@@ -264,7 +293,8 @@ feeRouter.get(
     const contacts = await fetchStudentContacts(withCount.map((x: any) => x.studentId));
     const withContact = mergeArchive(withCount, contacts);
 
-    res.json(page(withContact, total, q));
+    // 顺带把窗口天数带回前端：列表为什么比台账少，界面上要说得清楚
+    res.json({ ...page(withContact, total, q), urgeWindowDays: windowDays });
   }),
 );
 
@@ -280,6 +310,8 @@ feeRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
     const remindDays = await getNumberSetting('feeRemindDays');
+    // ★ 导出与列表同一窗口口径（少了一行会被当成 bug）
+    const windowDays = await getNumberSetting('feeUrgeWindowDays');
 
     const query = db(FEE_TABLE).where('is_deleted', false);
     // ★ 2026-10-20：筛选口径与列表完全一致（班级/关键字都认档案现状）
@@ -304,7 +336,10 @@ feeRouter.get(
     }
 
     const rows = await query.clone().select('*').orderBy('expire_date', 'asc');
-    let list = rows.map((r: any) => toFee(r, remindDays));
+    // ★ 窗口过滤与列表同口径；到期日为空的单同样不进
+    let list = rows
+      .map((r: any) => toFee(r, remindDays))
+      .filter((x: any) => withinUrgeWindow(x, windowDays));
     if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
 
     // ★ 档案信息（2026-10-20）：导出与列表同口径，按 500 分片批量取档案

@@ -51,6 +51,14 @@ const tableRows = ref<FeeRow[]>([]);
 /** 「全部部门」合并视图的结果（前端分页） */
 const mergedRows = ref<FeeRow[]>([]);
 const serverTotal = ref(0);
+/**
+ * 初高催费窗口天数（后端设置项 feeUrgeWindowDays，默认 20）
+ *
+ * ★ 2026-10-20 用户要求：催费列表的内容来自财务管理 · 缴费管理，
+ *   且「到期日距今 ≤ 20 天」的缴费单才进列表 → 由后端过滤，这里只取回天数做界面说明，
+ *   不然用户会以为「台账里有的单怎么列表里没有」。
+ */
+const urgeWindowDays = ref<number | null>(null);
 
 const total = computed(() => (query.dept === 'all' ? mergedRows.value.length : serverTotal.value));
 const tableData = computed<FeeRow[]>(() => {
@@ -204,7 +212,10 @@ async function loadData() {
             }),
       ]);
       const rows: FeeRow[] = [];
-      if (settled[0].status === 'fulfilled') rows.push(...settled[0].value.list.map((r) => ({ ...r, dept: '初高' } as FeeRow)));
+      if (settled[0].status === 'fulfilled') {
+        rows.push(...settled[0].value.list.map((r) => ({ ...r, dept: '初高' } as FeeRow)));
+        urgeWindowDays.value = settled[0].value.urgeWindowDays ?? urgeWindowDays.value;
+      }
       if (settled[1].status === 'fulfilled') rows.push(...settled[1].value.list.map((r: any) => urgeToRow(r)));
       if (settled[2].status === 'fulfilled') rows.push(...settled[2].value.list.map((r: any) => callToRow(r)));
       rows.sort((a, b) => (b.expireDate || '0000').localeCompare(a.expireDate || '0000'));
@@ -214,6 +225,7 @@ async function loadData() {
       const data = await fetchFeeList(query);
       tableRows.value = data.list.map((r) => ({ ...r, dept: '初高' } as FeeRow));
       serverTotal.value = data.total;
+      urgeWindowDays.value = data.urgeWindowDays ?? null;
     }
   } catch {
     /* 错误已统一处理 */
@@ -448,6 +460,10 @@ onMounted(() => {
       <div class="toolbar">
         <el-button v-if="query.dept === 'jh'" :icon="Bell" @click="openNotify()">催费记录</el-button>
         <el-button v-if="query.dept === 'jh'" :icon="Download" @click="handleExport">导出</el-button>
+        <!-- ★ 2026-10-20 用户要求：催费列表来自财务管理 · 缴费管理，到期日到 20 天才进列表 -->
+        <span v-if="urgeWindowDays && query.dept !== 'class' && query.dept !== 'employ'" class="window-hint">
+          初高数据来自「财务管理 · 缴费管理」，只列到期日距今 ≤ {{ urgeWindowDays }} 天的缴费单（含已逾期；未设到期日的不显示）
+        </span>
       </div>
 
       <el-table v-loading="loading" :data="tableData" border stripe style="width: 100%" empty-text="暂无数据">
@@ -633,6 +649,13 @@ onMounted(() => {
 }
 .toolbar {
   margin-bottom: 12px;
+}
+/* 催费窗口说明：靠右、浅色，别和操作按钮抢注意力 */
+.window-hint {
+  float: right;
+  line-height: 32px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .dept-hint {
   font-size: 12px;

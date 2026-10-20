@@ -13,9 +13,16 @@ import type {
   FeeNotifyListQuery,
 } from 'shared-types/class-jh';
 
-/** 催费列表（含 remainDays/isUrgent） */
-export function fetchFeeList(query: FeeListQuery): Promise<PageData<FeeRecord>> {
-  return http.get<PageData<FeeRecord>>('/api/class-jh/fee/list', query);
+/**
+ * 催费列表（含 remainDays/isUrgent）
+ *
+ * ★ 2026-10-20：后端只返回「到期日距今 ≤ 催费窗口天数」的单，
+ *   并把 windowDays 一起带回来（urgeWindowDays），用于界面上说明「为什么比台账少」。
+ */
+export type FeeListPage = PageData<FeeRecord> & { urgeWindowDays?: number };
+
+export function fetchFeeList(query: FeeListQuery): Promise<FeeListPage> {
+  return http.get<FeeListPage>('/api/class-jh/fee/list', query);
 }
 
 /** 催费导出 */
