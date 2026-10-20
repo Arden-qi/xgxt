@@ -87,6 +87,8 @@ check('当前宿舍显示 楼栋/宿舍号/床位号', dorm.includes('楼栋：'
 check('调宿楼栋来自楼栋设置', dorm.includes('listAllocateBuildings(changeForm.category)'));
 check('目标床位取宿舍剩余床位', dorm.includes('freeBeds'));
 check('调宿有 类别 → 楼栋 → 目标床位', dorm.includes('label="目标床位"') && dorm.includes('loadChangeRooms'));
+check('打开弹窗即预加载楼栋选项', /async function openChange\(\)[\s\S]{0,400}onChangeCategory\(\)/.test(dorm));
+check('未选楼栋时目标床位禁用并提示', dorm.includes(':disabled="!changeForm.building"') && dorm.includes('请先选择楼栋'));
 check('日期只读、原因 ≤100', dorm.includes('{{ changeForm.changeDate }}') && !dorm.includes('v-model="changeForm.changeDate"') && dorm.includes('maxlength="100"'));
 check('后端路由有 classes/buildings/rooms/save', ['/classes', '/buildings', '/rooms', '/save'].every((p) => route.includes(`'${p}'`)));
 check('app.ts 在 /api/teaching/dorm 之前挂载 allocate', app.indexOf("'/api/teaching/dorm/allocate'") > -1 && app.indexOf("'/api/teaching/dorm/allocate'") < app.indexOf("'/api/teaching/dorm'"));

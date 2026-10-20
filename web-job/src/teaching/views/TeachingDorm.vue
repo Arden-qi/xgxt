@@ -455,7 +455,8 @@
             <el-select
               v-model="changeForm.targetBedId"
               filterable
-              placeholder="选择空余床位（宿舍 · 床位）"
+              :disabled="!changeForm.building"
+              :placeholder="changeForm.building ? '选择空余床位（宿舍 · 床位）' : '请先选择楼栋'"
               style="width: 100%"
               :loading="changeRoomsLoading"
             >
@@ -1149,6 +1150,12 @@ function resetChangeForm() {
 async function openChange() {
   resetChangeForm();
   changeVisible.value = true;
+  /**
+   * ★ 2026-10-20 修复：弹窗一打开就要把默认类别（男寝）的楼栋拉出来。
+   *   之前只在「切换类别 / 选学生」时才拉，导致刚打开时楼栋下拉是空的，
+   *   用户以为「无数据」，目标床位也跟着没得选。
+   */
+  void onChangeCategory();
   try {
     changeClasses.value = (await listAllocateClasses()) || [];
   } catch (e) {
@@ -1198,8 +1205,11 @@ async function onChangeStudent(studentId: string) {
 /** 切换类型：调宿时按学生性别预选类别；退宿不需要目标宿舍 */
 async function onChangeBizType() {
   changeForm.targetBedId = '';
-  if (changeForm.bizType === 1 && curStudent.value) {
-    changeForm.category = curStudent.value.gender === 2 ? 2 : 1;
+  if (changeForm.bizType === 1) {
+    if (curStudent.value) {
+      changeForm.category = curStudent.value.gender === 2 ? 2 : 1;
+    }
+    // 没选学生时也要保证当前类别的楼栋已经加载出来
     await onChangeCategory();
   }
 }
