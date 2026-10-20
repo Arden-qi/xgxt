@@ -162,7 +162,7 @@ check(
 check(
   '② 批量导入：表头/模板/解析/预览/失败清单五处都去掉编码列',
   count(rolem, "const IMPORT_HEADER = '职位名称,类型,所属部门,职位说明';") === 1 &&
-    count(rolem, "'实训助教,业务职位,实训教学部,导入创建'") === 1 &&
+    count(rolem, "'实训助教,业务职位,实训管理,导入创建'") === 1 &&
     count(rolem, 'const [roleName, roleType, deptName, remark] = line') === 1 &&
     count(rolem, '<tr><th>职位名称</th><th>类型</th><th>部门</th><th>校验</th></tr>') === 1 &&
     count(rolem, '${r.roleName},${r.roleType},${r.deptName},${r.remark},${r.reason}') === 1,

@@ -1095,7 +1095,7 @@ interface ImportRow {
 const IMPORT_HEADER = '职位名称,类型,所属部门,职位说明';
 const IMPORT_TEMPLATE = [
   IMPORT_HEADER,
-  '实训助教,业务职位,实训教学部,导入创建',
+  '实训助教,业务职位,实训管理,导入创建',
   '财务主管,管理职位,财务管理部,导入创建',
 ].join('\n');
 

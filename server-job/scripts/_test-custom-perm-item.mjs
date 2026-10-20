@@ -261,12 +261,19 @@ if (!apiOk) {
       `HTTP ${protDel.status} / code ${protDel.json?.code}`,
     );
 
-    /* ---- 2.5 勾给「招生老师」 ---- */
+    /* ---- 2.5 勾给一个业务职位 ----
+     * ⚠️ 原来写死「招生老师」。那个职位是用户在界面上自建的，随时可能被停用 / 删除
+     *    （2026-10-20 实测：招生部连同招生老师已被逻辑删除，本脚本因此假报红 4 条）。
+     *    断言的目标是「勾给职位 → 回显 1 个 → 删除时有 1 个职位被收回」这条链路，
+     *    不依赖具体是哪个职位，所以改成「优先招生老师，否则任一启用的非预置职位」。 */
     db = conn(DB_PERM);
-    const role = await db('t_perm_role').where({ role_name: '招生老师', is_deleted: false }).first();
+    const role =
+      (await db('t_perm_role').where({ role_name: '招生老师', is_deleted: false }).first()) ||
+      (await db('t_perm_role').where({ is_deleted: false, is_sys: false }).first()) ||
+      (await db('t_perm_role').where({ is_deleted: false }).first());
     roleId = role?.id || '';
-    roleName = role?.role_name || '招生老师';
-    check('库里有「招生老师」职位', !!roleId, roleId);
+    roleName = role?.role_name || '（无可用职位）';
+    check('库里有可用于授权的职位', !!roleId, `${roleName} / ${roleId}`);
 
     const tree0 = await req(`${BASE}/api/perm/assign/tree?roleId=${roleId}`, { token });
     permsBefore = tree0.json?.data?.perms || {};
@@ -279,7 +286,7 @@ if (!apiOk) {
       token,
       body: { roleId, perms: merged },
     });
-    check('把新权限点勾给「招生老师」成功', save.status === 200, `permCount=${save.json?.data?.permCount}`);
+    check(`把新权限点勾给「${roleName}」成功`, save.status === 200, `permCount=${save.json?.data?.permCount}`);
     check(
       '职位权限数 = 原值 + 2',
       Number(save.json?.data?.permCount) === cntBefore + 2,

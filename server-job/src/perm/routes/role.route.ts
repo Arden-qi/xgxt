@@ -4,7 +4,7 @@
  * 提供方：权限管理（林晓）
  * 前缀：  /api/perm/role
  *
- *  GET    /list              职位列表（分页）
+ *  GET    /list              职位列表（分页；带 deptId 时默认含其下级部门，可用 withChild=false 关掉）
  *  GET    /detail?id=xxx     职位详情（含权限映射）
  *  POST   /add               新建职位
  *  PUT    /update            编辑职位
@@ -41,6 +41,7 @@ import { BizError } from '../middleware/errorHandler';
 import {
   addLog,
   clientIp,
+  collectDescendants,
   countRoleUsers,
   getRolePermMap,
   replaceRolePerms,
@@ -112,6 +113,16 @@ const listSchema = z.object({
   roleType: z.string().optional(),
   roleStatus: z.string().optional(),
   deptId: z.string().optional(),
+  /**
+   * 按部门筛职位时是否包含下级部门的职位（默认包含，与账号列表同口径）。
+   *
+   * ★ 2026-10-20：部门树上的「职位数」是**含子部门**的聚合值（dept.route 用
+   *   collectDescendants 算的），但这里原来是 `andWhere('dept_id', deptId)` 精确匹配 ——
+   *   于是「就业部」行上写 1 个职位，点「查看职位」却弹空列表（职位挂在它的
+   *   实训管理 / 就业管理 上）。教学部只有自己挂职位，所以这个不一致以前从没暴露。
+   *   现在默认含下级，数量和弹窗内容终于同源。
+   */
+  withChild: z.union([z.string(), z.boolean()]).optional(),
   /** 只看预置 / 只看自建 */
   isSys: z.union([z.string(), z.boolean()]).optional(),
 });
@@ -131,7 +142,15 @@ roleRouter.get(
     }
     if (q.roleType) query.andWhere('role_type', q.roleType);
     if (q.roleStatus) query.andWhere('role_status', q.roleStatus);
-    if (q.deptId) query.andWhere('dept_id', q.deptId);
+    if (q.deptId) {
+      const withChild = !(q.withChild === false || q.withChild === 'false' || q.withChild === '0');
+      if (withChild) {
+        const all = await db('t_perm_dept').where('is_deleted', false).select('id', 'parent_id');
+        query.whereIn('dept_id', collectDescendants(all, q.deptId));
+      } else {
+        query.andWhere('dept_id', q.deptId);
+      }
+    }
     if (q.isSys !== undefined && q.isSys !== '') {
       query.andWhere('is_sys', q.isSys === true || q.isSys === 'true' || q.isSys === '1');
     }

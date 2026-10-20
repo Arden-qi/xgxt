@@ -538,13 +538,16 @@ function gotoUserEdit(id: string): void {
   <div>
     <!-- ==================== KPI（原型 renderOrg 第 2687~2692 行） ==================== -->
     <div class="kpi">
-      <div class="k" @click="toast('部门总数已合并统计：初中部/高中部/大学部计入教学部')">
+      <!-- ★ 2026-10-20：实训教学部 + 就业管理部 合并为「就业部」，其下挂 实训管理 / 就业管理。
+           原来第 1 张卡的口径是「部门总数 = 全部 - 校级 - 3 个学段」，第 2 张卡写死「学段（教学部）」；
+           现在下设子部门变成 5 个（教学部 3 + 就业部 2），沿用旧文案会自相矛盾，故两处一起改口径。 -->
+      <div class="k" @click="toast('部门总数只统计校级直属的一级部门：教学部的 3 个学段、就业部的 2 个下设部门不重复计入')">
         <div class="n b">{{ overview?.deptTotal ?? '—' }}</div>
         <div class="l">部门总数</div>
       </div>
-      <div class="k" @click="toast('教学部下设 初中部 / 高中部 / 大学部 3 个学段，统一归入教学部')">
+      <div class="k" @click="toast('下设子部门：教学部的 初中部 / 高中部 / 大学部 + 就业部的 实训管理 / 就业管理')">
         <div class="n g">{{ overview?.stageTotal ?? '—' }}</div>
-        <div class="l">下设学段（教学部）</div>
+        <div class="l">下设子部门</div>
       </div>
       <div class="k" @click="toast('全部门职位均在此列表')">
         <div class="n p">{{ overview?.roleTotal ?? '—' }}</div>
@@ -632,7 +635,7 @@ function gotoUserEdit(id: string): void {
       <div class="fm" style="grid-template-columns: 1fr">
         <div class="f">
           <label>部门名称 <span class="req">*</span></label>
-          <input v-model="form.deptName" class="inp" placeholder="如：实训教学部" />
+          <input v-model="form.deptName" class="inp" placeholder="如：就业部" />
         </div>
         <div class="f">
           <label>上级部门 <span class="req">*</span></label>

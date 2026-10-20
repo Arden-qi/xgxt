@@ -800,29 +800,42 @@ export function clientIp(req: any): string {
  * 五、部门口径
  * ============================================================ */
 
-/** 部门总数口径：排除「全部门(校级)」与 3 个学段 */
-export const MERGED_STAGE_IDS = ['D_TEACH_J', 'D_TEACH_G', 'D_TEACH_U'];
+/**
+ * 部门层级常量（与 shared-types 的 DeptLevel 同值，这里只取用得到的两个）
+ *   2 = 一级部门（校级直属：市场咨询部 / 教学部 / 就业部 …）
+ *   3 = 下设子部门（教学部的 3 个学段、就业部的 实训管理 / 就业管理）
+ */
+const DEPT_LEVEL_DEPT = 2;
+const DEPT_LEVEL_SUB = 3;
 
-/** 部门总数 = 排除校级与学段后的长度 */
+/**
+ * 部门总数 = 校级直属的一级部门个数（不含校级本身，也不含下设子部门）。
+ *
+ * ★ 2026-10-20 口径调整：原来是「排除 D_ALL + 硬编码排除 3 个学段 id」。
+ *   就业部并进来之后，下设子部门从 3 个变成 5 个（教学部 3 + 就业部 2），
+ *   硬编码的 id 名单必然漏 —— 而且再挂一个子部门就要再改一次代码。
+ *   改成按 dept_level 数：谁被挂到别的部门下，就自动不计入「部门总数」。
+ */
 export async function countDeptTotal(): Promise<number> {
-  const rows = await db('t_perm_dept')
-    .where('is_deleted', false)
-    .whereNot('id', 'D_ALL')
-    .whereNotIn('id', MERGED_STAGE_IDS);
+  const rows = await db('t_perm_dept').where({
+    is_deleted: false,
+    dept_level: DEPT_LEVEL_DEPT,
+  });
   return rows.length;
 }
 
-/** 学段数（教学部下设） */
+/** 下设子部门数（教学部的 初中部 / 高中部 / 大学部 + 就业部的 实训管理 / 就业管理） */
 export async function countStageTotal(): Promise<number> {
-  const rows = await db('t_perm_dept')
-    .where('is_deleted', false)
-    .whereIn('id', MERGED_STAGE_IDS);
+  const rows = await db('t_perm_dept').where({
+    is_deleted: false,
+    dept_level: DEPT_LEVEL_SUB,
+  });
   return rows.length;
 }
 
 /**
  * 部门下账号数：包含子部门
- * （教学部计入初中部/高中部/大学部的账号）
+ * （教学部计入初中部/高中部/大学部的账号；就业部计入 实训管理 / 就业管理 的账号）
  */
 export async function countUsersOfDept(deptId: string): Promise<number> {
   const all = await db('t_perm_dept').where('is_deleted', false).select('id', 'parent_id');
