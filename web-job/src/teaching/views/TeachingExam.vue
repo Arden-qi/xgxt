@@ -143,6 +143,8 @@ const form = reactive({
   classId: '',
   examName: '',
   examType: 1,
+  /** 考试类型=其他(5) 时的自定义名称 */
+  examTypeName: '',
   examDate: today(),
   contentTypes: [1] as number[],
   fullScores: {} as Record<string, number | undefined>,
@@ -164,6 +166,7 @@ async function openForm(row?: ExamRow) {
     form.classId = row.classIds[0] || '';
     form.examName = row.examName;
     form.examType = row.examType;
+    form.examTypeName = row.examTypeCustom || '';
     form.examDate = row.examDate;
     form.contentTypes = (d.contents || []).map((c) => c.type);
     form.fullScores = {};
@@ -177,6 +180,7 @@ async function openForm(row?: ExamRow) {
     form.classId = query.classId || '';
     form.examName = '';
     form.examType = 1;
+    form.examTypeName = '';
     form.examDate = today();
     form.contentTypes = [1];
     form.fullScores = {};
@@ -187,10 +191,11 @@ async function openForm(row?: ExamRow) {
 
 async function submitForm() {
   const stage = formStage.value as TeachingStage;
-  if (!stage) return ElMessage.warning('请选择学段');
+  if (!stage) return ElMessage.warning('请选择部门');
   if (!form.examName.trim()) return ElMessage.warning('请填写考试名称');
   if (!form.classId) return ElMessage.warning('请选择班级');
   if (!form.contentTypes.length) return ElMessage.warning('请至少选择一个考试内容项');
+  if (form.examType === 5 && !form.examTypeName.trim()) return ElMessage.warning('类型选择「其他」时必须填写具体类型名称');
 
   saving.value = true;
   try {
@@ -199,6 +204,7 @@ async function submitForm() {
       id: form.id,
       examName: form.examName.trim(),
       examType: form.examType,
+      examTypeName: form.examType === 5 ? form.examTypeName.trim() : null,
       examDate: form.examDate,
       classIds: [form.classId],
       contents: form.contentTypes.map((t) => ({
@@ -270,7 +276,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <el-table v-loading="loading" :data="rows" size="small" border stripe>
       <el-table-column type="index" label="序号" width="60" align="center" />
       <el-table-column prop="examDate" label="日期" width="112" align="center" sortable />
-      <el-table-column prop="stageName" label="学段" width="70" align="center">
+      <el-table-column prop="stageName" label="部门" width="70" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain" :type="row.stage === 'jh' ? 'warning' : row.stage === 'class' ? 'primary' : 'success'">
             {{ row.stageName }}
@@ -324,7 +330,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
       <div v-loading="detailLoading">
         <template v-if="detail">
           <el-descriptions :column="3" size="small" border>
-            <el-descriptions-item label="学段">{{ detail.record.stageName }}</el-descriptions-item>
+            <el-descriptions-item label="部门">{{ detail.record.stageName }}</el-descriptions-item>
             <el-descriptions-item label="考试名称">{{ detail.record.examName }}</el-descriptions-item>
             <el-descriptions-item label="类型">{{ detail.record.examTypeName }}</el-descriptions-item>
             <el-descriptions-item label="日期">{{ detail.record.examDate }}</el-descriptions-item>
@@ -358,8 +364,8 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <!-- 新增 / 编辑 -->
     <el-dialog v-model="formVisible" :title="form.id ? '编辑考试' : '新建考试'" width="680px">
       <el-form label-width="90px" size="small">
-        <el-form-item label="学段">
-          <el-select v-model="form.stage" placeholder="选择学段" style="width: 140px">
+        <el-form-item label="部门">
+          <el-select v-model="form.stage" placeholder="选择部门" style="width: 140px">
             <el-option v-for="s in availableStages" :key="s" :label="STAGE_LABEL[s]" :value="s" />
           </el-select>
         </el-form-item>
@@ -375,6 +381,16 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           <el-select v-model="form.examType" style="width: 160px">
             <el-option v-for="(n, t) in EXAM_TYPE_NAME" :key="t" :label="n" :value="Number(t)" />
           </el-select>
+        </el-form-item>
+        <!-- ★ 选「其他」时给出可自由填写的输入框（落 exam_type_name） -->
+        <el-form-item v-if="form.examType === 5" label="类型名称">
+          <el-input
+            v-model="form.examTypeName"
+            maxlength="50"
+            show-word-limit
+            placeholder="请填写具体类型，如：期末补考 / 技能比武"
+            style="width: 320px"
+          />
         </el-form-item>
         <el-form-item label="考试日期">
           <el-date-picker v-model="form.examDate" type="date" value-format="YYYY-MM-DD" style="width: 160px" />

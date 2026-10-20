@@ -115,6 +115,20 @@ export async function entry(examId: string, classId: string): Promise<ScoreEntry
   };
 }
 
+/** ★ 各分数项的本场满分（内容项表 → {written:150} 这种） */
+const FIELD_OF_CONTENT: Record<number, string> = { 1: 'written', 2: 'machine', 3: 'interview', 4: 'other' };
+export async function contentFull(examId: string): Promise<Record<string, number>> {
+  const rows = (await tbl(db, 'sms_class', EC, STAGE)
+    .where({ exam_id: examId, is_deleted: 0 })
+    .select('exam_content_type', 'full_score')) as Array<Record<string, any>>;
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    const f = FIELD_OF_CONTENT[Number(r.exam_content_type)];
+    if (f && r.full_score !== null && r.full_score !== undefined) out[f] = Number(r.full_score);
+  }
+  return out;
+}
+
 export async function save(body: ScoreSaveBody, userId: string) {
   const exam = (await tbl(db, 'sms_class', E, STAGE).where({ id: body.examId, is_deleted: 0 }).first()) as
     | Record<string, any>

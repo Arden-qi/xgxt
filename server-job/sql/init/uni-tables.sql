@@ -811,6 +811,7 @@ CREATE TABLE IF NOT EXISTS `t_uni_exam` (
   `stage_code` int DEFAULT NULL COMMENT '学段内阶段码（初高101/大学201~206）',
   `exam_name` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `exam_type` int DEFAULT NULL,
+  `exam_type_name` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '自定义考试类型名称（exam_type=5 其他时填写）',
   `exam_date` date DEFAULT NULL,
   `class_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `class_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,

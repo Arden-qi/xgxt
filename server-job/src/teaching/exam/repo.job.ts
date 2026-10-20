@@ -51,7 +51,8 @@ function mapRow(r: Record<string, any>, contents: ExamContentItem[] = []): ExamR
     stageName: '实训',
     examName: String(r.exam_name ?? ''),
     examType: Number(r.exam_type ?? 0),
-    examTypeName: EXAM_TYPE_NAME[Number(r.exam_type)] ?? '未知',
+    examTypeName: (r.exam_type_name as string) || EXAM_TYPE_NAME[Number(r.exam_type)] || '未知',
+    examTypeCustom: (r.exam_type_name as string) || null,
     examDate: fmtDate(r.exam_time),
     classIds: splitIds(r.class_ids),
     classNames: String(r.class_names ?? ''),
@@ -114,6 +115,8 @@ export async function save(body: ExamSaveBody, userId: string) {
   const payload = {
     exam_name: body.examName,
     exam_type: body.examType,
+    /* ★ 「其他」时把自定义名称落库（varchar50，见 sql/init/uni-tables.sql） */
+    exam_type_name: body.examType === 5 ? (body.examTypeName || null) : null,
     // exam_time 是 datetime：统一存当天 09:00（沿用原逻辑的"当天考试"语义）
     exam_time: new Date(`${body.examDate}T09:00:00`),
     class_ids: classes.map((c) => String(c.id)).join(','),

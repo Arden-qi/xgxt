@@ -29,8 +29,8 @@ import {
   type ScoreSummaryItem,
   type TeachingStage,
 } from '@/teaching/api/score';
-import type { ExamRow } from '@/teaching/api/exam';
-import { listScoreExamOptions } from '@/teaching/api/score';
+import type { ClassOption, ExamRow } from '@/teaching/api/exam';
+import { listScoreClasses, listScoreExamOptions } from '@/teaching/api/score';
 import { stageVisible } from '@/teaching/access';
 import { isReadOnlyUser } from '@/store/permission';
 
@@ -137,6 +137,14 @@ async function loadSummary() {
     summary.value = [];
   }
 }
+async function loadEntryClasses() {
+  try {
+    allClassOptions.value = (await listScoreClasses()) || [];
+  } catch {
+    allClassOptions.value = [];
+  }
+}
+
 async function loadExams() {
   try {
     examOptions.value = (await listScoreExamOptions()) || [];
@@ -172,7 +180,7 @@ onMounted(async () => {
   } catch {
     formulas.value = null;
   }
-  await loadExams();
+  await Promise.all([loadExams(), loadEntryClasses()]);
   await Promise.all([loadList(), loadSummary()]);
 });
 
@@ -186,17 +194,24 @@ const entryForm = reactive({ stage: '' as '' | TeachingStage, examId: '', classI
 const entryStage = computed<TeachingStage | ''>(
   () => entryForm.stage || (availableStages.value.length === 1 ? availableStages.value[0] : ''),
 );
-const entryExamOptions = computed(() =>
-  entryStage.value ? examOptions.value.filter((e) => e.stage === entryStage.value) : [],
-);
-const entryClassOptions = computed(() => {
-  const e = entryExamOptions.value.find((x) => x.id === entryForm.examId);
-  if (!e) return [];
-  return (e.classIds || []).map((id, i) => ({
-    id,
-    name: (e.classNames || '').split('、')[i] || id,
-  }));
+const entryExamOptions = computed(() => {
+  if (!entryStage.value) return [];
+  const ofStage = examOptions.value.filter((e) => e.stage === entryStage.value);
+  if (!entryForm.classId) return ofStage;
+  return ofStage.filter((e) => (e.classIds || []).includes(entryForm.classId));
 });
+/* ★ 2026-10-20：班级下拉改为「本部门下我能看到的班」。
+   原来是从「已选考试」的 classIds 反推 —— 一个老师带多个班时，
+   考试没选就根本没有班级可选，选了考试也只能录它自带的那个班。 */
+const allClassOptions = ref<ClassOption[]>([]);
+const entryClassOptions = computed(() =>
+  entryStage.value ? allClassOptions.value.filter((c) => c.stage === entryStage.value) : [],
+);
+/** ★ 各输入项的本场考试满分（来自考试内容项）；缺省时回落到综合满分，再不行给 1000 */
+
+const entryCaps = ref<Record<string, number>>({});
+const capOf = (field: string): number => entryCaps.value[field] ?? (entry.value?.fullTotal || 1000);
+
 /** 录入弹窗用自己的公式（弹窗学段可能和查询学段不同） */
 const entryFormula = computed<ScoreScopeItem | null>(() => {
   if (!formulas.value || !entryStage.value) return null;
@@ -237,6 +252,8 @@ async function loadEntry() {
       entryForm.classId,
     );
     if (!entryForm.classId && entry.value.classId) entryForm.classId = entry.value.classId;
+    /* ★ 分项满分由后端随 entry 一起返回（不用再调考试域接口，班主任会被 403） */
+    entryCaps.value = entry.value.contentFullScore || {};
   } catch {
     entry.value = null;
   } finally {
@@ -246,10 +263,42 @@ async function loadEntry() {
 
 watch(() => [entryForm.stage, entryForm.examId, entryForm.classId], () => void loadEntry());
 
+/* ★ 部门变了：班级/考试都属于旧部门，直接清空（避免拿旧班 id 录新部门的分） */
+watch(
+  () => entryForm.stage,
+  () => {
+    entryForm.classId = '';
+    entryForm.examId = '';
+    entry.value = null;
+  },
+);
+
+/* ★ 班级变了：当前考试若不覆盖该班，清掉考试 */
+watch(
+  () => entryForm.classId,
+  () => {
+    if (!entryForm.examId) return;
+    if (!entryExamOptions.value.some((e) => e.id === entryForm.examId)) entryForm.examId = '';
+  },
+);
+
+/* ★ 直接选考试时，自动带出该考试的第一个班（考试覆盖多班时可再手动换） */
+watch(
+  () => entryForm.examId,
+  (id) => {
+    if (!id || entryForm.classId) return;
+    const e = examOptions.value.find((x) => x.id === id);
+    const first = e?.classIds?.[0];
+    if (first) entryForm.classId = first;
+  },
+);
+
 async function submitEntry() {
   if (!entry.value) return;
   const stage = entryStage.value as TeachingStage;
-  if (!stage || !entryForm.examId) return ElMessage.warning('请选择部门与考试');
+  if (!stage) return ElMessage.warning('请选择部门');
+  if (!entryForm.classId) return ElMessage.warning('请选择班级');
+  if (!entryForm.examId) return ElMessage.warning('请选择考试');
 
   const rowsPayload = entry.value.rows.map((r) => ({
     studentId: r.studentId,
@@ -411,14 +460,19 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
             <el-option v-for="s in availableStages" :key="s" :label="STAGE_LABEL[s]" :value="s" />
           </el-select>
         </el-form-item>
-        <el-form-item label="考试">
-          <el-select v-model="entryForm.examId" placeholder="选择考试" filterable style="width: 240px">
-            <el-option v-for="e in entryExamOptions" :key="e.id" :label="e.examName" :value="e.id" />
+        <el-form-item label="班级">
+          <el-select v-model="entryForm.classId" placeholder="选择班级" filterable style="width: 180px">
+            <el-option v-for="c in entryClassOptions" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="entryClassOptions.length > 1" label="班级">
-          <el-select v-model="entryForm.classId" placeholder="选择班级" style="width: 180px">
-            <el-option v-for="c in entryClassOptions" :key="c.id" :label="c.name" :value="c.id" />
+        <el-form-item label="考试">
+          <el-select
+            v-model="entryForm.examId"
+            :placeholder="entryForm.classId ? '选择考试' : '先选班级（或直接选考试）'"
+            filterable
+            style="width: 240px"
+          >
+            <el-option v-for="e in entryExamOptions" :key="e.id" :label="e.examName" :value="e.id" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -433,22 +487,22 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           <el-table-column prop="studentName" label="姓名" width="90" />
           <el-table-column v-if="entryInputFields.includes('written')" label="笔试" width="110">
             <template #default="{ row }">
-              <el-input-number v-model="row.writtenScore" :min="0" :max="100" size="small" controls-position="right" style="width: 100px" />
+              <el-input-number v-model="row.writtenScore" :min="0" :max="capOf('written')" size="small" controls-position="right" style="width: 100px" />
             </template>
           </el-table-column>
           <el-table-column v-if="entryInputFields.includes('machine')" label="机试" width="110">
             <template #default="{ row }">
-              <el-input-number v-model="row.machineScore" :min="0" :max="100" size="small" controls-position="right" style="width: 100px" />
+              <el-input-number v-model="row.machineScore" :min="0" :max="capOf('machine')" size="small" controls-position="right" style="width: 100px" />
             </template>
           </el-table-column>
           <el-table-column v-if="entryInputFields.includes('interview')" label="面试" width="110">
             <template #default="{ row }">
-              <el-input-number v-model="row.interviewScore" :min="0" :max="100" size="small" controls-position="right" style="width: 100px" />
+              <el-input-number v-model="row.interviewScore" :min="0" :max="capOf('interview')" size="small" controls-position="right" style="width: 100px" />
             </template>
           </el-table-column>
           <el-table-column v-if="entryInputFields.includes('other')" label="其他" width="110">
             <template #default="{ row }">
-              <el-input-number v-model="row.otherScore" :min="0" :max="100" size="small" controls-position="right" style="width: 100px" />
+              <el-input-number v-model="row.otherScore" :min="0" :max="capOf('other')" size="small" controls-position="right" style="width: 100px" />
             </template>
           </el-table-column>
           <el-table-column v-if="entryManualJudge" label="考试结果" width="120">
@@ -462,7 +516,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
             <template #default="{ row }">{{ row.totalScore ?? '—' }}</template>
           </el-table-column>
         </el-table>
-        <el-empty v-else description="请选择部门与考试" />
+        <el-empty v-else description="请选择部门、班级与考试" />
         <el-alert
           v-if="entry"
           class="ts-entry-note"

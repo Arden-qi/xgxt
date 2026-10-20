@@ -128,6 +128,26 @@ export async function entry(examId: string, classId: string): Promise<ScoreEntry
   };
 }
 
+/** ★ 各分数项的本场满分（初高存在 content_full_score 这个 JSON 里） */
+const FIELD_OF_CONTENT: Record<number, string> = { 1: 'written', 2: 'machine', 3: 'interview', 4: 'other' };
+export async function contentFull(examId: string): Promise<Record<string, number>> {
+  const e = (await tbl(db, 'sms_class_jh', E, STAGE).where({ id: examId, is_deleted: 0 }).first()) as
+    | Record<string, any>
+    | undefined;
+  if (!e?.content_full_score) return {};
+  try {
+    const obj = JSON.parse(String(e.content_full_score)) as Record<string, number>;
+    const out: Record<string, number> = {};
+    for (const [t, v] of Object.entries(obj)) {
+      const f = FIELD_OF_CONTENT[Number(t)];
+      if (f && v !== null && v !== undefined) out[f] = Number(v);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export async function save(body: ScoreSaveBody, userId: string) {
   const exam = (await tbl(db, 'sms_class_jh', E, STAGE).where({ id: body.examId, is_deleted: 0 }).first()) as
     | Record<string, any>

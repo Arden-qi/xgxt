@@ -238,6 +238,20 @@ async function loadBoard() {
 
 watch(() => [entry.stage, entry.classId, entry.attendanceDate], () => void loadBoard());
 
+/* ★ 切换部门后，若当前班级不属于新部门就显式清空：
+   否则「值还留着、只是下拉没选项」——用户以为清空了，直接点保存会拿**上一个部门的班级 id**
+   去写新部门的考勤（后端只会报「班级不存在」，或更糟写错班）。
+   注意：从列表某行点「录入」时 stage/classId 是一起赋值的，此时班级合法，不能被清掉。 */
+watch(
+  () => entry.stage,
+  () => {
+    if (entry.classId && !entryClassOptions.value.some((c) => c.id === entry.classId)) {
+      entry.classId = '';
+      board.value = null;
+    }
+  },
+);
+
 /** 需要填原因的状态（与后端 dto.ts 一致） */
 const NEED_REASON = [2, 5, 6, 7];
 
@@ -471,36 +485,34 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         </el-form-item>
       </el-form>
 
-      <!-- 三个部门统一：按人登记 -->
-      <template>
-        <div v-loading="boardLoading">
-          <div v-if="board" class="ta-board-tip">
-            {{ board.className }} · {{ board.attendanceDate }} · 在班 {{ board.shouldCount }} 人
-          </div>
-          <el-table v-if="board" :data="board.rows" size="small" border stripe max-height="360">
-            <el-table-column prop="studentNo" label="学号" width="120" />
-            <el-table-column prop="studentName" label="姓名" width="100" />
-            <el-table-column label="状态" width="130">
-              <template #default="{ row }">
-                <el-select v-model="row.status" size="small">
-                  <el-option v-for="(name, code) in UNIFIED_STATUS_NAME" :key="code" :label="name" :value="Number(code)" />
-                </el-select>
-              </template>
-            </el-table-column>
-            <el-table-column label="原因" min-width="180">
-              <template #default="{ row }">
-                <el-input
-                  v-model="row.reason"
-                  size="small"
-                  :disabled="![2, 5, 6, 7].includes(Number(row.status))"
-                  placeholder="缺勤 / 请假类必须填写"
-                />
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-empty v-else description="请选择部门与班级" />
+      <!-- 三个部门统一：按人登记（⚠️ 不要用裸 <template> 包，Vue 会当原生 template 渲染，内容不可见） -->
+      <div v-loading="boardLoading">
+        <div v-if="board" class="ta-board-tip">
+          {{ board.className }} · {{ board.attendanceDate }} · 在班 {{ board.shouldCount }} 人
         </div>
-      </template>
+        <el-table v-if="board" :data="board.rows" size="small" border stripe max-height="360">
+          <el-table-column prop="studentNo" label="学号" width="120" />
+          <el-table-column prop="studentName" label="姓名" width="100" />
+          <el-table-column label="状态" width="130">
+            <template #default="{ row }">
+              <el-select v-model="row.status" size="small">
+                <el-option v-for="(name, code) in UNIFIED_STATUS_NAME" :key="code" :label="name" :value="Number(code)" />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="原因" min-width="180">
+            <template #default="{ row }">
+              <el-input
+                v-model="row.reason"
+                size="small"
+                :disabled="![2, 5, 6, 7].includes(Number(row.status))"
+                placeholder="缺勤 / 请假类必须填写"
+              />
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-else description="请选择部门与班级" />
+      </div>
 
       <template #footer>
         <el-button size="small" @click="entryVisible = false">取消</el-button>

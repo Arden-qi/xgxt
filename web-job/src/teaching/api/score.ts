@@ -54,6 +54,8 @@ export interface ScoreEntry {
   classId: string;
   className: string;
   fullTotal: number;
+  /** 各分数项的本场满分（written/machine/interview/other） */
+  contentFullScore?: Record<string, number>;
   hasWrittenAvg: boolean;
   rows: ScoreEntryRow[];
 }
@@ -153,3 +155,14 @@ export function fetchScoreFormula() {
 export function listScoreExamOptions(p: { stage?: TeachingStage; keyword?: string } = {}) {
   return http.get<import('./exam').ExamRow[]>('/api/teaching/score/exam-options', p);
 }
+
+/**
+ * 成绩录入用的「班级下拉」
+ *
+ * 为什么不用 `/api/teaching/exam/classes`：那个接口按考试域权限码判权，
+ * 班主任只有 class:grade:view、没有 class:exam:view → 拿到 0 个班。
+ */
+export function listScoreClasses() {
+  return http.get<import('./attendance').ClassOption[]>('/api/teaching/score/classes');
+}
+

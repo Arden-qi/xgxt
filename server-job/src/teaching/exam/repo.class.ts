@@ -34,7 +34,8 @@ function mapRow(r: Record<string, any>, contents: ExamContentItem[] = []): ExamR
     stageName: '大学',
     examName: String(r.exam_name ?? ''),
     examType: Number(r.exam_type ?? 0),
-    examTypeName: EXAM_TYPE_NAME[Number(r.exam_type)] ?? '未知',
+    examTypeName: (r.exam_type_name as string) || EXAM_TYPE_NAME[Number(r.exam_type)] || '未知',
+    examTypeCustom: (r.exam_type_name as string) || null,
     examDate: String(r.exam_date ?? '').slice(0, 10),
     classIds: r.class_id ? [String(r.class_id)] : [],
     classNames: String(r.class_name ?? ''),
@@ -123,6 +124,8 @@ export async function save(body: ExamSaveBody, userId: string) {
   const payload = {
     exam_name: body.examName,
     exam_type: body.examType,
+    /* ★ 「其他」时把自定义名称落库（varchar50，见 sql/init/uni-tables.sql） */
+    exam_type_name: body.examType === 5 ? (body.examTypeName || null) : null,
     exam_date: body.examDate,
     class_id: cls.id,
     class_name: cls.class_name,

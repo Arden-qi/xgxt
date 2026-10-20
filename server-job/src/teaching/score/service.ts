@@ -25,10 +25,12 @@ import { assertStageCode, visibleStagesBy, type StageCodeMap } from '../shared/s
 import { getScoreFormula } from '../shared/conf';
 import { listExamsForStages } from '../exam/service';
 import { assertClassInScope, assertStudentsInScope } from '../shared/dataScope';
+import { listClassesOfStages, type ClassOption } from '../shared/classOptions';
 
 type Repo = {
   list: (q: ScoreListQuery, user?: any) => Promise<ScoreRow[]>;
   entry: (examId: string, classId: string) => Promise<ScoreEntry>;
+  contentFull: (examId: string) => Promise<Record<string, number>>;
   save: (b: ScoreSaveBody, userId: string) => Promise<{ saved: number }>;
 };
 
@@ -77,7 +79,11 @@ export async function getEntry(
 ): Promise<ScoreEntry> {
   await assertStageView(user, stage);
   await assertClassInScope(stage, classId, user, '该班级成绩');
-  return REPOS[stage].entry(examId, classId);
+  const e = await REPOS[stage].entry(examId, classId);
+  /* ★ 顺手带上「各分数项满分」，前端输入框上限就不必再调考试域接口
+     （班主任没有 class:exam:view，调 /exam/detail 会 403） */
+  const contentFullScore = await REPOS[stage].contentFull(examId).catch(() => ({}));
+  return { ...e, contentFullScore };
 }
 
 export async function saveScores(body: ScoreSaveBody, user: any) {
@@ -135,6 +141,17 @@ export async function scoreSummary(
  *   · 判权用**成绩域**的 CODES（jh: classjh:score:view / class: class:grade:view / job: job:examScore:view）
  *   · 数据复用考试域的查询（只读、不外放考试域写操作）
  */
+/**
+ * 成绩录入用的「班级下拉」
+ *
+ * ★ 复用 /api/teaching/exam/classes 会 403 —— 那个接口按**考试域**权限码判权，
+ *   班主任只有 class:grade:view、没有 class:exam:view，拿到的班级是 0 个。
+ *   这里用成绩域权限码判权，口径与 /exam-options 一致。
+ */
+export async function listEntryClasses(user: any): Promise<ClassOption[]> {
+  return listClassesOfStages(await visibleStages(user), user);
+}
+
 export async function listExamOptions(
   stage: TeachingStage | undefined,
   keyword: string | undefined,

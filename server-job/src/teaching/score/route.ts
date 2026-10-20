@@ -129,6 +129,13 @@ teachingScoreRouter.get(
  *      只返回考试列表供选择，不放开考试域的写操作。
  */
 teachingScoreRouter.get(
+  '/classes',
+  wrap(async (req, res) => {
+    res.json(ok(await svc.listEntryClasses(req.user)));
+  }),
+);
+
+teachingScoreRouter.get(
   '/exam-options',
   wrap(async (req, res) => {
     res.json(ok(await svc.listExamOptions(optStage(req.query.stage), str(req.query.keyword), req.user)));
