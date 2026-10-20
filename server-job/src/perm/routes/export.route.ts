@@ -89,8 +89,9 @@ async function fetchDept(page?: number, size?: number, all = false): Promise<She
 
 async function fetchRole(page?: number, size?: number, all = false): Promise<Sheet> {
   // ★ 2026-10-19：用户要求全系统去掉「职位编码」→ 导出表也不再带这一列
+  // ★ 2026-10-20：同理去掉「职位类型」（界面上已无此列，导出也别带看不见的字段）
   const columns = [
-    '职位名称', '所属部门', '职位类型', '状态', '权限点数', '关联账号数', '是否预置', '描述',
+    '职位名称', '所属部门', '状态', '权限点数', '关联账号数', '是否预置', '描述',
   ];
   const query = db('t_perm_role').where('is_deleted', false);
   if (!all && page && size) query.limit(size).offset((page - 1) * size);
@@ -110,7 +111,6 @@ async function fetchRole(page?: number, size?: number, all = false): Promise<She
     rows: rows.map((r: any) => ({
       职位名称: r.role_name,
       所属部门: deptMap.get(r.dept_id) || '—',
-      职位类型: r.role_type,
       状态: r.role_status,
       权限点数: Number(r.perm_count || 0),
       关联账号数: userMap.get(r.id) || 0,

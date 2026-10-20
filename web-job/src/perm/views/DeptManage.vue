@@ -700,7 +700,6 @@ function gotoUserEdit(id: string): void {
         <thead>
           <tr>
             <th>职位名称</th>
-            <th>类型</th>
             <th>账号数</th>
             <th>操作</th>
           </tr>
@@ -708,7 +707,6 @@ function gotoUserEdit(id: string): void {
         <tbody>
           <tr v-for="r in deptRolesList" :key="r.id">
             <td><b>👤 {{ r.roleName }}</b></td>
-            <td>{{ r.roleType }}</td>
             <td class="num">{{ r.userCount }}</td>
             <td>
               <span class="lk" @click="openRolePerm(r, true)">看权限</span>

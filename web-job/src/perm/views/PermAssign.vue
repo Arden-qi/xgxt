@@ -882,7 +882,7 @@ async function openRoleUsers(): Promise<void> {
       <div style="border: 1px solid var(--line); border-radius: 9px; padding: 9px; max-height: 320px; overflow-y: auto">
         <div v-for="r in copyCandidates" :key="r.id" class="rl-item" @click="pickCopySource(r.id)">
           <span>{{ roleIcon(r.id) }} {{ r.roleName }}</span>
-          <span class="cnt">{{ r.roleType }} · {{ r.permCount }} 项权限</span>
+          <span class="cnt">{{ r.permCount }} 项权限</span>
         </div>
         <div v-if="!copyCandidates.length" class="empty">
           <div class="ic">🎭</div>

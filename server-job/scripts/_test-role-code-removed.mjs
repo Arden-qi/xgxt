@@ -114,9 +114,10 @@ console.log('\n===== 二、前端各页面点位 =====');
 const rolem = read(ROLEM);
 
 check(
-  '② 职位列表：表头已无「职位编码」列，空状态 colspan 改 8',
-  count(rolem, '<td colspan="8">') === 1 && count(rolem, 'colspan="9"') === 0,
-  `colspan8=${count(rolem, '<td colspan="8">')} colspan9=${count(rolem, 'colspan="9"')}`,
+  /* 编码列去掉后是 8 列；2026-10-20 又去掉「类型」列 → 现为 7 列 */
+  '② 职位列表：表头已无「职位编码」列，空状态 colspan 改 7',
+  count(rolem, '<td colspan="7">') === 1 && count(rolem, 'colspan="8"') === 0,
+  `colspan7=${count(rolem, '<td colspan="7">')} colspan8=${count(rolem, 'colspan="8"')}`,
 );
 
 check(
@@ -160,12 +161,13 @@ check(
 );
 
 check(
-  '② 批量导入：表头/模板/解析/预览/失败清单五处都去掉编码列',
-  count(rolem, "const IMPORT_HEADER = '职位名称,类型,所属部门,职位说明';") === 1 &&
-    count(rolem, "'实训助教,业务职位,实训管理,导入创建'") === 1 &&
-    count(rolem, 'const [roleName, roleType, deptName, remark] = line') === 1 &&
-    count(rolem, '<tr><th>职位名称</th><th>类型</th><th>部门</th><th>校验</th></tr>') === 1 &&
-    count(rolem, '${r.roleName},${r.roleType},${r.deptName},${r.remark},${r.reason}') === 1,
+  /* 2026-10-20：模板又去掉了「类型」列 → 现为 职位名称,所属部门,职位说明 */
+  '② 批量导入：表头/模板/解析/预览/失败清单五处都不带编码',
+  count(rolem, "const IMPORT_HEADER = '职位名称,所属部门,职位说明';") === 1 &&
+    count(rolem, "'实训助教,实训管理,导入创建'") === 1 &&
+    count(rolem, 'const [roleName, deptName, remark] = line') === 1 &&
+    count(rolem, '<tr><th>职位名称</th><th>部门</th><th>校验</th></tr>') === 1 &&
+    count(rolem, '${r.roleName},${r.deptName},${r.remark},${r.reason}') === 1,
   '五处口径已统一',
 );
 

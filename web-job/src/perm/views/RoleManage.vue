@@ -106,8 +106,11 @@ function countModules(p: RolePermMap): number {
 /** 职位图标 —— 统一走 @/perm/utils/roleIcon（列表 / 弹窗 / 详情三处共用一份映射表） */
 const roleIcon = roleIconOf;
 
-/** 职位类型标签配色（原型第 1534 行：系统职位→p、管理职位→w、其余→n） */
-const typeTag = (t: string): string => (t === '系统职位' ? 'p' : t === '管理职位' ? 'w' : 'n');
+/* ★ 2026-10-20：职位类型（业务/管理/职能/系统职位）已按用户要求从界面上整列移除 ——
+ *   列表列、筛选下拉、详情弹窗、新建/编辑表单、批量导入、导出表都不再展示或让人填。
+ *   ⚠️ 字段本身（t_perm_role.role_type）与接口里的一律保留：
+ *      数据仍按原值存着，编辑职位时原样带回、保存时原样提交，不会被重置成「业务职位」。
+ *      原先用于给类型标签配色的 typeTag() 因此一并删除（没有落点了）。 */
 
 /* ============================================================
  * 一、列表（原型 ROLE_FILTER + renderRoleList）
@@ -123,7 +126,6 @@ const query = reactive({
   page: 1,
   size: 10,
   keyword: '',
-  roleType: '',
   roleStatus: '',
   deptId: '',
 });
@@ -165,12 +167,6 @@ const defaultDeptId = computed(
 );
 
 const deptNameOf = (id: string): string => flatDepts.value.find((d) => d.id === id)?.deptName || '—';
-
-const roleTypes = computed<{ value: string; label: string }[]>(() =>
-  optionStore.roleTypes.length
-    ? optionStore.roleTypes.map((o) => ({ value: String(o.value), label: o.label }))
-    : ['业务职位', '管理职位', '职能职位', '系统职位'].map((v) => ({ value: v, label: v })),
-);
 
 const roleStatuses = computed<{ value: string; label: string }[]>(() =>
   optionStore.roleStatuses.length
@@ -225,7 +221,7 @@ function onKeywordInput(): void {
 }
 
 function resetFilter(): void {
-  Object.assign(query, { page: 1, keyword: '', roleType: '', roleStatus: '', deptId: '' });
+  Object.assign(query, { page: 1, keyword: '', roleStatus: '', deptId: '' });
   void load();
   toast('已重置筛选条件', 'warn');
 }
@@ -860,6 +856,11 @@ interface RoleForm {
   id: string;
   roleName: string;
   deptId: string;
+  /**
+   * ★ 2026-10-20：界面上已没有「职位类型」这个字段，但模型里**必须留着**——
+   *   编辑职位时从详情带回原值、保存时原样提交，否则后端会把类型重置成默认的「业务职位」
+   *   （存量里「管理职位 / 职能职位」的 5 个职位会被悄悄改掉）。新建时填默认值即可。
+   */
   roleType: string;
   roleStatus: string;
   /** 弹窗里不展示（原型无此字段），但保存时要带上，避免把排序号覆盖掉 */
@@ -1037,7 +1038,7 @@ function submitForm(): void {
       msg: isEdit ? `确认保存对「${name}」的修改？` : `确认创建职位「${name}」？`,
       detail: [
         { k: '职位名称', v: `<b>${esc(name)}</b>` },
-        { k: '类型 / 部门', v: `${esc(form.roleType)} · ${esc(deptNameOf(form.deptId))}` },
+        { k: '所属部门', v: esc(deptNameOf(form.deptId)) },
         { k: '已配权限', v: `<b>${draftActionCount.value}</b> 项动作` },
       ],
       tip: isEdit
@@ -1085,18 +1086,19 @@ async function saveForm(isEdit: boolean, name: string): Promise<void> {
 
 interface ImportRow {
   roleName: string;
-  roleType: string;
   deptName: string;
   remark: string;
   ok: boolean;
   reason: string;
 }
 
-const IMPORT_HEADER = '职位名称,类型,所属部门,职位说明';
+/* ★ 2026-10-20：模板去掉「类型」列（职位类型已不在界面出现）。
+ *   导入时后端 roleType 不传 → 按默认「业务职位」落库（与新建职位同一套兜底）。 */
+const IMPORT_HEADER = '职位名称,所属部门,职位说明';
 const IMPORT_TEMPLATE = [
   IMPORT_HEADER,
-  '实训助教,业务职位,实训管理,导入创建',
-  '财务主管,管理职位,财务管理部,导入创建',
+  '实训助教,实训管理,导入创建',
+  '财务主管,财务管理部,导入创建',
 ].join('\n');
 
 const importOpen = ref(false);
@@ -1172,12 +1174,11 @@ function toImportPreview(): void {
 
   const seen = new Set<string>();
   const rows: ImportRow[] = lines.map((line) => {
-    const [roleName, roleType, deptName, remark] = line
+    const [roleName, deptName, remark] = line
       .split(',')
       .map((s) => (s || '').trim());
     const r: ImportRow = {
       roleName: roleName || '',
-      roleType: roleType || '业务职位',
       deptName: deptName || '',
       remark: remark || '',
       ok: true,
@@ -1207,7 +1208,7 @@ function downloadFailList(): void {
   const text = [
     `${IMPORT_HEADER},失败原因`,
     ...importFail.value.map(
-      (r) => `${r.roleName},${r.roleType},${r.deptName},${r.remark},${r.reason}`,
+      (r) => `${r.roleName},${r.deptName},${r.remark},${r.reason}`,
     ),
   ].join('\n');
   downloadText('职位导入失败清单.csv', text);
@@ -1226,7 +1227,6 @@ async function doImport(): Promise<void> {
       rows.map((r) => ({
         roleName: r.roleName,
         deptName: r.deptName,
-        roleType: r.roleType,
         remark: r.remark,
       })),
     );
@@ -1298,10 +1298,6 @@ async function doExport(): Promise<void> {
             @input="onKeywordInput"
             @keyup.enter="reloadFromFirstPage"
           />
-          <select v-model="query.roleType" class="inp" @change="reloadFromFirstPage">
-            <option value="">全部类型</option>
-            <option v-for="t in roleTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-          </select>
           <select v-model="query.roleStatus" class="inp" @change="reloadFromFirstPage">
             <option value="">全部状态</option>
             <option v-for="s in roleStatuses" :key="s.value" :value="s.value">{{ s.label }}</option>
@@ -1323,8 +1319,7 @@ async function doExport(): Promise<void> {
             <thead>
               <tr>
                 <th style="width: 220px">职位名称</th>
-                <th style="width: 150px">所属部门</th>
-                <th style="width: 92px">类型</th>
+                <th style="width: 170px">所属部门</th>
                 <th style="width: 74px">关联人数</th>
                 <th style="width: 80px">权限数</th>
                 <th style="width: 72px">状态</th>
@@ -1341,7 +1336,6 @@ async function doExport(): Promise<void> {
                   <span v-if="r.isSys" class="tag n" style="margin-left: 4px">预置</span>
                 </td>
                 <td>{{ r.deptName || '—' }}</td>
-                <td><span class="tag" :class="typeTag(r.roleType)">{{ r.roleType }}</span></td>
                 <td class="num">{{ r.userCount }} 人</td>
                 <td class="num">
                   <span class="lk" @click="openPermTree(r, 'view')">{{ r.permCount }} 项</span>
@@ -1369,7 +1363,7 @@ async function doExport(): Promise<void> {
                 </td>
               </tr>
               <tr v-if="!list.length">
-                <td colspan="8">
+                <td colspan="7">
                   <div class="empty">
                     <div class="ic">🔍</div>
                     {{ loading ? '加载中…' : '没有符合条件的职位，试试调整筛选条件' }}
@@ -1398,12 +1392,6 @@ async function doExport(): Promise<void> {
     <ProtoDialog v-model="detailOpen" :title="detailTitle" size="lg">
       <div class="fm" style="grid-template-columns: repeat(3, 1fr)">
         <div class="f"><label>职位名称</label><div style="font-weight: 600">{{ detail?.roleName || '—' }}</div></div>
-        <div class="f">
-          <label>职位类型</label>
-          <div>
-            <span class="tag" :class="detail?.roleType === '系统职位' ? 'p' : 'n'">{{ detail?.roleType || '—' }}</span>
-          </div>
-        </div>
         <div class="f"><label>所属部门</label><div>{{ detail?.deptName || '—' }}</div></div>
         <div class="f">
           <label>状态</label>
@@ -1602,12 +1590,6 @@ async function doExport(): Promise<void> {
           <input v-model="form.roleName" class="inp" placeholder="如：学管主任" />
         </div>
         <div class="f">
-          <label>职位类型 <span class="req">*</span></label>
-          <select v-model="form.roleType" class="inp">
-            <option v-for="t in roleTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-          </select>
-        </div>
-        <div class="f">
           <label>所属部门 <span class="req">*</span></label>
           <select v-model="form.deptId" class="inp">
             <option v-for="d in flatDepts" :key="d.id" :value="d.id">{{ d.deptName }}</option>
@@ -1709,12 +1691,11 @@ async function doExport(): Promise<void> {
       </div>
       <table class="tb">
         <thead>
-          <tr><th>职位名称</th><th>类型</th><th>部门</th><th>校验</th></tr>
+          <tr><th>职位名称</th><th>部门</th><th>校验</th></tr>
         </thead>
         <tbody>
           <tr v-for="(r, i) in importRows" :key="i" :style="r.ok ? '' : 'background:var(--dg-l)'">
             <td>{{ r.roleName || '—' }}</td>
-            <td>{{ r.roleType }}</td>
             <td>{{ r.deptName || '—' }}</td>
             <td>
               <span v-if="r.ok" class="tag g">通过</span>
