@@ -810,13 +810,26 @@ function deptLabelOf(row: { deptName?: string | null; stageName?: string | null 
   return row.deptName || row.stageName || '—';
 }
 
-/** 各学段可见的状态（与后端 repo 的口径一致，只是用于筛选下拉禁用） */
+/**
+ * 各学段可选的状态（筛选下拉的禁用口径 + 编辑表单的选项来源）
+ *
+ * ★ 2026-10-20 批注（新增/编辑学生弹窗的「状态」下拉）：
+ *   ① 「状态选择，删除待咨询和咨询中」「编辑学生→状态：删除待咨询、咨询中的状态选择」
+ *      → 全学段都不再提供 1 待咨询 / 2 咨询中（这两个属于咨询招生环节的状态，
+ *        学生档案里不应该手工改）；
+ *   ② 「大学部的状态选择同步初中部状态选择保持一致」
+ *      → class 直接复用初高部那套，不再单独只有 试学中/正式在读/休学/退学/实训中。
+ *
+ * 注：4 预在读早在上一版就从**表单**里摘掉了（本数组保留它，只为让筛选下拉
+ *     还能筛到历史数据；formStatusOptions 会跳过它）。
+ */
+const JH_STATUS_CODES = [3, 4, 5, 6, 7, 8, 9, 10, 11];
 const STATUS_BY_STAGE: Record<StudentStage, number[]> = {
-  jh: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-  class: [3, 5, 6, 7, 8],
+  jh: JH_STATUS_CODES,
+  class: JH_STATUS_CODES, // ★ 批注：与初高部保持一致
   job: [6, 7, 9, 10],
   emp: [6, 7, 9, 10],
-  edu: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  edu: JH_STATUS_CODES,
 };
 function statusAllowed(stage: StudentStage, s: number): boolean {
   return (STATUS_BY_STAGE[stage] || []).includes(s);
@@ -1186,14 +1199,37 @@ const formPhaseOptions = computed(() => {
     if (dept && pl.deptCode !== dept) continue;
     for (const ph of pl.phases) if (!seen.has(ph.value)) seen.set(ph.value, ph.label);
   }
-  if (seen.size) return [...seen].map(([value, label]) => ({ value, label }));
-  const list = meta.value.find((m) => m.stage === form.stage)?.phaseOptions || [];
-  if (form.stage === 'jh') return list.filter((p) => JH_PHASE_CODES.includes(p.value));
+  let list: Array<{ value: number; label: string }>;
+  if (seen.size) {
+    list = [...seen].map(([value, label]) => ({ value, label }));
+  } else {
+    const base = meta.value.find((m) => m.stage === form.stage)?.phaseOptions || [];
+    list = form.stage === 'jh' ? base.filter((p) => JH_PHASE_CODES.includes(p.value)) : base;
+  }
+  // 兜底：老学生的阶段码可能不在当前方案里（如方案只配了 201~203，学生是 206），
+  // 不补一条的话阶段下拉会显示成裸数字 206。只补显示，不改数据。
+  const cur = Number(form.phaseCode);
+  if (cur && !list.some((p) => p.value === cur)) {
+    let label = '';
+    for (const pl of planOptionsAll.value) {
+      const p = pl.phases.find((x) => x.value === cur);
+      if (p) { label = p.label; break; }
+    }
+    if (!label) {
+      for (const m of meta.value) {
+        const p = m.phaseOptions.find((x) => x.value === cur);
+        if (p) { label = p.label; break; }
+      }
+    }
+    if (label) list = [...list, { value: cur, label }];
+  }
   return list;
 });
 /** 表单里状态下拉：按该学段允许的状态
  *  ★ 2026-10-16 按批注：去掉「预在读」（截图红框 + 红字「删除这个选择」）——
- *    新增 / 编辑学生时不再提供这个选项；老数据里已有的「预在读」照常显示（只是不能新选） */
+ *    新增 / 编辑学生时不再提供这个选项。
+ *  ★ 2026-10-20 按批注：再删「待咨询 / 咨询中」，且大学部与初高部保持一致
+ *    （口径见上面 STATUS_BY_STAGE 的注释）。 */
 const formStatusOptions = computed(() => {
   const allow = STATUS_BY_STAGE[form.stage] || [];
   const out: Record<number, string> = {};
@@ -1201,6 +1237,10 @@ const formStatusOptions = computed(() => {
     if (s === StudentStatus.PRE_STUDY) continue;
     out[s] = STUDENT_STATUS_NAME[s] || String(s);
   }
+  // 历史数据兜底：编辑老学生时，其状态可能已不在可选列表里（如「预在读 / 待咨询」），
+  // 补进选项只为**显示**原名，避免下拉显示成裸数字；用户仍可改选成其它状态。
+  const cur = Number(form.studentStatus);
+  if (cur && !out[cur] && STUDENT_STATUS_NAME[cur]) out[cur] = STUDENT_STATUS_NAME[cur];
   return out;
 });
 /** 是否显示床位号：就业/教务表没有 bed_no 列 */
