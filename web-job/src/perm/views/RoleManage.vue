@@ -841,7 +841,7 @@ function openUserDetail(u: PermUserListItem): void {
 }
 
 /**
- * ★ 2026-10-19 按用户要求：详情弹窗里的「去编辑」按钮已去掉（`:show-edit="false"`），
+ * ★ 2026-10-19 按用户要求：详情弹窗里的「去编辑」按钮已删除（共享组件里也彻底去掉了），
  *   随之 `openUserEditById()` 成了死代码，一并删除（`permUserEditRoute` 导入也清掉）。
  * ⚠️ 副作用要说清楚：本页「职位下人员」的行操作只有「移出该职位」「账号详情」，
  *   去掉这个按钮后，在职位管理这一页已经**没有任何编辑账号的入口** ——
@@ -1763,13 +1763,12 @@ async function doExport(): Promise<void> {
     />
 
     <!-- ==================== 账号详情（就地弹窗，与账号管理同一份组件） ==================== -->
-    <!-- ★ 2026-10-19 按用户要求：`:show-edit="false"` —— 本页详情弹窗也不再显示
-         「去编辑」，底部只剩「关闭」。要编辑该账号请走「账号管理」列表里的「编辑」。 -->
+    <!-- ★ 2026-10-19：「去编辑」按钮已从共享组件里彻底删除，故这里不再传开关。
+         本页「职位下人员」没有行级编辑，要改该账号请走「账号管理」列表里的「编辑」。 -->
     <UserDetailDialog
       v-model="userDetailOpen"
       :user-id="userDetailId"
       :fallback="userDetailRow"
-      :show-edit="false"
     />
   </div>
 </template>

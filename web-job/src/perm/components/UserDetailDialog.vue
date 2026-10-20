@@ -17,13 +17,17 @@
  * ⚠️ 「查看权限 / 编辑权限」不再跳「职位权限分配」页（跳过去还不知道要点哪个职位），
  *    直接在本弹窗之上叠一层权限树弹窗（PermTreeDialog），就地看 / 就地改。
  *
- * ★ 2026-10-19：底部「去编辑」按钮改成可关的 —— 传 `:show-edit="false"` 即隐藏。
- *   · 「账号管理」关掉了它：列表行操作里本来就有独立的「编辑」，
- *     弹窗底部再来一个是重复入口（用户第一轮要求删掉）。
- *   · 「职位管理」也关掉了它（用户第二轮要求）：底部只剩「关闭」。
- *     ⚠️ 那一页「职位下人员」的行操作只有「移出该职位」「账号详情」，
- *     关掉后本页就没有编辑账号的入口了，要改账号得去「账号管理」。
- *   · 仍需保留开关（默认 true）而不能直接全局删按钮 —— 「部门管理」还显示它。
+ * ★ 2026-10-19 起：底部「去编辑」按钮已**彻底删除**（用户最终要求：不要这个按钮）。
+ *   删之前它是可关的，三处入口按三轮要求逐个关掉 ——
+ *     · 账号管理：列表行操作里本来就有独立的「编辑」，底部再来一个是重复入口；
+ *     · 职位管理：「职位下人员」弹窗也一并去掉；
+ *     · 部门管理：最后一处，用户第三轮要求删除。
+ *   三处都关了之后开关本身成了死代码，遂连同 prop / emit 一起删掉，
+ *   底部只剩「关闭」。
+ *
+ *   ⚠️ 想改账号，走各页列表行操作的「编辑」：
+ *     · 账号管理、部门管理（部门下账号弹窗）都有行级「编辑」；
+ *     · 职位管理的「职位下人员」弹窗没有行级编辑，要改得回「账号管理」。
  */
 import { computed, ref, watch } from 'vue';
 import type { PermModule, PermRoleListItem, PermUserListItem, RolePermMap } from 'shared-types/perm';
@@ -40,22 +44,12 @@ const props = withDefaults(
     userId: string;
     /** 列表行数据：先渲染、再补最新（可选） */
     fallback?: PermUserListItem | null;
-    /**
-     * 是否显示底部「去编辑」按钮（默认 true）。
-     * ★ 2026-10-19：「账号管理」「职位管理」都传 false ——
-     *   前者列表已有独立「编辑」，后者按用户要求一并去掉。
-     */
-    showEdit?: boolean;
   }>(),
-  // ★ `showEdit` 默认 true：目前只剩「部门管理」不传（按钮照旧显示）
-  { fallback: null, showEdit: true },
+  { fallback: null },
 );
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void;
-  /** 点「去编辑」时抛出，由调用方决定怎么编辑（多数页面是跳账号管理）。
-   *  仅当 `showEdit` 为 true 时按钮才渲染，也就是说关掉后这个事件不会触发。 */
-  (e: 'edit', userId: string): void;
 }>();
 
 /* ============================================================
@@ -456,11 +450,8 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
 
     <template #footer>
       <div class="lft">账号 ID：{{ detail?.id || '—' }}</div>
-      <!-- ★ 2026-10-19：账号管理页 / 职位管理页都传 `:show-edit="false"` 不再渲染它；
-           目前只剩部门管理照旧显示。 -->
-      <button v-if="showEdit" class="btn" type="button" @click="emit('edit', props.userId)">
-        去编辑
-      </button>
+      <!-- ★ 2026-10-19：底部「去编辑」按钮已彻底删除（三处入口全部要求去掉），
+           只剩「关闭」。改账号请走列表行操作里的「编辑」。 -->
       <button class="btn pri" type="button" @click="visible = false">关闭</button>
     </template>
   </ProtoDialog>

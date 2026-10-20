@@ -802,11 +802,12 @@ function gotoUserEdit(id: string): void {
     />
 
     <!-- ==================== 账号详情（就地弹窗，不跳账号管理） ==================== -->
+    <!-- ★ 2026-10-19：底部「去编辑」按钮已删除（组件里已无此按钮，故也无 @edit 绑定）；
+         本页改账号走「部门下账号」弹窗行操作里的「编辑」→ gotoUserEdit。 -->
     <UserDetailDialog
       v-model="userDetailOpen"
       :user-id="userDetailId"
       :fallback="userDetailRow"
-      @edit="gotoUserEdit"
     />
   </div>
 </template>
