@@ -380,6 +380,62 @@ export interface ScoreSummaryItem {
   passRate: number;
 }
 
+/**
+ * 单行改分（成绩列表「编辑」）
+ *
+ * ★ 只改「传了的字段」：没传 = 保持原值。
+ *   —— 备注列是内联编辑的，只传 remark 时**不能**把分数重算一遍再写回去
+ *      （浮点权重来回算会把 85 变成 84.999…）。
+ */
+export interface ScoreUpdateBody {
+  stage: TeachingStage;
+  /** 成绩行 id */
+  id: string;
+  writtenScore?: number | null;
+  machineScore?: number | null;
+  interviewScore?: number | null;
+  otherScore?: number | null;
+  /**
+   * 考试结果 1 通过 / 2 未通过 / null 未判断
+   *
+   * ★ 2026-10-19：三个学段都允许老师手改（「编辑」弹窗里的结果下拉）。
+   *   传了就以老师选的为准；没传则维持原判定逻辑：
+   *     初高按满分比例重判 / 大学默认通过 / 实训保持未判断。
+   */
+  examResult?: number | null;
+  remark?: string | null;
+}
+
+/**
+ * 末班（成绩列表「末班」）
+ *
+ * 【规则】结果必须已是「未通过」才能末班；
+ *   目标班级学段：初高 → 只能初高；大学 → 只能大学；实训 → 三学段任意。
+ */
+export interface ScoreRepeatBody {
+  stage: TeachingStage;
+  /** 成绩行 id */
+  scoreId: string;
+  /** 目标班级所属学段 */
+  targetStage: TeachingStage;
+  targetClassId: string;
+  /** YYYY-MM-DD；不传默认今天 */
+  repeatDate?: string;
+  /** 末班原因（下拉选项，或「其他」手填） */
+  repeatReason: string;
+  /** 学员不足说明：拼进末班原因，并同步写成绩备注 */
+  shortcoming?: string;
+}
+
+export interface ScoreRepeatResult {
+  repeatCount: number;
+  fromClassName: string | null;
+  toClassName: string;
+  toStageName: string;
+  /** 目标班有无班主任可通知（本版不发站内信，仅回传便于前端提示） */
+  notified: boolean;
+}
+
 /* ============================================================
  * 退费域（第 4 个合并的业务域）
  * ============================================================
@@ -1069,6 +1125,15 @@ export interface ClassRow {
   phaseCode: number | null;
   phaseName: string;
 
+  /**
+   * ★ 2026-10-16 新增：阶段方案（表单里「阶段方案 + 阶段」两个下拉的落库值）
+   *   老班级没有方案时为 null，回显退回 phaseName（阶段码名称）。
+   */
+  schemeId: string | null;
+  schemeStageId: string | null;
+  /** 方案里的阶段名称（冗余存一份，列表/详情直接回显） */
+  schemeStageName: string | null;
+
   headTeacherId: string | null;
   headTeacherName: string | null;
   teacherId: string | null;
@@ -1131,6 +1196,10 @@ export interface ClassSaveBody {
   classCode?: string | null;
   deptCode?: number | null;
   phaseCode?: number | null;
+  /** ★ 2026-10-16：阶段方案（可选；不选方案的老流程照样能用） */
+  schemeId?: string | null;
+  schemeStageId?: string | null;
+  schemeStageName?: string | null;
   headTeacherId?: string | null;
   headTeacherName?: string | null;
   teacherId?: string | null;

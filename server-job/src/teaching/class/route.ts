@@ -96,6 +96,10 @@ function buildSaveBody(b: Record<string, any>, stage: TeachingStage) {
     classCode: strOrNull(b.classCode),
     deptCode,
     phaseCode,
+    // ★ 2026-10-16：阶段方案三字段（可空 —— 老班级/不选方案时不传）
+    schemeId: strOrNull(b.schemeId),
+    schemeStageId: strOrNull(b.schemeStageId),
+    schemeStageName: strOrNull(b.schemeStageName),
     headTeacherId: strOrNull(b.headTeacherId),
     headTeacherName: strOrNull(b.headTeacherName),
     teacherId: strOrNull(b.teacherId),
@@ -220,6 +224,14 @@ teachingClassRouter.get(
   '/meta',
   wrap(async (req, res) => {
     res.json(ok(await svc.listClassMeta(req.user), '查询成功'));
+  }),
+);
+
+/** 7b. 阶段方案选项（★ 2026-10-16：班级表单的「阶段方案 / 阶段」两个下拉用） */
+teachingClassRouter.get(
+  '/scheme-options',
+  wrap(async (req, res) => {
+    res.json(ok(await svc.listSchemeOptions(req.user), '查询成功'));
   }),
 );
 

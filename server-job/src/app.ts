@@ -48,7 +48,7 @@ import upgradeRouter from './routes/upgrade.route';
 // ---- ★ 班级管理模块（原 8003 · 学管主体）2026-10-04 并入 ----
 //    代码整棵搬在 src/class/ 下，路由统一前缀 /api/class/*
 import { buildRouters as buildClassRouters } from './class/modules/index';
-import { authAllowSync as classAuthAllowSync } from './class/middleware/auth';
+import { authAllowSync as classAuthAllowSync, authAllowSyncPlus as classAuthAllowSyncPlus } from './class/middleware/auth';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec as classSwaggerSpec } from './class/docs/swagger';
 import { dictRouter as classDictRouter } from './class/modules/meta/dict.route';
@@ -393,11 +393,19 @@ app.use('/api/class/meta', classAuthAllowSync, classStaffRouter);
 // ---- 业务路由 ----
 // ★ 2026-10-06：中间叠一道【学管主任只读 + 仅审批可写】闸（见 middleware/approvalOnly.ts）
 for (const r of buildClassRouters()) {
-  app.use(r.path, classAuthAllowSync, denyApprovalOnlyWrite, r.router);
+  /**
+   * ★ 2026-10-19：待接收学员（/api/class/consult）改成「初高中 + 大学」共用页 ——
+   *   初高账号的门户 modules 只有 class-jh，默认会被模块准入挡住，
+   *   这一组接口单独放行 class-jh（其它 /api/class/* 仍然只认 class）。
+   */
+  const authMw = r.path === '/api/class/consult' ? classAuthAllowSyncPlus(['class-jh']) : classAuthAllowSync;
+  app.use(r.path, authMw, denyApprovalOnlyWrite, r.router);
 }
 
 // ---- 当前登录人（班级前端启动时拉一次，拿数据范围与可见班级）----
-app.get('/api/class/me', classAuthAllowSync, (req, res) => {
+// ★ 2026-10-19：待接收学员是初高/大学共用页，初高账号也要能拉这个上下文
+//   （否则页面一打开就弹「没有访问班级管理模块的权限」，且拿不到 classIds）
+app.get('/api/class/me', classAuthAllowSyncPlus(['class-jh']), (req, res) => {
   const u = (req as any).user;
   if (!u) return classOk(res, null, '未登录');
   return classOk(
