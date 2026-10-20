@@ -82,8 +82,22 @@ async function seedSettings() {
 }
 
 /* ============================================================
- * 2. 学习阶段字典
+ * 2. 学习阶段字典（★ 2026-10-16 改成「阶段方案 → 多个阶段」）
  * ============================================================ */
+
+/** 阶段方案（一个部门一个默认方案） */
+const STAGE_PLANS = [
+  { id: 'seed-plan-jh', name: '初高部阶段方案', dept: 1 },
+  { id: 'seed-plan-uni', name: '大学部阶段方案', dept: 2 },
+];
+
+async function seedStagePlans() {
+  let i = 0;
+  for (const p of STAGE_PLANS) {
+    await ensure('t_class_stage_plan', p.id, { plan_name: p.name, dept_code: p.dept, sort_no: i });
+    i += 1;
+  }
+}
 
 const STAGES = [
   { code: 101, name: '预科', dept: 1, months: 3 },
@@ -99,13 +113,24 @@ const STAGES = [
   { code: 204, name: '四阶段', dept: 2, months: 4 },
 ];
 
+/** 部门 → 默认方案 ID */
+const DEFAULT_PLAN = { 1: 'seed-plan-jh', 2: 'seed-plan-uni' };
+
 async function seedStages() {
   let i = 0;
   for (const s of STAGES) {
     await ensureBy(
       't_class_stage',
       { stage_code: s.code, dept_code: s.dept },
-      { id: `seed-stage-${s.code}`, stage_code: s.code, stage_name: s.name, dept_code: s.dept, study_months: s.months, sort_no: i },
+      {
+        id: `seed-stage-${s.code}`,
+        stage_code: s.code,
+        stage_name: s.name,
+        dept_code: s.dept,
+        plan_id: DEFAULT_PLAN[s.dept],
+        study_months: s.months,
+        sort_no: i,
+      },
     );
     i += 1;
   }
@@ -879,6 +904,8 @@ async function main() {
   console.log('开始灌入演示种子数据（幂等）...');
   await seedSettings();
   console.log('  ✓ 系统设置');
+  await seedStagePlans();
+  console.log('  ✓ 阶段方案');
   await seedStages();
   console.log('  ✓ 学习阶段字典');
   await seedStageSchemes();

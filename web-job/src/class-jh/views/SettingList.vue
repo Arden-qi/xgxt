@@ -202,7 +202,7 @@ async function submitScheme() {
 async function handleDeleteScheme(row: StageScheme) {
   try {
     await ElMessageBox.confirm(
-      `确定删除方案「${row.schemeName}」吗？（已被班级使用的方案不可删）`,
+      `确定删除方案「${row.schemeName}」吗？（方案下已有班级 / 学生正在使用的阶段不可删）`,
       '删除确认',
       {
         type: 'warning',

@@ -272,8 +272,20 @@ async function probeMysql() {
   }
   if (!portAlive) {
     bad(`连不上 MySQL：${host}:${port} 没有在监听`);
-    info('请确认 MySQL 服务已启动（Windows 服务里找 MySQL / mysql57 / mysql80）');
-    info('若 MySQL 装了但没启动，在“服务”里手动启动，或管理员 cmd 执行：net start mysql57');
+
+    // ★ 2026-10-16：提示必须说到点上。这台机器的 MySQL 是 D:\mysql 绿色版，
+    //   **没有注册成 Windows 服务**，所以「去服务里找 MySQL / net start mysql57」
+    //   这种通用建议对它是错的，用户照着做只会白折腾（实测踩过）。
+    const portable = ['D:\\mysql', 'C:\\mysql', path.join(ROOT, '..', 'mysql')]
+      .find((b) => fs.existsSync(path.join(b, 'bin', 'mysqld.exe')));
+    if (portable) {
+      info(`本机的 MySQL 是绿色版（${portable}），没有注册成 Windows 服务，重启后不会自动运行。`);
+      info(`两个办法：① 直接跑「一键启动.bat」，它现在会自动把 MySQL 拉起来；`);
+      info(`            ② 手动双击 ${portable}\\start_mysql.bat，再重跑本自检。`);
+    } else {
+      info('请确认 MySQL 服务已启动（Windows 服务里找 MySQL / mysql57 / mysql80）');
+      info('若 MySQL 装了但没启动，在“服务”里手动启动，或管理员 cmd 执行：net start mysql57');
+    }
     return;
   }
   ok(`MySQL 端口 ${host}:${port} 可以连接`);
