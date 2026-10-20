@@ -186,6 +186,35 @@ function updateOne(recordId, fields) {
   lark(`base +record-batch-update --base-token ${BASE_TOKEN} --table-id ${TABLE_ID} --json @${p} --as user`);
 }
 
+/**
+ * 写后真复验：按 record_id **直读记录本身**，确认字段真的落库了。
+ *
+ * 为什么非要做这一步（2026-10-20 踩坑）：
+ *   查重用的 `findByHash` 走的是搜索索引，索引有延迟、也可能给出「幽灵命中」。
+ *   出现过这样的连环坑：工具打印「更新成功」，check 也查得到标题，
+ *   但把整表导出后那条记录其实是**全空**的 —— 只验索引等于没验。
+ *   这里直接 +record-get 读那一条，标题对不上就报错，别让人以为写完了。
+ */
+function assertWritten(recordId, fields) {
+  if (!recordId) return { ok: false, why: '没有拿到 record_id' };
+  const res = lark(
+    `base +record-get --base-token ${BASE_TOKEN} --table-id ${TABLE_ID}` +
+    ` --record-id ${recordId} --field-id 复现步骤 --field-id BUG标题 --format json --as user`,
+  );
+  const d = res?.data ?? {};
+  const cols = d.fields ?? [];
+  const row = (d.data ?? [])[0] ?? [];
+  const got = {
+    title: cellText(row[cols.indexOf('BUG标题')]).trim(),
+    steps: cellText(row[cols.indexOf('复现步骤')]).trim(),
+  };
+  const wantTitle = cellText(fields['BUG标题']).trim();
+  if (!got.title) return { ok: false, why: `记录 ${recordId} 读回来是空的（写没落地）`, got };
+  if (got.title !== wantTitle) return { ok: false, why: `标题对不上：表里是「${got.title}」`, got };
+  if (!got.steps.startsWith(`【`)) return { ok: false, why: `复现步骤缺少 hash 锚点：${got.steps.slice(0, 40)}`, got };
+  return { ok: true, got };
+}
+
 /** 同步等待（不 spawn 子进程；Windows 下拼 shell 命令容易因路径/引号失败） */
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -375,8 +404,18 @@ function main() {
     console.log(`⚠ 检测到重复写入，已自动收敛：保留 ${keep}，删除 ${removed.join(', ')}`);
   }
   const finalCheck = waitFor(hash, 1);
+  console.log(`复验：hash ${hash} 共 ${finalCheck.length} 条`);
+
+  // ★ 再直读一次记录本身：索引查得到 ≠ 字段真写进去了（见 assertWritten 注释）
+  const verify = assertWritten(keepId ?? finalCheck[0]?.recordId, fields);
+  if (!verify.ok) {
+    console.error(`✗ 写后复验失败：${verify.why}`);
+    console.error('  这条提交的缺陷记录**没有真正落库**，请按上面的原因处理后重跑（重跑是幂等的）。');
+    process.exit(1);
+  }
+
   console.log(`${action}成功：${keepId}`);
-  console.log(`复验：hash ${hash} 共 ${finalCheck.length} 条 ✓`);
+  console.log(`复验：字段已落库（标题「${verify.got.title.slice(0, 30)}…」）✓`);
   if (info) console.log(`对应提交：${info.hash} ${info.subject}（${info.author} · ${info.time}）`);
   process.exit(finalCheck.length === 1 ? 0 : 1);
 }
