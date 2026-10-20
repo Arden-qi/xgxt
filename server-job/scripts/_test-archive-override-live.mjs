@@ -173,6 +173,90 @@ const SHADOW_NAME = 'ZZ-档案覆盖测试班';
     );
   }
 
+  /* ============================================================
+   * ⑥ 财务管理 · 缴费单「能对上档案就以档案为准」
+   *
+   * 财务的单来自两条链路：报名前的咨询收费（学生还没建档）、报名后的补单。
+   * 所以判定口径是「能对上就对，对不上保持原样」，这里验证「能对上」那一半：
+   * 把一条财务单临时挂到一个真实学生身上，看接口是否显示档案里的姓名/班级。
+   * ============================================================ */
+  const finRow = (
+    await knex.raw(
+      `SELECT id, student_id, student_no, student_name, class_id, class_name, dept_code
+       FROM sms_finance.t_finance_fee WHERE is_deleted = 0
+       ORDER BY create_time DESC LIMIT 1`,
+    )
+  )[0][0];
+  // ⚠️ 特意挑一个「姓名与财务单原值不同」的学生：
+  //    否则姓名断言可能因为原文就一样而假通过，证明不了覆盖真的生效
+  const realStu = (
+    await knex.raw(
+      `SELECT id, student_no, student_name, class_id, class_name, dept_code
+       FROM sms_class_jh.t_class_student
+       WHERE is_deleted = 0 AND student_name <> ?
+       ORDER BY student_no LIMIT 1`,
+      [finRow?.student_name ?? ''],
+    )
+  )[0][0];
+
+  if (finRow && realStu) {
+    const finBackup = {
+      student_id: finRow.student_id,
+      student_no: finRow.student_no,
+      student_name: finRow.student_name,
+      class_id: finRow.class_id,
+      class_name: finRow.class_name,
+      dept_code: finRow.dept_code,
+    };
+    try {
+      // 故意只改关联键，姓名/班级仍留着原来的（老快照），看接口会不会纠正
+      await knex('sms_finance.t_finance_fee').where({ id: finRow.id }).update({
+        student_id: realStu.id,
+        student_no: realStu.student_no,
+      });
+
+      const r3 = await req(
+        `${BASE}/api/finance/fee/list?page=1&size=50&studentNo=${encodeURIComponent(realStu.student_no)}`,
+        { token, timeout: 15000 },
+      );
+      const fRows = r3.json?.data?.list || [];
+      const hit = fRows.find((x) => x.id === finRow.id);
+      check(
+        '财务缴费单：能对上档案时，姓名/班级取档案值（不是老快照）',
+        !!hit &&
+          hit.studentName === realStu.student_name &&
+          hit.className === realStu.class_name,
+        hit ? `接口返回 ${hit.studentName} / ${hit.className}` : '列表里没找到这张单',
+      );
+
+      // 详情页同口径（单行覆盖路径与列表不同，必须单独验）
+      const r4 = await req(`${BASE}/api/finance/fee/detail?id=${encodeURIComponent(finRow.id)}`, {
+        token,
+        timeout: 15000,
+      });
+      const d = r4.json?.data;
+      check(
+        '财务缴费详情：同样取档案值（详情页不会退回老快照）',
+        !!d && d.studentName === realStu.student_name && d.className === realStu.class_name,
+        d ? `详情返回 ${d.studentName} / ${d.className}` : '详情接口无数据',
+      );
+    } finally {
+      await knex('sms_finance.t_finance_fee').where({ id: finRow.id }).update(finBackup);
+      const back = (
+        await knex.raw('SELECT student_id, student_no FROM sms_finance.t_finance_fee WHERE id = ?', [
+          finRow.id,
+        ])
+      )[0][0];
+      check(
+        '财务单据已还原',
+        String(back.student_id) === String(finBackup.student_id),
+        `${back.student_no}`,
+      );
+    }
+  } else {
+    console.log('  ⚠️  财务单或学生档案为空，跳过财务关联测试');
+  }
+
   await knex.destroy();
   console.log(`\n===== 结果：${pass}/${pass + fails.length} 通过 =====`);
   if (fails.length) {

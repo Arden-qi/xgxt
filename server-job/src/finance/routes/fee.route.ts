@@ -37,6 +37,8 @@ import {
 // ★ 2026-10-05：缴费单新增/变更后推送到班级管理（只读副本），失败不影响主流程
 // ★ 2026-10-06：收方扩到「大学部 + 初高」，故改调 syncFeeToAll / syncFeesToAll
 import { syncFeeToAll, syncFeesToAll } from '../services/class-sync';
+// ★ 2026-10-20：财务缴费单的学生姓名/班级以学生档案为准（能对上就对，对不上保持原样）
+import { lookupArchive, applyArchiveToFeeRows } from '../services/student-archive';
 
 export const feeRouter = Router();
 
@@ -107,7 +109,22 @@ feeRouter.get(
       .limit(q.size)
       .offset((q.page - 1) * q.size);
 
-    const list = rows.map(toFeeListItem);
+    /**
+     * ★ 2026-10-20：学生姓名/班级/部门以学生档案最新值为准。
+     *
+     * 财务的单有两个来源：报名前的咨询收费单（此时学生还没进学籍档案）、
+     * 报名后的补单（档案里已有）。所以口径是「能对上就对齐，对不上保持原样」——
+     * 对不上的不删不改（那是「尚未建档」的真实状态，不是脏数据）。
+     */
+    const { rows: merged } = applyArchiveToFeeRows(
+      rows,
+      await lookupArchive(
+        rows.map((r: any) => r.student_id),
+        rows.map((r: any) => r.student_no),
+      ),
+    );
+
+    const list = merged.map(toFeeListItem);
     res.json(page(list, Number(total), q));
   }),
 );
@@ -161,6 +178,11 @@ feeRouter.get(
     if (!row) {
       throw new BizError(BizCode.FEE_NOT_FOUND, '缴费单不存在');
     }
+    // ★ 2026-10-20：详情与列表同口径（档案能对上就用档案最新值）
+    applyArchiveToFeeRows(
+      [row],
+      await lookupArchive([row.student_id], [row.student_no]),
+    );
     // 餐费场景：把「同一张凭证还被谁共用」一并返回，方便财务判断
     const shared = await findVoucherSharers(row.voucher_url, id);
     res.json(ok({ ...toFeeDetail(row), sharedVoucherBy: shared }));
