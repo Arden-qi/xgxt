@@ -143,8 +143,11 @@ const app = express();
 // ============================================================
 
 app.use(cors());
-app.use(express.json({ limit: '20mb' }));          // 支持 JSON 请求体
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// ★ 2026-10-16：复盘「上传录音」上限提到 50MB。
+//   音频以 base64 dataURL 走 JSON body 提交 → 50MB 文件 ≈ 66.7MB 请求体，
+//   原来 20mb 会被 body-parser 直接拒（PayloadTooLargeError）。
+app.use(express.json({ limit: '100mb' }));         // 支持 JSON 请求体
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 // 请求日志（开发阶段方便看请求有没有进来）
 app.use((req, _res, next) => {

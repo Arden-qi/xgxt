@@ -20,12 +20,27 @@ set "PYTHONIOENCODING=utf-8"
 
 cd /d "%~dp0"
 
-where node >nul 2>&1
-if errorlevel 1 goto :no_node
+REM Locate node.exe by ABSOLUTE PATH first. Never rely only on `where node`:
+REM if the system PATH value is damaged (e.g. "C:\Windows\system32" accidentally
+REM split into "C:\Wi;dows\system32"), where.exe itself cannot be found and the
+REM launcher wrongly reports "Node.js not found".
+set "NODE_EXE="
+if exist "D:\node.js\node.exe" set "NODE_EXE=D:\node.js\node.exe"
+if not defined NODE_EXE if exist "C:\Program Files\nodejs\node.exe" set "NODE_EXE=C:\Program Files\nodejs\node.exe"
+if not defined NODE_EXE if exist "%ProgramFiles%\nodejs\node.exe" set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
+if not defined NODE_EXE if exist "%USERPROFILE%\.workbuddy\binaries\node\versions\22.22.2\node.exe" set "NODE_EXE=%USERPROFILE%\.workbuddy\binaries\node\versions\22.22.2\node.exe"
+
+REM Last resort: fall back to PATH lookup (works when PATH is healthy).
+if not defined NODE_EXE for /f "delims=" %%p in ('where node 2^>nul') do if not defined NODE_EXE set "NODE_EXE=%%p"
+
+if not defined NODE_EXE goto :no_node
 
 if not exist "tools\start.mjs" goto :no_entry
 
-node "tools\start.mjs" %*
+REM Make node's own folder visible to child processes (npm, etc.).
+for %%I in ("%NODE_EXE%") do set "PATH=%%~dpI;%PATH%"
+
+"%NODE_EXE%" "tools\start.mjs" %*
 goto :done
 
 :no_node

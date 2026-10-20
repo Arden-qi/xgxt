@@ -10,17 +10,37 @@ import { ref, reactive, onMounted } from 'vue';
 import { canAct } from '@/store/permission';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { Search, Refresh, Plus } from '@element-plus/icons-vue';
-import { fetchLogList, fetchLogDetail, addLog, updateLog, deleteLog } from '@/api/employmentLog';
-import StudentSelect from '@/components/StudentSelect.vue';
+import {
+  fetchLogList,
+  fetchLogDetail,
+  addLog,
+  updateLog,
+  deleteLog,
+  // ★ 2026-10-16：走业务路由自己的 /classes（就业老师才有权限；班级管理页的接口会 403）
+  fetchLogClassOptions,
+} from '@/api/employmentLog';
+import type { JobClassOption } from 'shared-types';
 
 const loading = ref(false);
 const tableData = ref<any[]>([]);
 const total = ref(0);
 
+/** ★ 2026-10-16：班级下拉选项 */
+const classOptions = ref<JobClassOption[]>([]);
+
+async function loadClassOptions() {
+  try {
+    classOptions.value = await fetchLogClassOptions();
+  } catch (e) {
+    // request.ts 已统一提示
+  }
+}
+
 const query = reactive<any>({
   page: 1,
   size: 20,
   studentName: '',
+  classId: '',
   company: '',
   startDate: '',
   endDate: '',
@@ -47,6 +67,7 @@ function handleSearch() {
 function handleReset() {
   query.page = 1;
   query.studentName = '';
+  query.classId = '';
   query.company = '';
   query.startDate = '';
   query.endDate = '';
@@ -96,11 +117,9 @@ const defaultForm = {
 
 const form = reactive({ ...defaultForm });
 
-/** 学生选择器的回填标签 */
-const studentLabel = ref('');
-
 const rules: FormRules = {
-  studentId: [{ required: true, message: '请选择学生', trigger: 'change' }],
+  // ★ 2026-10-16：姓名改为可直接手填（原来是 el-select 从学生列表里选）
+  studentName: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   logDate: [{ required: true, message: '请选择日志日期', trigger: 'change' }],
 };
 
@@ -112,7 +131,6 @@ function todayStr() {
 function handleAdd() {
   isEdit.value = false;
   Object.assign(form, defaultForm, { logDate: todayStr() });
-  studentLabel.value = '';
   dialogVisible.value = true;
 }
 
@@ -134,16 +152,10 @@ async function handleEdit(row: any) {
       salary: data.salary,
       interviewSituation: data.interviewSituation || '',
     });
-    studentLabel.value = data.studentName;
     dialogVisible.value = true;
   } catch (e) {
     console.error(e);
   }
-}
-
-function onStudentChange(id: string, name: string) {
-  form.studentId = id;
-  form.studentName = name;
 }
 
 async function handleSubmit() {
@@ -154,7 +166,9 @@ async function handleSubmit() {
   try {
     const payload = {
       id: form.id,
-      studentId: form.studentId,
+      // ★ 2026-10-16：姓名手填 → studentId 不再必传；后端会按姓名尝试匹配学生
+      studentId: form.studentId || undefined,
+      studentName: form.studentName.trim(),
       logDate: form.logDate,
       resumeCount: Number(form.resumeCount) || 0,
       interviewInvite: Number(form.interviewInvite) || 0,
@@ -204,7 +218,10 @@ function money(v?: number) {
   return v ? `¥${Number(v).toLocaleString()}` : '—';
 }
 
-onMounted(loadData);
+onMounted(() => {
+  loadData();
+  loadClassOptions();
+});
 </script>
 
 <template>
@@ -214,6 +231,12 @@ onMounted(loadData);
       <el-form :model="query" inline>
         <el-form-item label="姓名">
           <el-input v-model="query.studentName" placeholder="请输入姓名" clearable style="width: 150px" @keyup.enter="handleSearch" />
+        </el-form-item>
+        <!-- ★ 2026-10-16：班级筛选下拉 -->
+        <el-form-item label="班级">
+          <el-select v-model="query.classId" clearable filterable placeholder="全部班级" style="width: 180px" @change="handleSearch">
+            <el-option v-for="c in classOptions" :key="c.id" :label="c.className" :value="c.id" />
+          </el-select>
         </el-form-item>
         <el-form-item label="面试公司">
           <el-input v-model="query.company" placeholder="请输入公司名称" clearable style="width: 170px" @keyup.enter="handleSearch" />
@@ -304,13 +327,11 @@ onMounted(loadData);
       <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="姓名" prop="studentId">
-              <StudentSelect
-                :model-value="form.studentId"
-                :initial-label="studentLabel"
-                @update:model-value="(v) => (form.studentId = v)"
-                @change="onStudentChange"
-              />
+            <el-form-item label="姓名" prop="studentName">
+              <el-input v-model="form.studentName" placeholder="请输入姓名" clearable maxlength="50" />
+              <div class="field-hint">
+                可直接手填；若姓名与学生库里某人完全一致，会自动关联其学号与班级
+              </div>
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -412,6 +433,15 @@ onMounted(loadData);
 
 .range-split {
   margin: 0 6px;
+  color: #A2938E;
+}
+
+/* ★ 2026-10-16 姓名手填的说明文字（el-form-item__content 是 flex，需占满一行） */
+.field-hint {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
   color: #A2938E;
 }
 

@@ -5,7 +5,7 @@
       <template #title>
         本页合并了 <b>4 个学段</b>的学生档案（初高 / 大学 / 就业 / 教务）。
         「全部」= 当前账号可见学段合并后<b>按学号去重</b>
-        <span class="muted">（同学号保留阶段更靠后的那条：就业 &gt; 大学 &gt; 初高 &gt; 教务）</span>
+        <span class="muted">（同学号保留学段更靠后的那条：就业 &gt; 大学 &gt; 初高 &gt; 教务）</span>
       </template>
     </el-alert>
 
@@ -52,11 +52,6 @@
             :label="c.stage ? `${c.name} · ${c.stageName}` : c.name"
             :value="c.id"
           />
-        </el-select>
-      </el-form-item>
-      <el-form-item v-if="phaseOptions.length" label="阶段">
-        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 130px">
-          <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
@@ -111,9 +106,6 @@
       <el-table-column label="班级" min-width="120">
         <template #default="{ row }">{{ row.className || '—' }}</template>
       </el-table-column>
-      <el-table-column label="阶段" width="110">
-        <template #default="{ row }">{{ row.phaseName || '—' }}</template>
-      </el-table-column>
       <el-table-column label="状态" width="90" align="center">
         <template #default="{ row }">
           <el-tag :type="statusTag(row.studentStatus)" size="small">{{ row.studentStatusName }}</el-tag>
@@ -162,7 +154,6 @@
           <el-descriptions-item label="身份证">{{ detail.profile.idCard || '—' }}</el-descriptions-item>
           <el-descriptions-item label="部门">{{ detail.base.deptName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="班级">{{ detail.base.className || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="阶段">{{ detail.base.phaseName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="statusTag(detail.base.studentStatus)" size="small">
               {{ detail.base.studentStatusName }}
@@ -294,13 +285,6 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="阶段">
-              <el-select v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
-                <el-option v-for="p in formPhaseOptions" :key="p.value" :label="p.label" :value="p.value" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
             <el-form-item label="状态">
               <el-select v-model="form.studentStatus" style="width: 100%">
                 <el-option v-for="(n, v) in formStatusOptions" :key="v" :label="n" :value="Number(v)" />
@@ -428,12 +412,10 @@ import {
   getStudentDetail,
   saveStudent,
   deleteStudent,
-  getStudentMeta,
   getStudentSummary,
   type StudentDetail,
   type StudentRow,
   type StudentStage,
-  type StudentStageMeta,
   type StudentSummary,
 } from '@/teaching/api/student';
 import { http } from '@/api/request';
@@ -472,7 +454,6 @@ const query = reactive({
 
   stage: '' as '' | StudentStage,
   classId: '',
-  phaseCode: undefined as number | undefined,
   studentStatus: undefined as number | undefined,
   keyword: '',
   unassigned: false,
@@ -483,28 +464,16 @@ const query = reactive({
 /* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
 useBreadcrumbStageKey(() => query.stage || '');
 
-const meta = ref<StudentStageMeta[]>([]);
 const classOptions = ref<Array<{ stage: StudentStage; stageName: string; id: string; name: string }>>([]);
 
 const classSelectOptions = computed(() =>
   query.stage ? classOptions.value.filter((c) => c.stage === query.stage) : classOptions.value,
 );
 
-/** 「阶段」筛选项：选了学段用该学段的；没选则取并集（去重） */
-const phaseOptions = computed(() => {
-  const list = query.stage
-    ? meta.value.filter((m) => m.stage === query.stage)
-    : meta.value;
-  const seen = new Map<number, string>();
-  for (const m of list) for (const p of m.phaseOptions) if (!seen.has(p.value)) seen.set(p.value, p.label);
-  return [...seen.entries()].map(([value, label]) => ({ value, label }));
-});
-
 function params() {
   return {
     stage: (query.stage || undefined) as StudentStage | undefined,
     classId: query.classId || undefined,
-    phaseCode: query.phaseCode,
     studentStatus: query.studentStatus,
     keyword: query.keyword || undefined,
     unassigned: query.unassigned || undefined,
@@ -531,7 +500,6 @@ async function load(p = query.page) {
 
 function onStageChange() {
   query.classId = '';
-  query.phaseCode = undefined;
   query.studentStatus = undefined;
   load(1);
 }
@@ -539,7 +507,6 @@ function onStageChange() {
 function reset() {
   query.stage = '';
   query.classId = '';
-  query.phaseCode = undefined;
   query.studentStatus = undefined;
   query.keyword = '';
   query.unassigned = false;
@@ -581,7 +548,6 @@ const emptyForm = () => ({
   deptCode: undefined as number | undefined,
   classId: '',
   className: '',
-  phaseCode: undefined as number | undefined,
   studentStatus: undefined as number | undefined,
   education: '',
   graduateSchool: '',
@@ -608,10 +574,6 @@ const rules: FormRules = {
 /** 表单里班级下拉：按当前表单学段过滤 */
 const formClassOptions = computed(() =>
   classOptions.value.filter((c) => c.stage === form.stage),
-);
-/** 表单里阶段下拉：按当前表单学段 */
-const formPhaseOptions = computed(
-  () => meta.value.find((m) => m.stage === form.stage)?.phaseOptions || [],
 );
 /** 表单里状态下拉：按该学段允许的状态 */
 const formStatusOptions = computed(() => {
@@ -644,7 +606,6 @@ async function openEdit(row: StudentRow) {
     deptCode: b.deptCode ?? undefined,
     classId: b.classId || '',
     className: b.className || '',
-    phaseCode: b.phaseCode ?? undefined,
     studentStatus: b.studentStatus,
     education: b.education || '',
     graduateSchool: d.profile.graduateSchool || '',
@@ -690,7 +651,6 @@ async function doSave() {
       deptCode: form.deptCode ?? null,
       classId: form.classId || null,
       className: form.className || null,
-      phaseCode: form.phaseCode ?? null,
       studentStatus: form.studentStatus,
       education: form.education || null,
       graduateSchool: form.graduateSchool || null,
@@ -737,7 +697,6 @@ async function doDelete(row: StudentRow) {
 
 /* ---------------- 初始化 ---------------- */
 async function loadAux() {
-  meta.value = await getStudentMeta();
   try {
     classOptions.value = await http.get('/api/teaching/student/classes');
   } catch {
