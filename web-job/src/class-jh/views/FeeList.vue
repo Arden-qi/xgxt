@@ -69,6 +69,9 @@ function urgeToRow(r: any): FeeRow {
     studentId: r.studentId,
     studentNo: r.studentNo || '',
     studentName: r.studentName || '',
+    // ★ 2026-10-20 用户要求：大学催缴副本（t_class_urge_sync）自带 phone / parent_phone
+    phone: r.phone ?? null,
+    parentPhone: r.parentPhone ?? null,
     classId: r.classId ?? undefined,
     className: r.className,
     feeType: r.feeType,
@@ -91,6 +94,9 @@ function callToRow(r: any): FeeRow {
     studentId: r.studentId,
     studentNo: r.studentNo || '',
     studentName: r.studentName || '',
+    // ★ 2026-10-20 用户要求：就业催费单存的是发起时的电话快照（t_job_fee_call.phone/parent_phone）
+    phone: r.phone ?? null,
+    parentPhone: r.parentPhone ?? null,
     classId: r.classId ?? undefined,
     className: r.className,
     feeType: r.feeType,
@@ -285,10 +291,12 @@ async function handleExport() {
     const list = await exportFee(query);
     exportCsv(
       '催费台账',
-      ['学号', '姓名', '班级', '缴费类型', '应缴金额', '缴费状态', '应缴日期', '剩余天数', '是否紧急'],
+      ['学号', '姓名', '手机号', '家长手机号', '班级', '缴费类型', '应缴金额', '缴费状态', '应缴日期', '剩余天数', '是否紧急'],
       list.map((r) => [
         r.studentNo,
         r.studentName,
+        r.phone || '',
+        r.parentPhone || '',
         r.className,
         r.feeTypeName,
         formatAmount(r.feeAmount),
@@ -374,6 +382,15 @@ onMounted(() => {
         </el-table-column>
         <el-table-column prop="studentNo" label="学号" width="120" />
         <el-table-column prop="studentName" label="姓名" width="90" />
+        <!-- ★ 2026-10-20 用户要求：催费列表加手机号 / 家长手机号（催费主要打家长号）
+             三源口径：初高按 studentId 关联 t_class_student 取；
+             大学取催缴副本 t_class_urge_sync 自带列；就业取催费单电话快照 -->
+        <el-table-column label="手机号" width="125">
+          <template #default="{ row }">{{ dash(row.phone) }}</template>
+        </el-table-column>
+        <el-table-column label="家长手机号" width="125">
+          <template #default="{ row }">{{ dash(row.parentPhone) }}</template>
+        </el-table-column>
         <el-table-column label="班级" width="110">
           <template #default="{ row }">{{ dash(row.className) }}</template>
         </el-table-column>

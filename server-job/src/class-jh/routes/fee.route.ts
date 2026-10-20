@@ -40,7 +40,15 @@ function calcRemainDays(expireDate: any): number | null {
 /** 未结清状态 */
 const UNPAID_STATUSES = [PayStatus.UNPAID, PayStatus.FROZEN];
 
-/** 缴费台账行 → 实体（含派生 remainDays/isUrgent） */
+/**
+ * 缴费台账行 → 实体（含派生 remainDays/isUrgent）
+ *
+ * ★ 2026-10-20 用户要求：列表补「学生手机号 / 家长手机号」。
+ *   t_class_fee 是**缴费流水表，不存联系方式**（已核 information_schema：
+ *   21 列里没有任何 phone 列），联系方式只在学生表 t_class_student 上，
+ *   → 由调用方按 studentId 批量补齐（见 fetchStudentContacts），
+ *   这里只负责把补好的值透传出去，缺学生档时给 null（前端显示 —）。
+ */
 function toFee(r: any, remindDays: number) {
   const remainDays = calcRemainDays(r.expire_date);
   const isUrgent =
@@ -53,6 +61,8 @@ function toFee(r: any, remindDays: number) {
     classId: r.class_id,
     className: r.class_name,
     deptCode: r.dept_code,
+    phone: r.phone ?? null,
+    parentPhone: r.parent_phone ?? null,
     feeType: r.fee_type,
     feeTypeName: nameOf(FEE_TYPE_NAME, r.fee_type),
     feeAmount: r.fee_amount,
@@ -64,6 +74,30 @@ function toFee(r: any, remindDays: number) {
     isUrgent,
     voucherUrl: r.voucher_url,
   };
+}
+
+/**
+ * 批量取学生联系方式：`studentId → { phone, parentPhone }`
+ *
+ * ⚠️ 两条纪律：
+ *   ① 一次 IN 查询就够（不要左连 —— `t_class_fee` 与 `t_class_student` 同名列
+ *      一大把：student_no / student_name / class_id / class_name / dept_code /
+ *      is_deleted…，左连后不加表前缀会直接 ambiguous column）；
+ *   ② 按 500 分片：导出场景可能一次上千个 studentId，一条超长 IN 会撞
+ *      max_allowed_packet 报错。去重 + 剔空值同样不能省。
+ */
+async function fetchStudentContacts(studentIds: Array<string | null | undefined>) {
+  const map: Record<string, { phone: string | null; parentPhone: string | null }> = {};
+  const ids = [...new Set(studentIds.filter((x): x is string => !!x))];
+  for (let i = 0; i < ids.length; i += 500) {
+    const rows = await db(STUDENT_TABLE)
+      .whereIn('id', ids.slice(i, i + 500))
+      .select('id', 'phone', 'parent_phone');
+    for (const r of rows as any[]) {
+      map[r.id] = { phone: r.phone || null, parentPhone: r.parent_phone || null };
+    }
+  }
+  return map;
 }
 
 /* ============================================================
@@ -124,7 +158,16 @@ feeRouter.get(
       urgeCountMap = Object.fromEntries(counts.map((c: any) => [c.student_id, Number(c.urge_count)]));
     }
     const withCount = paged.map((x: any) => ({ ...x, urgeCount: urgeCountMap[x.studentId] || 0 }));
-    res.json(page(withCount, total, q));
+
+    // ★ 联系电话（2026-10-20 用户要求）：缴费表不自带手机号，按本页学生批量补
+    const contacts = await fetchStudentContacts(withCount.map((x: any) => x.studentId));
+    const withContact = withCount.map((x: any) => ({
+      ...x,
+      phone: contacts[x.studentId]?.phone ?? null,
+      parentPhone: contacts[x.studentId]?.parentPhone ?? null,
+    }));
+
+    res.json(page(withContact, total, q));
   }),
 );
 
@@ -155,7 +198,15 @@ feeRouter.get(
     let list = rows.map((r: any) => toFee(r, remindDays));
     if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
 
-    res.json(ok(list));
+    // ★ 联系电话（2026-10-20）：导出与列表同口径，按 500 分片批量补
+    const contacts = await fetchStudentContacts(list.map((x: any) => x.studentId));
+    const withContact = list.map((x: any) => ({
+      ...x,
+      phone: contacts[x.studentId]?.phone ?? null,
+      parentPhone: contacts[x.studentId]?.parentPhone ?? null,
+    }));
+
+    res.json(ok(withContact));
   }),
 );
 

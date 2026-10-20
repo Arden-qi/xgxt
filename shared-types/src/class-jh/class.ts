@@ -386,6 +386,10 @@ export interface FeeRecord extends BaseEntity {
   classId?: string;
   className?: string;
   deptCode?: number;
+  /** ★ 2026-10-20 用户要求：学生手机号（来自 t_class_student.phone，左连取） */
+  phone?: string | null;
+  /** ★ 2026-10-20 用户要求：家长手机号（催费主要打这个；t_class_student.parent_phone） */
+  parentPhone?: string | null;
   feeType: FeeType;
   /** 双返回 */
   feeTypeName: string;
