@@ -102,9 +102,11 @@ function domainNode(key: string): MenuNode {
  *
  * 【为什么不直接用同名】实测两处命名只有 8 个域里 7 个相同：
  *   domainConfig.ts: student class attendance exam score dorm fee refund approval
- *   access.ts:        student class attendance exam score dorm —   refund leave
- *   → `approval` ↔ `leave` 命名不同源
- *   → `fee` 在 STAGE_ACCESS 里**没有**对应项（它保留了 stages，走 anyStageAccessible 老路径）
+ *   access.ts:        student class attendance exam score dorm fee refund leave
+ *   → `approval` ↔ `leave` 命名不同源；其余同名
+ *
+ * ★ 2026-10-20 合并 meng 后：fee 域也改成 unified（催费 / 缴费 两页签），
+ *   access.ts 里已补 fee 项，因此 fee 不再是「没有对应项」的特例。
  *
  * ★ 缺项一律映射成 null：菜单判定会退回 `hasPage(path)` 老逻辑，
  *   行为与修复前完全一致（宁可少显示，不可错误显示）。
@@ -116,6 +118,10 @@ const DOMAIN_TO_STAGE_DOMAIN: Record<string, string> = {
   exam: 'exam',
   score: 'score',
   dorm: 'dorm',
+  // ★ 2026-10-19：fee 域改 unified 后不再有 stages，菜单显隐改走业务域权限码
+  //   （与其它八域同款；不映射会退回 hasPage('/teaching/fee')，后端页面清单里
+  //   没有 /teaching/* → 菜单被静默过滤，即「催费/缴费菜单消失」的根因）
+  fee: 'fee',
   refund: 'refund',
   approval: 'leave',
 };
