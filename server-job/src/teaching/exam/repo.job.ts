@@ -60,7 +60,7 @@ function mapRow(r: Record<string, any>, contents: ExamContentItem[] = []): ExamR
     contentNames: types.map((t) => EXAM_CONTENT_TYPE_NAME[t] ?? '未知').join(' / '),
     status: 2, // 实训无审批状态
     statusName: '已提交',
-    creatorName: (r.creator_name as string) ?? null,
+    creatorName: (r.creator_name as string) || (r.create_by_name as string) || null,
     remark: (r.remark as string) ?? null,
   };
 }
@@ -94,7 +94,7 @@ export async function detail(id: string): Promise<ExamDetail | null> {
   return { record: mapRow(rec), contents: [], fields: [] };
 }
 
-export async function save(body: ExamSaveBody, userId: string) {
+export async function save(body: ExamSaveBody, userId: string, userName = '') {
   const ids = body.classIds ?? [];
   if (!ids.length) throw new Error('缺少班级');
   const classes = (await tbl(db, 'sms_job', C, STAGE).whereIn('id', ids).where('is_deleted', 0)) as Array<

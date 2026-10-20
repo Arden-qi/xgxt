@@ -59,7 +59,7 @@ function mapRow(r: Record<string, any>): ExamRow {
     contentNames: types.map((t) => EXAM_CONTENT_TYPE_NAME[t] ?? '未知').join(' / '),
     status,
     statusName: EXAM_STATUS_NAME[status] ?? '已提交',
-    creatorName: (r.create_by_name as string) ?? null,
+    creatorName: (r.creator_name as string) || (r.create_by_name as string) || null,
     remark: (r.remark as string) ?? null,
   };
 }
@@ -144,6 +144,9 @@ export async function save(body: ExamSaveBody, userId: string, userName: string)
     ...payload,
     exam_status: 1, // 草稿
     create_by_name: userName,
+    /* ★ 列表读的是 creator_name（原来只写了 create_by_name） */
+    creator_id: userId,
+    creator_name: userName || null,
     is_deleted: 0,
     create_time: now,
     create_by: userId,

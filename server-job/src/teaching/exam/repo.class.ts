@@ -43,7 +43,7 @@ function mapRow(r: Record<string, any>, contents: ExamContentItem[] = []): ExamR
     contentNames: types.map((t) => EXAM_CONTENT_TYPE_NAME[t] ?? '未知').join(' / '),
     status: 2, // 大学无审批状态，恒为"已提交"
     statusName: '已提交',
-    creatorName: (r.creator_name as string) ?? null,
+    creatorName: (r.creator_name as string) || (r.create_by_name as string) || null,
     remark: null,
   };
 }
@@ -96,7 +96,7 @@ export async function detail(id: string): Promise<ExamDetail | null> {
   return { record: mapRow(rec, contents), contents, fields };
 }
 
-export async function save(body: ExamSaveBody, userId: string) {
+export async function save(body: ExamSaveBody, userId: string, userName = '') {
   if (!body.classIds?.length) throw new Error('缺少班级');
   const classId = body.classIds[0];
   const cls = (await tbl(db, 'sms_class', C, STAGE).where({ id: classId, is_deleted: 0 }).first()) as
@@ -144,7 +144,8 @@ export async function save(body: ExamSaveBody, userId: string) {
         id,
         ...payload,
         creator_id: userId,
-        creator_name: null,
+        /* ★ 之前写死 null → 列表「创始人」永远是「—」 */
+        creator_name: userName || null,
         is_deleted: 0,
         create_time: now,
         create_by: userId,

@@ -22,6 +22,7 @@ import { BizCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
+import { transferStudent, transferTargets } from './transfer';
 import type { ClassListQuery, TeachingStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
 
@@ -245,5 +246,51 @@ teachingClassRouter.get(
   wrap(async (req, res) => {
     const stage = reqStage(req.query.stage);
     res.json(ok({ classCode: await svc.genClassCodeFor(stage) }));
+  }),
+);
+/* ============================================================
+ * 11. 学生换班（末班 / 升班）
+ *   末班：成绩不好 → 转到进度相同或更慢的班重修
+ *   升班：成绩好   → 跳到进度更快的班
+ *   ⚠️ 直接生效，不走待接收审批
+ * ============================================================ */
+
+/** 11.1 可选目标班级（按进度过滤） */
+teachingClassRouter.get(
+  '/transfer-targets',
+  wrap(async (req, res) => {
+    const stage = reqStage(req.query.stage);
+    const fromClassId = str(req.query.fromClassId);
+    if (!fromClassId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
+    const mode = req.query.mode === 'promote' ? 'promote' : 'repeat';
+    res.json(ok(await transferTargets(stage, fromClassId, mode), '查询成功'));
+  }),
+);
+
+/** 11.2 执行换班 */
+teachingClassRouter.post(
+  '/transfer',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    const studentId = str(b.studentId);
+    const fromClassId = str(b.fromClassId);
+    const toClassId = str(b.toClassId);
+    if (!studentId || !fromClassId || !toClassId) {
+      throw new BizError(BizCode.PARAM_ERROR, '缺少学生或班级参数');
+    }
+    const out = await transferStudent(
+      {
+        stage,
+        studentId,
+        fromClassId,
+        toClassId,
+        mode: b.mode === 'promote' ? 'promote' : 'repeat',
+        reason: b.reason ? String(b.reason) : null,
+        examId: str(b.examId) ?? null,
+      },
+      req.user,
+    );
+    res.json(ok(out, `已转入「${out.toClassName}」`));
   }),
 );

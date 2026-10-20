@@ -31,6 +31,7 @@ import {
 } from '@/teaching/api/score';
 import type { ClassOption, ExamRow } from '@/teaching/api/exam';
 import { listScoreClasses, listScoreExamOptions } from '@/teaching/api/score';
+import { listTransferTargets, transferStudentToClass, type TransferTarget } from '@/teaching/api/class';
 import { stageVisible } from '@/teaching/access';
 import { isReadOnlyUser } from '@/store/permission';
 
@@ -293,6 +294,79 @@ watch(
   },
 );
 
+/* ================= 行操作：详情 / 编辑 / 末班 / 升班 ================= */
+const rowDetail = ref<ScoreRow | null>(null);
+const rowDetailVisible = ref(false);
+function openRowDetail(row: ScoreRow) {
+  rowDetail.value = row;
+  rowDetailVisible.value = true;
+}
+
+/** 编辑：直接打开录入弹窗，定位到这条记录的班级+考试 */
+function openRowEdit(row: ScoreRow) {
+  entryForm.stage = row.stage;
+  entryForm.examId = row.examId;
+  entryForm.classId = row.classId || '';
+  entryVisible.value = true;
+  void loadEntry();
+}
+
+const xferVisible = ref(false);
+const xferSaving = ref(false);
+const xferMode = ref<'repeat' | 'promote'>('repeat');
+const xferRow = ref<ScoreRow | null>(null);
+const xferTargets = ref<TransferTarget[]>([]);
+const xferTargetId = ref('');
+const xferReason = ref('');
+const xferLoading = ref(false);
+
+async function openTransfer(row: ScoreRow, mode: 'repeat' | 'promote') {
+  if (!row.classId) return ElMessage.warning('该记录没有班级，无法换班');
+  xferRow.value = row;
+  xferMode.value = mode;
+  xferTargetId.value = '';
+  xferReason.value = '';
+  xferTargets.value = [];
+  xferVisible.value = true;
+  xferLoading.value = true;
+  try {
+    xferTargets.value = await listTransferTargets({
+      stage: row.stage,
+      fromClassId: row.classId,
+      mode,
+    });
+  } catch {
+    xferTargets.value = [];
+  } finally {
+    xferLoading.value = false;
+  }
+}
+
+async function submitTransfer() {
+  const row = xferRow.value;
+  if (!row?.classId) return;
+  if (!xferTargetId.value) return ElMessage.warning('请选择目标班级');
+  const target = xferTargets.value.find((t) => t.id === xferTargetId.value);
+  const label = xferMode.value === 'repeat' ? '末班' : '升班';
+  xferSaving.value = true;
+  try {
+    const r = await transferStudentToClass({
+      stage: row.stage,
+      studentId: row.studentId,
+      fromClassId: row.classId,
+      toClassId: xferTargetId.value,
+      mode: xferMode.value,
+      reason: xferReason.value.trim() || null,
+      examId: row.examId,
+    });
+    ElMessage.success(`${row.studentName} 已${label}转入「${r?.toClassName || target?.name || ''}」`);
+    xferVisible.value = false;
+    await Promise.all([loadList(), loadSummary()]);
+  } finally {
+    xferSaving.value = false;
+  }
+}
+
 async function submitEntry() {
   if (!entry.value) return;
   const stage = entryStage.value as TeachingStage;
@@ -434,6 +508,18 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           <span v-else>—</span>
         </template>
       </el-table-column>
+      <el-table-column label="操作" width="200" fixed="right">
+        <template #default="{ row }">
+          <el-button link type="primary" size="small" @click="openRowDetail(row)">详情</el-button>
+          <el-button link type="primary" size="small" @click="openRowEdit(row)">编辑</el-button>
+          <el-button link type="warning" size="small" :disabled="!row.classId" @click="openTransfer(row, 'repeat')">
+            末班
+          </el-button>
+          <el-button link type="success" size="small" :disabled="!row.classId" @click="openTransfer(row, 'promote')">
+            升班
+          </el-button>
+        </template>
+      </el-table-column>
       <template #empty>
         <el-empty description="没有成绩记录（换个部门或考试试试）" />
       </template>
@@ -532,6 +618,87 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         <el-button size="small" type="primary" :loading="entrySaving" @click="submitEntry">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- ===== 成绩行详情 ===== -->
+    <el-dialog v-model="rowDetailVisible" title="成绩详情" width="560px">
+      <el-descriptions v-if="rowDetail" :column="2" border size="small">
+        <el-descriptions-item label="部门">{{ stageLabel(rowDetail.stage) }}</el-descriptions-item>
+        <el-descriptions-item label="班级">{{ rowDetail.className || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="学号">{{ rowDetail.studentNo || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="姓名">{{ rowDetail.studentName || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="考试" :span="2">{{ rowDetail.examName || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="笔试">{{ rowDetail.writtenScore ?? '—' }}</el-descriptions-item>
+        <el-descriptions-item label="机试">{{ rowDetail.machineScore ?? '—' }}</el-descriptions-item>
+        <el-descriptions-item label="面试">{{ rowDetail.interviewScore ?? '—' }}</el-descriptions-item>
+        <el-descriptions-item label="其他">{{ rowDetail.otherScore ?? '—' }}</el-descriptions-item>
+        <el-descriptions-item label="综合成绩"><b>{{ rowDetail.totalScore ?? '—' }}</b></el-descriptions-item>
+        <el-descriptions-item label="结果">{{ rowDetail.examResultName || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="备注" :span="2">{{ rowDetail.remark || '—' }}</el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button size="small" @click="rowDetailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ===== 末班 / 升班（换班） ===== -->
+    <el-dialog
+      v-model="xferVisible"
+      :title="xferMode === 'repeat' ? '末班（转班重修）' : '升班（跳班）'"
+      width="520px"
+    >
+      <el-alert
+        v-if="xferRow"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="
+          (xferMode === 'repeat'
+            ? '末班：成绩不达标，转到进度相同或更慢的班重修（进度 = 班级阶段码）'
+            : '升班：成绩达标，跳到进度更快的班') +
+          '，换班后立即生效、不需对方接收。'
+        "
+        style="margin-bottom: 12px"
+      />
+      <el-form label-width="90px" size="small">
+        <el-form-item label="学生">
+          <span>{{ xferRow?.studentName || '—' }}（{{ xferRow?.studentNo || '—' }}）</span>
+        </el-form-item>
+        <el-form-item label="原班级">
+          <span>{{ xferRow?.className || '—' }}</span>
+        </el-form-item>
+        <el-form-item label="目标班级" required>
+          <el-select
+            v-model="xferTargetId"
+            :loading="xferLoading"
+            filterable
+            :placeholder="xferTargets.length ? '选择目标班级' : '没有符合进度条件的班级'"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="t in xferTargets"
+              :key="t.id"
+              :label="`${t.name}${t.stageCode ? ' · 阶段' + t.stageCode : ''}`"
+              :value="t.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原因">
+          <el-input
+            v-model="xferReason"
+            type="textarea"
+            :rows="2"
+            maxlength="200"
+            show-word-limit
+            :placeholder="xferMode === 'repeat' ? '如：本次考试不及格，转班重修' : '如：成绩优秀，跳班学习'"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="xferVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="xferSaving" @click="submitTransfer">确认换班</el-button>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 

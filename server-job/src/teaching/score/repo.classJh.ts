@@ -56,7 +56,8 @@ async function mapRow(r: Record<string, any>, nameMap: Map<string, string>): Pro
     examName: nameMap.get(String(r.exam_id)) ?? '',
     examDate: r.exam_date ? String(r.exam_date).slice(0, 10) : null,
     classId: (r.class_id as string) ?? null,
-    className: null,
+    /* ★ 原来写死 null → 列表「班级」列恒为空（筛选却按 class_id 有值，所以能搜到） */
+    className: (r.class_name as string) || null,
     studentId: String(r.student_id),
     studentNo: (r.student_no as string) ?? null,
     studentName: (r.student_name as string) ?? null,
@@ -202,6 +203,7 @@ export async function save(body: ScoreSaveBody, userId: string) {
         exam_type: exam.exam_type,
         exam_date: exam.exam_date,
         class_id: exam.class_id,
+        class_name: (exam.class_name as string) ?? null,
         student_id: r.studentId,
         student_no: (stu?.student_no as string) ?? '',
         student_name: (stu?.student_name as string) ?? '',

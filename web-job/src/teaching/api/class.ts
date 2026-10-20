@@ -16,6 +16,7 @@
  */
 
 import { http } from '@/api/request';
+import type { TeachingStage } from './attendance';
 
 export type ClassStage = 'jh' | 'class' | 'job';
 
@@ -216,3 +217,36 @@ export const DEPT_OPTIONS = [
   { value: 1, label: '初高部' },
   { value: 2, label: '大学部' },
 ];
+/* ============================================================
+ * 学生换班（末班 / 升班）
+ *   末班：成绩不好 → 转到进度相同或更慢的班重修
+ *   升班：成绩好   → 跳到进度更快的班
+ *   进度 = 班级 stage_code（阶段码）
+ * ============================================================ */
+
+export interface TransferTarget {
+  id: string;
+  name: string;
+  stageCode: number | null;
+  headTeacherName: string | null;
+}
+
+export function listTransferTargets(p: {
+  stage: TeachingStage;
+  fromClassId: string;
+  mode: 'repeat' | 'promote';
+}) {
+  return http.get<TransferTarget[]>('/api/teaching/class/transfer-targets', p);
+}
+
+export function transferStudentToClass(body: {
+  stage: TeachingStage;
+  studentId: string;
+  fromClassId: string;
+  toClassId: string;
+  mode: 'repeat' | 'promote';
+  reason?: string | null;
+  examId?: string | null;
+}) {
+  return http.post<{ ok: true; toClassName: string }>('/api/teaching/class/transfer', body);
+}
