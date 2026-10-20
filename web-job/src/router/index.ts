@@ -5,6 +5,7 @@ import {
   ensureModuleStores,
   moduleAllowed,
   moduleOfPageCode,
+  pageModuleAllowed,
   menuAllowed,
   portalLandingPath,
 } from '@/store/modules';
@@ -432,9 +433,9 @@ router.beforeEach(async (to) => {
   //   根因同源 —— 门户 modules 是模块级权威，但这里只校了两套班级模块，
   //   于是「门户只授权 perm、权限库里却是系统管理员角色」的账号（linx）
   //   直连 /class、/edu/student 照样能进。
-  //   现在统一走 moduleOfPageCode()，一处映射、两处（App.vue 菜单 + 本守卫）共用。
-  const needModule = moduleOfPageCode(pageCode);
-  if (needModule && !moduleAllowed(needModule)) {
+  //   现在统一走 pageModuleAllowed()，一处映射、两处（App.vue 菜单 + 本守卫）共用。
+  //   ★ 2026-10-19：共用页（待接收学员）允许任一相关模块放行。
+  if (!pageModuleAllowed(pageCode)) {
     // 落到「当前账号有权限的任意一个页面」，避免把他甩进死循环
     const firstAllowed = myPages.value.find((p) => {
       if (p.path.includes('/:')) return false;

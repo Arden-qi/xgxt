@@ -12,7 +12,7 @@ import { requirePerm } from '../../lib/permGuard';
 import { isFullAccess } from '../../lib/authUser';
 import { rowToCamel, rowsToCamel } from '../../lib/case';
 import { now, uuid } from '../../lib/ids';
-import { ConsultStatusName, DeptName, GenderName, stageNameOf } from '../../lib/dict';
+import { ConsultStatusName, DeptName, GenderName } from '../../lib/dict';
 import { assertClassAcceptStudent } from '../../lib/classRule';
 import { wrap } from '../../middleware/error';
 import {
@@ -22,6 +22,10 @@ import {
   tblInsTrx,
   USE_UNI_TABLE,
 } from '../../../teaching/shared/uniTable';
+// ★ 2026-10-19：初高也走「待接收」—— 接收初高的推送单要调初高的建档口
+import classSync from '../../../utils/classSync';
+// ★ 2026-10-19：判断目标班到底在哪个库（初高的班只在 sms_class_jh 里）
+import { db as jhDb } from '../../../class-jh/utils/db';
 
 /**
  * 咨询推送（需求 v1.2）
@@ -98,28 +102,44 @@ function canHandlePush(user: { roles: string[]; classIds: string[] }, push: Reco
   return !!target && user.classIds.includes(target);
 }
 
-function toPushItem(row: Record<string, unknown>): Record<string, unknown> {
+/**
+ * 推送单行 → 前端展示结构
+ *
+ * ★ 2026-10-19：删掉「意向阶段」——
+ *   需求「将接收学生的意向阶段删除」。库里的 `intend_stage` 列保留（历史数据不动），
+ *   但接口不再下发；学生阶段一律取【目标班级】的 stage。
+ *
+ * `canReceive` 由后端算好给前端用：判定要看「目标班是不是我带的班」，
+ * 而初高的班现在也并进了 user.classIds，前端自己算会漏。
+ */
+function toPushItem(
+  row: Record<string, unknown>,
+  user?: { roles: string[]; classIds: string[] },
+): Record<string, unknown> {
   const c = rowToCamel<Record<string, unknown>>(row);
+  delete c.intendStage;
   const st = Number(row.apply_status);
   const dept = row.intend_dept_code !== null && row.intend_dept_code !== undefined
     ? Number(row.intend_dept_code)
     : null;
-  const stage = row.intend_stage !== null && row.intend_stage !== undefined
-    ? Number(row.intend_stage)
-    : null;
   const isRepeatIn = Number(row.is_repeat_in) === 1;
   const isTransfer = row.source_system === 'transfer';
   const isUpgrade = row.source_system === 'upgrade';
+  /** 目标学段：1 初高部 → 初高库；2 大学部 → 本库
+   *  ⚠️ 只用于**前端展示**（接收弹窗里隐藏大学部才有的宿舍/床位）。
+   *     真正的入库判定在 /receive 里按「这个班在不在初高库」做。 */
+  const targetIsJh = dept === 1;
   return {
     ...c,
     genderName: row.gender ? (GenderName[Number(row.gender)] ?? '未知') : '—',
     applyStatusName: ConsultStatusName[st] ?? '未知',
     intendDeptName: dept === null ? '—' : (DeptName[dept] ?? '未知'),
-    intendStageName: stage === null ? '—' : stageNameOf(stage),
+    targetIsJh,
     isRepeatIn,
     isTransfer,
     isUpgrade,
     sourceKind: isRepeatIn ? '末班重修' : isTransfer ? '换班转入' : isUpgrade ? '初高升学' : '咨询新生',
+    canReceive: user ? canHandlePush(user, row) : false,
   };
 }
 
@@ -164,7 +184,7 @@ consultRouter.get(
     base.orderBy('push_time', 'desc');
 
     const paged = await paginate(base, query, async (qb) =>
-      (await qb as Array<Record<string, unknown>>).map(toPushItem),
+      (await qb as Array<Record<string, unknown>>).map((r) => toPushItem(r, user)),
     );
     return ok(res, pageData(paged.total, paged.page, paged.size, paged.list), '查询成功');
   }),
@@ -186,7 +206,7 @@ consultRouter.get(
       | Record<string, unknown>
       | undefined;
     if (!row) throw Errors.param('咨询推送单不存在');
-    return ok(res, toPushItem(row), '查询成功');
+    return ok(res, toPushItem(row, req.user!), '查询成功');
   }),
 );
 
@@ -393,7 +413,6 @@ const receiveSchema = z.object({
   id: z.string().min(1, '缺少咨询单ID'),
   classId: z.string().optional().nullable(),
   studentNo: z.string().optional().nullable(),
-  stage: z.coerce.number().int().optional().nullable(),
   age: z.coerce.number().int().optional().nullable(),
   phone: z.string().optional().nullable(),
   parentPhone: z.string().optional().nullable(),
@@ -459,6 +478,68 @@ consultRouter.post(
     }
     assertClassAccess(user, classId, '该班级');
 
+    /**
+     * ★ 2026-10-19：目标班在【初高】
+     *
+     *   需求：「接收权限放宽到初高中、大学，初高中、大学接收来自咨询的学生」——
+     *   初高不再「分班即入班」，也走推送 → 班主任在这里接收。
+     *   初高的学生档案在另一个库（sms_class_jh），本模块不能直写，
+     *   所以调初高的内部建档口 `POST /api/class-jh/student/from-consult`（幂等键=咨询单号）。
+     *
+     *   ⚠️ 判定用「这个班在不在初高库」，**不用 intend_dept_code**：
+     *      末班 / 换班推来的单子里 dept 取的是学生自己的部门，学生部门与目标班
+     *      不一致时（例如初高部的学生被放到大学班）会把单子导错库 →
+     *      「目标班级不存在」。班的归属才是权威。
+     */
+    const jhCls = (await jhDb('t_class_info')
+      .where({ id: classId, is_deleted: 0 })
+      .first()) as Record<string, unknown> | undefined;
+    if (jhCls) {
+      // 学号 / 学历 / 入学日期 / 学生状态按接收弹窗填的带过去；
+      // 宿舍床位是大学部宿舍表的 ID，初高用不上，这里不透传。
+      const r = await classSync.consultCreateJh({
+        consultNo: push.consult_no,
+        studentName: push.student_name,
+        gender: push.gender ?? undefined,
+        phone: b.phone ?? push.phone ?? null,
+        parentPhone: b.parentPhone ?? push.parent_phone ?? null,
+        age: b.age ?? push.age ?? null,
+        school: push.graduate_school ?? null,
+        address: push.home_address ?? null,
+        classId,
+        remark: b.remark ?? push.remark ?? null,
+        studentNo: b.studentNo ?? null,
+        education: b.education ?? push.education ?? null,
+        enrollDate: b.enrollDate ?? null,
+        studentStatus: b.studentStatus ?? null,
+      });
+      if (!r.ok) throw Errors.param(`接收失败：${r.message}`);
+
+      const sid = String((r.data as Record<string, unknown>)?.id ?? '');
+      const sno = String((r.data as Record<string, unknown>)?.studentNo ?? '');
+      const dupJh = Boolean((r.data as Record<string, unknown>)?.duplicate);
+
+      await PUSH()
+        .where({ id: b.id })
+        .update({
+          apply_status: ConsultStatus.RECEIVED,
+          receiver_id: user.userId,
+          receiver_name: user.userName,
+          receive_time: now(),
+          student_id: sid,
+          student_no: sno,
+          ...baseUpdate(user),
+        });
+
+      return ok(
+        res,
+        { studentId: sid, studentNo: sno },
+        dupJh
+          ? `「${String(push.student_name)}」已在初高班级「${String(push.intend_class_name ?? '')}」里（未重复建档）`
+          : `已接收「${String(push.student_name)}」并建档到初高班级「${String(push.intend_class_name ?? '')}」，学号 ${sno}`,
+      );
+    }
+
     let className: string | null = null;
     let deptCode = (push.intend_dept_code as number) ?? null;
     let headTeacherId: string | null = null;
@@ -467,7 +548,8 @@ consultRouter.post(
     let teacherName: string | null = null;
     let assistantId: string | null = null;
     let assistantName: string | null = null;
-    let stage = b.stage ?? ((push.intend_stage as number) ?? null);
+    /** 阶段一律取目标班级的（「意向阶段」已删除，不再由推送单带过来） */
+    let stage: number | null = null;
 
     if (classId) {
       const cls = (await notDeleted(CLS()).where('id', classId).first()) as
@@ -484,7 +566,7 @@ consultRouter.post(
       teacherName = (cls.teacher_name as string) ?? null;
       assistantId = (cls.assistant_id as string) ?? null;
       assistantName = (cls.assistant_name as string) ?? null;
-      if (stage === null) stage = cls.stage as number;
+      stage = (cls.stage as number) ?? null;
     }
     if (deptCode === null) {
       throw Errors.param('请选择要归入的班级（用于确定部门与学习阶段）');
