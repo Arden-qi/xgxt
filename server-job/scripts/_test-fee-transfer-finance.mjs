@@ -119,8 +119,11 @@ function baseRow(over = {}) {
     check('① 类型：FeeTransferPayload / FeeTransferResult 已定义', /interface FeeTransferPayload/.test(types) && /interface FeeTransferResult/.test(types));
 
     check(
-      '② 前端：工具栏有「批量上传到财务」按钮',
-      /批量上传到财务/.test(feeList) && /@click="openTransfer"/.test(feeList),
+      // 默认视图是「全部部门」，所以按钮不能只给初高显示（用户第一版就是因此看不见）
+      '② 前端：筛选行（重置后面）有「批量上传到财务」，全部部门视图也可见',
+      /批量上传到财务/.test(feeList) &&
+        /@click="openTransfer"/.test(feeList) &&
+        /v-if="query\.dept === 'jh' \|\| query\.dept === 'all'"/.test(feeList),
     );
     check(
       '② 前端弹窗：全选 / 只选未上传过 两个按钮都在',

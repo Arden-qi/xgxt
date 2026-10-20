@@ -606,6 +606,11 @@ onMounted(() => {
           <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
           <el-button :icon="Refresh" @click="handleReset">重置</el-button>
         </el-form-item>
+        <!-- ★ 2026-10-20 用户要求：整页一个「批量上传到财务缴费管理」，放在筛选行（重置后面）。
+             默认视图是「全部部门」，所以不能只对初高显示，否则一进来就看不见这个按钮。 -->
+        <el-form-item v-if="query.dept === 'jh' || query.dept === 'all'">
+          <el-button type="primary" plain :icon="Upload" @click="openTransfer">批量上传到财务</el-button>
+        </el-form-item>
         <el-form-item>
           <div class="dept-hint">注：缴费状态、仅看紧急、应缴日期对全部部门（初高/大学/就业）生效；缴费状态三部门统一（待缴/已缴/已核对/逾期/冻结），就业的催费单状态（待催缴/催缴中/已缴清）已折算为缴费状态；「紧急」= 未结清且已过应缴日（逾期一律算紧急）</div>
         </el-form-item>
@@ -614,10 +619,6 @@ onMounted(() => {
 
     <el-card shadow="never" class="table-card">
       <div class="toolbar">
-        <!-- ★ 2026-10-20 用户要求：整体一个「批量上传到财务缴费管理」入口 -->
-        <el-button v-if="query.dept === 'jh'" type="primary" :icon="Upload" @click="openTransfer">
-          批量上传到财务
-        </el-button>
         <el-button v-if="query.dept === 'jh'" :icon="Download" @click="handleExport">导出</el-button>
         <!-- ★ 2026-10-20 用户要求：催费列表来自财务管理 · 缴费管理，到期日到 20 天才进列表 -->
         <span v-if="urgeWindowDays && query.dept !== 'class' && query.dept !== 'employ'" class="window-hint">
