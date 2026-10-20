@@ -85,8 +85,8 @@ check(
     S.assign.includes('<PermItemDialog v-model="itemAdminOpen" @saved="onItemSaved"'),
 );
 check(
-  '「＋ 新增权限」入口 3 处（页头 / 工具条 / 权限树底栏）',
-  count(S.assign, 'itemAdminOpen = true') === 3,
+  '「＋ 新增权限」入口 2 处（页头 / 工具条；权限树底栏那处已按 2026-10-20 要求删除）',
+  count(S.assign, 'itemAdminOpen = true') === 2,
   `实测 ${count(S.assign, 'itemAdminOpen = true')} 处`,
 );
 check(
