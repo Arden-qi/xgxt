@@ -12,7 +12,7 @@
  *  PUT    /update            编辑部门
  *  DELETE /delete/:id        删除部门（逻辑删除）
  *
- * ⚠️ 部门被角色/账号引用时不可删除；有子部门时不可删除。
+ * ⚠️ 部门被职位/账号引用时不可删除；有子部门时不可删除。
  * ⚠️ 删除部门为不可恢复操作 —— 前端需二次确认。
  */
 
@@ -75,7 +75,7 @@ deptRouter.get(
       .limit(q.size)
       .offset((q.page - 1) * q.size);
 
-    // 部门归属统计（角色数 / 账号数，含子部门）
+    // 部门归属统计（职位数 / 账号数，含子部门）
     const allDepts = await db(TABLE).where('is_deleted', false).select('id', 'parent_id');
     const roleRows = await db('t_perm_role').where('is_deleted', false).select('dept_id');
 
@@ -230,7 +230,7 @@ const addSchema = z.object({
 
 deptRouter.post(
   '/add',
-  checkPermission('perm:角色管理:add'),
+  checkPermission('perm:职位管理:add'),
   validate(addSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
@@ -283,7 +283,7 @@ const updateSchema = addSchema.extend({ id: z.string().min(1, '必须传 id') })
 
 deptRouter.put(
   '/update',
-  checkPermission('perm:角色管理:edit'),
+  checkPermission('perm:职位管理:edit'),
   validate(updateSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
@@ -338,7 +338,7 @@ deptRouter.put(
 
 deptRouter.delete(
   '/delete/:id',
-  checkPermission('perm:角色管理:del'),
+  checkPermission('perm:职位管理:del'),
   wrap(async (req, res) => {
     const { id } = req.params;
 
@@ -352,13 +352,13 @@ deptRouter.delete(
       throw new BizError(BizCode.DEPT_HAS_CHILD, '该部门下还有子部门，请先处理子部门');
     }
 
-    // 被角色/账号引用 → 不可删
+    // 被职位/账号引用 → 不可删
     const roleCount = await db('t_perm_role').where({ dept_id: id, is_deleted: false }).count({ n: '*' });
     const userCount = await db('t_perm_user').where({ dept_id: id, is_deleted: false }).count({ n: '*' });
     if (Number(roleCount[0]?.n || 0) > 0 || Number(userCount[0]?.n || 0) > 0) {
       throw new BizError(
         BizCode.DEPT_IN_USE,
-        `该部门被 ${roleCount[0]?.n || 0} 个角色、${userCount[0]?.n || 0} 个账号引用，不可删除`,
+        `该部门被 ${roleCount[0]?.n || 0} 个职位、${userCount[0]?.n || 0} 个账号引用，不可删除`,
       );
     }
 

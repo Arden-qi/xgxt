@@ -34,7 +34,7 @@
  *    sms_perm.t_student_base 会被重灌（它是学生主档的影子表）。
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,6 +42,51 @@ import mysql from 'mysql2/promise';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DRY = process.argv.includes('--dry');
+
+/* ============================================================
+ * 0.1 种子凭证图片
+ *
+ * ⚠️ 为什么需要这段：数据库里的 voucher_url 指向 /uploads/seed/*.png，
+ *    但 uploads/ 被 .gitignore 忽略、种子数据本身也不带图片文件 ——
+ *    不生成的话，财务在「缴费管理」点开凭证就是 404（截图加载失败），
+ *    这正是 2026-10-15 用户反馈的「其他模块上传的缴费凭证财务无法查看」。
+ *
+ *    做法：仓库里随包分发一组示例凭证图（assets/sample-vouchers/），
+ *    种子脚本按「费用类型 + 部门」把对应那张复制到 uploads/seed/ 下。
+ * ============================================================ */
+
+/** 示例凭证图目录（随仓库分发） */
+const SAMPLE_VOUCHER_DIR = resolve(__dirname, '..', 'assets', 'sample-vouchers');
+/** 种子凭证落盘目录（与 app.ts 里 /uploads 的静态托管根**必须一致**） */
+const SEED_UPLOAD_DIR = resolve(__dirname, '..', 'uploads', 'seed');
+
+/** 本脚本生成过的文件名，避免重复复制 */
+const generatedVouchers = new Set();
+
+/**
+ * 按「费用类型 + 部门」生成一张种子凭证图片
+ *
+ * @param {string} fileName 目标文件名，如 voucher-J26001-1.png
+ * @param {number} feeType  费用类型 1~5，决定用哪张示例图
+ * @param {number} deptCode 部门 1 二三期 / 2 大学部
+ */
+function ensureSeedVoucher(fileName, feeType, deptCode) {
+  if (DRY || !fileName || generatedVouchers.has(fileName)) return;
+  generatedVouchers.add(fileName);
+
+  const ft = [1, 2, 3, 4, 5].includes(Number(feeType)) ? Number(feeType) : 1;
+  const dp = Number(deptCode) === 2 ? 2 : 1;
+  const src = resolve(SAMPLE_VOUCHER_DIR, `voucher-type${ft}-dept${dp}.png`);
+  const dst = resolve(SEED_UPLOAD_DIR, fileName);
+
+  try {
+    if (!existsSync(SEED_UPLOAD_DIR)) mkdirSync(SEED_UPLOAD_DIR, { recursive: true });
+    if (!existsSync(dst)) copyFileSync(src, dst);
+  } catch (e) {
+    // 生成失败不阻断 seed：只是财务侧暂时看不到那张图
+    console.warn(`[seed] 生成种子凭证图失败 ${fileName}: ${e.message}`);
+  }
+}
 
 /* ============================================================
  * 0. 连接配置（读 server-job/.env）
@@ -436,6 +481,10 @@ async function seedFinance(conn) {
   const pushFee = (s, cls, feeType, payStatus, offsetDays, period) => {
     n += 1;
     const id = `FEE-${s.no}-${feeType}`;
+    // ★ 2026-10-15：凭证图片必须真的落盘，否则财务点开就是 404
+    const hasVoucher = payStatus >= E.PAY_PAID;
+    const voucherFile = `voucher-${s.no}-${feeType}.png`;
+    if (hasVoucher) ensureSeedVoucher(voucherFile, feeType, s.dept);
     rows.push(base(id, {
       student_id: `FSB-${s.no}`, student_no: s.no, student_name: s.name,
       class_id: cls?.id ?? null, class_name: cls?.name ?? null,
@@ -443,8 +492,8 @@ async function seedFinance(conn) {
       fee_type: feeType, amount: feeStd(s.dept, feeType),
       pay_status: payStatus, pay_date: payStatus >= E.PAY_PAID ? D(offsetDays) : null,
       expire_date: D(offsetDays + 180), period,
-      voucher_url: payStatus >= E.PAY_PAID ? `/uploads/seed/voucher-${s.no}-${feeType}.png` : null,
-      voucher_no: payStatus >= E.PAY_PAID ? `PZ${s.no}${feeType}` : null,
+      voucher_url: hasVoucher ? `/uploads/seed/${voucherFile}` : null,
+      voucher_no: hasVoucher ? `PZ${s.no}${feeType}` : null,
       is_verified: payStatus === E.PAY_VERIFIED ? 1 : 0,
       verified_by: payStatus === E.PAY_VERIFIED ? S.finMgr.id : null,
       verified_by_name: payStatus === E.PAY_VERIFIED ? S.finMgr.name : null,
@@ -612,6 +661,10 @@ function seedConsult(conn) {
       clsName = s.class_name; deptCode = s.dept_code ?? E.DEPT_UNIV;
     }
     const feeRow = FIN.fees.find((f) => f.student_no === s.student_no && f.fee_type === feeType);
+    // ★ 2026-10-15：咨询收款单的凭证图同样要落盘
+    const noVoucher = status === E.CONSULT_NO_VOUCHER;
+    const consultVoucherFile = `voucher-${s.student_no}.png`;
+    if (!noVoucher) ensureSeedVoucher(consultVoucherFile, feeType, deptCode);
     orders.push(base(`ORD-${String(on).padStart(3, '0')}`, {
       order_no: `SK2026${String(on).padStart(4, '0')}`,
       finance_fee_id: feeRow?.id ?? null,
@@ -619,9 +672,9 @@ function seedConsult(conn) {
       class_name: clsName, dept_code: deptCode, fee_type: feeType, amount,
       status, finance_pay_status: financePayStatus,
       reject_reason: status === E.CONSULT_REJECTED ? '凭证模糊' : null,
-      voucher_url: status === E.CONSULT_NO_VOUCHER ? null : `/uploads/seed/voucher-${s.student_no}.png`,
-      voucher_no: status === E.CONSULT_NO_VOUCHER ? null : `QPZ${s.student_no}`,
-      voucher_by: status === E.CONSULT_NO_VOUCHER ? null : s.owner_name,
+      voucher_url: noVoucher ? null : `/uploads/seed/${consultVoucherFile}`,
+      voucher_no: noVoucher ? null : `QPZ${s.student_no}`,
+      voucher_by: noVoucher ? null : s.owner_name,
       pay_method: 'wechat', batch_no: on,
     }));
   }
@@ -669,10 +722,10 @@ function seedConsult(conn) {
       await insertMany(conn, `${DB.consult}.t_consult_student`, students);
       await insertMany(conn, `${DB.consult}.t_consult_fee_order`, orders);
       await insertMany(conn, `${DB.consult}.t_consult_history`, hist);
-      // 消费项字典 + 配置
+      // 消费项字典 + 配置（★ 2026-10-16 用户指令：取消「工具包」「宿舍门禁卡」）
       await insertMany(conn, `${DB.consult}.t_consult_consume_item`, [
-        ['校服', 12000, 1], ['被褥三件套', 15000, 2], ['工具包', 8000, 3],
-        ['教材资料', 6000, 4], ['军训服', 9000, 5], ['宿舍门禁卡', 2000, 6],
+        ['校服', 12000, 1], ['被褥三件套', 15000, 2],
+        ['教材资料', 6000, 4], ['军训服', 9000, 5],
       ].map(([name, price, sort], i) => base(`CIT-${i + 1}`, { item_name: name, price, sort_no: sort, is_enabled: 1 })));
       await insertMany(conn, `${DB.consult}.t_consult_config`, [
         base('CCFG-1', { config_key: 'trialDays', config_value: '7', remark: '试学默认天数' }),
@@ -1161,8 +1214,21 @@ function seedEdu(conn) {
       notify_time: null, upload_time: NOW(),
       certificate_name: `凭证-${s.no}.png`, upload_remark: '教务侧演示',
       student_no: s.no, auto_frozen: i % 7 === 0 ? 1 : 0,
-      pay_status: String(src?.pay_status ?? E.PAY_UNPAID),
-      cert_status: '已上传', order_no: `EDU2026${String(i + 1).padStart(4, '0')}`,
+      /**
+       * ⚠️ 2026-10-15 修正：教务的 pay_status 用的是 PayPaidStatus（'已缴' / '未缴'），
+       *    原先直接写了财务的数字状态（'3'）—— 后果是
+       *    `payStatus === PayPaidStatus.PAID('已缴')` 永远不成立，
+       *    教务「上传凭证」永远不可用（接口报「该笔费用尚未缴纳，缴清后才能上传凭证」）。
+       *    映射口径：财务 2 待核对 / 3 已缴 = 钱已到账 → '已缴'；其余（1 待缴 / 5 冻结）→ '未缴'。
+       */
+      pay_status: [2, 3].includes(Number(src?.pay_status)) ? '已缴' : '未缴',
+      /**
+       * ⚠️ 2026-10-15 修正：凭证状态必须是 CertStatus 的取值（未传 / 已传 / 被打回），
+       *    原先写成「已上传」—— 那是 exp_status（到期状态）的取值。
+       *    后果：code 里 `certStatus === CertStatus.UPLOADED('已传')` 永远不成立，
+       *    教务「凭证状态」筛选筛不到、「已上传」提示也不出现。
+       */
+      cert_status: '已传', order_no: `EDU2026${String(i + 1).padStart(4, '0')}`,
       amount: src?.amount ?? STDU[E.FEE_TUITION],
     });
   });

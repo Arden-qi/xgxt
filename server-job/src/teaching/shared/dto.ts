@@ -615,6 +615,37 @@ export const LEAVE_STAGE_BIZ: Record<TeachingStage, number[]> = {
   job: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
 };
 
+/**
+ * ★ 部门（业务口径）—— 发起申请时那个下拉，**取代**原来的「学段」
+ *
+ * 【为什么要有这一层】
+ *   用户口径里公司有 4 个部门：初高中 / 大学 / 实训 / 就业；
+ *   而技术上只有 3 个学段（jh / class / job），且「实训」与「就业」共用同一个库
+ *   （`sms_job`，就是启动日志里的「就业管理」）。
+ *
+ * 【就业为什么没有 stage】
+ *   学籍异动（休学/退学/复学）只在 3 个学段有库表与仓储实现，**就业部门暂无**。
+ *   按业务确认：选项仍然展示（用户能看到完整部门列表），但选它就提示
+ *   「该部门暂不办理学籍异动」，学生下拉置空 —— 而不是给它一个假学段、
+ *   让用户填完表单再在提交时报错。
+ *   → `stage = null` 就是这个「占位、不可用」的机器可读表示。
+ *
+ * ⚠️ 前端**不要在页面里另抄一份**：本数组由 `/meta` 下发，改这里就够了。
+ */
+export const LEAVE_DEPARTMENTS: Array<{
+  /** 部门码（jh/class/job 与学段同码，employ 是就业） */
+  code: string;
+  /** 部门中文名（页面显示，与用户口径一致：初高中 / 大学 / 实训 / 就业） */
+  name: string;
+  /** 对应学段；null = 该部门暂不办理学籍异动（选它就禁用） */
+  stage: TeachingStage | null;
+}> = [
+  { code: 'jh', name: '初高中', stage: 'jh' },
+  { code: 'class', name: '大学', stage: 'class' },
+  { code: 'job', name: '实训', stage: 'job' },
+  { code: 'employ', name: '就业', stage: null },
+];
+
 /** 审批链步数（供前端展示"本次走几步"） */
 export const LEAVE_CHAIN_STEPS: Record<number, number> = {
   [LEAVE_BIZ_TYPE.SUSPEND]: 1,
@@ -657,6 +688,21 @@ export interface LeaveRow {
   attendedHours: number | null;
   /** 关联的退费单号（退学联动） */
   relatedRefundNo: string | null;
+
+  /**
+   * ★ 学生**当前**状态（实时读学生表，不是建单时的快照）
+   *
+   * 【为什么列表要带它】
+   *   单据状态 ≠ 学生现状。比如「休学单已通过」，但如果这个人之后又办过复学，
+   *   他现在是「正式在读」，不会出现在「复学」的候选名单里。
+   *   列表上不显示这一列时，用户会看到「一堆已通过的休学单 → 复学时却没人可选」，
+   *   直接判定成 bug（2026-10-15 用户就是这么报上来的）。
+   *   ⚠️ 由 service 在分页**之后**批量补（见 attachStudentStatus），
+   *      仓储的 decorate 不负责它（那是快照字段，语义不同）。
+   */
+  studentStatus?: number | null;
+  /** 学生当前状态中文名（'休学' / '正式在读' …） */
+  studentStatusName?: string;
 
   approvalStatus: number;
   approvalStatusName: string;

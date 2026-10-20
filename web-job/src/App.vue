@@ -12,69 +12,42 @@
  *     · 就业/教务/班级：沿用「菜单项有 pageCode → hasPage(path) 通过才显示」
  *
  * ⚠️ 再次强调：这里过滤菜单只是"不碍眼"，真正的拦截在后端接口。
+ *
+ * ★ 2026-10-16 工作台 = 系统首页（用户指令：每个角色进来第一个页面就是工作台）：
+ *   侧栏顶部固定一个「工作台」单层菜单项（所有登录角色可见）；
+ *   菜单分组计算整体抽到 config/sideMenu.ts，与首页快捷入口共用同一份口径。
  */
 import { RouterView, useRoute, useRouter } from 'vue-router';
 import { computed, onMounted, ref } from 'vue';
-import { MENU, type MenuNode } from '@/config/menu';
-/* ★ 第 1 期「入口合并」：把「初高 / 大学 / 实训」的重复菜单收成一个入口。
- *   · matchTeachingPath —— 直连老路由时，左侧菜单要亮在合并后的菜单项上
- *   · anyStageAccessible —— 聚合菜单的显隐：任一学段可访问即显示 */
+/* ★ 第 1 期「入口合并」：matchTeachingPath —— 直连老路由时，左侧菜单要亮在合并后的菜单项上 */
 import { matchTeachingPath } from '@/teaching/domainConfig';
-import {
-  anyStageAccessible,
-  stageVisible,
-  STAGE_ACCESS,
-  type StageDomain,
-} from '@/teaching/access';
 import { ROLE_CODE_NAME } from 'shared-types';
-import type { ModuleDef } from 'shared-types/portal';
 import * as ElementPlusIconsVue from '@element-plus/icons-vue';
 import {
   myRoles,
   permissionLoaded,
   loadMyPermissions,
-  hasPage,
 } from '@/store/permission';
 import { useAuthStore as usePortalStore } from '@/portal/stores/auth';
-import { portalLogout, moduleAllowed, moduleOfPageCode } from '@/store/modules';
-/* ★ 2026-10-06 新增：板块 → 页面 台账（权限管理 → 页面管理）
- *   左侧菜单要按它过滤 —— 被取消勾选的页面 = 该板块没有这个页面。 */
-import { pageEnabled } from '@/store/pageConfig';
+import { portalLogout } from '@/store/modules';
 /* 面包屑导航（内容区顶部的位置指示） */
 import BreadcrumbBar from '@/components/BreadcrumbBar.vue';
+/* ★ 2026-10-15 新增：顶栏「修改密码」—— 登录人自助改密（所有角色都能用）
+ *   ★ 2026-10-16 改名：原来叫「重置密码」，与「账号管理 → 重置密码」
+ *     （管理员代忘记密码的人重置）撞名，改成「修改密码」以示区分。 */
+import { ElMessage } from 'element-plus';
+import type { FormInstance, FormRules } from 'element-plus';
+import { changeMyPassword, verifyMyPassword } from '@/portal/api/portal';
+/* ★ 2026-10-16 侧栏菜单计算抽到 config/sideMenu.ts：
+ *   工作台首页（views/Workbench.vue）的「快捷入口」要和侧栏用同一套显隐口径，
+ *   两处共用一份，避免口径漂移。
+ *   注：原先在本文件 import 的 moduleAllowed / moduleOfPageCode / pageEnabled
+ *   已随菜单计算一并搬去 sideMenu.ts，本文件不再直接使用，故不再重复引入。 */
+import { useSideMenu, type ViewChild } from '@/config/sideMenu';
 
 const route = useRoute();
 const router = useRouter();
 const portal = usePortalStore();
-
-/** 门户模块图标（按模块 key） */
-const MODULE_ICON: Record<string, string> = {
-  consult: 'ChatLineRound',
-  finance: 'Money',
-  perm: 'Lock',
-  // ★ 2026-10-05：legacy 模块（就业/教务/班级）由 config/menu.ts 渲染，
-  //    这里一并登记图标，将来若改成统一由门户注册表渲染也不用再改。
-  job: 'Briefcase',
-  edu: 'School',
-  class: 'UserFilled',
-};
-
-interface ViewChild {
-  title: string;
-  path?: string;
-  key?: string;
-  phase?: string;
-  stage?: string;
-  pageCode?: string;
-}
-interface ViewGroup {
-  title: string;
-  icon?: string;
-  stage?: string;
-  module?: string;
-  path?: string;
-  children?: ViewChild[];
-}
 
 /** 当前激活的菜单项（hash 路由下 route.path 就是 /xxx） */
 const activeMenu = computed(() => {
@@ -90,150 +63,11 @@ const activeMenu = computed(() => {
   return route.path;
 });
 
-/**
- * 门户模块分组（动态）—— 直接来自登录下发的 visibleModules
- * ⚠️ 不在这里硬编码标题/路径，避免与门户 MODULES 注册表两处维护、改一处漏一处。
- */
-const portalGroups = computed<ViewGroup[]>(() => {
-  const mods: ModuleDef[] = portal.visibleModules || [];
-  return (
-    mods
-      /* ============================================================
-       * ★ 2026-10-06 修：「未开放的导航」—— 滤掉 legacy 空模块
-       *
-       * 【现象】左侧菜单顶部多出 4 个点不动的菜单项：
-       *         就业管理 / 教务管理 / 班级管理 / 教学管理（初高）
-       *         点进去是 /coming「功能开发中」占位页。
-       * 【真因】就业/教务/班级/初高 在门户注册表 MODULES 里是 `legacy: true`
-       *         且 `menus: []`（页面清单在 config/menu.ts，由 jobGroups 按
-       *         pageCode 渲染）。但这里没过滤 legacy ——
-       *         `m.menus` 为空 → children 为空 → 模板走「无子菜单」分支，
-       *         渲染成一个单层菜单项，跳 /coming。
-       *         （portal.ts 的注释早就写了「App.vue 会按 legacy 标记把它们从
-       *           门户分组里滤掉」，但这段过滤一直没写，是漏实现。）
-       * 【口径】门户分组只渲染「有页面清单的新模块」；
-       *         legacy 模块一律交给 jobGroups（受 hasPage / 模块门槛双重过滤）。
-       * ============================================================ */
-      .filter((m) => !m.legacy && (m.menus?.length ?? 0) > 0)
-      .map((m) => ({
-        title: m.title,
-        icon: MODULE_ICON[String(m.key)] || 'Grid',
-        module: String(m.key),
-        children: (m.menus || [])
-          .map((mi) => ({
-            title: mi.title,
-            key: mi.key,
-            path: `/${m.key}${mi.path}`,
-          }))
-          /* ★ 2026-10-06 页面台账（权限管理 → 页面管理）：
-           *   该板块被取消勾选的页面 = 这个板块没有这个页面 → 不渲染。 */
-          .filter((c) => pageEnabled(c.path)),
-      }))
-  );
-});
-
-/**
- * 合并域菜单项的显隐（2026-10-12 新增）
- * ---------------------------------------------------------------
- * 【★ 这条分支修的是「合并后菜单集体消失」】
- *
- * 【症状】校长登录后左侧只剩 8 项（工作台 / 班级交接 / 待接收学员 / 催费·缴费 /
- *        就业日志 / 复盘填写 / 数据统计 / 系统设置），
- *        学生档案、班级管理、出勤管理、考试管理、成绩管理、宿舍管理、
- *        退费、休学/退学审批这 8 个合并域全不见了。
- *
- * 【根因】菜单显隐原本是二选一：
- *        if (stages?.length) → anyStageAccessible(stages)  ← 合并域该走这条
- *        else                 → hasPage(path)             ← 实际走了这条（错）
- *        第 2 期做「真正统一页面」时把 8 个域的 `stages` 清空了（改用 `unified`），
- *        但判定没跟着改 → 落到 hasPage('/teaching/exam')
- *        而后端 `/api/job/auth/my-pages` 下发的 40 个页面里 **`/teaching/*` 一条都没有**
- *        （实测）→ 8 个菜单被**静默过滤**，不报错、日志无痕。
- *
- * 【为什么按权限码判、而不是补回 stages】
- *   `STAGE_ACCESS` 里 19 条旧路由已按第 3 期 D2 **物理删除**（path 全是 null），
- *   那里本来就只能靠权限码判。而权限码来自权限库 `t_perm_page.page_code`，
- *   与后端各域 `requireAnyPage()` 同源 → 前后端口径天然一致。
- *
- * 【显隐口径 = 与合并前完全一致】
- *   「该域下任一学段有权限就显示」，与原 `anyStageAccessible` 语义相同，
- *   所以不会让任何人多看到或少看到页面。
- */
-function mergedDomainMenuAllowed(domainKey?: string): boolean | null {
-  // 没配 stageDomain（如催费·缴费，它保留了 stages）→ 交回原逻辑
-  if (!domainKey) return null;
-  const stages = Object.keys(
-    (STAGE_ACCESS as Record<string, unknown>)[domainKey] ?? {},
-  );
-  if (!stages.length) return null; // 对照表里没有这个域 → 交回原逻辑
-  return stages.some((s) => stageVisible(domainKey as StageDomain, s));
-}
-
-/** 就业/教务/班级分组（静态，沿用原权限逻辑） */
-const jobGroups = computed<ViewGroup[]>(() => {
-  return MENU.map((mod) => {
-    if (!mod.children?.length) return mod as ViewGroup;
-    const kids = mod.children.filter((c: MenuNode) => {
-      /* ★ 第 1 期「入口合并」：聚合菜单项（带 stages）——
-       *   显隐口径 = 「任一学段可访问就显示」。
-       *   每个学段仍按它**原来的路径 + 原来的权限码**判（见 teaching/access.ts），
-       *   所以用户能看到什么，与合并前**完全一致**。 */
-      if (c.stages?.length) return anyStageAccessible(c.stages);
-      // ★★ 2026-10-12：合并域（第 2 期清空了 stages）改按 STAGE_ACCESS 权限码判，
-      //   详见 mergedDomainMenuAllowed 的注释。返回 null = 本项不适用，走下面的老逻辑。
-      const merged = mergedDomainMenuAllowed(c.stageDomain);
-      if (merged !== null) return merged;
-      if (!c.path) return true;
-      if (!hasPage(c.path)) return false;
-      // ★ 2026-10-06 页面台账：被「页面管理」取消勾选的页面 = 该板块没有这个页面
-      if (!pageEnabled(c.path)) return false;
-      // ★ 2026-10-05 两套班级模块隔离（大学部 class / 初高 class-jh）
-      return legacyMenuAllowed(c.pageCode);
-    });
-    return { ...mod, children: kids as ViewChild[] } as ViewGroup;
-  }).filter((mod) => {
-    if (mod.children) return mod.children.length > 0;
-    return true;
-  });
-});
-
-/**
- * legacy 分组（就业 / 教务 / 大学部班级 / 初高教学）的【模块门槛】
- *
- * 【为什么单靠 hasPage 不够】
- *   ① 大学部班级 / 初高教学：这两个模块用的是**同一批角色码**
- *      （都是 TEACH_HEAD / TEACH_DEAN …），一个大学部班主任的 myPages 里
- *      同时含 class:* 与 classjh:* 的页面码。只看 hasPage 的话，
- *      他会在左侧看到「教学管理（初高）」整组菜单 —— 两套模块就串了。
- *   ② 就业 / 教务：账号在【权限管理】里挂的角色决定页面码。
- *      典型反例：权限管理员（账号 linx）在 sms_perm 里挂的是「系统管理员」角色
- *      → my-pages 下发全部 40 个页面 → 左侧多出「就业管理 / 教务管理 /
- *      班级管理 / 教学管理（初高）」四组菜单，与它门户上只授权 perm 相矛盾。
- *
- * 【做法】按权限码前缀再要求「账号有没有被授权这个模块」
- *   （门户 t_sys_account.modules 是模块级的权威口径）：
- *     job:*      → 必须有 job 模块
- *     edu:*      → 必须有 edu 模块
- *     class:*    → 必须有 class 模块
- *     classjh:*  → 必须有 class-jh 模块
- *
- * ⚠️ 门户身份未加载（portal.account 为空）时不拦 ——
- *    否则非门户来源（或门户接口临时失败）会把这几组菜单整片打没。
- */
-function legacyMenuAllowed(pageCode?: string): boolean {
-  if (!pageCode) return true;
-  if (!portal.account) return true;
-  const m = moduleOfPageCode(pageCode);
-  return !m || moduleAllowed(m);
-}
-
-/** 统一菜单：门户模块在前，就业/教务/班级在后 */
-const visibleMenu = computed<ViewGroup[]>(() => [...portalGroups.value, ...jobGroups.value]);
-
-/** 默认展开所有分组 */
-const defaultOpeneds = computed(() =>
-  visibleMenu.value.filter((m) => m.children?.length).map((m) => m.title),
-);
+/* ★ 2026-10-16 菜单计算（门户模块分组 / 教学管理分组 / 工作台置顶项 / 默认展开）
+ *   原先写在本文件的 portalGroups / jobGroups / mergedDomainMenuAllowed /
+ *   legacyMenuAllowed 整体抽到 config/sideMenu.ts，逻辑一行未改；
+ *   唯一新增：visibleMenu 顶部固定「工作台」单层菜单项（系统首页）。 */
+const { visibleMenu, defaultOpeneds } = useSideMenu();
 
 /** 菜单数据到位后再创建 el-menu，default-openeds 才生效 */
 const menuReady = computed(() => visibleMenu.value.length > 0);
@@ -271,6 +105,139 @@ const isLoginPage = computed(() => route.path === '/login');
 function doLogout(): void {
   portalLogout();
   router.replace('/login');
+}
+
+/* ============================================================
+ * ★ 2026-10-15 新增：顶栏「修改密码」（登录人自助改密）
+ *
+ * 交互口径（用户指定）：
+ *   ① 先填【原密码】→ 点「验证」，后端确认无误后，才解锁下面两栏；
+ *   ② 再填【新密码】；
+ *   ③ 最后【再输一遍新密码】，两次一致才能提交。
+ *
+ * ⚠️ 前端这一步「验证后解锁」只是交互引导，真正的把关在后端：
+ *    /change-password 里会再复核一次原密码，跳过验证直接调接口也改不了。
+ * ============================================================ */
+
+/** 弹窗显隐 */
+const pwdOpen = ref(false);
+/** 原密码是否已通过后端校验 —— 未通过时「新密码 / 确认密码」两栏不可填 */
+const pwdVerified = ref(false);
+const pwdVerifying = ref(false);
+const pwdSubmitting = ref(false);
+/** 内联错误（后端也会弹 toast，这里再落到输入框下方，方便用户就地改） */
+const pwdError = ref('');
+const pwdFormRef = ref<FormInstance>();
+
+const pwdForm = ref({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: '',
+});
+
+/** 密码强度 0~3 —— 只做提示，不拦截（演示环境别把用户卡住） */
+const pwdScore = computed(() => {
+  const p = pwdForm.value.newPassword;
+  if (!p) return 0;
+  let s = 0;
+  if (p.length >= 8) s += 1;
+  if (/[A-Za-z]/.test(p) && /\d/.test(p)) s += 1;
+  if (/[^A-Za-z0-9]/.test(p) || p.length >= 12) s += 1;
+  return s;
+});
+const pwdScoreText = computed(() => ['', '偏弱', '中等', '较强'][pwdScore.value] || '');
+
+const pwdRules: FormRules = {
+  oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        const s = String(value || '');
+        if (s.length < 6 || s.length > 20) return callback(new Error('新密码长度需为 6~20 位'));
+        if (/\s/.test(s)) return callback(new Error('新密码不能包含空格'));
+        if (s === pwdForm.value.oldPassword) return callback(new Error('新密码不能与原密码相同'));
+        callback();
+      },
+      trigger: 'blur',
+    },
+  ],
+  confirmPassword: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        if (value !== pwdForm.value.newPassword) return callback(new Error('两次输入的新密码不一致'));
+        callback();
+      },
+      trigger: 'blur',
+    },
+  ],
+};
+
+function openPwdDialog(): void {
+  pwdOpen.value = true;
+}
+
+/** 关闭后必须把「已验证」的闸门复位，否则下次打开能跳过第一步直接填新密码 */
+function onPwdClosed(): void {
+  pwdVerified.value = false;
+  pwdVerifying.value = false;
+  pwdSubmitting.value = false;
+  pwdError.value = '';
+  pwdForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' };
+  pwdFormRef.value?.clearValidate();
+}
+
+/** 改了新密码 → 顺手复验「确认密码」，否则会出现「两次明明一样却还提示不一致」 */
+function onNewPwdInput(): void {
+  if (pwdForm.value.confirmPassword) {
+    pwdFormRef.value?.validateField('confirmPassword').catch(() => undefined);
+  }
+}
+
+/** 第一步：验证原密码 */
+async function doVerifyOld(): Promise<void> {
+  pwdError.value = '';
+  if (!pwdForm.value.oldPassword) {
+    pwdError.value = '请输入原密码';
+    return;
+  }
+  pwdVerifying.value = true;
+  try {
+    await verifyMyPassword(pwdForm.value.oldPassword);
+    pwdVerified.value = true;
+    ElMessage.success('原密码正确，请设置新密码');
+  } catch {
+    pwdVerified.value = false;
+    pwdError.value = '原密码不正确，请重新输入';
+  } finally {
+    pwdVerifying.value = false;
+  }
+}
+
+/** 第二步：提交修改 */
+async function doChangePwd(): Promise<void> {
+  pwdError.value = '';
+  if (!pwdVerified.value) {
+    pwdError.value = '请先验证原密码';
+    return;
+  }
+  const passed = await pwdFormRef.value?.validate().catch(() => false);
+  if (!passed) return;
+
+  pwdSubmitting.value = true;
+  try {
+    await changeMyPassword({
+      oldPassword: pwdForm.value.oldPassword,
+      newPassword: pwdForm.value.newPassword,
+    });
+    ElMessage.success('密码修改成功，下次登录请使用新密码');
+    pwdOpen.value = false;
+  } catch {
+    // 后端已弹错误提示；这里只把弹窗留在原位，方便用户就地修改
+  } finally {
+    pwdSubmitting.value = false;
+  }
 }
 
 onMounted(() => {
@@ -313,9 +280,117 @@ onMounted(() => {
             <span class="header-urole">{{ roleText }}</span>
           </div>
         </div>
+        <!--
+          ★ 2026-10-15 改版：退出登录整体左移，右侧新增「修改密码」。
+            两者都在最右侧的操作区，所有角色登录后都能看到并使用。
+        -->
         <el-button size="small" text class="switch-role" @click="doLogout">退出登录</el-button>
+        <el-button size="small" class="reset-pwd-btn" @click="openPwdDialog">
+          <el-icon class="reset-pwd-ic"><component :is="getIcon('Key')" /></el-icon>
+          <span>修改密码</span>
+        </el-button>
       </div>
     </el-header>
+
+    <!-- ==================== 修改密码弹窗（所有角色可用） ==================== -->
+    <el-dialog
+      v-model="pwdOpen"
+      title="修改密码"
+      width="440px"
+      append-to-body
+      :close-on-click-modal="false"
+      class="pwd-dialog"
+      @closed="onPwdClosed"
+    >
+      <div class="pwd-who">
+        <span class="pwd-who-lb">当前账号</span>
+        <b class="pwd-who-name">{{ userNameText }}</b>
+        <span class="pwd-who-acc">{{ portal.account?.account || '' }}</span>
+      </div>
+
+      <el-form
+        ref="pwdFormRef"
+        :model="pwdForm"
+        :rules="pwdRules"
+        label-width="82px"
+        class="pwd-form"
+        @submit.prevent
+      >
+        <!-- ① 原密码：验证通过后才解锁下面两栏 -->
+        <el-form-item label="原密码" prop="oldPassword">
+          <div class="pwd-row">
+            <el-input
+              v-model="pwdForm.oldPassword"
+              type="password"
+              show-password
+              placeholder="请输入当前登录密码"
+              :disabled="pwdVerified"
+              @keyup.enter="doVerifyOld"
+            />
+            <el-button
+              class="pwd-verify"
+              :type="pwdVerified ? 'success' : 'primary'"
+              :loading="pwdVerifying"
+              :disabled="pwdVerified"
+              @click="doVerifyOld"
+            >
+              {{ pwdVerified ? '已验证' : '验证' }}
+            </el-button>
+          </div>
+        </el-form-item>
+
+        <!-- ② 新密码 -->
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input
+            v-model="pwdForm.newPassword"
+            type="password"
+            show-password
+            :disabled="!pwdVerified"
+            placeholder="6~20 位，建议字母 + 数字组合"
+            @input="onNewPwdInput"
+          />
+        </el-form-item>
+
+        <!-- ③ 再输一遍新密码 -->
+        <el-form-item label="确认密码" prop="confirmPassword" class="pwd-item-last">
+          <el-input
+            v-model="pwdForm.confirmPassword"
+            type="password"
+            show-password
+            :disabled="!pwdVerified"
+            placeholder="请再次输入新密码"
+            @keyup.enter="doChangePwd"
+          />
+        </el-form-item>
+
+        <!-- 强度提示（只提示，不拦截） -->
+        <div v-if="pwdVerified" class="pwd-score">
+          <span class="pwd-score-lb">密码强度</span>
+          <span class="pwd-score-track">
+            <i :style="{ width: pwdScore * 33.34 + '%' }" :class="`lv${pwdScore}`"></i>
+          </span>
+          <span class="pwd-score-txt" :class="`lv${pwdScore}`">{{ pwdScoreText }}</span>
+        </div>
+      </el-form>
+
+      <div v-if="pwdError" class="pwd-err">{{ pwdError }}</div>
+      <div v-else-if="!pwdVerified" class="pwd-tip">
+        为了防止误操作，请先验证原密码，验证通过后才能设置新密码。
+      </div>
+      <div v-else class="pwd-tip">新密码设置成功后，下次登录请使用新密码。</div>
+
+      <template #footer>
+        <el-button @click="pwdOpen = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!pwdVerified"
+          :loading="pwdSubmitting"
+          @click="doChangePwd"
+        >
+          确认修改
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-container class="body-wrap">
       <!-- ============ 左侧菜单（统一） ============ -->
@@ -375,10 +450,10 @@ onMounted(() => {
                 </el-menu-item>
               </el-sub-menu>
 
-              <!-- 无子菜单 → 单层菜单项 -->
+              <!-- 无子菜单 → 单层菜单项（★ 2026-10-16：index 支持 path，工作台 '/' 可正常高亮） -->
               <el-menu-item
                 v-else
-                :index="mod.title"
+                :index="mod.index || mod.title"
                 @click="router.push(mod.path || '/coming')"
               >
                 <el-icon v-if="getIcon(mod.icon)">
@@ -608,4 +683,162 @@ onMounted(() => {
   height: 44px;
   line-height: 44px;
 }
+
+/* ============================================================
+ * ★ 2026-10-15 顶栏右侧操作区：退出登录（左移）+ 修改密码（新增，最右）
+ *    配色沿用顶栏的良志红，修改密码做成实心主按钮 ——
+ *    它比退出登录更「需要被点」，放最右侧、视觉更重。
+ * ============================================================ */
+.reset-pwd-btn {
+  color: #fff;
+  background: #cd3a33;
+  border: 1px solid #cd3a33;
+  padding: 6px 12px;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(205, 58, 51, 0.24);
+}
+
+.reset-pwd-btn:hover,
+.reset-pwd-btn:focus {
+  color: #fff;
+  background: #b22a23;
+  border-color: #b22a23;
+}
+
+.reset-pwd-ic {
+  margin-right: 4px;
+}
+
+/* ---------- 修改密码弹窗 ---------- */
+
+/* 顶部「当前账号」信息条：让用户确认改的是哪个账号 */
+.pwd-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fbf7f4;
+  border: 1px solid #f1eae5;
+  border-radius: 9px;
+  padding: 9px 12px;
+  margin-bottom: 16px;
+  font-size: 12.5px;
+}
+
+.pwd-who-lb {
+  color: #9c8d88;
+}
+
+.pwd-who-name {
+  color: #443432;
+  font-size: 13px;
+}
+
+.pwd-who-acc {
+  margin-left: auto;
+  color: #b3a69f;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.pwd-form :deep(.el-form-item) {
+  margin-bottom: 16px;
+}
+
+.pwd-form :deep(.el-form-item__label) {
+  font-size: 12.5px;
+  color: #7a6c67;
+}
+
+/* 原密码 + 「验证」按钮同一行 */
+.pwd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.pwd-verify {
+  flex: none;
+  width: 78px;
+}
+
+/* 「确认密码」是最后一个输入项，下面紧跟密码强度条：
+ * ⚠️ 它的校验错误（如「两次输入的新密码不一致」）是**绝对定位**在输入框正下方、
+ *    只占 item 的 margin-bottom 那一段。所以这里要多留 10px，
+ *    否则错误红字会和「密码强度」挤在同一行、看着像叠在一起。 */
+.pwd-item-last {
+  margin-bottom: 26px;
+}
+
+/* 密码强度条（不拦截，只提示） */
+.pwd-score {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px 82px;
+  font-size: 11.5px;
+}
+
+.pwd-score-lb {
+  color: #9c8d88;
+}
+
+.pwd-score-track {
+  flex: 1;
+  max-width: 120px;
+  height: 6px;
+  border-radius: 3px;
+  background: #f1eae5;
+  overflow: hidden;
+  display: inline-block;
+}
+
+.pwd-score-track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.2s;
+}
+
+.pwd-score-track i.lv0 {
+  background: transparent;
+}
+.pwd-score-track i.lv1 {
+  background: #d9534f;
+}
+.pwd-score-track i.lv2 {
+  background: #e0a33e;
+}
+.pwd-score-track i.lv3 {
+  background: #3f7a55;
+}
+
+.pwd-score-txt.lv1 {
+  color: #d9534f;
+}
+.pwd-score-txt.lv2 {
+  color: #c98a24;
+}
+.pwd-score-txt.lv3 {
+  color: #3f7a55;
+}
+
+/* 底部提示 / 错误 */
+.pwd-tip {
+  font-size: 11.5px;
+  color: #9c8d88;
+  line-height: 1.6;
+}
+
+.pwd-err {
+  font-size: 11.5px;
+  color: #b22a23;
+  background: #fdf4f2;
+  border: 1px solid #f9e4e1;
+  border-radius: 8px;
+  padding: 8px 12px;
+  line-height: 1.6;
+}
+
 </style>

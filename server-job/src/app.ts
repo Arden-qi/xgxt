@@ -103,6 +103,8 @@ import portalAccountRouter from './portal/routes/account.route';
 import { authMiddleware as consultAuth, consultPermGate } from './consult/middleware/auth';
 import consultStudentRouter from './consult/routes/student.route';
 import consultFeeRouter from './consult/routes/fee.route';
+/* ★ 2026-10-16 分期付款路由，挂在 /api/consult/fee/plan 下 */
+import consultInstallmentRouter from './consult/routes/installment.route';
 import consultRefundRouter from './consult/routes/refund.route';
 import consultApproveRouter from './consult/routes/approve.route';
 import consultLossRouter from './consult/routes/loss.route';
@@ -427,13 +429,14 @@ app.use('/api/portal/account', portalAccountRouter);
 
 /* ---- ② 市场咨询（原 8001）---- */
 /**
- * ★ 2026-10-07：中间插入 `consultPermGate` —— 让「角色-权限分配」的改动
+ * ★ 2026-10-07：中间插入 `consultPermGate` —— 让「职位权限分配」的改动
  *   真正传导到咨询模块的写接口（原先这些接口只认岗位角色，不认权限树）。
  *   ⚠️ 它只对「权限树里被管理员显式撤销过的动作」生效，其余一律放行
  *      （差异存储，与班级 / 初高 / 财务三模块同一口径）。
  */
 app.use('/api/consult/student', consultAuth, consultPermGate, consultStudentRouter);
 app.use('/api/consult/fee', consultAuth, consultPermGate, consultFeeRouter);
+app.use('/api/consult/fee/plan', consultAuth, consultPermGate, consultInstallmentRouter);
 app.use('/api/consult/refund', consultAuth, consultPermGate, consultRefundRouter);
 app.use('/api/consult/approve', consultAuth, consultPermGate, consultApproveRouter);
 app.use('/api/consult/loss', consultAuth, consultPermGate, consultLossRouter);
