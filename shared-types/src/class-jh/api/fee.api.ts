@@ -35,8 +35,15 @@ export type FeeExportResponse = ApiResponse<FeeRecord[]>;
 export interface FeeSharePayload {
   studentId: string;
   feeType: FeeType;
+  /** 触达渠道：只允许 短信 / 微信（口径见 SHARE_CHANNEL_PUSH_OPTIONS） */
   shareChannel: ShareChannel;
-  remark?: string;
+  /**
+   * 发送内容（★ 2026-10-20 用户要求：原「备注」改叫「发送内容」）
+   *
+   * 就是实际发给家长的那段话：留空则只用系统自动生成的催费文案；
+   * 填了就附在自动文案后面一起发出（落库到 t_class_fee_notify.remark 列）。
+   */
+  sendContent?: string;
 }
 
 /** 催费分享响应（含可复制文案） */

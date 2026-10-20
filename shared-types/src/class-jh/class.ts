@@ -429,6 +429,7 @@ export interface FeeNotify extends BaseEntity {
   notifyUserName?: string;
   /** YYYY-MM-DD HH:mm:ss */
   notifyTime: string;
+  /** 发送内容（表列沿用了 remark 这个旧名） */
   remark?: string;
 }
 

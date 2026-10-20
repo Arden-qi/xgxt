@@ -6,7 +6,7 @@
 import { computed, ref, reactive, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh, Download, Bell, Promotion } from '@element-plus/icons-vue';
-import { FEE_TYPE_NAME, PAY_STATUS_NAME, SHARE_CHANNEL_NAME, ShareChannel } from 'shared-types/class-jh';
+import { FEE_TYPE_NAME, PAY_STATUS_NAME, SHARE_CHANNEL_PUSH_OPTIONS, ShareChannel } from 'shared-types/class-jh';
 import { FEE_CALL_STATUS_NAME } from 'shared-types';
 import type { FeeRecord, FeeListQuery, FeeNotify, FeeNotifyListQuery, ClassInfo } from 'shared-types/class-jh';
 import { fetchFeeList, fetchFeeNotifyList, exportFee, shareFee } from '@/class-jh/api/fee';
@@ -264,13 +264,14 @@ const shareText = ref('');
 const shareResultVisible = ref(false);
 const shareForm = reactive({
   shareChannel: ShareChannel.WECHAT,
-  remark: '',
+  // ★ 2026-10-20 用户要求：原「备注」改叫「发送内容」（就是实际发给家长的那段话）
+  sendContent: '',
 });
 
 function handleShare(row: FeeRecord) {
   shareRow.value = row;
   shareForm.shareChannel = ShareChannel.WECHAT;
-  shareForm.remark = '';
+  shareForm.sendContent = '';
   shareText.value = '';
   shareVisible.value = true;
 }
@@ -283,7 +284,7 @@ async function submitShare() {
       studentId: shareRow.value.studentId,
       feeType: shareRow.value.feeType,
       shareChannel: shareForm.shareChannel,
-      remark: shareForm.remark || undefined,
+      sendContent: shareForm.sendContent.trim() || undefined,
     });
     shareText.value = res.shareText;
     shareVisible.value = false;
@@ -526,12 +527,20 @@ onMounted(() => {
           <el-input :model-value="shareRow?.feeTypeName" disabled />
         </el-form-item>
         <el-form-item label="触达渠道">
+          <!-- ★ 2026-10-20 用户要求：下拉只留 短信 / 微信（站内消息已下线） -->
           <el-select v-model="shareForm.shareChannel" style="width: 100%">
-            <el-option v-for="(name, value) in SHARE_CHANNEL_NAME" :key="value" :label="name" :value="Number(value)" />
+            <el-option v-for="opt in SHARE_CHANNEL_PUSH_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="shareForm.remark" type="textarea" :rows="2" />
+        <el-form-item label="发送内容">
+          <el-input
+            v-model="shareForm.sendContent"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+            placeholder="实际发给家长的内容，留空则只发送系统自动生成的催费提醒"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -550,7 +559,7 @@ onMounted(() => {
     </el-dialog>
 
     <!-- 催费记录 -->
-    <el-dialog v-model="notifyVisible" title="催费记录" width="720px">
+    <el-dialog v-model="notifyVisible" title="催费记录" width="960px">
       <el-table v-loading="notifyLoading" :data="notifyData" border stripe size="small" empty-text="暂无催费记录">
         <el-table-column type="index" label="序号" width="60" align="center" />
         <el-table-column prop="studentNo" label="学号" width="120" />
@@ -560,6 +569,10 @@ onMounted(() => {
           <template #default="{ row }">{{ formatAmount(row.feeAmount) }}</template>
         </el-table-column>
         <el-table-column prop="shareChannelName" label="渠道" width="90" />
+        <!-- ★ 2026-10-20：原「备注」改叫「发送内容」，这里同步展示，否则填了什么看不到 -->
+        <el-table-column label="发送内容" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">{{ dash(row.remark) }}</template>
+        </el-table-column>
         <el-table-column label="催费时间" width="170">
           <template #default="{ row }">{{ row.notifyTime }}</template>
         </el-table-column>

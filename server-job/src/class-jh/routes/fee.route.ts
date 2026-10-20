@@ -9,7 +9,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { BizCode, FEE_TYPE_NAME, PAY_STATUS_NAME, SHARE_CHANNEL_NAME } from 'shared-types/class-jh';
+import {
+  BizCode,
+  FEE_TYPE_NAME,
+  PAY_STATUS_NAME,
+  SHARE_CHANNEL_NAME,
+  SHARE_CHANNEL_PUSH_CODES,
+} from 'shared-types/class-jh';
 import { FeeType, PayStatus, ShareChannel } from 'shared-types/class-jh';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
@@ -310,15 +316,21 @@ feeRouter.get(
 );
 
 /* ============================================================
- * 3. 催费推送（生成站内消息 + 可复制文案）
+ * 3. 催费推送（按 短信 / 微信 触达，生成发送内容）
  *   POST /api/class/fee/share
  * ============================================================ */
 
 const shareSchema = z.object({
   studentId: z.string().min(1, '学生必填'),
   feeType: z.coerce.number().int().min(1).max(5, '缴费类型不正确'),
-  shareChannel: z.coerce.number().int().min(1).max(3, '触达渠道不正确'),
-  remark: z.string().max(500).optional(),
+  // ★ 2026-10-20 用户要求：触达渠道只留 短信 / 微信（站内消息下线），
+  //   与前端下拉共用 SHARE_CHANNEL_PUSH_CODES 一份口径，避免「界面不给选、接口照样收」
+  shareChannel: z.coerce
+    .number()
+    .int()
+    .refine((v) => SHARE_CHANNEL_PUSH_CODES.includes(v), '触达渠道仅支持短信或微信'),
+  // ★ 2026-10-20：「备注」改叫「发送内容」，就是实际发给家长的那段话
+  sendContent: z.string().max(500).optional(),
 });
 
 feeRouter.post(
@@ -341,12 +353,13 @@ feeRouter.post(
     const expireDate = fee?.expire_date ?? null;
     const amountYuan = feeAmount === null ? '—' : (feeAmount / 100).toFixed(2);
 
-    // 生成可复制文案
+    // 生成发送内容：系统自动文案 + 用户填的「发送内容」（有则附在后面，不再带「备注：」前缀）
+    const sendContent = (body.sendContent ?? '').trim();
     const shareText =
       `【缴费提醒】${stu.student_name} 同学（学号 ${stu.student_no}）：` +
       `您的「${nameOf(FEE_TYPE_NAME, body.feeType)}」${feeAmount === null ? '' : `应缴 ${amountYuan} 元`}` +
       `${expireDate ? `，到期日 ${String(expireDate).slice(0, 10)}` : ''}，请尽快完成缴费。` +
-      `${body.remark ? `备注：${body.remark}` : ''}`;
+      `${sendContent ? `\n${sendContent}` : ''}`;
 
     const notifyId = randomUUID();
     const now = new Date();
@@ -364,7 +377,8 @@ feeRouter.post(
       notify_user_id: req.user?.userId ?? null,
       notify_user_name: req.user?.userName ?? null,
       notify_time: now,
-      remark: body.remark ?? null,
+      // 表列名沿用 remark（不动库结构），存的就是「发送内容」
+      remark: sendContent || null,
       is_deleted: false,
       create_time: now,
       create_by: req.user?.userId || 'system',

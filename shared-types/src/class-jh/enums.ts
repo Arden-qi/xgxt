@@ -419,12 +419,29 @@ export const HANDOVER_ROLE_NAME: Record<number, string> = {
   [HandoverRole.TEACHER]: '教员',
 };
 
-/** 催费触达渠道中文名 */
+/** 催费触达渠道中文名（含历史渠道：老记录里的「站内消息」仍要能显示） */
 export const SHARE_CHANNEL_NAME: Record<number, string> = {
   [ShareChannel.INNER_MESSAGE]: '站内消息',
   [ShareChannel.WECHAT]: '微信',
   [ShareChannel.SMS]: '短信',
 };
+
+/**
+ * 催费推送「触达渠道」下拉的可选项（★ 2026-10-20 用户要求）
+ *
+ * 只保留 微信 / 短信 两个真实能触达家长的渠道；
+ * 「站内消息」（码 1）从下拉里下线，但 SHARE_CHANNEL_NAME 里留着它 ——
+ * 否则历史催费记录里的渠道名会显示成空白。
+ *
+ * ⚠️ 前端下拉、后端校验、自检脚本三处共用这一份口径，别各写一遍。
+ */
+export const SHARE_CHANNEL_PUSH_OPTIONS: Array<{ value: ShareChannel; label: string }> = [
+  { value: ShareChannel.SMS, label: SHARE_CHANNEL_NAME[ShareChannel.SMS] },
+  { value: ShareChannel.WECHAT, label: SHARE_CHANNEL_NAME[ShareChannel.WECHAT] },
+];
+
+/** 催费推送允许的渠道码（后端校验用，与下拉同源） */
+export const SHARE_CHANNEL_PUSH_CODES: number[] = SHARE_CHANNEL_PUSH_OPTIONS.map((o) => o.value);
 
 /** 考试内容类型中文名 */
 export const EXAM_CONTENT_TYPE_NAME: Record<number, string> = {
