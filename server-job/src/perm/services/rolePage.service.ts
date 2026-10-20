@@ -260,6 +260,8 @@ export async function loadRolePages(roleId: string): Promise<PermRolePagesResult
         pageTitle: p.title,
         pagePath: p.path,
         pageCode: p.pageCode,
+        /* ★ 与板块模式口径一致：合并页把整组权限码一起下发 */
+        pageCodes: p.pageCodes,
         pageSort: i + 1,
         enabled: on,
         locked: !!p.locked,
