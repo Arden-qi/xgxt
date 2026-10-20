@@ -28,6 +28,7 @@ import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+import { resolveLogRoleLabels } from '../services/perm.service';
 import {
   addLog,
   clientIp,
@@ -193,13 +194,16 @@ async function fetchLog(
 
   const rows = await query.clone().select('*').orderBy('log_time', 'desc');
 
+  // ★ 2026-10-20：导出的「职位」列同样要中文（库里可能存的是 SYS_STAFF / 空）
+  const roleLabels = await resolveLogRoleLabels(rows as any[]);
+
   return {
     title: '操作日志',
     columns,
-    rows: rows.map((r: any) => ({
+    rows: rows.map((r: any, i: number) => ({
       操作时间: fmt(r.log_time),
       操作人: r.operator_name,
-      职位: r.operator_role || '',
+      职位: roleLabels[i] ?? r.operator_role ?? '',
       所属模块: r.module_name,
       操作类型: r.action_type,
       操作对象: r.target_obj || '',

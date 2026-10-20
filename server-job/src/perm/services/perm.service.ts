@@ -23,6 +23,9 @@ import {
   PERM_BASE_ACTION_NAME,
 } from 'shared-types/perm';
 import { db } from '../utils/db';
+// ★ 2026-10-20：日志里的 `operator_id` 是【门户账号 id】，职位名在 sms_portal.t_sys_account.title
+//   （与 sms_perm.t_perm_user 不是一张表，详见 portalTitleByAccountIds 的注释）
+import { db as portalDb } from '../../portal/utils/db';
 
 /* ============================================================
  * 一、权限树
@@ -725,36 +728,249 @@ export interface AddLogInput {
 }
 
 /**
- * 职位编码 → 职位中文名
+ * 职位编码 / 门户级编码 / 用户 id → 中文职位名
+ * ============================================================================
  *
- * ⚠️ 为什么需要这一步：
- *    req.user.roles 里装的是【职位编码】（SYS_ADMIN / MKT_CONSULT / TEACH_HEAD），
- *    而操作日志是给人看的，应该记中文职位名（系统管理员 / 咨询老师 / 班主任）。
- *    种子数据里预置的那 10 条日志用的就是中文名，如果写入时不转换，
- *    日志列表里就会出现「系统管理员 · SYS_ADMIN」这种中英混杂的行 —— 与原型不一致。
+ * 【为什么需要这一步】
+ *   `req.user.roles` 里装的是【职位编码】（SYS_ADMIN / MKT_CONSULT / TEACH_HEAD），
+ *   而操作日志是给人看的，应该记中文职位名（系统管理员 / 咨询老师 / 班主任）。
+ *   种子数据里预置的日志用的就是中文名，写入时不转换 →
+ *   日志列表里就会出现「系统管理员 · SYS_ADMIN」这种中英混杂的行。
  *
- * 只对「形如职位编码」的片段查库（全大写字母/数字/下划线），
- * 已经是中文名的直接原样返回，不做无谓查询。
+ * 【★★ 2026-10-20 第二版：光有 role_code 映射还不够】
+ *   用户截图指出「操作日志 → 所属职位」整列显示 `SYS_STAFF`（英文），
+ *   要求按「账号管理」那种中文胶囊显示。查库后原因有两层：
+ *
+ *   ① 门户登录签发的 token 里 `roles` **只有粗粒度身份**：
+ *        SYS_ADMIN（管理员）/ SYS_STAFF（其余全部）—— 见 class/middleware/auth.ts 的注释。
+ *      也就是说「登录者到底挂哪个职位」**根本不在 token 里**。
+ *   ② `SYS_STAFF` 在 `t_perm_role` 里**没有对应行**（它不是业务职位），
+ *      所以老的 `map.get(p) || p` 兜底把它原样留成了英文；
+ *      `operator_role` 为空的行同理（写日志时没传）也留成空。
+ *
+ * 【现在的口径】逐级降级，六级兜底：
+ *   ① 中文片段 → 原样保留（种子数据 / 老日志已经是中文的，不要去查库改它）；
+ *   ② 业务职位编码 → 查 `t_perm_role.role_code` 换成中文名；
+ *   ③ 剩下的（门户级编码 / 全空）→ 按 operator_id 查 `t_perm_user_role`；
+ *   ④ 再按 operator_name 查 `t_perm_user` 的职位（门户 id 与权限库 id 不是一套，
+ *      姓名才是唯一连接键；「账号管理」页显示的正是这套，两边要对得上）；
+ *   ⑤ 还查不到 → 按 operator_id 查 `t_sys_account.title`（只存在于门户的账号，
+ *      如张老师 / 刘会计，权限库里没有对应人）；
+ *   ⑥ 最后 → 给门户级编码一个中文兜底名（系统管理员 / 普通职员 / 服务账号），
+ *      绝不把 `SYS_STAFF` 这种英文丢到界面上。
+ *
+ * 【读写两侧共用】
+ *   · 写：`addLog()` 里 `toRoleNames(raw, operatorId)` —— 新日志直接落中文；
+ *   · 读：`resolveLogRoleLabels(rows)` —— **老日志（库里已是 SYS_STAFF / 空）也能正确显示**，
+ *     而且一页 20 条只查 2 次库（先按编码批量查、再按账号批量查），不会 N+1。
  */
-async function toRoleNames(raw: string): Promise<string> {
-  if (!raw) return '';
-  const parts = raw
+
+/** 门户级编码：只是「管理员 / 普通职员 / 服务账号」的粗粒度身份，不是业务职位 */
+const PORTAL_LEVEL_ROLE_CODES = new Set(['SYS_ADMIN', 'SYS_STAFF', 'ROLE_SERVICE']);
+
+/** 门户级编码的中文兜底（只有在查不到这个人真实职位时才用） */
+const PORTAL_LEVEL_ROLE_LABELS: Record<string, string> = {
+  SYS_ADMIN: '系统管理员',
+  SYS_STAFF: '普通职员',
+  ROLE_SERVICE: '服务账号',
+};
+
+/** 形如职位编码：全大写字母 / 数字 / 下划线 */
+const isRoleCode = (s: string) => /^[A-Z][A-Z0-9_]*$/.test(s);
+
+/** 「A、B」→ ['A','B'] */
+const splitRoleText = (raw?: string | null) =>
+  (raw || '')
     .split('、')
     .map((s) => s.trim())
     .filter(Boolean);
-  const codes = parts.filter((p) => /^[A-Z][A-Z0-9_]*$/.test(p));
-  if (!codes.length) return raw;
+
+/** 职位编码 → 中文名（一次批量，空 map 表示一个都没命中） */
+async function roleNameByCodes(codes: string[]): Promise<Map<string, string>> {
+  if (!codes.length) return new Map();
   try {
     const rows = (await db('t_perm_role')
-      .whereIn('role_code', codes)
+      .whereIn('role_code', [...new Set(codes)])
       .where('is_deleted', false)
       .select('role_code', 'role_name')) as { role_code: string; role_name: string }[];
-    const map = new Map(rows.map((r) => [r.role_code, r.role_name]));
-    return parts.map((p) => map.get(p) || p).join('、');
+    return new Map(rows.map((r) => [r.role_code, r.role_name]));
   } catch {
-    // 查库失败就记原值，不能因为"名字没转过来"把日志丢掉
-    return raw;
+    // 查库失败不能把日志丢掉，交给下一级兜底
+    return new Map();
   }
+}
+
+/**
+ * 操作人 → 中文职位名的**首选**来源：门户账号表 `t_sys_account.title`
+ *
+ * 【为什么不是 t_perm_user —— 这个坑必须记住】
+ *   操作日志的 `operator_id` 是【门户账号 id】（`t_sys_account.id`，UUID 形如 43575dc6-…），
+ *   而「账号管理」页那套 `t_perm_user` 的主键是 `U001` / `U_chenxf` 这种短 id
+ *   —— **两套账号不是同一张表**（门户账号在 sms_portal，权限账号在 sms_perm）。
+ *   第一版按 t_perm_user 查，一行都查不到（林晓在 t_perm_user 里是 U021，
+ *   日志里却是那个 UUID），表现为「按操作人兜底完全不生效」。
+ *   门户账号自己就带 `title`（权限管理员 / 教员 / 项目经理 / 财务 …），
+ *   正是界面上该显示的「所属职位」。
+ */
+async function portalTitleByAccountIds(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  try {
+    const rows = (await portalDb('t_sys_account')
+      .whereIn('id', [...new Set(ids)])
+      .where('is_deleted', false)
+      .select('id', 'title')) as { id: string; title: string | null }[];
+    for (const r of rows) if (r.title) out.set(r.id, r.title);
+  } catch {
+    /* 查不到就走下一级 */
+  }
+  return out;
+}
+
+/** 二级兜底：`t_perm_user_role`（万一 operator_id 是权限库账号 U001 这种） */
+async function roleNamesByUserIds(userIds: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (!userIds.length) return out;
+  try {
+    const rows = (await db('t_perm_user_role as ur')
+      .leftJoin('t_perm_role as r', 'ur.role_id', 'r.id')
+      .whereIn('ur.user_id', [...new Set(userIds)])
+      .where('ur.is_deleted', false)
+      .where('r.is_deleted', false)
+      .orderBy('r.sort_no', 'asc')
+      .select('ur.user_id as userId', 'r.role_name as roleName')) as {
+      userId: string;
+      roleName: string;
+    }[];
+    for (const r of rows) {
+      if (!r.roleName) continue;
+      const arr = out.get(r.userId) || [];
+      if (!arr.includes(r.roleName)) arr.push(r.roleName);
+      out.set(r.userId, arr);
+    }
+  } catch {
+    /* 同上，查不到就交给中文兜底 */
+  }
+  return out;
+}
+
+/**
+ * 三级兜底：按**操作人姓名**匹配 `t_perm_user`，取其权限库职位
+ *
+ * ⚠️ 为什么还要按姓名匹配：
+ *   日志的 `operator_id` 是门户账号 UUID，权限库账号主键是 U001 —— 两边 id 对不上；
+ *   但两边**是同一批人**（孙敏 / 孙建龙 / 周杰 在两张表里都有），姓名是唯一可用的连接键。
+ *   而「账号管理」页（用户点名要对照的那个页面）显示的正是 `t_perm_user` 这套职位，
+ *   优先取它，操作日志与账号管理对同一个人才不会一个写「系统管理员」、一个写「权限管理员」。
+ *   重名会取错 —— 本系统是内部系统且姓名唯一，可接受；真做大了应该加 operator_code。
+ */
+async function roleNamesByUserNames(names: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (!names.length) return out;
+  try {
+    const rows = (await db('t_perm_user as u')
+      .leftJoin('t_perm_user_role as ur', 'ur.user_id', 'u.id')
+      .leftJoin('t_perm_role as r', 'ur.role_id', 'r.id')
+      .whereIn('u.user_name', [...new Set(names)])
+      .where('u.is_deleted', false)
+      .where('ur.is_deleted', false)
+      .where('r.is_deleted', false)
+      .orderBy('r.sort_no', 'asc')
+      .select('u.user_name as name', 'r.role_name as roleName')) as {
+      name: string;
+      roleName: string;
+    }[];
+    for (const r of rows) {
+      if (!r.roleName) continue;
+      const arr = out.get(r.name) || [];
+      if (!arr.includes(r.roleName)) arr.push(r.roleName);
+      out.set(r.name, arr);
+    }
+  } catch {
+    /* 查不到就走下一级 */
+  }
+  return out;
+}
+
+/**
+ * 统一解析入口（**写日志与读日志共用这一套口径**，避免两边各写一遍再走偏）
+ *
+ * 逐级降级：
+ *   ① 中文片段 → 原样保留（种子数据 / 老日志已经是中文的，不去动它）；
+ *   ② 业务职位编码 → `t_perm_role.role_code` 换成中文名；
+ *   ③ 只剩门户级编码 / 全空 → 按 operator_id 查 `t_sys_account.title`；
+ *   ④ 还查不到 → 按 operator_id 查 `t_perm_user_role`（兼容权限库账号）；
+ *   ⑤ 最后给门户级编码一个中文兜底名，**绝不把 SYS_STAFF 这种英文丢到界面**。
+ *
+ * @returns 与入参等长；解析不出来给 `''`（界面显示「—」）
+ */
+async function resolveRoleLabels(
+  rows: { operator_role?: string | null; operator_id?: string | null; operator_name?: string | null }[],
+): Promise<string[]> {
+  if (!rows.length) return [];
+
+  // ①② 先按编码批量查一次
+  const allCodes: string[] = [];
+  for (const r of rows) allCodes.push(...splitRoleText(r.operator_role).filter(isRoleCode));
+  const codeMap = await roleNameByCodes(allCodes);
+
+  const labels = rows.map((r) =>
+    splitRoleText(r.operator_role)
+      .map((p) => (isRoleCode(p) ? codeMap.get(p) || '' : p))
+      .filter(Boolean)
+      .join('、'),
+  );
+
+  // ③④⑤ 仍然为空的行 → 按操作人现查（三张表各一次批量查，不 N+1）
+  const need = rows.filter((_, i) => !labels[i]);
+  const needIds = [...new Set(need.map((r) => r.operator_id).filter(Boolean).map(String))];
+  const needNames = [...new Set(need.map((r) => r.operator_name).filter(Boolean).map(String))];
+  const [byUser, byName, byAccount] = await Promise.all([
+    roleNamesByUserIds(needIds),
+    roleNamesByUserNames(needNames),
+    portalTitleByAccountIds(needIds),
+  ]);
+
+  return rows.map((r, i) => {
+    if (labels[i]) return labels[i];
+    const id = r.operator_id ? String(r.operator_id) : '';
+    const nm = r.operator_name ? String(r.operator_name) : '';
+
+    // ③ 权限库职位（按 id）→ ④ 权限库职位（按姓名，与「账号管理」页口径一致）
+    const permRoles = (id && byUser.get(id)) || (nm && byName.get(nm)) || [];
+    if (permRoles.length) return permRoles.join('、');
+
+    // ⑤ 门户账号自带的 title（张老师 / 刘会计 这类只存在于门户的账号）
+    if (id && byAccount.get(id)) return byAccount.get(id) as string;
+
+    // ⑥ 中文兜底，绝不把英文编码丢到界面
+    return splitRoleText(r.operator_role)
+      .map((p) => PORTAL_LEVEL_ROLE_LABELS[p] || '')
+      .filter(Boolean)
+      .join('、');
+  });
+}
+
+/**
+ * 写日志时用：把一段 `operatorRole`（可能是编码、可能是中文、可能空）解析成中文名
+ * @param operatorId   门户账号 id —— 传了就能在只有 SYS_STAFF 时补出真实职位
+ * @param operatorName 操作人姓名 —— 门户 id 与权限库 id 对不上时按姓名兜底
+ */
+async function toRoleNames(raw: string, operatorId?: string, operatorName?: string): Promise<string> {
+  const [label] = await resolveRoleLabels([
+    { operator_role: raw, operator_id: operatorId, operator_name: operatorName },
+  ]);
+  return label || '';
+}
+
+/**
+ * 读日志时用（批量）：把一批日志行的 `operator_role` 解析成给人看的中文职位名
+ * 一页 20 条只查 4 次库（编码 + 两种账号表 + 姓名），不会 N+1。
+ */
+export async function resolveLogRoleLabels(
+  rows: { operator_role?: string | null; operator_id?: string | null; operator_name?: string | null }[],
+): Promise<string[]> {
+  return resolveRoleLabels(rows);
 }
 
 /**
@@ -770,7 +986,7 @@ export async function addLog(input: AddLogInput): Promise<void> {
       log_time: now,
       operator_id: input.operatorId || 'system',
       operator_name: input.operatorName || '系统',
-      operator_role: await toRoleNames(input.operatorRole || ''),
+      operator_role: await toRoleNames(input.operatorRole || '', input.operatorId, input.operatorName),
       module_name: input.moduleName,
       action_type: input.actionType,
       target_obj: input.targetObj || '',

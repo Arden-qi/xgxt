@@ -23,7 +23,7 @@ import { ok } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { RoleStatus, UserStatus } from 'shared-types/perm';
-import { countDeptTotal, countStageTotal, getTreeStats } from '../services/perm.service';
+import { countDeptTotal, countStageTotal, getTreeStats, resolveLogRoleLabels } from '../services/perm.service';
 
 export const overviewRouter = Router();
 
@@ -50,6 +50,10 @@ overviewRouter.get(
       db('t_perm_log').where('is_deleted', false).orderBy('log_time', 'desc').limit(6),
     ]);
 
+    // ★ 2026-10-20：最近日志的「所属职位」同样要中文（口径见 services/perm.service.ts
+    //   resolveLogRoleLabels 的注释：token 里只有 SYS_ADMIN/SYS_STAFF，得按操作人现查）
+    const recentRoleLabels = await resolveLogRoleLabels(recentLogs as any[]);
+
     res.json(
       ok({
         roleTotal: Number(roleTotal[0]?.n || 0),
@@ -61,11 +65,11 @@ overviewRouter.get(
         itemTotal: stats.itemCount,
         deptTotal,
         stageTotal,
-        recentLogs: recentLogs.map((r: any) => ({
+        recentLogs: recentLogs.map((r: any, i: number) => ({
           id: r.id,
           logTime: r.log_time,
           operatorName: r.operator_name,
-          operatorRole: r.operator_role,
+          operatorRole: recentRoleLabels[i] ?? r.operator_role,
           moduleName: r.module_name,
           actionType: r.action_type,
           targetObj: r.target_obj,
