@@ -401,6 +401,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","
 .tb td.dept-name{padding-left:calc(14px + var(--dept-indent,0px))}
 .tb td.dept-name .branch{color:#C9BDB8;margin-right:3px;font-size:11px}
 
+/* ---- 部门管理表：列宽 / 间隙（2026-10-20 按用户反馈调整）----
+   【问题】表格 6 列里只有「部门说明」是自适应列，其余写死 px
+     （部门名称 230 / 上级部门 150 / 职位数 80 / 账号数 80 / 操作 250）。
+     → 卡片宽出来多少全砸给说明列：实测卡片 1132px 时说明格 340px，
+       而说明文字只有 81~161px，右边挂着 180~260px 空白 —— 就是用户截图框的部分。
+     另外数字列原来是左对齐，一个 3 位数的数字在 80px 格里左右各留一半空档，
+     视觉上等于把这个间隙又放大一倍。
+   【口径】① 整表 table-layout:fixed —— 列宽严格按模板里声明的百分比分配，
+             不会被长说明文字反向撑开（宽度可预测）；
+           ② 两个数字列居中，数字落在列中间而不是紧贴左边界；
+           ③ 说明允许在任意位置折行，避免超长说明把 fixed 布局撑破；
+           ④ 本表 min-width:960px + 外层 .tb-wrap 横向滚动 —— 960 是这套百分比
+              「六列都还装得下」的下限（名称 230 / 上级 115 / 说明 202 /
+              职位 96 / 账号 96 / 操作 221），比它更窄就横滚，不让操作列挤成两行。 */
+.tb.tb-dept{table-layout:fixed;min-width:960px}
+.tb.tb-dept .num{text-align:center}
+.tb.tb-dept .desc{overflow-wrap:anywhere}
+
 /* ---- 输入（原型 .inp → 设计系统口径） ---- */
 .inp,.main select.inp,.main textarea.inp{padding:6px 11px;border:1px solid #E2D7D1;border-radius:7px;background:#fff;font-size:12.5px;color:#5F5350;outline:none;transition:.15s;min-width:0;height:32px}
 textarea.inp{height:auto;padding:9px 11px;line-height:1.6}

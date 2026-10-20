@@ -572,15 +572,27 @@ function gotoUserEdit(id: string): void {
         </div>
       </div>
       <div class="card-b p0">
-        <table class="tb">
+        <!-- ★ 2026-10-20 按用户反馈（截图框出「部门说明」右侧的大片空白）改列宽口径：
+               原来只有「部门说明」是自适应列，其余 5 列写死 px（230/150/80/80/250），
+               → 卡片宽出来多少全部砸到说明列上：卡片 1132px 时说明格 340px，
+                 而实测文字只有 81~161px，右边挂着 180~260px 纯空白。
+               现在 6 列全给百分比（合计 100%）+ table-layout:fixed，
+               富余空间按比例摊到每一列，不再集中成「说明列右侧一个大洞」。
+               百分比取值：名称 24 / 上级 12 / 说明 21 / 职位 10 / 账号 10 / 操作 23
+               —— 名称要装得下「📂 部门名 + 含 N 个下级」标签，操作要装得下 4 个链接。
+               另外外面套了 .tb-wrap（与职位管理 / 操作日志两张表一致）+
+           CSS 里给本表 min-width:960px：视口窄到装不下 960 时改为横向滚动，
+           而不是把「查看职位 / 查看账号 / 编辑 / 删除」挤断成两行。 -->
+        <div class="tb-wrap">
+        <table class="tb tb-dept">
           <thead>
             <tr>
-              <th style="width: 230px">部门名称</th>
-              <th style="width: 150px">上级部门</th>
-              <th>部门说明</th>
-              <th style="width: 80px">职位数</th>
-              <th style="width: 80px">账号数</th>
-              <th style="width: 250px">操作</th>
+              <th style="width: 24%">部门名称</th>
+              <th style="width: 12%">上级部门</th>
+              <th style="width: 21%">部门说明</th>
+              <th style="width: 10%">职位数</th>
+              <th style="width: 10%">账号数</th>
+              <th style="width: 23%">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -627,6 +639,7 @@ function gotoUserEdit(id: string): void {
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
     </div>
 
