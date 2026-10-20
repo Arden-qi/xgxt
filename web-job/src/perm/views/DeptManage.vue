@@ -590,8 +590,13 @@ function gotoUserEdit(id: string): void {
               <th style="width: 24%">部门名称</th>
               <th style="width: 12%">上级部门</th>
               <th style="width: 21%">部门说明</th>
-              <th style="width: 10%">职位数</th>
-              <th style="width: 10%">账号数</th>
+              <!-- ★ 2026-10-20 用户第二次反馈（截图框住「职位数 / 账号数」两列表头）：
+                   「字段和下面对应的数字歪到姥姥家」—— 上一轮只给 <td> 加了居中，
+                   表头还是左对齐 → 表头文字贴左、数字落在列中间，两行错开半个列宽。
+                   现在表头也挂 num 类，表头与单元格走**同一条**对齐规则，
+                   不会再出现「改了行没改头」的半套。 -->
+              <th class="num" style="width: 10%">职位数</th>
+              <th class="num" style="width: 10%">账号数</th>
               <th style="width: 23%">操作</th>
             </tr>
           </thead>

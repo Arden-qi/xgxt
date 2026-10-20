@@ -72,7 +72,7 @@ check('职位管理页没有被误加 tb-dept（列宽口径只治部门表）',
 
 /* ---- ② 6 列宽度全部百分比、合计 100% ---- */
 const thead = deptSrc.slice(deptSrc.indexOf('<thead>'), deptSrc.indexOf('</thead>'));
-const widths = [...thead.matchAll(/<th style="width:\s*([\d.]+)%"/g)].map((m) => Number(m[1]));
+const widths = [...thead.matchAll(/<th[^>]*style="width:\s*([\d.]+)%"/g)].map((m) => Number(m[1]));
 check('表头 6 列宽度都是百分比', widths.length === 6, `解析到 ${widths.length} 列：${widths.join(' / ')}`);
 check('表头不再有写死的 px 列宽', !/style="width:\s*\d+px"/.test(thead));
 const sum = widths.reduce((a, b) => a + b, 0);
@@ -94,6 +94,18 @@ check('CSS：本表 min-width:960px（六列都装得下的下限，再窄改横
   /\.tb\.tb-dept\s*\{[^}]*min-width:\s*960px/.test(cssSrc));
 check('模板：表格外面套了 .tb-wrap（与职位管理 / 操作日志一致，min-width 才滚得起来）',
   /<div class="tb-wrap">\s*<table class="tb tb-dept">/.test(deptSrc));
+
+/* ---- ③b 表头与数字必须同一条对齐规则（2026-10-20 第二版 · 用户第二次反馈）----
+   【踩过的坑】第一版只给 <td> 加了居中，<th> 还是 .tb th 的左对齐
+   → 表头文字贴左、数字落在列中间，两行错开 25px（1360 视口实测），
+     1920 视口更夸张。用户原话「字段和下面对应的数字歪到姥姥家」。
+   → 以后判「表头与内容对齐」不能只查 td 规则，必须查**表头也挂了同一个类**，
+     且 CSS 选择器**没有用 td 限定**（`.tb.tb-dept td.num` 会漏掉表头）。 */
+const numThs = [...thead.matchAll(/<th class="num"[^>]*>(职位数|账号数)<\/th>/g)].map((m) => m[1]);
+check('表头「职位数 / 账号数」都挂 num 类（与下面数字走同一条对齐规则）',
+  numThs.length === 2, `命中 ${numThs.join(' / ') || '无'}`);
+check('CSS 的数字列规则没写成 td.num（写成 td 限定就会漏掉表头）',
+  /\.tb\.tb-dept\s+\.num\s*\{/.test(cssSrc) && !/\.tb\.tb-dept\s+td\.num/.test(cssSrc));
 
 /* ---- ④ 模板结构仍在：缩进变量、富余说明列仍在第 3 列 ---- */
 check('说明列仍是第 3 列（.desc 单元格）', /<td class="desc">/.test(deptSrc));
