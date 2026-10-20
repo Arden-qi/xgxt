@@ -131,13 +131,22 @@
           <el-tag :type="tagType(row.classStatus)" size="small">{{ row.classStatusName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="220" fixed="right" align="center">
+      <el-table-column label="操作" width="280" fixed="right" align="center">
         <template #default="{ row }">
           <!-- 2026-10-19 批注：按钮「花名册」改名「详情」（抽屉里不只有名单，还有班级信息与交接记录） -->
           <el-button link type="primary" @click="openDetail(row)">详情</el-button>
           <el-button v-if="!isReadOnlyUser" link type="primary" @click="openEdit(row)">编辑</el-button>
           <!-- 2026-10-19 批注：操作列加【交接】；原来单独的【改状态】移进编辑弹窗 -->
           <el-button v-if="!isReadOnlyUser" link type="success" @click="openHandover(row)">交接</el-button>
+          <!-- 2026-10-20 批注：交接后面加【升实训】（只对大学部班级开放） -->
+          <el-button
+            v-if="!isReadOnlyUser && row.stage === 'class'"
+            link
+            type="warning"
+            @click="openTraining(row)"
+          >
+            升实训
+          </el-button>
           <el-button v-if="!isReadOnlyUser" link type="danger" @click="doDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -546,6 +555,90 @@
         <el-button type="primary" :loading="handoverSaving" @click="doHandover">确认交接</el-button>
       </template>
     </el-dialog>
+
+    <!-- ============ 升实训（2026-10-20 批注：大学部 → 就业部） ============ -->
+    <el-dialog v-model="trainingVisible" title="升实训（大学部 → 就业部）" width="720px" top="7vh" destroy-on-close>
+      <el-alert class="tv-tip" type="warning" :closable="false" show-icon>
+        <template #title>
+          升实训会把这个班<b>连同学生</b>整体转到就业部：新班<b>不再有班主任 / 教员 / 助教</b>，
+          只保留项目经理与就业老师；原班级从大学部移除。学生状态统一变为「实训中」。
+        </template>
+      </el-alert>
+      <el-form label-width="100px" class="tv-form">
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="原班级">
+              <el-input :model-value="trainingForm.srcName" disabled />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="部门">
+              <el-input model-value="就业部" disabled />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="班级名称">
+              <el-input v-model="trainingForm.className" maxlength="50" placeholder="默认沿用原班级名称，可修改" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="阶段">
+              <el-select v-model="trainingForm.phaseCode" placeholder="就业部阶段方案" style="width: 100%">
+                <el-option v-for="p in trainingPhaseOptions" :key="p.value" :label="p.label" :value="p.value" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="项目经理">
+              <el-select
+                v-model="trainingForm.projectManagerId"
+                filterable
+                placeholder="请选择"
+                :loading="staffLoading"
+                style="width: 100%"
+              >
+                <el-option v-for="u in staffOptions" :key="u.id" :label="u.userName" :value="u.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="就业老师">
+              <el-select
+                v-model="trainingForm.employmentTeacherId"
+                filterable
+                placeholder="请选择"
+                :loading="staffLoading"
+                style="width: 100%"
+              >
+                <el-option v-for="u in staffOptions" :key="u.id" :label="u.userName" :value="u.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24">
+            <el-form-item label="备注">
+              <el-input
+                v-model="trainingForm.remark"
+                type="textarea"
+                :rows="2"
+                maxlength="200"
+                show-word-limit
+                :placeholder="`默认记录：由大学部「${trainingForm.srcName}」升实训`"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </el-form>
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`提交后：「${trainingForm.srcName}」的 ${trainingForm.studentCount} 名学生整体升入「${trainingForm.className || trainingForm.srcName}」，原班级从大学部移除。`"
+      />
+      <template #footer>
+        <el-button @click="trainingVisible = false">取消</el-button>
+        <el-button type="primary" :loading="trainingSaving" @click="doTrainingUpgrade">确认升实训</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -580,6 +673,7 @@ import {
   genClassCode,
   listClassHandovers,
   doClassHandover,
+  upgradeClassToTraining,
   CLASS_STATUS_TAG,
   CLASS_STATUS_SELECTABLE,
   classStatusOptions,
@@ -1065,6 +1159,104 @@ async function doHandover() {
     ElMessage.error((e as Error).message || '交接失败');
   } finally {
     handoverSaving.value = false;
+  }
+}
+
+/* ---------------- ★ 升实训（2026-10-20 批注：大学部 → 就业部） ----------------
+ * 批注①（班级管理页红框 + 红字）：「【升实训】：部门选择为就业部，不再有班主任，教员，
+ *   助教，选择项目经理，就业老师，班级名称可以进行修改，选择就业部的阶段方案」
+ * 追问确认：整班全部转入；升实训=改变部门，班级名称可改也可保持原样。
+ *
+ * 只对**大学部（class）**班级显示入口 —— 初高部学生要先「升云」到大学部再走这一步。
+ * 数据搬迁（建实训班 + 迁学生 + 写花名册 + 原班逻辑删除）全在后端一个事务里。
+ */
+const trainingVisible = ref(false);
+const trainingSaving = ref(false);
+const trainingForm = reactive({
+  classId: '',
+  srcName: '',
+  studentCount: 0,
+  className: '',
+  phaseCode: undefined as number | undefined,
+  projectManagerId: '',
+  employmentTeacherId: '',
+  remark: '',
+});
+
+/** 就业部阶段方案里的阶段（deptCode = 3，只取这一套，不要混进初高/大学的阶段码） */
+const trainingPhaseOptions = computed(() => {
+  const plans = metaList.value.flatMap((m) => m.planOptions || []);
+  const seen = new Map<number, string>();
+  for (const pl of plans) {
+    if (pl.deptCode !== 3) continue;
+    for (const p of pl.phases) if (!seen.has(p.value)) seen.set(p.value, p.label);
+  }
+  return [...seen].map(([value, label]) => ({ value, label }));
+});
+
+function openTraining(row: ClassRow) {
+  Object.assign(trainingForm, {
+    classId: row.classId,
+    srcName: row.className,
+    studentCount: row.studentCount ?? 0,
+    // 批注：班级名称可以修改，也可以保持原班级名称不变
+    className: row.className,
+    phaseCode: trainingPhaseOptions.value[0]?.value,
+    projectManagerId: '',
+    employmentTeacherId: '',
+    remark: '',
+  });
+  trainingVisible.value = true;
+}
+
+async function doTrainingUpgrade() {
+  const name = trainingForm.className.trim() || trainingForm.srcName;
+  if (!trainingForm.phaseCode) {
+    ElMessage.warning('请选择就业部阶段');
+    return;
+  }
+  if (!trainingForm.projectManagerId) {
+    ElMessage.warning('请选择「项目经理」');
+    return;
+  }
+  if (!trainingForm.employmentTeacherId) {
+    ElMessage.warning('请选择「就业老师」');
+    return;
+  }
+  if (!trainingForm.studentCount) {
+    ElMessage.warning('该班级没有学生，无法升实训');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认把「${trainingForm.srcName}」整班（${trainingForm.studentCount} 人）升实训为「${name}」？原班级将从大学部移除，学生状态变为「实训中」。`,
+      '升实训确认',
+      { type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  const pm = staffOptions.value.find((u) => u.id === trainingForm.projectManagerId);
+  const et = staffOptions.value.find((u) => u.id === trainingForm.employmentTeacherId);
+  trainingSaving.value = true;
+  try {
+    const r = await upgradeClassToTraining({
+      classId: trainingForm.classId,
+      className: name,
+      phaseCode: trainingForm.phaseCode,
+      projectManagerId: trainingForm.projectManagerId,
+      projectManagerName: pm?.userName || '',
+      employmentTeacherId: trainingForm.employmentTeacherId,
+      employmentTeacherName: et?.userName || '',
+      remark: trainingForm.remark || null,
+    });
+    ElMessage.success(`已升实训：${r.targetClassName}（${r.classCode}），转入 ${r.moved} 人`);
+    trainingVisible.value = false;
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message || '升实训失败');
+  } finally {
+    trainingSaving.value = false;
   }
 }
 

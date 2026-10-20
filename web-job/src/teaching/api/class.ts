@@ -263,6 +263,34 @@ export function genClassCode(stage: ClassStage) {
   return http.get<{ classCode: string | null }>('/api/teaching/class/gen-code', { stage });
 }
 
+/* ---------------- 升实训（2026-10-20 批注：大学部 → 就业部） ---------------- */
+
+export interface TrainingUpgradePayload {
+  /** 源班级（只能是大学部班级） */
+  classId: string;
+  /** 新实训班的班级名称；不传 = 沿用原班名 */
+  className?: string;
+  /** 就业部阶段方案里的阶段编码（301/302/303…） */
+  phaseCode?: number;
+  projectManagerId?: string;
+  projectManagerName?: string;
+  employmentTeacherId?: string;
+  employmentTeacherName?: string;
+  remark?: string | null;
+}
+
+export interface TrainingUpgradeResult {
+  targetClassId: string;
+  targetClassName: string;
+  classCode: string;
+  moved: number;
+}
+
+/** 升实训：整班（含学生）从大学部转到就业部 */
+export function upgradeClassToTraining(payload: TrainingUpgradePayload) {
+  return http.post<TrainingUpgradeResult>('/api/teaching/class/training-upgrade', payload);
+}
+
 /** 班级状态（★ 三套完全一致，无需映射） */
 export const CLASS_STATUS_NAME: Record<number, string> = {
   1: '开放',

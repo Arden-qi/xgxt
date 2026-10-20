@@ -22,6 +22,8 @@ import { BizCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
+// 升实训单独一个文件（跨库搬迁逻辑较重，且不参与班级仓储的适配器分发）
+import * as trainingSvc from './training';
 import type { ClassListQuery, ClassStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
 import { normalizeClassroom } from '../shared/format';
@@ -275,5 +277,32 @@ teachingClassRouter.get(
   wrap(async (req, res) => {
     const stage = reqStage(req.query.stage);
     res.json(ok({ classCode: await svc.genClassCodeFor(stage) }));
+  }),
+);
+
+/* ============================================================
+ * 11. 升实训（2026-10-20 批注）
+ *   大学部的班 → 就业部（实训）：可选新班级名 / 就业部阶段方案 /
+ *   项目经理 / 就业老师；不再有班主任、教员、助教；整班学生一起转过去。
+ *   口径与实现细节见 class/training.ts 头部。
+ * ============================================================ */
+teachingClassRouter.post(
+  '/training-upgrade',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const r = await trainingSvc.upgradeClassToTraining(
+      {
+        classId: requireId(b.classId),
+        className: str(b.className),
+        phaseCode: numOrUndef(b.phaseCode),
+        projectManagerId: str(b.projectManagerId),
+        projectManagerName: str(b.projectManagerName),
+        employmentTeacherId: str(b.employmentTeacherId),
+        employmentTeacherName: str(b.employmentTeacherName),
+        remark: strOrNull(b.remark) ?? null,
+      },
+      req.user,
+    );
+    res.json(ok(r, `已升实训：${r.targetClassName}（${r.classCode}），转入 ${r.moved} 人`));
   }),
 );
