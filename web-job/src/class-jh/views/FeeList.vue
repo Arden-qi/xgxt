@@ -285,9 +285,10 @@ function handleReset() {
 const paymentVisible = ref(false);
 const paymentSubmitting = ref(false);
 const paymentRow = ref<FeeRow | null>(null);
-/** 截图查看弹窗 */
+/** 缴费详情弹窗（★ 2026-10-20 用户要求：查看时看到全部登记信息，不只是图片） */
 const voucherViewVisible = ref(false);
 const voucherViewUrl = ref('');
+const voucherViewRow = ref<FeeRow | null>(null);
 /** el-upload 实例（重开弹窗要清空上一张，否则limit=1选不了新图） */
 const voucherUploadRef = ref<any>(null);
 
@@ -397,8 +398,15 @@ async function submitPayment() {
 }
 
 /** 查看已上传的凭证（相对地址由 Vite 代理 /uploads 转发到后端） */
-function viewVoucher(url?: string | null) {
+/**
+ * 查看缴费详情（★ 2026-10-20 用户要求：不只看图片，登记的每一项都要能看到）
+ *   → 传整行，弹窗里把 学生/缴费项目/方式/金额/时间/备注 全部列出来，图片放最下面。
+ *   地址是相对路径（/uploads/...）时补上开头的斜杠，交给 Vite 的 /uploads 代理转发后端。
+ */
+function viewVoucher(row: FeeRow) {
+  const url = row?.voucherUrl;
   if (!url) return;
+  voucherViewRow.value = row;
   voucherViewUrl.value = /^https?:\/\//i.test(url) ? url : url.startsWith('/') ? url : `/${url}`;
   voucherViewVisible.value = true;
 }
@@ -584,7 +592,7 @@ onMounted(() => {
               <el-button link type="primary" size="small" @click="openPayment(row)">
                 {{ row.voucherUrl ? '重新登记' : '上传缴费凭证' }}
               </el-button>
-              <el-button v-if="row.voucherUrl" link type="success" size="small" @click="viewVoucher(row.voucherUrl)">
+              <el-button v-if="row.voucherUrl" link type="success" size="small" @click="viewVoucher(row)">
                 查看
               </el-button>
             </template>
@@ -677,14 +685,30 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 查看缴费凭证 -->
-    <el-dialog v-model="voucherViewVisible" title="缴费凭证" width="640px">
+    <!-- 缴费详情（登记信息 + 凭证图片） -->
+    <el-dialog v-model="voucherViewVisible" title="缴费详情" width="680px">
+      <el-descriptions v-if="voucherViewRow" :column="2" border size="small">
+        <el-descriptions-item label="学生" :span="2">
+          {{ voucherViewRow.studentNo }} {{ voucherViewRow.studentName }}
+        </el-descriptions-item>
+        <el-descriptions-item label="班级">{{ dash(voucherViewRow.className) }}</el-descriptions-item>
+        <el-descriptions-item label="缴费项目">{{ dash(voucherViewRow.feeTypeName) }}</el-descriptions-item>
+        <el-descriptions-item label="应缴金额">{{ formatAmount(voucherViewRow.feeAmount) }}</el-descriptions-item>
+        <el-descriptions-item label="缴费方式">{{ dash(voucherViewRow.payMethodName) }}</el-descriptions-item>
+        <el-descriptions-item label="实缴金额">
+          {{ voucherViewRow.paidAmount == null ? '—' : formatAmount(voucherViewRow.paidAmount) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="缴费时间">{{ formatDate(voucherViewRow.payDate) }}</el-descriptions-item>
+        <el-descriptions-item label="备注" :span="2">{{ dash(voucherViewRow.payRemark) }}</el-descriptions-item>
+      </el-descriptions>
+      <div class="voucher-title">缴费截图</div>
       <div class="voucher-wrap">
-        <img v-if="voucherViewUrl" :src="voucherViewUrl" alt="缴费凭证" class="voucher-img" />
+        <img v-if="voucherViewUrl" :src="voucherViewUrl" alt="缴费截图" class="voucher-img" />
+        <span v-else class="field-unit">未上传截图</span>
       </div>
       <template #footer>
         <el-button @click="voucherViewVisible = false">关闭</el-button>
-        <el-button type="primary" tag="a" :href="voucherViewUrl" target="_blank" rel="noopener">新窗口打开</el-button>
+        <el-button type="primary" tag="a" :href="voucherViewUrl" target="_blank" rel="noopener">新窗口打开截图</el-button>
       </template>
     </el-dialog>
   </div>
@@ -727,6 +751,11 @@ onMounted(() => {
 .upload-tip {
   width: 100%;
   font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.voucher-title {
+  margin: 14px 0 8px;
+  font-size: 13px;
   color: var(--el-text-color-secondary);
 }
 .voucher-wrap {

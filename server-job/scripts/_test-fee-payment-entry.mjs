@@ -132,6 +132,16 @@ const createdFiles = [];
     check('⑤ 接口类型定义（FeePaymentPayload / FeePaymentResult）', /interface FeePaymentPayload/.test(api) && /interface FeePaymentResult/.test(api));
 
     check(
+      // ★ 2026-10-20 用户要求：点「查看」不只看图片，登记的每一项都要能看到
+      '⑥ 查看弹窗展示全部登记信息（学生/项目/方式/金额/时间/备注）+ 截图',
+      /el-dialog v-model="voucherViewVisible" title="缴费详情"/.test(feeList) &&
+        /el-descriptions v-if="voucherViewRow"/.test(feeList) &&
+        ['voucherViewRow.studentNo', 'voucherViewRow.feeTypeName', 'voucherViewRow.payMethodName', 'voucherViewRow.paidAmount', 'voucherViewRow.payDate', 'voucherViewRow.payRemark'].every(
+          (f) => feeList.includes(f),
+        ) &&
+        /viewVoucher\(row\)/.test(feeList),
+    );
+    check(
       '⑥ Vite 把 /uploads 代理到后端（否则凭证图片被当路由返回 index.html）',
       /'\/uploads': \{ target: 'http:\/\/localhost:8004'/.test(viteCfg),
     );
