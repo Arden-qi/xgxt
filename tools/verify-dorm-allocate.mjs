@@ -67,10 +67,15 @@ const page = read('web-job/src/teaching/views/DormAllocate.vue');
 const api = read('web-job/src/teaching/api/dormAllocate.ts');
 const route = read('server-job/src/teaching/dorm/allocate.route.ts');
 const app = read('server-job/src/app.ts');
+const svc = read('server-job/src/teaching/dorm/allocate.service.ts');
 
 check('TeachingDorm 挂了「班级分派」页签', /班级分派/.test(dorm) && /DormAllocate/.test(dorm));
 check('DormAllocate 列表有六个必需列', ['班级', '班主任', '男生人数', '女生人数', '状态', '所分宿舍'].every((h) => page.includes(h)));
 check('DormAllocate 左右两栏（男寝 / 女寝）', page.includes('男寝') && page.includes('女寝') && page.includes("loadRooms('male')") && page.includes("loadRooms('female')"));
+check('下拉框前有「选择楼栋」四个字', (page.match(/选择楼栋/g) || []).length >= 3);
+check('无学生班级按 100 床上限', page.includes('EMPTY_CLASS_MAX_BEDS') && svc.includes('EMPTY_CLASS_MAX_BEDS = 100'));
+check('楼栋取自「楼栋设置」字典', svc.includes("t_dorm_building") && svc.includes('BUILDING'));
+check('宿舍取自各楼栋已建房间（t_job_dorm）', svc.includes("const ROOM = 'sms_job.t_job_dorm'"));
 check('前端接口封装指向 allocate/*', api.includes('/api/teaching/dorm/allocate/classes') && api.includes('/save'));
 check('后端路由有 classes/buildings/rooms/save', ['/classes', '/buildings', '/rooms', '/save'].every((p) => route.includes(`'${p}'`)));
 check('app.ts 在 /api/teaching/dorm 之前挂载 allocate', app.indexOf("'/api/teaching/dorm/allocate'") > -1 && app.indexOf("'/api/teaching/dorm/allocate'") < app.indexOf("'/api/teaching/dorm'"));
@@ -104,43 +109,58 @@ if (login.status !== 200 || !login.body?.data?.token) {
   const bList = buildings.body?.data || [];
   check('男寝楼栋非空', buildings.status === 200 && bList.length > 0, bList.join(','));
 
-  const firstBuilding = bList[0] || 'A-1';
-  const rooms = await req(
-    'GET',
-    `/api/teaching/dorm/allocate/rooms?category=1&building=${encodeURIComponent(firstBuilding)}`,
-    { token },
-  );
-  const rList = rooms.body?.data || [];
+  // 楼栋来自「楼栋设置」字典；逐个楼栋找一间有房间的来验证
+  let firstBuilding = bList[0] || '';
+  let rList = [];
+  for (const b of bList) {
+    const resp = await req(
+      'GET',
+      `/api/teaching/dorm/allocate/rooms?category=1&building=${encodeURIComponent(b)}`,
+      { token },
+    );
+    const list = resp.body?.data || [];
+    if (list.length) {
+      firstBuilding = b;
+      rList = list;
+      break;
+    }
+  }
   check(
     '宿舍列表含剩余床位',
-    rooms.status === 200 &&
-      rList.length > 0 &&
+    rList.length > 0 &&
       typeof rList[0].capacity === 'number' &&
       typeof rList[0].occupied === 'number' &&
       typeof rList[0].remaining === 'number',
-    rList.length ? `${rList[0].building} ${rList[0].room} 余 ${rList[0].remaining}` : '空',
+    rList.length ? `${firstBuilding} ${rList[0].room} 余 ${rList[0].remaining}` : '所有男寝楼栋都没有房间',
   );
 
-  // 幂等保存：挑一个已分派的班，把现有宿舍原样保存一遍
-  const assigned = rows.find((r) => r.status === '已分派' && (r.maleRooms.length || r.femaleRooms.length));
-  if (assigned) {
+  // 保存：挑一个「待分派」的班，用空列表保存 = 清空（幂等，不改动已有分派）
+  const pending = rows.find((r) => r.status === '待分派');
+  if (pending) {
     const save = await req('POST', '/api/teaching/dorm/allocate/save', {
       token,
       body: {
-        className: assigned.className,
-        headTeacherName: assigned.headTeacherName,
-        maleRoomIds: assigned.maleRooms.map((r) => r.roomId),
-        femaleRoomIds: assigned.femaleRooms.map((r) => r.roomId),
+        className: pending.className,
+        headTeacherName: pending.headTeacherName,
+        maleRoomIds: [],
+        femaleRoomIds: [],
       },
     });
-    check('保存分派 200', save.status === 200 && save.body?.code === 200, save.body?.message || save.raw.slice(0, 80));
+    check('保存分派 200（空列表幂等）', save.status === 200 && save.body?.code === 200, save.body?.message || save.raw.slice(0, 80));
 
     const after = await req('GET', '/api/teaching/dorm/allocate/classes', { token });
-    const row = (after.body?.data || []).find((r) => r.className === assigned.className);
-    check('回读仍为已分派', !!row && row.status === '已分派', row ? `${row.className} ${row.status}` : '未找到班级');
+    const row = (after.body?.data || []).find((r) => r.className === pending.className);
+    check('回读仍为待分派', !!row && row.status === '待分派', row ? `${row.className} ${row.status}` : '未找到班级');
   } else {
-    check('保存分派 200', false, '没有可用于幂等保存的已分派班级（先手工分派一个班再跑本脚本）');
+    check('保存分派 200（空列表幂等）', false, '没有「待分派」的班级可用于幂等保存');
   }
+
+  // 非法房间 id → 必须拒绝，不能静默写入
+  const badSave = await req('POST', '/api/teaching/dorm/allocate/save', {
+    token,
+    body: { className: '不存在的班', maleRoomIds: ['00000000-0000-0000-0000-000000000000'], femaleRoomIds: [] },
+  });
+  check('非法宿舍 id 被拒', badSave.status >= 400 || badSave.body?.code !== 200, `HTTP ${badSave.status} code=${badSave.body?.code}`);
 
   const oldApi = await req('GET', '/api/edu/dorm/assign/list', { token });
   check('旧入口 /api/edu/dorm/assign/list 对教务 403', oldApi.status === 403, `HTTP ${oldApi.status}`);

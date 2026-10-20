@@ -9,30 +9,46 @@
  * 【数据来自哪】
  *   ① 班级：优先取「班级管理」三学段的班级表（sms_class_jh.t_class_info /
  *      sms_class.t_class_info / sms_job.t_job_class）；
- *      班级表还没建班（实测为空）时，回退到 `sms_edu.t_student_base` 的
- *      班级名字段 —— 否则页面会是一片空白，教务根本没法分派。
+ *      班级表还没建班（实测为空）时，回退到教务 / 门户学生表的班级名 ——
+ *      否则页面会是一片空白，教务根本没法分派。
  *   ② 人数：按班级分组数学生表 `gender=1`（男）/ `gender=2`（女）。
- *   ③ 宿舍：**教务宿舍表**（sms_edu.t_edu_dorm_room / t_edu_dorm_bed），
- *      与「教务管理 → 宿舍管理 → 分派宿舍」是同一份数据；
- *      剩余床位 = 额定人数 - 已住（已住 = 床位表里 student_name 非空的条数）。
- *   ④ 分派关系：复用 `sms_edu.t_edu_dorm_assignment`
+ *   ③ 楼栋：**只认「系统设置 → 楼栋设置」里的楼栋**（sms_common.t_dorm_building），
+ *      按类别（1 男寝 / 2 女寝）分左右两栏。
+ *   ④ 宿舍：各楼栋在「宿舍管理」里建出来的房间（sms_job.t_job_dorm + t_job_dorm_bed），
+ *      剩余床位 = bed_count - 已住（已住优先数学生主档 dorm_id，退回床位表 bed_status=2）。
+ *   ⑤ 分派关系：`sms_edu.t_edu_dorm_assignment`
  *      （class_name / head_teacher_name / room_id / building / room / category），
- *      不新建表 —— 这份表本来就是「班级 ↔ 宿舍」的权威关系。
+ *      不新建表；room_id 存的是宿舍房间主键（t_job_dorm.id）。
  *
- * 【一条硬规则：一间宿舍同一时间只归一个班】
- *   与既有 /api/edu/dorm/assign 完全一致；冲突时直接报出是哪几间、被谁占了。
+ * 【★ 没有学生的新班级也能分派】
+ *   班级刚建、学生还没导入时，男/女生人数都是 0。
+ *   这一档不做「按人数选够」的校验，改为**按床位上限**：
+ *   已选床位数 ≤ 100（EMPTY_CLASS_MAX_BEDS）。
+ *
+ * 【一间宿舍只归一个班】
+ *   允许从别的班接管（教务重新划分），保存时软删原班的分派行。
  */
 
 import { randomUUID } from 'crypto';
 import { BizCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { db } from '../../utils/db';
-import { syncEduDormToClass } from '../../services/dorm-sync.service';
 
-const ROOM = 'sms_edu.t_edu_dorm_room';
-const BED = 'sms_edu.t_edu_dorm_bed';
+/** 宿舍房间 / 床位 / 学生（合并宿舍管理实际在用的三张表） */
+const ROOM = 'sms_job.t_job_dorm';
+const BED = 'sms_job.t_job_dorm_bed';
+const STUDENT = 'sms_job.t_student_base';
+/** 楼栋字典（与「楼栋设置」同一份） */
+const BUILDING = 'sms_common.t_dorm_building';
 const ASSIGN = 'sms_edu.t_edu_dorm_assignment';
 const EDU_STUDENT = 'sms_edu.t_student_base';
+const PERM_STUDENT = 'sms_perm.t_student_base';
+
+/** 可以住宿舍的学生状态：3 试学中 / 5 正式在读 / 8 实训中（与 dorm repo 同口径） */
+const IN_SCHOOL_STATUS = [3, 5, 8];
+
+/** ★ 无学生班级的分派床位上限 */
+const EMPTY_CLASS_MAX_BEDS = 100;
 
 export interface AllocateRoomRef {
   roomId: string;
@@ -51,9 +67,11 @@ export interface AllocateClassRow {
   status: string;
   maleRooms: AllocateRoomRef[];
   femaleRooms: AllocateRoomRef[];
-  /** 已选中床位数（按房间额定人数累加，仅作展示/校验参考） */
+  /** 已选中床位数（按房间额定人数累加，仅作展示参考） */
   maleBeds: number;
   femaleBeds: number;
+  /** 该班暂无学生 → 前端按 100 床上限分派 */
+  noStudents: boolean;
 }
 
 function str(v: unknown): string {
@@ -129,27 +147,7 @@ async function teachingClasses(): Promise<ClassBase[]> {
 
 /** 教务学生表里的班级（班级表为空时的兜底；也是教务实际在用的班级口径） */
 async function eduClasses(): Promise<ClassBase[]> {
-  const rows = await db(EDU_STUDENT)
-    .where({ is_deleted: false })
-    .whereNotNull('class_name')
-    .whereNot('class_name', '')
-    .groupBy('class_name')
-    .select('class_name')
-    .select(
-      db.raw('MAX(head_teacher_name) AS ht'),
-      db.raw('SUM(gender = 1) AS m'),
-      db.raw('SUM(gender = 2) AS f'),
-    );
-
-  return (rows as any[])
-    .map((r) => ({
-      className: str(r.class_name).trim(),
-      headTeacherName: str(r.ht).trim() || null,
-      maleCount: int(r.m),
-      femaleCount: int(r.f),
-      stage: 'edu',
-    }))
-    .filter((r) => !!r.className);
+  return groupStudentsByClass(EDU_STUDENT, 'edu');
 }
 
 /**
@@ -159,11 +157,14 @@ async function eduClasses(): Promise<ClassBase[]> {
  *   本项目的演示库里 `sms_edu.t_student_base` 整表 `is_deleted=1`（历史种子），
  *   真正「在读」的学生在 `sms_perm.t_student_base`（门户权限库的学生投影）。
  *   如果只查前两层，页面会一个班都列不出来 —— 功能看起来像没做。
- *   有真实班级表的环境里，这一层自然被前面的结果覆盖（按班级名去重）。
  */
 async function permClasses(): Promise<ClassBase[]> {
+  return groupStudentsByClass(PERM_STUDENT, 'edu');
+}
+
+async function groupStudentsByClass(table: string, stage: string): Promise<ClassBase[]> {
   try {
-    const rows = (await db('sms_perm.t_student_base')
+    const rows = (await db(table)
       .where({ is_deleted: false })
       .whereNotNull('class_name')
       .whereNot('class_name', '')
@@ -180,12 +181,42 @@ async function permClasses(): Promise<ClassBase[]> {
         headTeacherName: str(r.ht).trim() || null,
         maleCount: int(r.m),
         femaleCount: int(r.f),
-        stage: 'edu',
+        stage,
       }))
       .filter((r) => !!r.className);
   } catch {
     return [];
   }
+}
+
+/**
+ * 某个班的学生人数（保存时做「无学生 → 100 床上限」校验用）
+ *
+ * 逐张学生表按 class_name 数一遍，取**最大值**而不是相加 ——
+ * 同一个班在班级学生表 / 教务表 / 门户表里是同一批人的投影，相加会翻倍。
+ */
+async function classStudentCounts(className: string): Promise<{ male: number; female: number; total: number }> {
+  const sources = [
+    'sms_class_jh.t_class_student',
+    'sms_class.t_class_student',
+    'sms_job.t_student_base',
+    EDU_STUDENT,
+    PERM_STUDENT,
+  ];
+  let male = 0;
+  let female = 0;
+  for (const t of sources) {
+    try {
+      const [row] = (await db(t)
+        .where({ is_deleted: false, class_name: className })
+        .select(db.raw('SUM(gender = 1) AS m'), db.raw('SUM(gender = 2) AS f'))) as any[];
+      male = Math.max(male, int(row?.m));
+      female = Math.max(female, int(row?.f));
+    } catch {
+      /* 表不存在 → 跳过 */
+    }
+  }
+  return { male, female, total: male + female };
 }
 
 /* ============================================================
@@ -194,16 +225,15 @@ async function permClasses(): Promise<ClassBase[]> {
 
 async function assignmentRows(): Promise<any[]> {
   return db(`${ASSIGN} as a`)
-    .join(`${ROOM} as r`, 'a.room_id', 'r.id')
+    .leftJoin(`${ROOM} as r`, 'a.room_id', 'r.id')
     .where('a.is_deleted', false)
-    .where('r.is_deleted', false)
     .select(
       'a.class_name',
       'a.room_id',
       'a.building',
       'a.room',
       'a.category',
-      'r.capacity',
+      'r.bed_count as capacity',
     );
 }
 
@@ -221,7 +251,7 @@ export async function listAllocateClasses(keyword?: string): Promise<AllocateCla
 
   /**
    * 去重：班级表优先，教务/门户学生表的同名班级只用来补缺。
-   * 名次按「初高 → 大学 → 实训 → 教务」稳定排列，前端下拉/列表不会跳来跳去。
+   * 名次按「初高 → 大学 → 实训 → 教务」稳定排列，前端列表不会跳来跳去。
    */
   const merged: ClassBase[] = [];
   const seen = new Set<string>();
@@ -265,6 +295,7 @@ export async function listAllocateClasses(keyword?: string): Promise<AllocateCla
         femaleRooms,
         maleBeds: maleRooms.reduce((s, r) => s + r.capacity, 0),
         femaleBeds: femaleRooms.reduce((s, r) => s + r.capacity, 0),
+        noStudents: c.maleCount + c.femaleCount === 0,
       };
     })
     .sort((a, b) => a.className.localeCompare(b.className, 'zh-Hans-CN'));
@@ -274,15 +305,33 @@ export async function listAllocateClasses(keyword?: string): Promise<AllocateCla
  * 楼栋 / 宿舍（分派弹窗用）
  * ============================================================ */
 
-/** 按类别返回楼栋（只认宿舍表里真实存在的楼栋，按自然序） */
+/**
+ * 按类别返回楼栋 —— **只认「楼栋设置」里建的楼栋**（含还没建房间的楼栋）
+ *
+ * 【为什么不从房间表 distinct】
+ *   需求明确：下拉要列出「楼栋设置」里建的所有楼栋，宿舍号再按楼栋去房间表取。
+ *   这样刚建好楼栋、还没生成房间时，下拉里也能看到它（只是房间列表为空）。
+ *   字典里一栋都没有时再退回房间表，避免页面完全空白。
+ */
 export async function listAllocateBuildings(category: number): Promise<string[]> {
-  const rows = (await db(ROOM)
-    .where({ is_deleted: false, category })
-    .distinct('building')) as any[];
-  return rows
-    .map((r) => str(r.building).trim())
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }));
+  let names: string[] = [];
+  try {
+    const rows = (await db(BUILDING)
+      .where({ is_deleted: false, category })
+      .orderBy([
+        { column: 'sort_no', order: 'asc' },
+        { column: 'building_name', order: 'asc' },
+      ])
+      .select('building_name')) as any[];
+    names = rows.map((r) => str(r.building_name).trim()).filter(Boolean);
+  } catch {
+    names = [];
+  }
+  if (!names.length) {
+    const rows = (await db(ROOM).where({ is_deleted: false }).whereIn('dorm_gender', [category]).distinct('building')) as any[];
+    names = rows.map((r) => str(r.building).trim()).filter(Boolean);
+  }
+  return names.sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }));
 }
 
 export interface AllocateRoomRow {
@@ -299,25 +348,55 @@ export interface AllocateRoomRow {
   assignedTo: string | null;
 }
 
+/** 一批房间的床位统计：capacity / occupied / remaining */
+async function roomBedStats(ids: string[]): Promise<Map<string, { capacity: number; occupied: number }>> {
+  const out = new Map<string, { capacity: number; occupied: number }>();
+  if (!ids.length) return out;
+
+  const rooms = (await db(ROOM).whereIn('id', ids).where({ is_deleted: false }).select('id', 'bed_count')) as any[];
+  const beds = (await db(BED).whereIn('dorm_id', ids).where({ is_deleted: false }).select('dorm_id', 'bed_status')) as any[];
+
+  const bedTotal = new Map<string, number>();
+  const bedUsed = new Map<string, number>();
+  for (const b of beds) {
+    const k = str(b.dorm_id);
+    bedTotal.set(k, (bedTotal.get(k) ?? 0) + 1);
+    if (Number(b.bed_status) === 2) bedUsed.set(k, (bedUsed.get(k) ?? 0) + 1);
+  }
+
+  // 已住优先数学生主档的 dorm_id（宿舍域同口径），没有学生指向时才退回床位表
+  const staying = (await db(STUDENT)
+    .whereIn('dorm_id', ids)
+    .where({ is_deleted: false })
+    .whereIn('student_status', IN_SCHOOL_STATUS)
+    .select('dorm_id')) as any[];
+  const stayCount = new Map<string, number>();
+  for (const s of staying) {
+    const k = str(s.dorm_id);
+    if (k) stayCount.set(k, (stayCount.get(k) ?? 0) + 1);
+  }
+
+  for (const r of rooms) {
+    const id = str(r.id);
+    const total = bedTotal.get(id) || int(r.bed_count);
+    const used = stayCount.get(id) ?? bedUsed.get(id) ?? 0;
+    out.set(id, { capacity: total, occupied: used });
+  }
+  return out;
+}
+
 export async function listAllocateRooms(
   category: number,
   building?: string,
 ): Promise<AllocateRoomRow[]> {
-  const qb = db(ROOM).where({ is_deleted: false, category });
+  const qb = db(ROOM).where({ is_deleted: false }).whereIn('dorm_gender', [category, 0]);
   const b = str(building).trim();
   if (b) qb.andWhere('building', b);
-  const rooms = (await qb.orderBy(['building', 'room'])) as any[];
+  const rooms = (await qb.orderBy(['building', 'room_no'])) as any[];
   if (!rooms.length) return [];
 
   const ids = rooms.map((r) => str(r.id));
-  const occupied = (await db(BED)
-    .whereIn('room_id', ids)
-    .where({ is_deleted: false })
-    .whereNotNull('student_name')
-    .groupBy('room_id')
-    .select('room_id')
-    .count({ n: '*' })) as any[];
-  const occMap = new Map(occupied.map((o) => [str(o.room_id), int(o.n)]));
+  const stats = await roomBedStats(ids);
 
   const assigned = (await db(ASSIGN)
     .whereIn('room_id', ids)
@@ -326,19 +405,19 @@ export async function listAllocateRooms(
   const assignMap = new Map(assigned.map((a) => [str(a.room_id), str(a.class_name)]));
 
   return rooms.map((r) => {
-    const capacity = int(r.capacity);
-    const used = occMap.get(str(r.id)) || 0;
-    const remaining = Math.max(capacity - used, 0);
+    const id = str(r.id);
+    const st = stats.get(id) || { capacity: int(r.bed_count), occupied: 0 };
+    const remaining = Math.max(st.capacity - st.occupied, 0);
     return {
-      roomId: str(r.id),
+      roomId: id,
       building: str(r.building),
-      room: str(r.room),
-      category: int(r.category),
-      capacity,
-      occupied: used,
+      room: str(r.room_no),
+      category: int(r.dorm_gender) || category,
+      capacity: st.capacity,
+      occupied: st.occupied,
       remaining,
       full: remaining <= 0,
-      assignedTo: assignMap.get(str(r.id)) || null,
+      assignedTo: assignMap.get(id) || null,
     };
   });
 }
@@ -372,26 +451,44 @@ export async function saveAllocate(body: {
   }
   const roomMap = new Map(rooms.map((r) => [str(r.id), r]));
 
-  // 类别校验：左栏只能选男寝、右栏只能选女寝
-  for (const id of maleIds) {
-    if (int(roomMap.get(id)?.category) !== 1) {
-      throw new BizError(BizCode.PARAM_ERROR, `宿舍 ${str(roomMap.get(id)?.room)} 不是男寝，不能分到男生栏`);
+  // 类别校验：左栏只能选男寝、右栏只能选女寝（dorm_gender=0 不限，两边都可以）
+  const badSide = (ids: string[], category: number, label: string) => {
+    for (const id of ids) {
+      const g = int(roomMap.get(id)?.dorm_gender);
+      if (g !== 0 && g !== category) {
+        throw new BizError(
+          BizCode.PARAM_ERROR,
+          `宿舍 ${str(roomMap.get(id)?.room_no)} 不是${label}，不能分到${label === '男寝' ? '男生' : '女生'}栏`,
+        );
+      }
     }
-  }
-  for (const id of femaleIds) {
-    if (int(roomMap.get(id)?.category) !== 2) {
-      throw new BizError(BizCode.PARAM_ERROR, `宿舍 ${str(roomMap.get(id)?.room)} 不是女寝，不能分到女生栏`);
+  };
+  badSide(maleIds, 1, '男寝');
+  badSide(femaleIds, 2, '女寝');
+
+  /**
+   * ★ 没有学生的新班级：不走「按人数选够」，改按床位上限 100。
+   *
+   * 床位口径与前端一致 = 所选房间的**剩余床位**之和（住满的房间前端不可选）。
+   */
+  const counts = await classStudentCounts(className);
+  if (counts.total === 0) {
+    const usedStats = await roomBedStats(allIds);
+    const beds = allIds.reduce((s, id) => {
+      const st = usedStats.get(id);
+      return s + Math.max((st?.capacity ?? 0) - (st?.occupied ?? 0), 0);
+    }, 0);
+    if (beds > EMPTY_CLASS_MAX_BEDS) {
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        `该班暂无学生，分派床位数不能超过 ${EMPTY_CLASS_MAX_BEDS} 个（当前 ${beds} 个）`,
+      );
     }
   }
 
   /**
    * 一间宿舍同一时间只能归一个班 —— 但**允许从别的班手里接管**（教务重新划分）。
-   *
-   * 【为什么不直接拦掉】
-   *   用户口径里只有「住满的宿舍不可选」，没有「已分给别的班不可选」；
-   *   而且教务的日常动作就是「把某间从 A 班调到 B 班」。
-   *   → 这里只记录被接管的班，保存时把它们原有的分派行软删（并在保存后同步班级侧），
-   *     界面上仍会提示「原属 X 班」，不会偷偷抢。
+   * 这里只记录被接管的班，保存时把它们原有的分派行软删（界面上会提示「原属 X 班」）。
    */
   const conflicts = allIds.length
     ? ((await db(ASSIGN)
@@ -400,17 +497,18 @@ export async function saveAllocate(body: {
         .whereNot('class_name', className)
         .select('room_id', 'class_name')) as any[])
     : [];
-  const releasedClasses = [...new Set(conflicts.map((c) => str(c.class_name)).filter(Boolean))];
 
   const existing = (await db(ASSIGN)
     .where({ class_name: className, is_deleted: false })
     .select('id', 'room_id')) as any[];
-  const targetSet = new Set(allIds);
-  const removedRoomIds = existing.map((e) => str(e.room_id)).filter((id) => !targetSet.has(id));
 
   const headTeacherName = str(body.headTeacherName).trim() || null;
   const now = new Date();
   const userId = body.userId || 'system';
+  /** 房间 → 该行记哪个类别（男/女栏由调用方决定，dorm_gender=0 时按栏位记） */
+  const categoryOf = new Map<string, number>();
+  for (const id of maleIds) categoryOf.set(id, 1);
+  for (const id of femaleIds) categoryOf.set(id, 2);
 
   await db.transaction(async (trx) => {
     // ① 先整班清空（覆盖式语义：勾选结果 = 该班最终分到的宿舍）
@@ -420,7 +518,7 @@ export async function saveAllocate(body: {
         .update({ is_deleted: true, update_time: now, update_by: userId });
     }
 
-    // ② 接管：把其它班在这几间上的分派行软删（保存后统一同步班级侧）
+    // ② 接管：把其它班在这几间上的分派行软删
     if (conflicts.length) {
       await trx(ASSIGN)
         .whereIn('room_id', allIds)
@@ -432,8 +530,8 @@ export async function saveAllocate(body: {
     // ③ 逐间写入
     //
     // ⚠️ 这张表有 `uk_assign_room(room_id)` 唯一键 —— **软删行也占着**。
-    //   所以不能按 (room_id, class_name) 找软删行（那是另一种组合，找不到），
-    //   必须**按 room_id 单列**找：找到就复活并改 class_name（接管），找不到才 insert。
+    //   所以不能按 (room_id, class_name) 找软删行，必须**按 room_id 单列**找：
+    //   找到就复活并改 class_name（接管），找不到才 insert。
     for (const roomId of allIds) {
       const r = roomMap.get(roomId)!;
       const revive = await trx(ASSIGN)
@@ -442,8 +540,8 @@ export async function saveAllocate(body: {
           class_name: className,
           head_teacher_name: headTeacherName,
           building: str(r.building),
-          room: str(r.room),
-          category: int(r.category),
+          room: str(r.room_no),
+          category: categoryOf.get(roomId) ?? int(r.dorm_gender) ?? 1,
           is_deleted: false,
           update_time: now,
           update_by: userId,
@@ -455,8 +553,8 @@ export async function saveAllocate(body: {
           head_teacher_name: headTeacherName,
           room_id: roomId,
           building: str(r.building),
-          room: str(r.room),
-          category: int(r.category),
+          room: str(r.room_no),
+          category: categoryOf.get(roomId) ?? int(r.dorm_gender) ?? 1,
           remark: null,
           is_deleted: false,
           create_time: now,
@@ -468,12 +566,7 @@ export async function saveAllocate(body: {
     }
   });
 
-  // ④ 推送班级管理（非阻断：内部已 try/catch，失败只记日志）
-  await syncEduDormToClass(className, removedRoomIds);
-  // 被接管的班也要同步一次，否则班级侧还留着这几间的旧副本
-  for (const cls of releasedClasses) {
-    await syncEduDormToClass(cls, allIds);
-  }
+  void conflicts;
 
   return { male: maleIds.length, female: femaleIds.length };
 }

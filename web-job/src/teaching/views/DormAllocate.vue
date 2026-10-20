@@ -70,6 +70,9 @@ const femaleLoading = ref(false);
 const maleSelected = ref<string[]>([]);
 const femaleSelected = ref<string[]>([]);
 
+/** ★ 无学生班级的分派床位上限（与后端 EMPTY_CLASS_MAX_BEDS 同口径） */
+const EMPTY_CLASS_MAX_BEDS = 100;
+
 /**
  * 房间缓存：切换楼栋后已选中的宿舍仍要能算床位，
  * 所以把每次加载过的房间都留一份（不随下拉切换丢失）。
@@ -109,16 +112,24 @@ function selectedBeds(g: Gender): number {
 const maleSelectedBeds = computed(() => selectedBeds('male'));
 const femaleSelectedBeds = computed(() => selectedBeds('female'));
 
+/** ★ 该班没有任何学生（新建班还没导学生）：不按人数选，改按 100 床上限 */
+const isEmptyClass = computed(
+  () => !!cur.value && (cur.value.maleCount || 0) + (cur.value.femaleCount || 0) === 0,
+);
+/** 无学生班级：男女两栏合计已选床位 */
+const totalSelectedBeds = computed(() => maleSelectedBeds.value + femaleSelectedBeds.value);
+
 function isChecked(g: Gender, roomId: string): boolean {
   return selectedOf(g).value.includes(roomId);
 }
 
-/** 是否禁选：住满 / 已选够人数（已分给别的班**可以**接管，只做提示） */
+/** 是否禁选：住满 / 已选够人数（无学生班级按 100 床上限） */
 function roomDisabled(g: Gender, r: AllocateRoomRow): boolean {
-  const target = targetOf(g);
-  if (target <= 0) return true;
   if (isChecked(g, r.roomId)) return false;
   if (r.full) return true;
+  if (isEmptyClass.value) return totalSelectedBeds.value >= EMPTY_CLASS_MAX_BEDS;
+  const target = targetOf(g);
+  if (target <= 0) return true;
   return selectedBeds(g) >= target;
 }
 
@@ -168,14 +179,6 @@ async function loadRooms(g: Gender) {
 
 async function openDialog(row: AllocateClassRow) {
   cur.value = row;
-  maleSelected.value = row.maleRooms.map((r) => r.roomId);
-  femaleSelected.value = row.femaleRooms.map((r) => r.roomId);
-  // 清掉上一次的缓存（不同班级的已选集合不能串）
-  for (const k of Object.keys(maleCache)) delete maleCache[k];
-  for (const k of Object.keys(femaleCache)) delete femaleCache[k];
-  for (const r of row.maleRooms) maleCache[r.roomId] = refToRoom(r, row.className);
-  for (const r of row.femaleRooms) femaleCache[r.roomId] = refToRoom(r, row.className);
-
   dialogVisible.value = true;
 
   const [mb, fb] = await Promise.all([
@@ -185,9 +188,30 @@ async function openDialog(row: AllocateClassRow) {
   maleBuildings.value = mb;
   femaleBuildings.value = fb;
 
+  /**
+   * 预选已分派的房间
+   *
+   * ⚠️ 只预选**属于当前楼栋字典**的房间：历史分派可能指向教务宿舍（A-1/B-1 等），
+   *   那些房间不是「楼栋设置」建的，保存时后端校验会报「宿舍不存在」。
+   *   遇到这类旧数据就当作未预选，用户重新挑一次即可（保存会覆盖旧分派）。
+   */
+  const seedOf = (refs: AllocateRoomRef[], buildings: string[]) =>
+    refs.filter((r) => buildings.includes(String(r.building || '').trim()));
+  const mSeed = seedOf(row.maleRooms, mb);
+  const fSeed = seedOf(row.femaleRooms, fb);
+
+  maleSelected.value = mSeed.map((r) => r.roomId);
+  femaleSelected.value = fSeed.map((r) => r.roomId);
+
+  // 清掉上一次的缓存（不同班级的已选集合不能串）
+  for (const k of Object.keys(maleCache)) delete maleCache[k];
+  for (const k of Object.keys(femaleCache)) delete femaleCache[k];
+  for (const r of mSeed) maleCache[r.roomId] = refToRoom(r, row.className);
+  for (const r of fSeed) femaleCache[r.roomId] = refToRoom(r, row.className);
+
   // 默认落在「已分派房间所在楼栋」，没有就第一栋
-  maleBuilding.value = row.maleRooms[0]?.building || mb[0] || '';
-  femaleBuilding.value = row.femaleRooms[0]?.building || fb[0] || '';
+  maleBuilding.value = mSeed[0]?.building || mb[0] || '';
+  femaleBuilding.value = fSeed[0]?.building || fb[0] || '';
 
   await Promise.all([loadRooms('male'), loadRooms('female')]);
 }
@@ -196,13 +220,21 @@ async function doSave() {
   if (!cur.value) return;
   const c = cur.value;
 
-  if (c.maleCount > 0 && maleSelectedBeds.value < c.maleCount) {
-    ElMessage.warning(`男寝已选 ${maleSelectedBeds.value} 床，还差 ${c.maleCount - maleSelectedBeds.value} 床`);
-    return;
-  }
-  if (c.femaleCount > 0 && femaleSelectedBeds.value < c.femaleCount) {
-    ElMessage.warning(`女寝已选 ${femaleSelectedBeds.value} 床，还差 ${c.femaleCount - femaleSelectedBeds.value} 床`);
-    return;
+  if (isEmptyClass.value) {
+    // ★ 新建班还没有学生：不按人数校验，只卡 100 床上限
+    if (totalSelectedBeds.value > EMPTY_CLASS_MAX_BEDS) {
+      ElMessage.warning(`该班暂无学生，分派床位数不能超过 ${EMPTY_CLASS_MAX_BEDS} 个（当前 ${totalSelectedBeds.value} 个）`);
+      return;
+    }
+  } else {
+    if (c.maleCount > 0 && maleSelectedBeds.value < c.maleCount) {
+      ElMessage.warning(`男寝已选 ${maleSelectedBeds.value} 床，还差 ${c.maleCount - maleSelectedBeds.value} 床`);
+      return;
+    }
+    if (c.femaleCount > 0 && femaleSelectedBeds.value < c.femaleCount) {
+      ElMessage.warning(`女寝已选 ${femaleSelectedBeds.value} 床，还差 ${c.femaleCount - femaleSelectedBeds.value} 床`);
+      return;
+    }
   }
 
   saving.value = true;
@@ -247,6 +279,8 @@ onMounted(load);
       <template #title>
         班级来自「班级管理」已建班级；男/女生人数按各班的实际学生数（性别）统计；
         点「分派」后左右两栏分别挑男寝 / 女寝宿舍，<b>已选床位数达到班级人数后不能再选</b>。
+        <b>暂无学生的新班级也可以直接分派，床位上限 {{ EMPTY_CLASS_MAX_BEDS }} 个。</b>
+        楼栋来自「系统设置 → 楼栋设置」，宿舍号取各楼栋已建的房间。
       </template>
     </el-alert>
 
@@ -318,27 +352,47 @@ onMounted(load);
         <div class="alloc-summary">
           <span>班级：<b>{{ cur.className }}</b></span>
           <span>班主任：{{ cur.headTeacherName || '—' }}</span>
-          <span>
-            男生 <b>{{ cur.maleCount }}</b> 人 · 已选
-            <b :class="maleSelectedBeds >= cur.maleCount ? 'ok' : 'warn'">{{ maleSelectedBeds }}</b> 床
-          </span>
-          <span>
-            女生 <b>{{ cur.femaleCount }}</b> 人 · 已选
-            <b :class="femaleSelectedBeds >= cur.femaleCount ? 'ok' : 'warn'">{{ femaleSelectedBeds }}</b> 床
-          </span>
+          <template v-if="isEmptyClass">
+            <span>
+              该班暂无学生 · 分派床位上限 <b>{{ EMPTY_CLASS_MAX_BEDS }}</b> 床 · 已选
+              <b :class="totalSelectedBeds <= EMPTY_CLASS_MAX_BEDS ? 'ok' : 'warn'">{{ totalSelectedBeds }}</b> 床
+            </span>
+          </template>
+          <template v-else>
+            <span>
+              男生 <b>{{ cur.maleCount }}</b> 人 · 已选
+              <b :class="maleSelectedBeds >= cur.maleCount ? 'ok' : 'warn'">{{ maleSelectedBeds }}</b> 床
+            </span>
+            <span>
+              女生 <b>{{ cur.femaleCount }}</b> 人 · 已选
+              <b :class="femaleSelectedBeds >= cur.femaleCount ? 'ok' : 'warn'">{{ femaleSelectedBeds }}</b> 床
+            </span>
+          </template>
         </div>
+
+        <el-alert
+          v-if="isEmptyClass"
+          class="alloc-empty-tip"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="`该班还没有学生信息：可直接分派宿舍，男女两栏合计不超过 ${EMPTY_CLASS_MAX_BEDS} 个床位`"
+        />
 
         <div class="alloc-cols">
           <!-- 左：男寝 -->
           <div class="alloc-col">
             <div class="alloc-col__head">
               <span class="alloc-col__title"><el-tag size="small" type="primary" effect="plain">男寝</el-tag> 选择宿舍</span>
-              <el-select v-model="maleBuilding" placeholder="选择楼栋" style="width: 160px" @change="loadRooms('male')">
-                <el-option v-for="b in maleBuildings" :key="b" :label="b" :value="b" />
-              </el-select>
+              <div class="alloc-col__pick">
+                <span class="alloc-col__label">选择楼栋</span>
+                <el-select v-model="maleBuilding" placeholder="选择楼栋" style="width: 160px" @change="loadRooms('male')">
+                  <el-option v-for="b in maleBuildings" :key="b" :label="b" :value="b" />
+                </el-select>
+              </div>
             </div>
             <el-alert
-              v-if="!cur.maleCount"
+              v-if="!cur.maleCount && !isEmptyClass"
               type="info"
               :closable="false"
               show-icon
@@ -367,12 +421,15 @@ onMounted(load);
           <div class="alloc-col">
             <div class="alloc-col__head">
               <span class="alloc-col__title"><el-tag size="small" type="danger" effect="plain">女寝</el-tag> 选择宿舍</span>
-              <el-select v-model="femaleBuilding" placeholder="选择楼栋" style="width: 160px" @change="loadRooms('female')">
-                <el-option v-for="b in femaleBuildings" :key="b" :label="b" :value="b" />
-              </el-select>
+              <div class="alloc-col__pick">
+                <span class="alloc-col__label">选择楼栋</span>
+                <el-select v-model="femaleBuilding" placeholder="选择楼栋" style="width: 160px" @change="loadRooms('female')">
+                  <el-option v-for="b in femaleBuildings" :key="b" :label="b" :value="b" />
+                </el-select>
+              </div>
             </div>
             <el-alert
-              v-if="!cur.femaleCount"
+              v-if="!cur.femaleCount && !isEmptyClass"
               type="info"
               :closable="false"
               show-icon
@@ -466,6 +523,21 @@ onMounted(load);
 .alloc-col__title {
   font-size: 13px;
   color: #443432;
+}
+/* ★ 「选择楼栋」四个字 + 下拉框，整体靠右 */
+.alloc-col__pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.alloc-col__label {
+  font-size: 12px;
+  color: #6b5b55;
+  white-space: nowrap;
+}
+.alloc-empty-tip {
+  margin-bottom: 10px;
 }
 .alloc-rooms {
   display: grid;
