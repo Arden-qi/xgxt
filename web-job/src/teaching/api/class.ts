@@ -266,31 +266,10 @@ export function getClassOptions() {
   return http.get<ClassOption[]>('/api/teaching/class/options');
 }
 
-/**
- * ★ 2026-10-16：阶段方案选项（表单「阶段方案 / 阶段」两个下拉的数据源）
- *
- * 方案统一存放在初高库、按部门区分（1 初高部 / 2 大学部）——
- * 三个学段共用这一份，前端按表单里选中的「部门」过滤；
- * 「阶段」下拉的选项 = 选中方案的 stages（阶段名称 + 学制）。
- */
-export interface SchemeStageOption {
-  id: string;
-  stageName: string;
-  studyMonths: number | null;
-  sortNo: number;
-}
-
-export interface SchemeOption {
-  id: string;
-  schemeName: string;
-  deptCode: number;
-  deptName: string;
-  stages: SchemeStageOption[];
-}
-
-export function getSchemeOptions() {
-  return http.get<SchemeOption[]>('/api/teaching/class/scheme-options');
-}
+/* ★ 2026-10-20：原 getSchemeOptions（/api/teaching/class/scheme-options）已删除 ——
+ *   它读的 t_class_stage_scheme / t_class_stage_scheme_stage 两张表从未建过，
+ *   页面一打开就弹「数据表不存在」。表单的「阶段方案」统一改用
+ *   /api/teaching/class/meta 下发的 planOptions（t_class_stage_plan + t_class_stage）。 */
 
 /** 生成班级编号（只有实训有；其它学段返回 null，前端应隐藏入口） */
 export function genClassCode(stage: ClassStage) {

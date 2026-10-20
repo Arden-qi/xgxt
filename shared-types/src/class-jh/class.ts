@@ -608,36 +608,10 @@ export interface StageDict extends BaseEntity {
   sortNo?: number;
 }
 
-/**
- * 阶段方案 · 阶段明细（★ 2026-10-16）
- *
- * 方案里的一个阶段：阶段名称 + 学制月数。
- * 例：方案一 → 一阶段 2月 / 二阶段 2月 / 三阶段 2月。
- */
-export interface StageSchemeStage {
-  id: string;
-  stageName: string;
-  /** 学制月数 */
-  studyMonths?: number | null;
-  /** 方案内顺序 */
-  sortNo?: number;
-}
-
-/**
- * 阶段方案（★ 2026-10-16：原「阶段字典」升级）
- *
- * 一个方案 = 方案名称 + 所属部门 + N 个阶段明细；
- * 班级新增/编辑时先选方案、再选阶段（阶段选项 = 该方案的阶段明细）。
- */
-export interface StageScheme {
-  id: string;
-  schemeName: string;
-  /** 所属部门 1初高部 2大学部 */
-  deptCode: number;
-  deptName?: string;
-  /** 方案下的阶段（按 sortNo 升序） */
-  stages: StageSchemeStage[];
-}
+/* ★ 2026-10-20：原 StageScheme / StageSchemeStage 两个类型已删除 ——
+ *   它们描述的是 /api/class-jh/stage-scheme/*（t_class_stage_scheme）那套实现，
+ *   那两张表的迁移从未执行过，整套已废弃。阶段方案现在只有一套：
+ *   t_class_stage_plan + t_class_stage（见 web-job 的 StagePlan 类型）。 */
 
 /** 操作日志 */
 export interface OpLog extends BaseEntity {

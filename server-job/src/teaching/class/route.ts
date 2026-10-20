@@ -99,10 +99,9 @@ function buildSaveBody(b: Record<string, any>, stage: ClassStage) {
     classCode: strOrNull(b.classCode),
     deptCode,
     phaseCode,
-    // ★ 2026-10-16：阶段方案三字段（可空 —— 老班级/不选方案时不传）
-    schemeId: strOrNull(b.schemeId),
-    schemeStageId: strOrNull(b.schemeStageId),
-    schemeStageName: strOrNull(b.schemeStageName),
+    /* ★ 2026-10-20：原「阶段方案」三字段（schemeId / schemeStageId / schemeStageName）已删除 ——
+     *   它们指向 t_class_stage_scheme 那套从未建表的实现；班级表里也从来没有这三列。
+     *   阶段统一只落 phase_code（阶段码），方案只作为前端筛选阶段的手段。 */
     headTeacherId: strOrNull(b.headTeacherId),
     headTeacherName: strOrNull(b.headTeacherName),
     teacherId: strOrNull(b.teacherId),
@@ -259,13 +258,10 @@ teachingClassRouter.get(
   }),
 );
 
-/** 7b. 阶段方案选项（★ 2026-10-16：班级表单的「阶段方案 / 阶段」两个下拉用） */
-teachingClassRouter.get(
-  '/scheme-options',
-  wrap(async (req, res) => {
-    res.json(ok(await svc.listSchemeOptions(req.user), '查询成功'));
-  }),
-);
+/* ★ 2026-10-20：原 /scheme-options（阶段方案下拉）已删除 ——
+ *   它读的 t_class_stage_scheme / t_class_stage_scheme_stage 两张表从未建过，
+ *   班级管理页一打开就报「数据表不存在」。表单的方案/阶段选项统一取
+ *   GET /api/teaching/class/meta 里的 planOptions（t_class_stage_plan + t_class_stage）。 */
 
 /** 8. 统计卡片（口径与列表完全一致） */
 teachingClassRouter.get(

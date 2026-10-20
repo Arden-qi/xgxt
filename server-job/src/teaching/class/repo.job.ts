@@ -90,10 +90,6 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase)),
-    // ★ 2026-10-16：阶段方案（新表单选择；老班级为 null，回显退回 phaseName）
-    schemeId: str(r.scheme_id),
-    schemeStageId: str(r.scheme_stage_id),
-    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -237,10 +233,6 @@ export const repo: ClassRepo = {
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
     set(phaseCodeCol(), body.phaseCode);
-    // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
-    set('scheme_id', body.schemeId);
-    set('scheme_stage_id', body.schemeStageId);
-    set('scheme_stage_name', body.schemeStageName);
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);

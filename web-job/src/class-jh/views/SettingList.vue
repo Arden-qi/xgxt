@@ -8,20 +8,26 @@
  *   一个方案 = 方案名称 + 所属部门 + N 个阶段（阶段名称 + 学制月数）；
  *   例：方案一 → 一阶段 学制2月 / 二阶段 学制2月 / 三阶段 学制2月。
  *   班级新增/编辑里的「阶段方案 / 阶段」两个下拉即取这里的数据。
+ *
+ * ★ 2026-10-20 去重：本页原先调 /api/class-jh/stage-scheme/*（t_class_stage_scheme
+ *   那套表从未建过，进来就报「数据表不存在」）。现在改调
+ *   /api/class-jh/stage/plan/*（t_class_stage_plan + t_class_stage）——
+ *   与班级 / 学生表单共用同一份「阶段方案」，只有这一套实现。
  */
 
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Delete, Edit, Search, Refresh, SetUp } from '@element-plus/icons-vue';
 import { DEPT_NAME } from 'shared-types/class-jh';
-import type { ClassSetting, StageScheme, OpLog, OpLogListQuery, StageSchemeSavePayload } from 'shared-types/class-jh';
+import type { ClassSetting, OpLog, OpLogListQuery } from 'shared-types/class-jh';
+import type { StagePlan, StagePlanSavePayload } from '@/class-jh/api/setting';
 import {
   fetchSettingDetail,
   updateSetting,
-  fetchStageSchemeList,
-  addStageScheme,
-  updateStageScheme,
-  deleteStageScheme,
+  fetchStagePlanList,
+  addStagePlan,
+  updateStagePlan,
+  deleteStagePlan,
   fetchOpLogList,
 } from '@/class-jh/api/setting';
 import { dash, formatDateTime } from '@/class-jh/utils/format';
@@ -87,84 +93,84 @@ async function saveSettings() {
 }
 
 /* ================= 阶段方案 ================= */
-const schemeLoading = ref(false);
-const schemeData = ref<StageScheme[]>([]);
+const planLoading = ref(false);
+const planData = ref<StagePlan[]>([]);
 
-async function loadSchemes() {
-  schemeLoading.value = true;
+async function loadPlans() {
+  planLoading.value = true;
   try {
-    schemeData.value = await fetchStageSchemeList();
+    planData.value = await fetchStagePlanList();
   } catch {
     /* 错误已统一处理 */
   } finally {
-    schemeLoading.value = false;
+    planLoading.value = false;
   }
 }
 
 /** 弹窗里的一行阶段明细（学制未填时为 undefined，提交前校验） */
-interface SchemeStageRow {
+interface PlanPhaseRow {
   stageName: string;
   studyMonths: number | undefined;
 }
 
-const schemeVisible = ref(false);
-const schemeSubmitting = ref(false);
-const schemeForm = reactive<{
+const planVisible = ref(false);
+const planSubmitting = ref(false);
+const planForm = reactive<{
   id: string | undefined;
-  schemeName: string;
+  planName: string;
   deptCode: number;
-  stages: SchemeStageRow[];
+  phases: PlanPhaseRow[];
 }>({
   id: undefined,
-  schemeName: '',
+  planName: '',
   deptCode: 1,
-  stages: [],
+  phases: [],
 });
 
 /** 打开弹窗：传 row = 编辑（回填方案与阶段明细），不传 = 新增 */
-function openSchemeDialog(row?: StageScheme) {
+function openPlanDialog(row?: StagePlan) {
   if (row) {
-    schemeForm.id = row.id;
-    schemeForm.schemeName = row.schemeName;
-    schemeForm.deptCode = row.deptCode;
-    schemeForm.stages = row.stages.length
-      ? row.stages.map((s) => ({ stageName: s.stageName, studyMonths: s.studyMonths ?? undefined }))
+    planForm.id = row.id;
+    planForm.planName = row.planName;
+    planForm.deptCode = row.deptCode;
+    planForm.phases = row.phases.length
+      ? row.phases.map((s) => ({ stageName: s.stageName, studyMonths: s.studyMonths ?? undefined }))
       : [{ stageName: '', studyMonths: undefined }];
   } else {
-    schemeForm.id = undefined;
-    schemeForm.schemeName = '';
-    schemeForm.deptCode = 1;
-    schemeForm.stages = [{ stageName: '', studyMonths: undefined }];
+    planForm.id = undefined;
+    planForm.planName = '';
+    planForm.deptCode = 1;
+    planForm.phases = [{ stageName: '', studyMonths: undefined }];
   }
-  schemeVisible.value = true;
+  planVisible.value = true;
 }
 
 /** 「添加阶段名称」：一个方案可以挂多个阶段 */
-function addSchemeStage() {
-  schemeForm.stages.push({ stageName: '', studyMonths: undefined });
+function addPlanPhase() {
+  planForm.phases.push({ stageName: '', studyMonths: undefined });
 }
 
-function removeSchemeStage(index: number) {
-  if (schemeForm.stages.length <= 1) return;
-  schemeForm.stages.splice(index, 1);
+function removePlanPhase(index: number) {
+  if (planForm.phases.length <= 1) return;
+  planForm.phases.splice(index, 1);
 }
 
-async function submitScheme() {
-  const schemeName = schemeForm.schemeName.trim();
-  if (!schemeName) {
+async function submitPlan() {
+  const planName = planForm.planName.trim();
+  if (!planName) {
     ElMessage.warning('请填写方案名称');
     return;
   }
-  if (!schemeForm.deptCode) {
+  if (!planForm.deptCode) {
     ElMessage.warning('请选择所属部门');
     return;
   }
-  if (!schemeForm.stages.length) {
+  if (!planForm.phases.length) {
     ElMessage.warning('请至少添加一个阶段');
     return;
   }
-  for (let i = 0; i < schemeForm.stages.length; i++) {
-    const s = schemeForm.stages[i];
+  for (let i = 0; i < planForm.phases.length; i++) {
+    const s = planForm.phases[i];
     if (!s.stageName?.trim()) {
       ElMessage.warning(`请填写第 ${i + 1} 个阶段的阶段名称`);
       return;
@@ -175,34 +181,34 @@ async function submitScheme() {
     }
   }
 
-  const payload: StageSchemeSavePayload = {
-    schemeName,
-    deptCode: schemeForm.deptCode,
-    stages: schemeForm.stages.map((s) => ({ stageName: s.stageName.trim(), studyMonths: Number(s.studyMonths) })),
+  const payload: StagePlanSavePayload = {
+    planName,
+    deptCode: planForm.deptCode,
+    phases: planForm.phases.map((s) => ({ stageName: s.stageName.trim(), studyMonths: Number(s.studyMonths) })),
   };
 
-  schemeSubmitting.value = true;
+  planSubmitting.value = true;
   try {
-    if (schemeForm.id) {
-      await updateStageScheme(schemeForm.id, payload);
+    if (planForm.id) {
+      await updateStagePlan({ ...payload, id: planForm.id });
       ElMessage.success('保存成功');
     } else {
-      await addStageScheme(payload);
+      await addStagePlan(payload);
       ElMessage.success('新增成功');
     }
-    schemeVisible.value = false;
-    loadSchemes();
+    planVisible.value = false;
+    loadPlans();
   } catch {
     /* 错误已统一处理 */
   } finally {
-    schemeSubmitting.value = false;
+    planSubmitting.value = false;
   }
 }
 
-async function handleDeleteScheme(row: StageScheme) {
+async function handleDeletePlan(row: StagePlan) {
   try {
     await ElMessageBox.confirm(
-      `确定删除方案「${row.schemeName}」吗？（方案下已有班级 / 学生正在使用的阶段不可删）`,
+      `确定删除方案「${row.planName}」吗？（方案下已有班级 / 学生正在使用的阶段不可删）`,
       '删除确认',
       {
         type: 'warning',
@@ -214,9 +220,9 @@ async function handleDeleteScheme(row: StageScheme) {
     return;
   }
   try {
-    await deleteStageScheme(row.id);
+    await deleteStagePlan(row.id);
     ElMessage.success('删除成功');
-    loadSchemes();
+    loadPlans();
   } catch {
     /* 错误已统一处理 */
   }
@@ -258,7 +264,7 @@ function resetOpLogQuery() {
 
 onMounted(() => {
   loadSettings();
-  loadSchemes();
+  loadPlans();
   loadOpLog();
 });
 </script>
@@ -292,20 +298,20 @@ onMounted(() => {
       </el-tab-pane>
 
       <!-- 阶段方案（★ 2026-10-16 由「阶段字典」升级：一个方案可含多个阶段） -->
-      <el-tab-pane label="阶段方案" name="stageScheme">
+      <el-tab-pane label="阶段方案" name="stagePlan">
         <div class="toolbar">
-          <el-button v-readonly-hide type="primary" :icon="Plus" @click="openSchemeDialog()">新增方案</el-button>
+          <el-button v-readonly-hide type="primary" :icon="Plus" @click="openPlanDialog()">新增方案</el-button>
         </div>
-        <el-table v-loading="schemeLoading" :data="schemeData" border stripe empty-text="暂无方案">
+        <el-table v-loading="planLoading" :data="planData" border stripe empty-text="暂无方案">
           <el-table-column type="index" label="序号" width="60" align="center" />
-          <el-table-column prop="schemeName" label="方案名称" min-width="180" />
+          <el-table-column prop="planName" label="方案名称" min-width="180" />
           <el-table-column label="所属部门" width="140">
             <template #default="{ row }">{{ DEPT_NAME[row.deptCode] || dash(row.deptCode) }}</template>
           </el-table-column>
           <el-table-column label="操作" width="150" align="center" fixed="right">
             <template #default="{ row }">
-              <el-button v-readonly-hide link type="primary" size="small" :icon="Edit" @click="openSchemeDialog(row)">编辑</el-button>
-              <el-button v-readonly-hide link type="danger" size="small" :icon="Delete" @click="handleDeleteScheme(row)">删除</el-button>
+              <el-button v-readonly-hide link type="primary" size="small" :icon="Edit" @click="openPlanDialog(row)">编辑</el-button>
+              <el-button v-readonly-hide link type="danger" size="small" :icon="Delete" @click="handleDeletePlan(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -357,49 +363,49 @@ onMounted(() => {
     </el-tabs>
 
     <!-- 新增 / 编辑方案（★ 一个方案可挂多个阶段） -->
-    <el-dialog v-model="schemeVisible" :title="schemeForm.id ? '编辑方案' : '新增方案'" width="640px">
-      <el-form :model="schemeForm" label-width="90px">
+    <el-dialog v-model="planVisible" :title="planForm.id ? '编辑方案' : '新增方案'" width="640px">
+      <el-form :model="planForm" label-width="90px">
         <el-form-item label="方案名称" required>
-          <el-input v-model="schemeForm.schemeName" maxlength="50" placeholder="如 方案一" />
+          <el-input v-model="planForm.planName" maxlength="50" placeholder="如 方案一" />
         </el-form-item>
         <el-form-item label="所属部门" required>
-          <el-select v-model="schemeForm.deptCode" style="width: 100%">
+          <el-select v-model="planForm.deptCode" style="width: 100%">
             <el-option v-for="(name, value) in DEPT_NAME" :key="value" :label="name" :value="Number(value)" />
           </el-select>
         </el-form-item>
         <el-form-item label="阶段明细" required>
-          <div class="scheme-stages">
-            <div v-for="(s, i) in schemeForm.stages" :key="i" class="scheme-stage-row">
-              <span class="scheme-stage-row__no">{{ i + 1 }}</span>
-              <el-input v-model="s.stageName" maxlength="50" placeholder="阶段名称，如 一阶段" class="scheme-stage-row__name" />
+          <div class="plan-phases">
+            <div v-for="(s, i) in planForm.phases" :key="i" class="plan-phase-row">
+              <span class="plan-phase-row__no">{{ i + 1 }}</span>
+              <el-input v-model="s.stageName" maxlength="50" placeholder="阶段名称，如 一阶段" class="plan-phase-row__name" />
               <el-input-number
                 v-model="s.studyMonths"
                 :min="1"
                 :max="120"
                 controls-position="right"
-                class="scheme-stage-row__months"
+                class="plan-phase-row__months"
               />
-              <span class="scheme-stage-row__unit">月</span>
+              <span class="plan-phase-row__unit">月</span>
               <el-button
                 link
                 type="danger"
                 :icon="Delete"
-                :disabled="schemeForm.stages.length <= 1"
-                @click="removeSchemeStage(i)"
+                :disabled="planForm.phases.length <= 1"
+                @click="removePlanPhase(i)"
               >
                 删除
               </el-button>
             </div>
-            <el-button link type="primary" :icon="Plus" @click="addSchemeStage">添加阶段名称</el-button>
-            <div class="scheme-stages__tip">
+            <el-button link type="primary" :icon="Plus" @click="addPlanPhase">添加阶段名称</el-button>
+            <div class="plan-phases__tip">
               一个方案可包含多个阶段，例：方案一 → 一阶段 · 学制2月 / 二阶段 · 学制2月 / 三阶段 · 学制2月
             </div>
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="schemeVisible = false">取消</el-button>
-        <el-button v-readonly-hide type="primary" :loading="schemeSubmitting" @click="submitScheme">确定</el-button>
+        <el-button @click="planVisible = false">取消</el-button>
+        <el-button v-readonly-hide type="primary" :loading="planSubmitting" @click="submitPlan">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -428,16 +434,16 @@ onMounted(() => {
   margin-bottom: 12px;
 }
 /* 新增/编辑方案弹窗里的「阶段明细」 */
-.scheme-stages {
+.plan-phases {
   width: 100%;
 }
-.scheme-stage-row {
+.plan-phase-row {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
 }
-.scheme-stage-row__no {
+.plan-phase-row__no {
   width: 20px;
   height: 20px;
   line-height: 20px;
@@ -448,16 +454,16 @@ onMounted(() => {
   font-size: 12px;
   flex: none;
 }
-.scheme-stage-row__name {
+.plan-phase-row__name {
   width: 220px;
 }
-.scheme-stage-row__months {
+.plan-phase-row__months {
   width: 130px;
 }
-.scheme-stage-row__unit {
+.plan-phase-row__unit {
   color: #909399;
 }
-.scheme-stages__tip {
+.plan-phases__tip {
   margin-top: 6px;
   font-size: 12px;
   color: #909399;

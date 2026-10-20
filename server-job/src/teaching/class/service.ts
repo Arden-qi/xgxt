@@ -40,7 +40,6 @@ import {
   type RoleKey,
   type StaffSlot,
 } from './handover.repo';
-import { listSchemes, type StageSchemeItem } from '../../class-jh/utils/stageScheme';
 
 const REPOS: Record<ClassStage, ClassRepo> = {
   jh: repoClassJh.repo,
@@ -206,20 +205,11 @@ export async function listClassMeta(user: any): Promise<ClassStageMeta[]> {
   }));
 }
 
-/**
- * ★ 2026-10-16：阶段方案选项（班级表单的「阶段方案 / 阶段」两个下拉）
- *
- * 方案数据存在初高库（sms_class_jh）的 t_class_stage_scheme，
- * 但按部门区分（1 初高部 / 2 大学部）—— 三个学段的班级表单都取这一份，
- * 前端按表单里选中的「部门」过滤，选完方案后「阶段」下拉 = 该方案的阶段明细。
- */
-export async function listSchemeOptions(user: any): Promise<StageSchemeItem[]> {
-  const stages = await visibleStages(user);
-  if (!stages.length) {
-    throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有班级信息的访问权限');
-  }
-  return listSchemes();
-}
+/* ★ 2026-10-20：原 listSchemeOptions（/api/teaching/class/scheme-options）已删除 ——
+ *   它读的 t_class_stage_scheme / t_class_stage_scheme_stage 两张表从未建过
+ *   （迁移从未执行），接口一进来就报「数据表不存在」。
+ *   班级表单的「阶段方案 / 阶段」统一取上面 listClassMeta 下发的 planOptions，
+ *   数据源 = t_class_stage_plan + t_class_stage（系统设置 · 阶段方案页维护的那套）。 */
 
 /**
  * 班级下拉（供出勤/考试/成绩/学生等域复用）

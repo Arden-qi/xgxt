@@ -5,7 +5,7 @@
  */
 
 import { ApiResponse, PageResponse } from '../common';
-import { ClassSetting, StageDict, StageScheme, OpLog, DashboardStat } from '../class';
+import { ClassSetting, StageDict, OpLog, DashboardStat } from '../class';
 
 /* ---------------- 系统设置 ---------------- */
 
@@ -43,35 +43,10 @@ export type StageAddResponse = ApiResponse<{ id: string }>;
 /** 阶段删除响应 */
 export type StageDeleteResponse = ApiResponse<null>;
 
-/* ---------------- 阶段方案（★ 2026-10-16：阶段字典升级为方案 + 多阶段） ---------------- */
-
-/** 阶段方案列表查询参数 */
-export interface StageSchemeListQuery {
-  deptCode?: number;
-}
-
-/** 阶段方案列表响应（含阶段明细） */
-export type StageSchemeListResponse = ApiResponse<StageScheme[]>;
-
-/** 阶段方案 · 阶段明细入参 */
-export interface StageSchemeStagePayload {
-  stageName: string;
-  /** 学制月数 */
-  studyMonths: number;
-}
-
-/** 阶段方案新增 / 修改入参（修改时阶段明细整体覆盖） */
-export interface StageSchemeSavePayload {
-  schemeName: string;
-  deptCode: number;
-  stages: StageSchemeStagePayload[];
-}
-
-/** 阶段方案新增响应 */
-export type StageSchemeAddResponse = ApiResponse<{ id: string }>;
-
-/** 阶段方案删除响应 */
-export type StageSchemeDeleteResponse = ApiResponse<null>;
+/* ★ 2026-10-20：原「阶段方案（StageScheme* ）」一组类型已删除 ——
+ *   它描述的是 /api/class-jh/stage-scheme/* 那套实现（t_class_stage_scheme，
+ *   表从未建过）。现在全系统只有一套阶段方案：t_class_stage_plan + t_class_stage，
+ *   前端类型见 web-job/src/class-jh/api/setting.ts 的 StagePlan / StagePlanSavePayload。 */
 
 /* ---------------- 操作日志 ---------------- */
 

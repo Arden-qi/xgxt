@@ -9,7 +9,7 @@ import { dormApplyRouter } from './dormApply.route';
 import { feeRouter } from './fee.route';
 import { refundRouter } from './refund.route';
 import { flowRouter, repeatRouter } from './flow.route';
-import { settingRouter, stageRouter, stageSchemeRouter, opLogRouter } from './setting.route';
+import { settingRouter, stageRouter, opLogRouter } from './setting.route';
 import { statsRouter } from './stats.route';
 import { handoverRouter } from './handover.route';
 
@@ -61,9 +61,11 @@ export function buildRouters(): MountedRouter[] {
 
     // ---------- 系统设置 / 阶段（字典 + 方案）/ 操作日志 ----------
     { path: '/api/class-jh/setting', router: settingRouter },
+    // 阶段方案（方案 + 多阶段）也在 stageRouter 里：GET/POST/PUT/DELETE /plan/*
     { path: '/api/class-jh/stage', router: stageRouter },
-    // ★ 2026-10-16：阶段方案（阶段字典升级版）
-    { path: '/api/class-jh/stage-scheme', router: stageSchemeRouter },
+    /* ★ 2026-10-20：原 /api/class-jh/stage-scheme 一组路由已删除 ——
+     *   它读的 t_class_stage_scheme / t_class_stage_scheme_stage 两张表从未建过，
+     *   与 /stage/plan/* 是重复的第二套实现。 */
     { path: '/api/class-jh/opLog', router: opLogRouter },
 
     // ---------- 工作台统计 ----------
