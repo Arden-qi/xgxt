@@ -60,12 +60,35 @@ teachingDormAllocateRouter.get(
   }),
 );
 
-/** 某楼栋下的宿舍（不传楼栋 = 该类别全部宿舍） */
+/** 某楼栋下的宿舍（不传楼栋 = 该类别全部宿舍；含空闲床位明细） */
 teachingDormAllocateRouter.get(
   '/rooms',
   wrap(async (req, res) => {
     const category = reqCategory(req.query.category);
     res.json(ok(await svc.listAllocateRooms(category, str(req.query.building)), '查询成功'));
+  }),
+);
+
+/**
+ * 学生搜索（调宿 / 退宿弹窗）
+ *
+ * - className：先按班级过滤（与班级下拉联动）
+ * - keyword：姓名 / 学号前后模糊
+ * 返回里带当前宿舍位置（building / room / bedLabel），供弹窗回显。
+ */
+teachingDormAllocateRouter.get(
+  '/students',
+  wrap(async (req, res) => {
+    res.json(
+      ok(
+        await svc.searchStudents({
+          className: str(req.query.className),
+          keyword: str(req.query.keyword),
+          limit: Number(req.query.limit) || 50,
+        }),
+        '查询成功',
+      ),
+    );
   }),
 );
 

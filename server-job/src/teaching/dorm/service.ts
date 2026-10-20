@@ -531,16 +531,36 @@ export async function createDormChange(
   body: DormChangeCreateBody,
   user: any,
 ): Promise<{ id: string }> {
-  await assertStageView(user, body.stage);
+  /**
+   * ★ 2026-10-20：合并页的调宿弹窗已去掉「学段」选择。
+   *
+   * 请求里的 stage 只用于决定落哪套表；三学段共用同一批宿舍表（切读关闭时
+   * 更是同一张物理表），所以**不能因为账号没有该学段权限就拒绝**。
+   * → 优先用请求的学段；没权限时退回该账号**可见的第一个宿舍学段**；
+   *   一个都没有才真正拒绝。
+   */
+  let stage = body.stage;
+  try {
+    await assertStageView(user, stage);
+  } catch (e) {
+    const list = await visibleStages(user);
+    if (!list.length) throw e;
+    stage = list[0];
+    body = { ...body, stage };
+  }
   if (body.bizType !== 1 && body.bizType !== 2) {
     throw new BizError(BizCode.PARAM_ERROR, '业务类型只能是 1 调换宿舍 / 2 退宿');
   }
   if (!body.changeReason || !body.changeReason.trim()) {
     throw new BizError(BizCode.PARAM_ERROR, '原因必填');
   }
+  // ★ 2026-10-20：原因长度按字符数卡 100（前端 textarea 的 maxlength 能被绕过）
+  if ([...body.changeReason.trim()].length > 100) {
+    throw new BizError(BizCode.PARAM_ERROR, '原因不能超过 100 个字符');
+  }
   if (!body.changeDate) {
     throw new BizError(BizCode.PARAM_ERROR, '日期必填');
   }
   // 换宿/退宿申请三学段都可提交（ rooms 可写，申请当然也可写）
-  return pick(body.stage).changeCreate(body, user?.userId || '');
+  return pick(stage).changeCreate(body, user?.userId || '');
 }

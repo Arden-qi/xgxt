@@ -31,6 +31,7 @@
 
 import { randomUUID } from 'crypto';
 import { BizCode } from 'shared-types';
+import { bedNoText } from 'shared-types/class';
 import { BizError } from '../../middleware/errorHandler';
 import { db } from '../../utils/db';
 
@@ -334,6 +335,12 @@ export async function listAllocateBuildings(category: number): Promise<string[]>
   return names.sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }));
 }
 
+export interface AllocateBedRef {
+  bedId: string;
+  bedNo: string;
+  bedLabel: string;
+}
+
 export interface AllocateRoomRow {
   roomId: string;
   building: string;
@@ -346,6 +353,8 @@ export interface AllocateRoomRow {
   full: boolean;
   /** 已分派给哪个班（空 = 未分派） */
   assignedTo: string | null;
+  /** ★ 空闲床位（调宿时可选到具体床位） */
+  freeBeds: AllocateBedRef[];
 }
 
 /** 一批房间的床位统计：capacity / occupied / remaining */
@@ -404,6 +413,29 @@ export async function listAllocateRooms(
     .select('room_id', 'class_name')) as any[];
   const assignMap = new Map(assigned.map((a) => [str(a.room_id), str(a.class_name)]));
 
+  /**
+   * ★ 空闲床位明细（调宿弹窗要选到「几号床」）
+   *   bed_status: 1 空闲 / 2 已住 / 3 停用 —— 只把 1 的列出来。
+   */
+  const freeBeds = (await db(BED)
+    .whereIn('dorm_id', ids)
+    .where({ is_deleted: false })
+    .select('id', 'dorm_id', 'bed_no', 'bed_status')) as any[];
+  const freeMap = new Map<string, AllocateBedRef[]>();
+  for (const b of freeBeds) {
+    if (Number(b.bed_status) !== 1) continue;
+    const k = str(b.dorm_id);
+    if (!freeMap.has(k)) freeMap.set(k, []);
+    freeMap.get(k)!.push({
+      bedId: str(b.id),
+      bedNo: str(b.bed_no),
+      bedLabel: bedNoText(b.bed_no),
+    });
+  }
+  for (const list of freeMap.values()) {
+    list.sort((a, b) => Number(a.bedNo) - Number(b.bedNo));
+  }
+
   return rooms.map((r) => {
     const id = str(r.id);
     const st = stats.get(id) || { capacity: int(r.bed_count), occupied: 0 };
@@ -418,8 +450,150 @@ export async function listAllocateRooms(
       remaining,
       full: remaining <= 0,
       assignedTo: assignMap.get(id) || null,
+      freeBeds: freeMap.get(id) || [],
     };
   });
+}
+
+/* ============================================================
+ * 学生搜索（调宿 / 退宿弹窗用）
+ * ============================================================ */
+
+export interface AllocateStudentRow {
+  studentId: string;
+  studentNo: string;
+  studentName: string;
+  gender: number;
+  genderName: string;
+  classId: string | null;
+  className: string | null;
+  headTeacherName: string | null;
+  /** 当前宿舍（未入住为空） */
+  dormId: string | null;
+  dormNo: string | null;
+  building: string | null;
+  room: string | null;
+  bedNo: string | null;
+  bedLabel: string | null;
+}
+
+/** 学生表来源（与班级列表同口径，逐张查再按学号去重） */
+const STUDENT_SOURCES = [
+  'sms_class_jh.t_class_student',
+  'sms_class.t_class_student',
+  'sms_job.t_student_base',
+  EDU_STUDENT,
+  PERM_STUDENT,
+];
+
+export async function searchStudents(opts: {
+  className?: string;
+  keyword?: string;
+  limit?: number;
+}): Promise<AllocateStudentRow[]> {
+  const className = str(opts.className).trim();
+  const kw = str(opts.keyword).trim();
+  const limit = Math.min(Math.max(int(opts.limit) || 50, 1), 100);
+
+  const rows: any[] = [];
+  for (const table of STUDENT_SOURCES) {
+    try {
+      const qb = db(table)
+        .where({ is_deleted: false })
+        .whereNotNull('student_name')
+        .whereNot('student_name', '');
+      if (className) qb.andWhere('class_name', className);
+      if (kw) {
+        // 前后模糊：姓名 / 学号 任一包含关键字
+        qb.andWhere((b: any) => {
+          b.where('student_name', 'like', `%${kw}%`).orWhere('student_no', 'like', `%${kw}%`);
+        });
+      }
+      const list = (await qb
+        .select(
+          'id',
+          'student_no',
+          'student_name',
+          'gender',
+          'class_id',
+          'class_name',
+          'head_teacher_name',
+          'dorm_id',
+          'dorm_no',
+        )
+        .limit(limit)) as any[];
+      rows.push(...list);
+    } catch {
+      /* 表不存在 → 跳过 */
+    }
+  }
+
+  // 按学号去重：优先保留有宿舍位置的记录（同一学生在多张表里是投影）
+  const byNo = new Map<string, any>();
+  for (const r of rows) {
+    const no = str(r.student_no).trim();
+    const key = no || `id:${str(r.id)}`;
+    const cur = byNo.get(key);
+    if (!cur || (!str(cur.dorm_id) && str(r.dorm_id))) byNo.set(key, r);
+  }
+  const picked = [...byNo.values()].slice(0, limit);
+
+  // 批量补宿舍位置：dorm_id → t_job_dorm
+  const dormIds = [...new Set(picked.map((r) => str(r.dorm_id)).filter(Boolean))];
+  const dormRows = dormIds.length
+    ? ((await db(ROOM).whereIn('id', dormIds).where({ is_deleted: false }).select('id', 'building', 'room_no')) as any[])
+    : [];
+  const dormMap = new Map(dormRows.map((d) => [str(d.id), d]));
+
+  /**
+   * 床位号：学生表里只有 dorm_id/dorm_no（部分表连 bed_no 列都没有），
+   * 床位以床位表的 student_id 为准 —— 只取处于「已住(2)」的那条。
+   */
+  const ids = picked.map((r) => str(r.id)).filter(Boolean);
+  const bedRows = ids.length
+    ? ((await db(BED)
+        .whereIn('student_id', ids)
+        .where({ is_deleted: false })
+        .select('student_id', 'bed_no', 'bed_status')) as any[])
+    : [];
+  const bedMap = new Map<string, string>();
+  for (const b of bedRows) {
+    if (Number(b.bed_status) === 2) bedMap.set(str(b.student_id), str(b.bed_no));
+  }
+
+  return picked
+    .map((r) => {
+      const g = int(r.gender);
+      const dormId = str(r.dorm_id) || null;
+      const d = dormId ? dormMap.get(dormId) : null;
+      // 兜底：dorm_no 形如「1号楼-303」
+      const dormNo = str(r.dorm_no) || null;
+      let building = d ? str(d.building) : null;
+      let room = d ? str(d.room_no) : null;
+      if ((!building || !room) && dormNo && dormNo.includes('-')) {
+        const [b, ...rest] = dormNo.split('-');
+        building = building || b;
+        room = room || rest.join('-');
+      }
+      const bedNo = bedMap.get(str(r.id)) || null;
+      return {
+        studentId: str(r.id),
+        studentNo: str(r.student_no),
+        studentName: str(r.student_name),
+        gender: g,
+        genderName: g === 1 ? '男' : g === 2 ? '女' : '未知',
+        classId: str(r.class_id) || null,
+        className: str(r.class_name) || null,
+        headTeacherName: str(r.head_teacher_name) || null,
+        dormId,
+        dormNo,
+        building,
+        room,
+        bedNo,
+        bedLabel: bedNo === null ? null : bedNoText(bedNo),
+      } satisfies AllocateStudentRow;
+    })
+    .sort((a, b) => (a.className || '').localeCompare(b.className || '', 'zh-Hans-CN') || a.studentName.localeCompare(b.studentName, 'zh-Hans-CN'));
 }
 
 /* ============================================================

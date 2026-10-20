@@ -77,6 +77,14 @@ check('无学生班级按 100 床上限', page.includes('EMPTY_CLASS_MAX_BEDS') 
 check('楼栋取自「楼栋设置」字典', svc.includes("t_dorm_building") && svc.includes('BUILDING'));
 check('宿舍取自各楼栋已建房间（t_job_dorm）', svc.includes("const ROOM = 'sms_job.t_job_dorm'"));
 check('前端接口封装指向 allocate/*', api.includes('/api/teaching/dorm/allocate/classes') && api.includes('/save'));
+
+/* ---- 调宿 / 退宿弹窗改版（2026-10-20）---- */
+check('调宿弹窗去掉「学段」选择', !dorm.includes('v-model="changeForm.stage"') && !dorm.includes('onChangeStageChange'));
+check('调宿弹窗有班级选择 + 学生远程搜索', dorm.includes('@change="onChangeClass"') && dorm.includes('remote-method="searchChangeStudents"'));
+check('学生选项带学号（区分重名）', dorm.includes('${s.studentName}（${s.studentNo}）'));
+check('选学生后回显当前宿舍', dorm.includes('label="当前宿舍"') && dorm.includes('curStudent.building'));
+check('调宿有 类别 → 楼栋 → 目标床位', dorm.includes('label="目标床位"') && dorm.includes('loadChangeRooms'));
+check('日期只读、原因 ≤100', dorm.includes('{{ changeForm.changeDate }}') && !dorm.includes('v-model="changeForm.changeDate"') && dorm.includes('maxlength="100"'));
 check('后端路由有 classes/buildings/rooms/save', ['/classes', '/buildings', '/rooms', '/save'].every((p) => route.includes(`'${p}'`)));
 check('app.ts 在 /api/teaching/dorm 之前挂载 allocate', app.indexOf("'/api/teaching/dorm/allocate'") > -1 && app.indexOf("'/api/teaching/dorm/allocate'") < app.indexOf("'/api/teaching/dorm'"));
 
@@ -161,6 +169,45 @@ if (login.status !== 200 || !login.body?.data?.token) {
     body: { className: '不存在的班', maleRoomIds: ['00000000-0000-0000-0000-000000000000'], femaleRoomIds: [] },
   });
   check('非法宿舍 id 被拒', badSave.status >= 400 || badSave.body?.code !== 200, `HTTP ${badSave.status} code=${badSave.body?.code}`);
+
+  /* ---- 调宿弹窗：学生搜索 / 空床位 / 校验 ---- */
+  const stuClass = rows.find((r) => r.maleCount + r.femaleCount > 0)?.className;
+  const stu = await req(
+    'GET',
+    `/api/teaching/dorm/allocate/students?className=${encodeURIComponent(stuClass || '')}`,
+    { token },
+  );
+  const stuList = stu.body?.data || [];
+  check(
+    '学生搜索 200 且带学号',
+    stu.status === 200 && stuList.length > 0 && !!stuList[0].studentNo && !!stuList[0].studentName,
+    stuList.length ? `${stuList[0].studentName}（${stuList[0].studentNo}）` : '空',
+  );
+  const kw = stuList[0]?.studentName?.slice(-1) || '';
+  const stuKw = await req(
+    'GET',
+    `/api/teaching/dorm/allocate/students?keyword=${encodeURIComponent(kw)}`,
+    { token },
+  );
+  check('学生姓名模糊搜索命中', (stuKw.body?.data || []).length > 0, `关键字 ${kw} → ${(stuKw.body?.data || []).length} 条`);
+
+  check(
+    '宿舍返回空闲床位明细',
+    rList.length > 0 && Array.isArray(rList[0].freeBeds) && rList[0].freeBeds.every((b) => b.bedId && b.bedLabel),
+    rList.length ? `${rList[0].room} 空闲 ${rList[0].freeBeds.length} 床` : '无房间',
+  );
+
+  const tooLong = await req('POST', '/api/teaching/dorm/change/create', {
+    token,
+    body: {
+      stage: 'job',
+      bizType: 2,
+      studentId: stuList[0]?.studentId || 'x',
+      changeDate: new Date().toISOString().slice(0, 10),
+      changeReason: '超'.repeat(101),
+    },
+  });
+  check('原因超 100 字被拒', tooLong.status >= 400 || tooLong.body?.code !== 200, `HTTP ${tooLong.status} code=${tooLong.body?.code}`);
 
   const oldApi = await req('GET', '/api/edu/dorm/assign/list', { token });
   check('旧入口 /api/edu/dorm/assign/list 对教务 403', oldApi.status === 403, `HTTP ${oldApi.status}`);

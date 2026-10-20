@@ -91,6 +91,7 @@ function refToRoom(r: AllocateRoomRef, className: string): AllocateRoomRow {
     remaining: r.capacity,
     full: false,
     assignedTo: className,
+    freeBeds: [],
   };
 }
 

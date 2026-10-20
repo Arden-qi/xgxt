@@ -29,6 +29,12 @@ export interface AllocateClassRow {
   femaleBeds: number;
 }
 
+export interface AllocateBedRef {
+  bedId: string;
+  bedNo: string;
+  bedLabel: string;
+}
+
 export interface AllocateRoomRow {
   roomId: string;
   building: string;
@@ -39,6 +45,26 @@ export interface AllocateRoomRow {
   remaining: number;
   full: boolean;
   assignedTo: string | null;
+  /** ★ 空闲床位明细（调宿时选到具体床位） */
+  freeBeds: AllocateBedRef[];
+}
+
+/** 学生搜索结果（调宿 / 退宿弹窗） */
+export interface AllocateStudentRow {
+  studentId: string;
+  studentNo: string;
+  studentName: string;
+  gender: number;
+  genderName: string;
+  classId: string | null;
+  className: string | null;
+  headTeacherName: string | null;
+  dormId: string | null;
+  dormNo: string | null;
+  building: string | null;
+  room: string | null;
+  bedNo: string | null;
+  bedLabel: string | null;
 }
 
 /** 班级列表 */
@@ -51,9 +77,18 @@ export function listAllocateBuildings(category: number): Promise<string[]> {
   return http.get<string[]>('/api/teaching/dorm/allocate/buildings', { category });
 }
 
-/** 某楼栋下的宿舍（不传楼栋 = 该类别全部） */
+/** 某楼栋下的宿舍（不传楼栋 = 该类别全部；含空闲床位明细） */
 export function listAllocateRooms(category: number, building?: string): Promise<AllocateRoomRow[]> {
   return http.get<AllocateRoomRow[]>('/api/teaching/dorm/allocate/rooms', { category, building });
+}
+
+/** 学生搜索：按班级联动 + 姓名/学号前后模糊 */
+export function searchAllocateStudents(params: {
+  className?: string;
+  keyword?: string;
+  limit?: number;
+}): Promise<AllocateStudentRow[]> {
+  return http.get<AllocateStudentRow[]>('/api/teaching/dorm/allocate/students', params);
 }
 
 /** 保存某个班的男寝 / 女寝分派（覆盖式） */

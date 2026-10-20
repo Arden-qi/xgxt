@@ -714,7 +714,22 @@ export function makeRepo(stage: TeachingStage): DormRepo {
       if (!isCheckout && !body.newDormId) throw new Error('调换宿舍必须选择目标宿舍');
       if (!isCheckout && !body.newBedId) throw new Error('调换宿舍必须选择目标床位');
   
-      const st = await tbl(db, SRC_DB, STUDENT_T, stage).where({ id: String(body.studentId), is_deleted: false }).first();
+      /**
+       * ★ 学生主档兜底（2026-10-20）
+       *
+       * 宿舍域的学生快照取自 `t_student_base`，但部分环境（演示库 / 门户投影）
+       * 里这张表没有在读学生，学生实际在 `sms_perm.t_student_base`。
+       * 调宿申请若只认前者会直接「学生不存在」，所以补一层门户学生表兜底 ——
+       * 单子仍写本学段的 t_job_dorm_change，快照列用兜底表的姓名/学号/性别。
+       */
+      let st: any = await tbl(db, SRC_DB, STUDENT_T, stage)
+        .where({ id: String(body.studentId), is_deleted: false })
+        .first();
+      if (!st) {
+        st = await db('sms_perm.t_student_base')
+          .where({ id: String(body.studentId), is_deleted: false })
+          .first();
+      }
       if (!st) throw new Error('学生不存在');
   
       let oldDorm: any = null;
@@ -730,8 +745,12 @@ export function makeRepo(stage: TeachingStage): DormRepo {
         if (Number(bed.bed_status) === 3) throw new Error('目标床位已停用');
       }
   
-      let className: string | null = null;
-      if (st.class_id) {
+      /**
+       * 班级名：优先用学生快照里的 class_name（门户/教务学生表只有班级名、没有 class_id），
+       * 没有才回班级表按 class_id 反查。
+       */
+      let className: string | null = str(st.class_name);
+      if (!className && st.class_id) {
         const c = await tbl(db, SRC_DB, CLASS_T, stage).where({ id: String(st.class_id) }).first();
         className = c ? str(c.class_name) : null;
       }
@@ -797,11 +816,19 @@ export function makeRepo(stage: TeachingStage): DormRepo {
           update_by: userId,
         });
       }
-      // ③ 学生主档同步
-      await tbl(db, SRC_DB, STUDENT_T, stage).where({ id: String(a.student_id) }).update({
-        dorm_id: a.new_dorm_id ?? null,
-        dorm_no: a.new_dorm_no ?? null,
-      });
+      // ③ 学生主档同步（本学段表没有该学生时，退回门户学生表，见 changeCreate 的兜底说明）
+      const synced = await tbl(db, SRC_DB, STUDENT_T, stage)
+        .where({ id: String(a.student_id) })
+        .update({
+          dorm_id: a.new_dorm_id ?? null,
+          dorm_no: a.new_dorm_no ?? null,
+        });
+      if (!synced) {
+        await db('sms_perm.t_student_base').where({ id: String(a.student_id) }).update({
+          dorm_id: a.new_dorm_id ?? null,
+          dorm_no: a.new_dorm_no ?? null,
+        });
+      }
       // ④ 两端 used_count 重算
       if (a.old_dorm_id) await refreshUsedCount(String(a.old_dorm_id));
       if (a.new_dorm_id) await refreshUsedCount(String(a.new_dorm_id));
