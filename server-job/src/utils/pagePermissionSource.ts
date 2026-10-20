@@ -637,7 +637,7 @@ const ROLE_OPERATION_PERMISSIONS: Record<string, string[]> = {
    *   这里就直接给全部 job: 页面」）。所以操作码同样给全量：
    *     · 基准 = 全部 job 操作码（从权限树映射表 PERM_POINT_TO_ACTION_CODES 派生，
    *       保证「树里能勾出来的 job 码」校长一个不缺）
-   *     · 管理员在「角色-权限分配」里**去勾**某动作 → overlay 的 removed 把它摘掉
+   *     · 管理员在「职位权限分配」里**去勾**某动作 → overlay 的 removed 把它摘掉
    *       （roleActionOverlay 的差异存储：explicit 撤销优先于静态兜底）
    *   —— 这样既满足「校长有全部权限」，又满足「必须遵循权限管理的设置」。
    *
@@ -711,7 +711,7 @@ export function getUserOperationPermissionsBase(roles: string[]): string[] {
  *
  * 【为什么要叠加】
  *   上面 `ROLE_OPERATION_PERMISSIONS` 是**写死在代码里的静态表**，
- *   而管理员真正在操作的是「角色-权限分配」页面（权限树 t_perm_role_perm）。
+ *   而管理员真正在操作的是「职位权限分配」页面（权限树 t_perm_role_perm）。
  *   两层命名体系完全不同（`teach||学生基础数据||create` ↔ `class:student:add`），
  *   所以以前「界面上取消了动作，按钮照样在」。
  *

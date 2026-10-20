@@ -44,6 +44,7 @@ import {
   getConfigNumber,
 } from './student.service';
 import { getArrivedTrialIncome, centToYuan, tempStudentNo } from './fee-order.service';
+import { terminateStudentPlans } from './installment.service';
 import { changeState } from './state.service';
 import { financeClient } from './finance.client';
 
@@ -235,7 +236,7 @@ export async function applyRefund(
   if (!allowed.includes(stu.consult_state)) {
     throw new BizError(
       BizCode.INVALID_STATUS,
-      `当前状态不允许发起退费（仅「试学费·待确认 / 试学中·待分班 / 试学中」可发起）。如需直接退学请联系教务模块处理。`,
+      `当前状态不允许发起退费（仅「咨询中 / 待分班 / 试学中」可发起）。如需直接退学请联系教务模块处理。`,
     );
   }
 
@@ -525,13 +526,18 @@ export async function syncRefundFromFinance(refundIds?: string[]): Promise<{ upd
           update_by: 'system-sync',
         });
 
-        // 学生状态 → 已退费
-        await changeState(row.consult_student_id, ConsultState.REFUNDED, {
+        // ★ 2026-10-15 用户口径：财务退款之后学生状态流转为「流失」，
+        //    流失原因 = 发起退款时填写的流失原因（退费单 remark = 「流失原因 · 备注」）
+        await changeState(row.consult_student_id, ConsultState.LOST, {
           byName: '财务模块',
           byTitle: '系统',
           action: 'REFUND_PAID',
-          historyText: `退费打款 ¥${centToYuan(row.refund_amount)} 已完成，学生状态流转为「已退费」`,
+          historyText: `退费打款 ¥${centToYuan(row.refund_amount)} 已完成，学生状态流转为「流失」`,
+          extraFields: { loss_reason: row.remark || '退费流失' },
         });
+
+        /* ★ 2026-10-16 分期：人已流失，未收的尾款不再收，终止在途分期计划 */
+        await terminateStudentPlans(row.consult_student_id, '学生已退费流失');
 
         updated++;
       } else if (rs === 7) {
@@ -594,12 +600,18 @@ export async function manualPay(
     update_by: operator.name,
   });
 
-  await changeState(row.consult_student_id, ConsultState.REFUNDED, {
+  // ★ 2026-10-15 用户口径：财务退款之后学生状态流转为「流失」，
+  //    流失原因 = 发起退款时填写的流失原因（退费单 remark = 「流失原因 · 备注」）
+  await changeState(row.consult_student_id, ConsultState.LOST, {
     byName: operator.name,
     byTitle: operator.title,
     action: 'REFUND_PAID',
-    historyText: `退费打款 ¥${centToYuan(row.refund_amount)}（${payload.payMethod || '银行转账'} · 流水号 ${payRef}），学生状态流转为「已退费」`,
+    historyText: `退费打款 ¥${centToYuan(row.refund_amount)}（${payload.payMethod || '银行转账'} · 流水号 ${payRef}），学生状态流转为「流失」`,
+    extraFields: { loss_reason: row.remark || '退费流失' },
   });
+
+  /* ★ 2026-10-16 分期：人已流失，未收的尾款不再收，终止在途分期计划 */
+  await terminateStudentPlans(row.consult_student_id, '学生已退费流失');
 
   return { payRef };
 }
