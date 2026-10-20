@@ -435,6 +435,13 @@ const CLASS_JH: RegistryBoard = {
       pageCode: 'classjh:setting:view',
       remark: '出勤达标线、催费提醒天数、封班可转入类型等',
     },
+    {
+      key: 'building',
+      title: '楼栋设置',
+      path: '/class-jh/building',
+      pageCode: 'classjh:building:view',
+      remark: '宿舍楼栋字典，与宿舍管理楼栋下拉实时一致（可独立授权给教务）',
+    },
   ],
 };
 

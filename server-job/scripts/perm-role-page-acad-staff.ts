@@ -20,6 +20,12 @@
  *   本脚本把它们重新 enabled=1，合并宿舍即对教务老师可见。
  *   /edu/dorm 置 0 → edu:dorm:view 被摘掉 → 教务不再有独立教务宿舍入口。
  *
+ * 【2026-10-20 再加】把「楼栋设置」(/class-jh/building) 抽成独立页面，单独给教务老师
+ *   放开（只给楼栋字典，不动系统设置里的 KV/阶段字典/操作日志）。
+ *   页面码 classjh:building:view 加进 CLASS_JH_ACAD_PAGES 与 R08 台账 KEEP 列表。
+ *   楼栋接口 /api/teaching/building/* 的 requireAnyPage 已认 classjh:dorm:view，
+ *   教务本就持有，所以接口无需改动。
+ *
  * 【不改什么】`t_perm_role_perm` 的权限码**不动**（只改页面分配），
  *   所以教务老师在页面之外要用的审批 / 核算能力不受影响。
  */
@@ -27,7 +33,7 @@ import { db } from '../src/perm/utils/db.js';
 
 const ROLE_ID = 'R08';
 /** ★ 保留的页面（path 必须和 pageRegistry 里的一致） */
-const KEEP = ['/edu/student', '/class-jh/dorm', '/dorm'];
+const KEEP = ['/edu/student', '/class-jh/dorm', '/dorm', '/class-jh/building'];
 
 async function main() {
   // 1. 先看看要写哪些

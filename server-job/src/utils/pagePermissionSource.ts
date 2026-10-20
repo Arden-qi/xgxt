@@ -233,8 +233,13 @@ const CLASS_JH_STAFF_PAGES: string[] = [
   'classjh:dorm:view',
 ];
 
-/** 教务老师：本模块只负责宿舍（调宿审批）与审批中心 */
-const CLASS_JH_ACAD_PAGES: string[] = ['classjh:dashboard:view', 'classjh:dorm:view', 'classjh:approval:view'];
+/** 教务老师：本模块只负责宿舍（调宿审批）与审批中心、楼栋字典 */
+const CLASS_JH_ACAD_PAGES: string[] = [
+  'classjh:dashboard:view',
+  'classjh:dorm:view',
+  'classjh:approval:view',
+  'classjh:building:view',
+];
 
 const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
   // 系统管理员：全部页面
