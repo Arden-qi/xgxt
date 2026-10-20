@@ -1453,8 +1453,10 @@ async function doExport(): Promise<void> {
 
       <template #footer>
         <div class="lft">职位 ID：{{ detail?.id || '—' }}</div>
-        <button class="btn" type="button" @click="detailOpen = false">关闭</button>
+        <!-- ★ 2026-10-20 按用户要求互换位置：编辑权限（主操作）在左，「关闭」贴右。
+             其余弹窗仍是「关闭在左、主操作在右」的原型口径，没跟着改。 -->
         <button class="btn pri" type="button" @click="openPermTreeFromDetail('edit')">编辑权限</button>
+        <button class="btn" type="button" @click="detailOpen = false">关闭</button>
       </template>
     </ProtoDialog>
 
