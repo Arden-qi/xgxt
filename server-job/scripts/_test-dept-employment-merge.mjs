@@ -208,22 +208,27 @@ try {
       `children=${(empNode?.children || []).length}`,
     );
     check(
-      '部门树：就业部职位数 1 / 账号数 2（含下级聚合）',
-      empNode?.roleCount === 1 && empNode?.userCount === 2,
+      /* ★ 2026-10-20 追加需求：项目经理 归入就业部条线 → 职位数 1 → 2 */
+      '部门树：就业部职位数 2 / 账号数 2（含下级聚合）',
+      empNode?.roleCount === 2 && empNode?.userCount === 2,
       `roleCount=${empNode?.roleCount} userCount=${empNode?.userCount}`,
     );
     check(
-      '部门树：实训管理 账号 1 / 就业管理 职位 1 账号 1',
-      flat.find((n) => n.id === 'D_TRAIN')?.userCount === 1 &&
+      '部门树：实训管理 职位 1 账号 1 / 就业管理 职位 1 账号 1',
+      flat.find((n) => n.id === 'D_TRAIN')?.roleCount === 1 &&
+        flat.find((n) => n.id === 'D_TRAIN')?.userCount === 1 &&
         flat.find((n) => n.id === 'D_JOB')?.roleCount === 1 &&
         flat.find((n) => n.id === 'D_JOB')?.userCount === 1,
     );
 
     const rolesOfEmp = await req(`${BASE}/api/perm/role/list?deptId=D_EMP&page=1&size=100`, { token });
     const empRoleNames = (rolesOfEmp.json?.data?.list || []).map((r) => r.roleName);
+    /* ★ 2026-10-20 追加需求：项目经理 也归就业部（原断言只认 就业老师 一个） */
     check(
-      '「查看职位」能点出就业部下的职位（= 就业老师）',
-      empRoleNames.length === 1 && empRoleNames[0] === '就业老师',
+      '「查看职位」能点出就业部下的职位（= 就业老师 + 项目经理）',
+      empRoleNames.length === 2 &&
+        empRoleNames.includes('就业老师') &&
+        empRoleNames.includes('项目经理'),
       empRoleNames.join('、') || '（空）',
     );
 
