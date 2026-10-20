@@ -215,3 +215,35 @@ teachingStudentRouter.get(
     res.json(ok(await svc.listStudentClasses(req.user), '查询成功'));
   }),
 );
+
+/** 8. 升云 · 目标班级（大学部 + 状态=开放；2026-10-20 批注） */
+teachingStudentRouter.get(
+  '/upgrade-targets',
+  wrap(async (req, res) => {
+    res.json(ok(await svc.listUpgradeTargets(req.user), '查询成功'));
+  }),
+);
+
+/**
+ * 9. 升云（初高部 → 大学部开放班级，批量）
+ *
+ * body: { studentIds: string[], targetClassId: string, remark?: string }
+ * 只适用于初高部学生 → 前端按钮只在该场景出现；后端仍按两个学段权限 + 班级状态兜底校验。
+ */
+teachingStudentRouter.post(
+  '/upgrade-cloud',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const studentIds = Array.isArray(b.studentIds) ? b.studentIds.map((x: unknown) => String(x)) : [];
+    const r = await svc.upgradeToUniversity(
+      {
+        studentIds,
+        targetClassId: str(b.targetClassId),
+        remark: strOrNull(b.remark) ?? null,
+      },
+      req.user,
+    );
+    const tip = `已升云 ${r.moved} 人 → ${r.toClassName}`;
+    res.json(ok(r, r.skipped.length ? `${tip}，${r.skipped.length} 人未处理` : tip));
+  }),
+);

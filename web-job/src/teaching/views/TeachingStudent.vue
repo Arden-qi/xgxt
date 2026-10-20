@@ -87,6 +87,8 @@
         <el-button type="primary" @click="load(1)">查询</el-button>
         <el-button @click="reset">重置</el-button>
         <el-button v-if="!isReadOnlyUser" type="success" @click="openCreate">新增学生</el-button>
+        <!-- 2026-10-20 批注：新增【升云】—— 初高部学生批量升入大学部「开放」班级 -->
+        <el-button v-if="!isReadOnlyUser && canUpgrade" type="warning" @click="openUpgrade">升云</el-button>
       </el-form-item>
     </el-form>
 
@@ -210,6 +212,30 @@
 
             <el-descriptions v-if="detail.resume" :column="1" border size="small" title="简历" class="tsv-sec">
               <el-descriptions-item label="简历文件">{{ detail.resume.resumeName || '（无）' }}</el-descriptions-item>
+            </el-descriptions>
+
+            <!-- ★ 2026-10-20 批注：基础信息里增加「升云记录」（原班级 / 原班主任 / 操作人） -->
+            <el-descriptions
+              v-if="upgradeRows.length"
+              :column="1"
+              border
+              size="small"
+              title="升云记录"
+              class="tsv-sec"
+            >
+              <el-descriptions-item
+                v-for="(u, i) in upgradeRows"
+                :key="u.id || i"
+                :label="u.upgradeTime || `第 ${i + 1} 次升云`"
+              >
+                <div class="tsv-upg-rec">
+                  <span>原班级：<b>{{ u.fromClassName || '—' }}</b></span>
+                  <span>原班主任：<b>{{ u.fromHeadTeacherName || '—' }}</b></span>
+                  <span>升入班级：<b>{{ u.toClassName || '—' }}</b></span>
+                  <span>操作人：<b>{{ u.operatorName || '—' }}</b></span>
+                  <span v-if="u.remark" class="muted">备注：{{ u.remark }}</span>
+                </div>
+              </el-descriptions-item>
             </el-descriptions>
 
             <el-descriptions v-if="flowRows.length" :column="1" border size="small" title="学籍异动记录" class="tsv-sec">
@@ -376,9 +402,127 @@
       </template>
     </el-dialog>
 
+    <!-- ★ 2026-10-20 批注：升云（初高部 → 大学部「开放」班级） -->
+    <el-dialog v-model="upgradeVisible" title="升云（初高部 → 大学部）" width="1000px" top="5vh">
+      <el-alert class="upg-tip" type="info" :closable="false" show-icon>
+        <template #title>
+          先勾选初高部学生，再选择要升入的大学部班级（<b>只能选「开放」状态的班级</b>）。
+          升云会把档案整体移动到大学部、<b>学号不变</b>，初高部原档案不再显示；
+          原班级 / 原班主任 / 操作人会记入该生的「升云记录」。
+        </template>
+      </el-alert>
+
+      <div class="upg-body">
+        <div class="upg-main">
+          <div class="upg-bar">
+            <el-input
+              v-model="upgKeyword"
+              placeholder="姓名 / 学号 / 手机"
+              clearable
+              style="width: 200px"
+              @keyup.enter="loadUpgradeStudents"
+            />
+            <el-button @click="loadUpgradeStudents">查询</el-button>
+            <span class="muted">共 {{ upgStudents.length }} 名「初高部 · 正式在读」学生</span>
+          </div>
+          <el-table
+            ref="upgTableRef"
+            v-loading="upgLoading"
+            :data="upgStudents"
+            border
+            stripe
+            size="small"
+            height="380"
+            row-key="studentId"
+            @selection-change="onUpgSelectionChange"
+          >
+            <el-table-column type="selection" width="44" />
+            <el-table-column label="学号" width="105">
+              <template #default="{ row }">{{ row.studentNo }}</template>
+            </el-table-column>
+            <el-table-column label="姓名" width="90">
+              <template #default="{ row }">{{ row.studentName }}</template>
+            </el-table-column>
+            <el-table-column label="性别" width="60" align="center">
+              <template #default="{ row }">{{ row.genderName || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="原班级" min-width="105">
+              <template #default="{ row }">{{ row.className || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="阶段" width="100">
+              <template #default="{ row }">{{ row.phaseName || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="原班主任" width="95">
+              <template #default="{ row }">{{ row.headTeacherName || '—' }}</template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <div class="upg-side">
+          <div class="upg-side__t">① 目标班级（大学部 · 开放）</div>
+          <el-select
+            v-model="upgTargetClassId"
+            filterable
+            placeholder="请选择班级"
+            style="width: 100%"
+            :loading="upgTargetLoading"
+          >
+            <el-option
+              v-for="c in upgTargets"
+              :key="c.id"
+              :label="c.phaseName ? `${c.name} · ${c.phaseName}` : c.name"
+              :value="c.id"
+            />
+          </el-select>
+          <div v-if="upgTarget" class="upg-target">
+            <div>班级：{{ upgTarget.name }}</div>
+            <div>阶段：{{ upgTarget.phaseName || '—' }}</div>
+            <div>班主任：{{ upgTarget.headTeacherName || '—' }}</div>
+          </div>
+          <div v-else class="upg-target upg-target--empty">
+            {{ upgTargets.length ? '尚未选择班级' : '暂无「开放」状态的大学部班级' }}
+          </div>
+
+          <el-divider />
+
+          <div class="upg-side__t">② 已选 {{ upgSelection.length }} 人</div>
+          <div class="upg-picked">
+            <el-tag
+              v-for="s in upgSelection"
+              :key="s.studentId"
+              size="small"
+              closable
+              @close="removeUpgPicked(s)"
+            >
+              {{ s.studentName }}
+            </el-tag>
+            <span v-if="!upgSelection.length" class="muted">请从左侧勾选学生</span>
+          </div>
+          <el-input
+            v-model="upgRemark"
+            class="upg-remark"
+            placeholder="备注（选填）"
+            maxlength="100"
+            show-word-limit
+          />
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="upgradeVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="upgSubmitting"
+          :disabled="!upgSelection.length || !upgTargetClassId"
+          @click="doUpgrade"
+        >
+          确定升云
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 新增 / 编辑 -->
-    <el-dialog v-model="editVisible" :title="form.id ? '编辑学生' : '新增学生'" width="720px" top="5vh">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
+    <el-dialog v-model="editVisible" :title="form.id ? '编辑学生' : '新增学生'" width="720px" top="5vh">      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <el-row :gutter="12">
           <el-col :span="8">
             <el-form-item label="学号">
@@ -576,13 +720,17 @@ import {
   deleteStudent,
   getStudentMeta,
   getStudentSummary,
+  listUpgradeTargets,
+  upgradeToUniversity,
   type StudentDetail,
   type StudentExtras,
   type StudentRow,
   type StudentStage,
   type StudentStageMeta,
   type StudentSummary,
+  type StudentUpgradeRow,
   type StagePlanOption,
+  type UpgradeTargetClass,
 } from '@/teaching/api/student';
 import { http } from '@/api/request';
 
@@ -1160,6 +1308,131 @@ async function doDelete(row: StudentRow) {
   load();
 }
 
+/* ---------------- ★ 升云（2026-10-20 批注） ----------------
+ * 批注：「增加【升云】功能：点击升云可以批量选择人员进行升云，只适用于初高中，
+ *   选择人员后再进行大学部要升入班级的选择，只能选择班级状态为开放的。」
+ * 口径：只列初高部「正式在读」学生；目标班级只列大学部「开放」班（后端过滤 + 兜底校验）。
+ * 结果：档案移到大学部（学号不变），初高部原档案逻辑删除，详情「基础信息」留一条升云记录。
+ */
+/** 同时能看「初高部」和「大学部」才显示按钮 —— 升云本身就是跨这两个部门 */
+const canUpgrade = computed(
+  () =>
+    stageOptions.value.some((s) => s.value === 'jh') &&
+    stageOptions.value.some((s) => s.value === 'class'),
+);
+
+const upgradeVisible = ref(false);
+const upgLoading = ref(false);
+const upgSubmitting = ref(false);
+const upgStudents = ref<StudentRow[]>([]);
+const upgSelection = ref<StudentRow[]>([]);
+const upgKeyword = ref('');
+const upgTargets = ref<UpgradeTargetClass[]>([]);
+const upgTargetClassId = ref('');
+const upgTargetLoading = ref(false);
+const upgRemark = ref('');
+const upgTableRef = ref<any>();
+const upgTarget = computed(() => upgTargets.value.find((c) => c.id === upgTargetClassId.value) || null);
+/** 详情「基础信息」里的升云记录 */
+const upgradeRows = computed<StudentUpgradeRow[]>(() => detail.value?.upgrades || []);
+
+async function openUpgrade() {
+  upgradeVisible.value = true;
+  upgKeyword.value = '';
+  upgRemark.value = '';
+  upgSelection.value = [];
+  upgTargetClassId.value = '';
+  upgTableRef.value?.clearSelection?.();
+  await Promise.all([loadUpgradeStudents(), loadUpgradeTargets()]);
+}
+
+/** 可升云学生：初高部 + 正式在读（批注口径：只有正式在读可升云） */
+async function loadUpgradeStudents() {
+  upgLoading.value = true;
+  try {
+    const r = await listStudents({
+      stage: 'jh',
+      studentStatus: StudentStatus.STUDYING,
+      keyword: upgKeyword.value || undefined,
+      page: 1,
+      size: 200,
+    });
+    upgStudents.value = r.list;
+  } catch {
+    upgStudents.value = [];
+  } finally {
+    upgLoading.value = false;
+  }
+}
+
+/** 目标班级：后端只返回「大学部 + 状态=开放」的班 */
+async function loadUpgradeTargets() {
+  upgTargetLoading.value = true;
+  try {
+    upgTargets.value = await listUpgradeTargets();
+  } catch {
+    upgTargets.value = [];
+  } finally {
+    upgTargetLoading.value = false;
+  }
+}
+
+function onUpgSelectionChange(rows: StudentRow[]) {
+  upgSelection.value = rows;
+}
+
+/** 点已选标签的 ×：同步取消表格勾选 */
+function removeUpgPicked(row: StudentRow) {
+  upgTableRef.value?.toggleRowSelection?.(row, false);
+}
+
+async function doUpgrade() {
+  if (!upgSelection.value.length) {
+    ElMessage.warning('请先勾选要升云的学生');
+    return;
+  }
+  if (!upgTargetClassId.value) {
+    ElMessage.warning('请选择要升入的大学部班级');
+    return;
+  }
+  const target = upgTarget.value;
+  const names = upgSelection.value.map((s) => s.studentName).join('、');
+  try {
+    await ElMessageBox.confirm(
+      `确认把 ${upgSelection.value.length} 名学生（${names}）升云到「${target?.name || ''}」？升云后档案移到大学部、学号不变，初高部不再显示该生。`,
+      '升云确认',
+      { type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  upgSubmitting.value = true;
+  try {
+    const r = await upgradeToUniversity({
+      studentIds: upgSelection.value.map((s) => s.studentId),
+      targetClassId: upgTargetClassId.value,
+      remark: upgRemark.value || null,
+    });
+    if (r.skipped?.length) {
+      const lines = r.skipped.map((x) => `${x.studentName || x.studentNo}：${x.reason}`).join('；');
+      await ElMessageBox.alert(
+        `已升云 ${r.moved} 人 → ${r.toClassName}。以下 ${r.skipped.length} 人未处理：${lines}`,
+        '升云结果',
+        { type: 'warning' },
+      );
+    } else {
+      ElMessage.success(`已升云 ${r.moved} 人 → ${r.toClassName}`);
+    }
+    upgradeVisible.value = false;
+    upgSelection.value = [];
+    await load(1);
+  } catch (e) {
+    ElMessage.error((e as Error).message || '升云失败');
+  } finally {
+    upgSubmitting.value = false;
+  }
+}
+
 /* ---------------- 初始化 ---------------- */
 async function loadAux() {
   meta.value = await getStudentMeta();
@@ -1237,5 +1510,64 @@ onMounted(async () => {
 .muted {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+/* ★ 2026-10-20 升云弹窗 */
+.upg-tip {
+  margin-bottom: 10px;
+}
+.upg-body {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.upg-main {
+  flex: 1;
+  min-width: 0;
+}
+.upg-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.upg-side {
+  width: 300px;
+  flex: none;
+  border-left: 1px solid var(--el-border-color-lighter);
+  padding-left: 14px;
+}
+.upg-side__t {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.upg-target {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--el-fill-color-light);
+  font-size: 12px;
+  line-height: 1.9;
+  color: var(--el-text-color-regular);
+}
+.upg-target--empty {
+  color: var(--el-text-color-secondary);
+}
+.upg-picked {  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 40px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.upg-remark {
+  margin-top: 12px;
+}
+.tsv-upg-rec {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  font-size: 13px;
 }
 </style>

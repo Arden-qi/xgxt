@@ -28,6 +28,7 @@ import type {
   StudentSaveResult,
   StudentStage,
   StudentStageMeta,
+  StudentUpgradeRow,
 } from '../shared/dto';
 import { STUDENT_DEDUP_PRIORITY, STUDENT_STAGES, STUDENT_STAGE_NAME } from '../shared/dto';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
@@ -36,6 +37,12 @@ import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { db } from '../../utils/db';
 import { StudentStatus } from 'shared-types';
 import type { StudentRepo, StudentStat } from './types';
+import { randomUUID } from 'crypto';
+import { db as classDb } from '../../class/db';
+import { tbl, tblInsTrx, tblTrx, phaseCodeCol } from '../shared/uniTable';
+import { resolveStageName } from '../../class-jh/utils/stageDict';
+import { insertUpgrade, listByStudentNo } from './upgrade.repo';
+import { ClassStatus, CLASS_STATUS_NAME, DeptCode } from 'shared-types';
 
 const REPOS: Record<StudentStage, StudentRepo> = {
   jh: repoClassJh.repo,
@@ -169,6 +176,11 @@ export async function getStudentDetail(
   await assertStageView(user, stage);
   const d = await REPOS[stage].detail(id, user);
   if (!d) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或没有访问权限');
+  // ★ 2026-10-20 升云记录：按学号挂到详情上（升云后大学那条是新 id，只有学号两边一致）
+  //   放在 service 层而不是各仓储里 —— 5 个仓储都要有，写一遍比写五遍强。
+  if (stage === 'jh' || stage === 'class') {
+    d.upgrades = await listByStudentNo(d.base.studentNo);
+  }
   return d;
 }
 
@@ -343,3 +355,275 @@ export async function listStudentClasses(user: any): Promise<StudentClassOption[
 }
 
 export { STUDENT_STAGES };
+
+/* ============================================================
+ * 升云（2026-10-20 批注）
+ * ============================================================
+ *
+ * 【批注原文】
+ *   「增加【升云】功能：点击升云可以批量选择人员进行升云，只适用于初高中，
+ *     选择人员后再进行大学部要升入班级的选择，只能选择班级状态为开放的。」+
+ *   「初高部的学生档案移动到大学部对应的班级，并增加升云的记录，
+ *     在学生档案详情中显示，在基础信息页面增加升云记录，记录信息包括原班主任、
+ *     原班级、操作人，同时升云只改变班级的相关内容，其余不变，尤其是学号不更改」
+ *
+ * 【做法 —— 档案「移动」，不是复制】
+ *   ① 大学库 `sms_class.t_class_student` 插一条新档案（学号原样搬，不改）
+ *   ② 初高库 `sms_class_jh.t_class_student` 原记录 `is_deleted = 1`
+ *      （逻辑删除：初高页面不再出现，但历史数据/审计仍可追溯）
+ *   ③ `sms_common.t_uni_student_upgrade` 记一条流水（原班级 / 原班主任 / 操作人）
+ *
+ * 【只搬「档案本身」，不搬业务流水】
+ *   成绩 / 考勤 / 末班 / 调宿这些记录仍挂在初高库原 id 上 ——
+ *   批注只要求档案与班级变更，跨学段搬流水没有业务依据（阶段也不同）。
+ *
+ * 【字段映射坑（两套列名不一样）】
+ *   native_place → origin      id_card_no → id_card
+ *   recruit_teacher_phone → recruit_phone
+ *   consult_teacher_phone → consult_phone
+ *   bed_no 初高是 varchar（'1号床'）→ 大学是 int（床位序号）
+ *   dorm_id 在初高指向初高房间表，跨库不可用 → 只保留 dorm_no 文本，避免指向不存在的房间
+ */
+
+/** 升云可选的目标班级（大学部 + 状态 = 开放） */
+export interface UpgradeTargetClass {
+  id: string;
+  name: string;
+  deptCode: number;
+  phaseCode: number | null;
+  phaseName: string;
+  headTeacherName: string | null;
+}
+
+export async function listUpgradeTargets(user: any): Promise<UpgradeTargetClass[]> {
+  await assertStageView(user, 'class');
+  const rows = (await tbl(classDb, 'sms_class', 't_class_info', 'class')
+    .where({ is_deleted: 0, class_status: ClassStatus.OPEN })
+    .orderBy('class_name', 'asc')) as Array<Record<string, any>>;
+  return rows
+    .filter((r) => Number(r.dept_code) === DeptCode.UNIVERSITY)
+    .map((r) => {
+      const phaseCode = r.stage === null || r.stage === undefined ? null : Number(r.stage);
+      return {
+        id: String(r.id),
+        name: String(r.class_name ?? ''),
+        deptCode: Number(r.dept_code),
+        phaseCode,
+        phaseName: phaseCode === null ? '' : resolveStageName(phaseCode),
+        headTeacherName: r.head_teacher_name ?? null,
+      };
+    });
+}
+
+export interface UpgradeSkipItem {
+  studentId: string;
+  studentNo: string;
+  studentName: string;
+  reason: string;
+}
+
+export interface UpgradeResult {
+  /** 成功升云的人数 */
+  moved: number;
+  /** 被跳过的（附原因，前端逐条提示） */
+  skipped: UpgradeSkipItem[];
+  /** 升入的班级名，供提示语用 */
+  toClassName: string;
+}
+
+/** 初高床位号（'1号床' / '1-上'）→ 大学床位序号（1） */
+function bedNoToInt(v: unknown): number | null {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const m = s.match(/\d+/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export async function upgradeToUniversity(
+  body: { studentIds?: string[]; targetClassId?: string; remark?: string | null },
+  user: any,
+): Promise<UpgradeResult> {
+  // 升云是跨学段动作：两个学段都要有访问权限（初高出人、大学进班）
+  await assertStageView(user, 'jh');
+  await assertStageView(user, 'class');
+
+  const ids = [...new Set((body.studentIds || []).map((x) => String(x ?? '').trim()).filter(Boolean))];
+  if (!ids.length) throw new BizError(BizCode.PARAM_ERROR, '请先勾选要升云的学生');
+
+  const targetClassId = String(body.targetClassId ?? '').trim();
+  if (!targetClassId) throw new BizError(BizCode.PARAM_ERROR, '请选择要升入的大学部班级');
+
+  const cls = (await tbl(classDb, 'sms_class', 't_class_info', 'class')
+    .where({ id: targetClassId, is_deleted: 0 })
+    .first()) as Record<string, any> | undefined;
+  if (!cls) throw new BizError(BizCode.PARAM_ERROR, '目标班级不存在或已删除');
+  if (Number(cls.dept_code) !== DeptCode.UNIVERSITY) {
+    throw new BizError(BizCode.PARAM_ERROR, '只能升入「大学部」的班级');
+  }
+  const clsStatus = Number(cls.class_status ?? 0);
+  if (clsStatus !== ClassStatus.OPEN) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `班级「${String(cls.class_name ?? '')}」当前状态是「${CLASS_STATUS_NAME[clsStatus] || '未知'}」，只能升入「开放」状态的班级`,
+    );
+  }
+
+  const operatorId = user?.userId || 'system';
+  const operatorName = user?.userName || null;
+  const now = new Date();
+  const toClassName = String(cls.class_name ?? '');
+  const toPhaseCode = cls.stage === null || cls.stage === undefined ? null : Number(cls.stage);
+
+  const result = await classDb.transaction(async (trx) => {
+    const skipped: UpgradeSkipItem[] = [];
+
+    // ① 读初高侧学生（只取未删除的）
+    const srcRows = (await tblTrx(trx, 'sms_class_jh', 't_class_student', 'jh')
+      .whereIn('id', ids)
+      .where('is_deleted', 0)) as Array<Record<string, any>>;
+    const byId = new Map(srcRows.map((r) => [String(r.id), r]));
+
+    // ② 大学侧同学号档案（含已逻辑删除的）——student_no 是唯一索引，插不进去
+    const nos = srcRows.map((r) => String(r.student_no ?? '')).filter(Boolean);
+    const existed = nos.length
+      ? ((await tblTrx(trx, 'sms_class', 't_class_student', 'class').whereIn('student_no', nos)) as Array<
+          Record<string, any>
+        >)
+      : [];
+    const existedNo = new Map(existed.map((r) => [String(r.student_no), r]));
+
+    let moved = 0;
+    for (const id of ids) {
+      const r = byId.get(id);
+      if (!r) {
+        skipped.push({ studentId: id, studentNo: '', studentName: '', reason: '学生不存在或已删除' });
+        continue;
+      }
+      const studentNo = String(r.student_no ?? '');
+      const studentName = String(r.student_name ?? '');
+
+      // 批注口径：只有「正式在读」可以升云（前端也只列这类，这里兜底）
+      if (Number(r.student_status) !== StudentStatus.STUDYING) {
+        skipped.push({
+          studentId: id,
+          studentNo,
+          studentName,
+          reason: '仅「正式在读」的学生可以升云',
+        });
+        continue;
+      }
+      const dup = existedNo.get(studentNo);
+      if (dup) {
+        skipped.push({
+          studentId: id,
+          studentNo,
+          studentName,
+          reason: dup.is_deleted
+            ? '大学部存在同号的已删除档案，学号不可复用'
+            : '大学部已存在相同学号的档案',
+        });
+        continue;
+      }
+
+      const newId = randomUUID();
+      // ③ 大学库落新档案：只换「班级相关内容」，其余字段原样搬，学号不变
+      await tblInsTrx(trx, 'sms_class', 't_class_student', 'class', {
+        id: newId,
+        student_no: studentNo,
+        student_name: studentName,
+        gender: Number(r.gender ?? 1),
+        age: r.age ?? null,
+        birth_date: r.birth_date ?? null,
+        // ★ 初高 native_place → 大学 origin
+        origin: r.native_place ?? null,
+        dept_code: DeptCode.UNIVERSITY,
+        class_id: String(cls.id),
+        class_name: toClassName,
+        [phaseCodeCol()]: toPhaseCode,
+        head_teacher_id: cls.head_teacher_id ?? null,
+        head_teacher_name: cls.head_teacher_name ?? null,
+        teacher_id: cls.teacher_id ?? null,
+        teacher_name: cls.teacher_name ?? null,
+        assistant_id: cls.assistant_id ?? null,
+        assistant_name: cls.assistant_name ?? null,
+        student_status: StudentStatus.STUDYING,
+        education: r.education ?? null,
+        graduate_school: r.graduate_school ?? null,
+        enroll_date: r.enroll_date ?? null,
+        phone: r.phone ?? null,
+        parent_name: r.parent_name ?? null,
+        parent_phone: r.parent_phone ?? null,
+        home_address: r.home_address ?? null,
+        // ★ 初高 id_card_no → 大学 id_card
+        id_card: r.id_card_no ?? null,
+        id_photo_url: r.id_photo_url ?? null,
+        household_photo_url: r.household_photo_url ?? null,
+        recruit_teacher_name: r.recruit_teacher_name ?? null,
+        recruit_phone: r.recruit_teacher_phone ?? null,
+        consult_teacher_name: r.consult_teacher_name ?? null,
+        consult_phone: r.consult_teacher_phone ?? null,
+        // 宿舍：dorm_id 是初高房间表主键，跨库指向无效 → 只保留房号 + 床位序号
+        dorm_id: null,
+        dorm_no: r.dorm_no ?? null,
+        bed_no: bedNoToInt(r.bed_no),
+        attendance_rate: r.attendance_rate ?? null,
+        repeat_count: 0,
+        remark: r.remark ?? null,
+        source_system: 'manual',
+        sync_status: 2,
+        is_deleted: 0,
+        create_time: now,
+        create_by: operatorId,
+        update_time: now,
+        update_by: operatorId,
+      });
+
+      // ④ 初高原记录逻辑删除（= 档案「移动」走）
+      await tblTrx(trx, 'sms_class_jh', 't_class_student', 'jh').where({ id }).update({
+        is_deleted: 1,
+        update_time: now,
+        update_by: operatorId,
+      });
+
+      // ⑤ 升云流水（详情「基础信息」里展示）
+      await insertUpgrade(
+        {
+          studentNo,
+          studentName,
+          fromStudentId: id,
+          fromClassId: r.class_id ?? null,
+          fromClassName: r.class_name ?? null,
+          fromHeadTeacherId: r.head_teacher_id ?? null,
+          fromHeadTeacherName: r.head_teacher_name ?? null,
+          toStudentId: newId,
+          toClassId: String(cls.id),
+          toClassName,
+          toHeadTeacherName: cls.head_teacher_name ?? null,
+          operatorId: operatorId === 'system' ? null : operatorId,
+          operatorName,
+          remark: body.remark ?? null,
+          upgradeTime: now,
+        },
+        trx,
+      );
+
+      moved += 1;
+    }
+
+    return { moved, skipped, toClassName };
+  });
+
+  return result;
+}
+
+/** 详情页用的升云记录（按学号，兼容「升云前后」两条档案） */
+export async function listUpgradesOf(studentNo: string): Promise<StudentUpgradeRow[]> {
+  try {
+    return await listByStudentNo(studentNo);
+  } catch {
+    // 迁移还没跑（表不存在）时不要让详情整个 500 —— 记录区块显示空即可
+    return [];
+  }
+}

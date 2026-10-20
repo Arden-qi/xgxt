@@ -892,6 +892,30 @@ export interface StudentDormSection {
   building: string | null;
 }
 
+/**
+ * 升云记录（2026-10-20 批注：初高部 → 大学部「开放」班级）
+ *
+ * 学生详情「基础信息」页签里展示：原班级 / 原班主任 / 升入班级 / 操作人 / 时间。
+ * ⚠️ 按**学号**关联：升云后大学那条是新学生 id，只有学号两边一致（批注要求学号不变）。
+ */
+export interface StudentUpgradeRow {
+  id: string;
+  studentNo: string;
+  studentName: string;
+  /** 原班级（初高部） */
+  fromClassName: string | null;
+  /** 原班主任 */
+  fromHeadTeacherName: string | null;
+  /** 升入班级（大学部） */
+  toClassName: string | null;
+  toHeadTeacherName: string | null;
+  operatorId: string | null;
+  /** 操作人 */
+  operatorName: string | null;
+  upgradeTime: string | null;
+  remark: string | null;
+}
+
 export interface StudentDetail {
   base: StudentRow;
   profile: StudentProfileSection;
@@ -907,6 +931,8 @@ export interface StudentDetail {
   flows: Array<Record<string, unknown>>;
   /** 末班 / 留级记录 */
   repeats: Array<Record<string, unknown>>;
+  /** 升云记录（初高部 → 大学部，2026-10-20）—— 由 service 层按学号补齐，仓储不返回 */
+  upgrades?: StudentUpgradeRow[];
   /** 其余学段特有字段（原样透传，前端不渲染、留作排查） */
   extra: Record<string, unknown> | null;
 }

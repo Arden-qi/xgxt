@@ -91,7 +91,45 @@ export interface StudentDetail {
   resume: Record<string, unknown> | null;
   flows: Array<Record<string, unknown>>;
   repeats: Array<Record<string, unknown>>;
+  /** 升云记录（初高部 → 大学部，2026-10-20）；后端按学号补齐 */
+  upgrades?: StudentUpgradeRow[];
   extra: Record<string, unknown> | null;
+}
+
+/** 升云记录（学生详情「基础信息」展示：原班级 / 原班主任 / 操作人） */
+export interface StudentUpgradeRow {
+  id: string;
+  studentNo: string;
+  studentName: string;
+  fromClassName: string | null;
+  fromHeadTeacherName: string | null;
+  toClassName: string | null;
+  toHeadTeacherName: string | null;
+  operatorId: string | null;
+  operatorName: string | null;
+  upgradeTime: string | null;
+  remark: string | null;
+}
+
+/** 升云可选的目标班级（大学部 + 状态=开放） */
+export interface UpgradeTargetClass {
+  id: string;
+  name: string;
+  deptCode: number;
+  phaseCode: number | null;
+  phaseName: string;
+  headTeacherName: string | null;
+}
+
+export interface UpgradeResult {
+  moved: number;
+  skipped: Array<{
+    studentId: string;
+    studentNo: string;
+    studentName: string;
+    reason: string;
+  }>;
+  toClassName: string;
 }
 
 export interface StudentListParams {
@@ -234,4 +272,20 @@ export function getStudentMeta() {
 
 export function getStudentSummary(params: StudentListParams) {
   return http.get<StudentSummary>('/api/teaching/student/summary', params);
+}
+
+/* ---------------- 升云（2026-10-20 批注：初高部 → 大学部开放班级） ---------------- */
+
+/** 升云可选的目标班级（后端只返回大学部 + 状态=开放的班） */
+export function listUpgradeTargets() {
+  return http.get<UpgradeTargetClass[]>('/api/teaching/student/upgrade-targets');
+}
+
+/** 批量升云：档案从初高部移动到大学部班级，学号不变 */
+export function upgradeToUniversity(body: {
+  studentIds: string[];
+  targetClassId: string;
+  remark?: string | null;
+}) {
+  return http.post<UpgradeResult>('/api/teaching/student/upgrade-cloud', body);
 }
