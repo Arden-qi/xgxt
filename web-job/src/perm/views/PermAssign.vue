@@ -712,7 +712,9 @@ async function openRoleUsers(): Promise<void> {
                 <button class="btn xs" type="button" @click="openTree('edit')">＋ 配置权限</button>
                 <button class="btn xs" type="button" @click="openCopy">从其他职位复制</button>
                 <button class="btn xs" type="button" @click="openRoleUsers">查看账号（{{ userCount }}）</button>
-                <button class="btn xs" type="button" @click="itemAdminOpen = true">＋ 新增权限</button>
+                <!-- ★ 2026-10-20 按用户要求删掉这里的「＋ 新增权限」：
+                     本页顶部工具条（重置为预置 / ＋ 新增权限 / 编辑该职位权限）已有入口，
+                     这个位置离「配置权限」太近，容易点错成"加权限点"而不是"配权限"。 -->
                 <span class="cl">共 {{ treeStats.modCount }} 个模块 / {{ treeStats.actionCount }} 个权限点</span>
               </div>
 

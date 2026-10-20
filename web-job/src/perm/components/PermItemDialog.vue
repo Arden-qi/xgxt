@@ -290,7 +290,7 @@ function payload(): PermItemSavePayload {
 
 async function save(): Promise<void> {
   if (editingPreset.value) {
-    toast('系统预置权限点只读，如需扩展请点「新建权限」', 'warn');
+    toast('系统预置权限点只读，不可修改；如需扩展请新增一条自建权限点', 'warn');
     return;
   }
   if (!validate()) return;
@@ -432,16 +432,16 @@ watch(
           <b>{{ editingPreset ? '查看预置权限点' : form.id ? '修改权限点' : '新增权限点' }}</b>
           <span v-if="editingPreset" class="tag p">预置 · 只读</span>
           <span v-else-if="form.id" class="tag g">自建 · 可改</span>
-          <button class="btn xs" type="button" style="margin-left: auto" @click="resetForm()">
-            ＋ 新建权限
-          </button>
+          <!-- ★ 2026-10-20 按用户要求删掉这里的「＋ 新建权限」按钮。
+               新建仍然可用：本弹窗每次打开都会 resetForm() 进「新增权限点」模式，
+               想再加一条，关掉弹窗从页面上的入口重新打开即可。 -->
         </div>
 
         <div v-if="editingPreset" class="notice w mb12">
           ⚠
           <div>
             「{{ form.itemName }}」是系统预置权限点，<b>不可修改</b>（业务代码按它的名字与动作判权）。
-            点右下角「＋ 新建权限」在同一个板块下加一条自己的。
+            如需扩展，请关闭本弹窗、从页面上的「＋ 新增权限」重新打开，新增一条自建权限点，不要改预置项。
           </div>
         </div>
 
@@ -590,7 +590,7 @@ watch(
         :disabled="saving || editingPreset"
         @click="save"
       >
-        {{ form.id ? '保存修改' : '保存权限点' }}
+        {{ form.id ? '保存修改' : '保存权限' }}
       </button>
     </template>
   </ProtoDialog>

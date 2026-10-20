@@ -85,8 +85,8 @@ check(
     S.assign.includes('<PermItemDialog v-model="itemAdminOpen" @saved="onItemSaved"'),
 );
 check(
-  '「＋ 新增权限」入口 2 处（页头 / 工具条；权限树底栏那处已按 2026-10-20 要求删除）',
-  count(S.assign, 'itemAdminOpen = true') === 2,
+  '「＋ 新增权限」入口 1 处（页头；工具条 + 权限树底栏两处已按 2026-10-20 要求删除）',
+  count(S.assign, 'itemAdminOpen = true') === 1,
   `实测 ${count(S.assign, 'itemAdminOpen = true')} 处`,
 );
 check(
@@ -94,6 +94,24 @@ check(
   S.assign.includes('async function onItemSaved') && S.assign.includes('assignApi.tree('),
 );
 check('权限树里给自建项打了「自建」标签', S.assign.includes('row.item.isCustom'));
+
+/* ---- 1.4 弹窗内的按钮文案（2026-10-20 用户要求） ---- */
+check(
+  '★ 弹窗右上角的「＋ 新建权限」按钮已删除',
+  !S.dlg.includes('＋ 新建权限'),
+);
+check(
+  '删除按钮后，指引文案不再指向它（不能留死指引）',
+  !S.dlg.includes('点右下角「＋ 新建权限」') && !S.dlg.includes('如需扩展请点「新建权限」'),
+);
+check(
+  '★ 新建能力没丢：打开弹窗仍会 resetForm() 进「新增权限点」模式',
+  /void loadItems\(\)\.then\(\(\) => resetForm\(\)\)/.test(S.dlg),
+);
+check(
+  '★ 新建时底部按钮文案 =「保存权限」（不再是「保存权限点」）',
+  S.dlg.includes("form.id ? '保存修改' : '保存权限'") && !S.dlg.includes('保存权限点'),
+);
 
 /* ---- 1.3 页面管理按部门分组 ---- */
 check(

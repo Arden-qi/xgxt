@@ -173,8 +173,8 @@ check(
  * ============================================================ */
 check('★ 底栏不再有「＋ 新增权限」', !FOOT.includes('＋ 新增权限'));
 check(
-  '页面另外两处「＋ 新增权限」入口仍在（页头 / 工具条）',
-  count(ASSIGN, 'itemAdminOpen = true') === 2,
+  '页面只剩 1 处「＋ 新增权限」入口（页头；工具条那处已按 2026-10-20 要求删除）',
+  count(ASSIGN, 'itemAdminOpen = true') === 1,
   `实测 ${count(ASSIGN, 'itemAdminOpen = true')} 处`,
 );
 check(
