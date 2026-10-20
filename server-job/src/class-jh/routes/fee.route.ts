@@ -34,6 +34,8 @@ import { boolFlag } from '../../utils/query';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+// ★ 2026-10-20 批量转交财务：直接复用财务自己的建单服务（凭证唯一性等规则不重复实现）
+import { addFee as financeAddFee } from '../../finance/services/fee.service';
 
 export const feeRouter = Router();
 
@@ -125,6 +127,11 @@ function toFee(r: any, remindDays: number) {
     payMethodName: r.pay_method ? nameOf(PAY_METHOD_NAME, r.pay_method) : null,
     paidAmount: r.paid_amount ?? null,
     payRemark: r.pay_remark ?? null,
+    /**
+     * 是否已转交财务（批量转交的判据）
+     * source_system='finance' + source_id 有值 = 这张单已经有对应的财务缴费单
+     */
+    transferred: r.source_system === 'finance' && !!r.source_id,
   };
 }
 
@@ -569,6 +576,147 @@ feeRouter.post(
       ok(
         { feeId: row.id, voucherUrl: voucherUrl ?? row.voucher_url ?? null, payStatus: nextStatus, financeSynced },
         '缴费登记成功',
+      ),
+    );
+  }),
+);
+
+/* ============================================================
+ * 2.6 批量转交财务（★ 2026-10-20 用户要求：整页一个「批量上传到财务缴费管理」）
+ *   GET  /api/class-jh/fee/transfer/candidates   候选列表（已登记缴费的初高单）
+ *   POST /api/class-jh/fee/transfer              把选中的单据转交财务
+ *
+ * 【“转交”到底做了什么】
+ *   在财务 `sms_finance.t_finance_fee` 里**生成对应的缴费单**（带凭证 / 实缴金额 / 缴费日期 / 备注），
+ *   财务在「缴费管理」里就能看到并核对 —— 这也是"把凭证信息转交给财务"的落地方式。
+ *   走的是财务自己的 `addFee()`，凭证唯一性、状态与凭证一致性等规则都照财务的口径执行，
+ *   不在本模块重新实现一遍（重复写规则 = 迟早对不上）。
+ *
+ * 【转交成功后】
+ *   回写 `t_class_fee.source_system='finance' + source_id=财务单id`：
+ *   · 这张单从此有财务对应单，`transferred=true`；
+ *   · 再转交会被"已转交过财务"跳过，不会重复建单；
+ *   · 以后财务改这张单，syncFeeToJh 按 (source_system, source_id) 合并回同一行，不会多出一条。
+ *
+ * 【一条失败不影响其他】逐条 try/catch，最后返回 成功 / 跳过 / 失败 三份明细。
+ * ============================================================ */
+
+feeRouter.get(
+  '/transfer/candidates',
+  checkPermission('class:fee:view'),
+  wrap(async (_req, res) => {
+    const remindDays = await getNumberSetting('feeRemindDays');
+    // 候选 = 已登记缴费（有方式或实缴金额）的初高单；已转交的也返回，前端用 transferred 区分
+    const rows = await db(FEE_TABLE)
+      .where('is_deleted', false)
+      .andWhere((qb) => {
+        qb.whereNotNull('pay_method').orWhereNotNull('paid_amount');
+      })
+      .orderBy('pay_date', 'desc')
+      .orderBy('expire_date', 'desc')
+      .limit(500)
+      .select('*');
+    res.json(ok(rows.map((r: any) => toFee(r, remindDays))));
+  }),
+);
+
+const transferSchema = z.object({
+  feeIds: z
+    .array(z.string().min(1))
+    .min(1, '请先勾选要转交的记录')
+    .max(200, '一次最多转交 200 条'),
+});
+
+feeRouter.post(
+  '/transfer',
+  checkPermission('class:fee:add'),
+  validate(transferSchema),
+  wrap(async (req, res) => {
+    const { feeIds } = (req as any).validated as z.infer<typeof transferSchema>;
+    const operator = { userId: req.user?.userId ?? '', userName: req.user?.userName ?? '' };
+    const uniq = [...new Set(feeIds)];
+
+    const rows = await db(FEE_TABLE).whereIn('id', uniq).where('is_deleted', false).select('*');
+    const byId = new Map(rows.map((r: any) => [r.id, r]));
+
+    const skipped: Array<{ feeId: string; reason: string }> = [];
+    const failed: Array<{ feeId: string; reason: string }> = [];
+    let success = 0;
+
+    for (const id of uniq) {
+      const row: any = byId.get(id);
+      if (!row) {
+        skipped.push({ feeId: id, reason: '缴费单不存在' });
+        continue;
+      }
+      if (Number(row.dept_code ?? 1) !== 1) {
+        skipped.push({ feeId: id, reason: '只有初高的缴费单能转交财务' });
+        continue;
+      }
+      if (row.pay_method == null && row.paid_amount == null) {
+        skipped.push({ feeId: id, reason: '还没登记缴费，没有凭证可转交' });
+        continue;
+      }
+      if (row.source_system === 'finance' && row.source_id) {
+        skipped.push({ feeId: id, reason: '已转交过财务' });
+        continue;
+      }
+
+      try {
+        /* 缴费方式在财务表里没有列（t_finance_fee 无 pay_method），
+           所以把「方式·备注」一起写进财务的 remark，财务核对时看得到怎么收的钱 */
+        const remarkParts = [
+          row.pay_method ? nameOf(PAY_METHOD_NAME, row.pay_method) : '',
+          row.pay_remark || '',
+        ].filter(Boolean);
+        const remark = `${remarkParts.join('·')}${row.voucher_url ? '' : '（现金收取，无凭证）'}`;
+
+        const financeFeeId = await financeAddFee(
+          {
+            studentId: row.student_id,
+            studentNo: row.student_no,
+            studentName: row.student_name,
+            classId: row.class_id ?? undefined,
+            className: row.class_name ?? undefined,
+            deptCode: 1,
+            feeType: Number(row.fee_type),
+            // 转交的是「实收金额」：没填实缴时退回应缴
+            amount: Number(row.paid_amount ?? row.fee_amount ?? 0),
+            payStatus: PayStatus.PAID, // 已收款，等财务核对
+            payDate: row.pay_date ? String(row.pay_date).slice(0, 10) : undefined,
+            expireDate: row.expire_date ? String(row.expire_date).slice(0, 10) : undefined,
+            period: row.period ?? undefined,
+            voucherUrl: row.voucher_url || undefined,
+            remark: remark || undefined,
+          },
+          operator,
+        );
+
+        await db(FEE_TABLE).where({ id }).update({
+          source_system: 'finance',
+          source_id: financeFeeId,
+          update_time: new Date(),
+          update_by: operator.userId || null,
+        });
+        success += 1;
+      } catch (e) {
+        failed.push({ feeId: id, reason: (e as Error)?.message || '转交失败' });
+      }
+    }
+
+    await writeOpLog({
+      module: 'fee',
+      bizType: '转交财务',
+      opUserId: operator.userId || undefined,
+      opUserName: operator.userName || undefined,
+      opDesc: `批量转交财务：提交 ${uniq.length} 条，成功 ${success}，跳过 ${skipped.length}，失败 ${failed.length}`,
+      afterValue: { success, skipped: skipped.length, failed: failed.length },
+    });
+
+    res.json(
+      ok(
+        { total: uniq.length, success, skipped, failed },
+        `转交完成：成功 ${success} 条${skipped.length ? `，跳过 ${skipped.length} 条` : ''}${failed.length ? `，失败 ${failed.length} 条` : ''}`,
       ),
     );
   }),

@@ -415,6 +415,13 @@ export interface FeeRecord extends BaseEntity {
   paidAmount?: number | null;
   /** 缴费备注（转账单号/说明） */
   payRemark?: string | null;
+  /**
+   * 是否已转交财务（★ 2026-10-20）
+   *
+   * 判据：source_system='finance' 且有 source_id —— 说明这张单已经有对应的财务缴费单。
+   * 批量转交时「只选未上传过」就是按这个标记过滤。
+   */
+  transferred?: boolean;
 }
 
 /** 催费记录 */

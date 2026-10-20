@@ -82,6 +82,29 @@ export interface FeePaymentPayload {
   dataUrl?: string;
 }
 
+/* ---------------- 批量转交财务 ---------------- */
+
+/**
+ * 批量转交财务（★ 2026-10-20 用户要求：整页一个「批量上传到财务缴费管理」）
+ *
+ * 「转交」= 在财务 sms_finance.t_finance_fee 里生成对应的缴费单（带凭证/金额/日期/备注），
+ * 财务在缴费管理里就能核对；成功后初高台账记下 source_system='finance' + source_id，避免重复转交。
+ */
+export interface FeeTransferPayload {
+  /** 要转交的缴费台账行 ID（一次最多 200 条） */
+  feeIds: string[];
+}
+
+/** 批量转交结果：成功/跳过/失败分开报，不因为一条失败就整体回滚 */
+export interface FeeTransferResult {
+  total: number;
+  success: number;
+  /** 跳过（已转交 / 还没登记缴费 / 不是初高单），属于正常情况 */
+  skipped: Array<{ feeId: string; reason: string }>;
+  /** 失败（财务侧拒绝等），需要人工看 */
+  failed: Array<{ feeId: string; reason: string }>;
+}
+
 /** 登记缴费响应 */
 export interface FeePaymentResult {
   feeId: string;

@@ -13,6 +13,7 @@ import type {
   FeeNotifyListQuery,
   FeePaymentPayload,
   FeePaymentResult,
+  FeeTransferResult,
 } from 'shared-types/class-jh';
 
 /**
@@ -41,6 +42,21 @@ export function exportFee(query: FeeListQuery): Promise<FeeRecord[]> {
  */
 export function submitFeePayment(payload: FeePaymentPayload): Promise<FeePaymentResult> {
   return http.post<FeePaymentResult>('/api/class-jh/fee/voucher', payload);
+}
+
+/**
+ * 批量转交财务 · 候选列表（★ 2026-10-20）
+ *
+ * 返回「已登记缴费」的初高台账行（最多 500 条），带 transferred 标记
+ * —— 弹窗里的「只选未上传过」就是挑 transferred !== true 的那些。
+ */
+export function fetchTransferCandidates(): Promise<FeeRecord[]> {
+  return http.get<FeeRecord[]>('/api/class-jh/fee/transfer/candidates');
+}
+
+/** 批量转交财务：把勾选的缴费单在财务缴费管理里生成对应单据 */
+export function transferFees(feeIds: string[]): Promise<FeeTransferResult> {
+  return http.post<FeeTransferResult>('/api/class-jh/fee/transfer', { feeIds });
 }
 
 /** 催费推送（生成可复制文案） */

@@ -10,11 +10,11 @@
  */
 
 import { computed, ref, reactive, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
-import { Search, Refresh, Download, Plus } from '@element-plus/icons-vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Search, Refresh, Download, Plus, Upload } from '@element-plus/icons-vue';
 import { FEE_TYPE_NAME, PAY_METHOD_NAME, PAY_STATUS_NAME, PayMethod, PayStatus } from 'shared-types/class-jh';
 import type { FeeRecord, FeeListQuery, ClassInfo } from 'shared-types/class-jh';
-import { fetchFeeList, exportFee, submitFeePayment } from '@/class-jh/api/fee';
+import { fetchFeeList, exportFee, submitFeePayment, fetchTransferCandidates, transferFees } from '@/class-jh/api/fee';
 import { urgeList } from '@/class/api/student';
 import { fetchFeeCallList } from '@/api/feeCall';
 import { fetchClassOptions } from '@/class-jh/api/classInfo';
@@ -325,7 +325,8 @@ function disabledFutureDate(date: Date): boolean {
 function openPayment(row: FeeRow) {
   paymentRow.value = row;
   paymentForm.payMethod = PayMethod.WECHAT;
-  paymentForm.amountYuan = Number(((row.paidAmount ?? row.feeAmount) || 0) / 100);
+  // ★ 用户要求：上传缴费金额默认带出「应缴金额」（可手动改成实际收到的）
+  paymentForm.amountYuan = Number((row.feeAmount || 0) / 100);
   paymentForm.payDate = todayStr();
   paymentForm.remark = '';
   voucherFile.value = null;
@@ -427,6 +428,83 @@ function viewVoucher(row: FeeRow) {
  */
 function hasPayment(row: FeeRow): boolean {
   return row.payMethod != null || !!row.voucherUrl;
+}
+
+/* ============ 批量上传到财务缴费管理 ============ */
+const transferVisible = ref(false);
+const transferLoading = ref(false);
+const transferSubmitting = ref(false);
+const transferRows = ref<FeeRow[]>([]);
+const transferSelected = ref<FeeRow[]>([]);
+const transferTableRef = ref<any>(null);
+
+/** 还没转交的条数（「只选未上传过」按钮上显示） */
+const untransferredCount = computed(() => transferRows.value.filter((r) => !r.transferred).length);
+
+/** 打开弹窗：拉「已登记缴费」的候选行（含已转交的，用状态列区分） */
+async function openTransfer() {
+  transferVisible.value = true;
+  transferLoading.value = true;
+  transferRows.value = [];
+  transferSelected.value = [];
+  try {
+    transferRows.value = (await fetchTransferCandidates()).map((r) => ({ ...r, dept: '初高' }) as FeeRow);
+  } catch {
+    /* 错误已统一处理 */
+  } finally {
+    transferLoading.value = false;
+  }
+}
+
+/** 全选 */
+function selectAllTransfer() {
+  transferTableRef.value?.clearSelection();
+  transferRows.value.forEach((r) => transferTableRef.value?.toggleRowSelection(r, true));
+}
+
+/** 只选未上传过（= 还没转交过财务的） */
+function selectUntransferred() {
+  transferTableRef.value?.clearSelection();
+  transferRows.value.filter((r) => !r.transferred).forEach((r) => transferTableRef.value?.toggleRowSelection(r, true));
+}
+
+function onTransferSelectionChange(rows: FeeRow[]) {
+  transferSelected.value = rows;
+}
+
+/** 提交转交：只送还没转交的，已转交的自动略过 */
+async function submitTransfer() {
+  const targets = transferSelected.value.filter((r) => !r.transferred);
+  if (!transferSelected.value.length) {
+    ElMessage.warning('请先勾选要转交的记录');
+    return;
+  }
+  if (!targets.length) {
+    ElMessage.warning('选中的记录都已转交过财务');
+    return;
+  }
+  transferSubmitting.value = true;
+  try {
+    const res = await transferFees(targets.map((r) => r.feeId));
+    const parts = [`成功 ${res.success} 条`];
+    if (res.skipped.length) parts.push(`跳过 ${res.skipped.length} 条`);
+    if (res.failed.length) parts.push(`失败 ${res.failed.length} 条`);
+    ElMessage.success(`转交完成：${parts.join('，')}`);
+    // 有跳过/失败时把原因摊开给人看，别让人猜
+    const detail = [...res.skipped, ...res.failed]
+      .slice(0, 8)
+      .map((x) => `${x.feeId.slice(-6)}：${x.reason}`)
+      .join('\n');
+    if (detail) {
+      ElMessageBox.alert(detail, '未转交明细（前 8 条）', { type: 'warning' });
+    }
+    transferVisible.value = false;
+    loadData();
+  } catch {
+    /* 错误已统一处理 */
+  } finally {
+    transferSubmitting.value = false;
+  }
 }
 
 /* ============ 导出 ============ */
@@ -536,6 +614,10 @@ onMounted(() => {
 
     <el-card shadow="never" class="table-card">
       <div class="toolbar">
+        <!-- ★ 2026-10-20 用户要求：整体一个「批量上传到财务缴费管理」入口 -->
+        <el-button v-if="query.dept === 'jh'" type="primary" :icon="Upload" @click="openTransfer">
+          批量上传到财务
+        </el-button>
         <el-button v-if="query.dept === 'jh'" :icon="Download" @click="handleExport">导出</el-button>
         <!-- ★ 2026-10-20 用户要求：催费列表来自财务管理 · 缴费管理，到期日到 20 天才进列表 -->
         <span v-if="urgeWindowDays && query.dept !== 'class' && query.dept !== 'employ'" class="window-hint">
@@ -630,6 +712,65 @@ onMounted(() => {
         @current-change="loadData"
       />
     </el-card>
+
+    <!-- 批量上传到财务缴费管理（★ 2026-10-20 用户要求：全选 / 只选未上传过 / 序号前复选框） -->
+    <el-dialog v-model="transferVisible" title="批量上传到财务缴费管理" width="1000px">
+      <div class="transfer-toolbar">
+        <el-button size="small" @click="selectAllTransfer">全选</el-button>
+        <el-button size="small" @click="selectUntransferred">只选未上传过（{{ untransferredCount }}）</el-button>
+        <span class="field-unit">
+          已选 {{ transferSelected.length }} 条 · 转交后财务在「缴费管理」里核对（已转交的会自动跳过）
+        </span>
+      </div>
+      <el-table
+        ref="transferTableRef"
+        v-loading="transferLoading"
+        :data="transferRows"
+        row-key="feeId"
+        border
+        stripe
+        size="small"
+        height="420"
+        empty-text="暂无已登记缴费的记录（先在操作列「上传缴费凭证」登记）"
+        @selection-change="onTransferSelectionChange"
+      >
+        <el-table-column type="selection" width="46" />
+        <el-table-column type="index" label="序号" width="60" align="center" />
+        <el-table-column prop="studentNo" label="学号" width="120" />
+        <el-table-column prop="studentName" label="姓名" width="90" />
+        <el-table-column prop="feeTypeName" label="缴费类型" width="90" />
+        <el-table-column label="应缴金额" width="110" align="right">
+          <template #default="{ row }">{{ formatAmount(row.feeAmount) }}</template>
+        </el-table-column>
+        <el-table-column label="实缴金额" width="110" align="right">
+          <template #default="{ row }">{{ row.paidAmount == null ? '—' : formatAmount(row.paidAmount) }}</template>
+        </el-table-column>
+        <el-table-column label="缴费方式" width="100" align="center">
+          <template #default="{ row }">{{ dash(row.payMethodName) }}</template>
+        </el-table-column>
+        <el-table-column label="缴费日期" width="110">
+          <template #default="{ row }">{{ formatDate(row.payDate) }}</template>
+        </el-table-column>
+        <el-table-column label="凭证" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.voucherUrl" type="success" size="small">已上传</el-tag>
+            <el-tag v-else type="info" size="small">未上传</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="转交状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.transferred" type="info" size="small">已转交</el-tag>
+            <el-tag v-else type="warning" size="small">未转交</el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="transferVisible = false">取消</el-button>
+        <el-button type="primary" :loading="transferSubmitting" @click="submitTransfer">
+          转交财务（{{ transferSelected.length }} 条）
+        </el-button>
+      </template>
+    </el-dialog>
 
     <!-- 登记缴费（上传缴费凭证） -->
     <el-dialog v-model="paymentVisible" title="上传缴费凭证" width="560px">
@@ -776,6 +917,13 @@ onMounted(() => {
   width: 100%;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+/* 批量转交财务：顶部全选/只选未上传过 */
+.transfer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 .voucher-title {
   margin: 14px 0 8px;
