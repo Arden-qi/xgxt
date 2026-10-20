@@ -23,10 +23,9 @@ import type {
   PermModule,
   PermRoleDetail,
   PermTreeStats,
-  PermUserListItem,
   RolePermMap,
 } from 'shared-types/perm';
-import { assignApi, roleApi, userApi } from '@/perm/api/perm';
+import { assignApi, roleApi } from '@/perm/api/perm';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
 import ProtoConfirm from '@/perm/components/ProtoConfirm.vue';
 import PermItemDialog from '@/perm/components/PermItemDialog.vue';
@@ -600,29 +599,11 @@ async function doReset(): Promise<void> {
   }
 }
 
-/* ============================================================
- * 7. 查看账号（原型 openRoleUsers）
- * ============================================================ */
-
-const usersOpen = ref(false);
-const usersLoading = ref(false);
-const roleUsers = ref<PermUserListItem[]>([]);
-
-const usersTitle = computed(() => `职位下人员 · <span class="em">${esc(currentRoleName.value)}</span>`);
-
-async function openRoleUsers(): Promise<void> {
-  if (!currentRoleId.value) return;
-  usersOpen.value = true;
-  usersLoading.value = true;
-  try {
-    const page = await userApi.list({ roleId: currentRoleId.value, page: 1, size: 100 });
-    roleUsers.value = page.list || [];
-  } catch {
-    roleUsers.value = [];
-  } finally {
-    usersLoading.value = false;
-  }
-}
+/* ★ 2026-10-20 按用户要求删除「查看账号」入口：
+     本页是"配置职位权限"的地方，看这个职位下有哪些账号属于「部门管理 / 账号管理」的职责，
+     夹在「配置权限 / 从其他职位复制」旁边容易被误点。
+     入口、弹窗、状态、openRoleUsers() 一并删除（无其他调用方）。
+     关联账号数仍在职位信息行「{{ currentRole.deptName }} · 关联账号 {{ userCount }} 人」展示。 */
 </script>
 
 <template>
@@ -711,9 +692,8 @@ async function openRoleUsers(): Promise<void> {
               <div class="perm-tools">
                 <button class="btn xs" type="button" @click="openTree('edit')">＋ 配置权限</button>
                 <button class="btn xs" type="button" @click="openCopy">从其他职位复制</button>
-                <button class="btn xs" type="button" @click="openRoleUsers">查看账号（{{ userCount }}）</button>
-                <!-- ★ 2026-10-20 按用户要求删掉这里的「＋ 新增权限」：
-                     本页顶部工具条（重置为预置 / ＋ 新增权限 / 编辑该职位权限）已有入口，
+                <!-- ★ 2026-10-20 按用户要求删掉这里的「查看账号」按钮；
+                     同轮删掉「＋ 新增权限」：本页顶部工具条（重置为预置 / ＋ 新增权限 / 编辑该职位权限）已有入口，
                      这个位置离「配置权限」太近，容易点错成"加权限点"而不是"配权限"。 -->
                 <span class="cl">共 {{ treeStats.modCount }} 个模块 / {{ treeStats.actionCount }} 个权限点</span>
               </div>
@@ -921,43 +901,7 @@ async function openRoleUsers(): Promise<void> {
       </template>
     </ProtoDialog>
 
-    <!-- ==================== 查看账号（原型 openRoleUsers） ==================== -->
-    <ProtoDialog v-model="usersOpen" :title="usersTitle" size="md">
-      <div class="notice i mb12">
-        ℹ<div>共 <b>{{ roleUsers.length }}</b> 个账号。</div>
-      </div>
-      <div v-if="usersLoading" class="empty">
-        <div class="ic">⏳</div>
-        加载中…
-      </div>
-      <table v-else-if="roleUsers.length" class="tb">
-        <thead>
-          <tr>
-            <th>姓名</th>
-            <th>部门</th>
-            <th>状态</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="u in roleUsers" :key="u.id">
-            <td><b>{{ u.userName }}</b></td>
-            <td>{{ u.deptName }}</td>
-            <td>
-              <span v-if="String(u.userStatus) === '正常'" class="tag g">正常</span>
-              <span v-else class="tag gy">{{ u.userStatus }}</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty">
-        <div class="ic">👤</div>
-        该职位下暂无账号
-      </div>
-
-      <template #footer>
-        <button class="btn" type="button" @click="usersOpen = false">关闭</button>
-      </template>
-    </ProtoDialog>
+    <!-- ★ 2026-10-20 「查看账号」弹窗整块删除（入口已删，无其他调用方） -->
 
     <!-- ==================== 确认框（原型 confirmDlg） ==================== -->
     <ProtoConfirm
