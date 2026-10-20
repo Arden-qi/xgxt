@@ -339,16 +339,15 @@ async function doExport(): Promise<void> {
                 <td class="desc num">{{ l.logTime }}</td>
                 <td><b>{{ l.operatorName }}</b></td>
                 <td>
-                  <!-- 与「账号管理 → 所属职位」同一套观感：中文名 + .tag.b 胶囊 -->
-                  <template v-if="roleList(l.operatorRole).length">
-                    <span
-                      v-for="n in roleList(l.operatorRole)"
-                      :key="n"
-                      class="tag b"
-                      style="margin: 1px 2px 1px 0"
-                      >{{ n }}</span
-                    >
-                  </template>
+                  <!-- 与「账号管理 → 所属职位」同一套观感：中文名 + .tag.b 胶囊
+                       ★ 2026-10-20 用户第二次指出「所属职位这个字段与下面的职位对齐，不要歪着」：
+                         胶囊盒子虽然在 14px（与表头文字同一起点），但胶囊自带 8px 左右内边距，
+                         胶囊**里的文字**实际落在 22px，肉眼就是表头比内容偏左 8px。
+                         `.tags` 用 -8px 外边距把胶囊整体往左顶回去，让胶囊文字与表头文字
+                         对齐（见 shared-ui.css 的 .tb .tags 注释）。 -->
+                  <span v-if="roleList(l.operatorRole).length" class="tags">
+                    <span v-for="n in roleList(l.operatorRole)" :key="n" class="tag b">{{ n }}</span>
+                  </span>
                   <span v-else class="desc">—</span>
                 </td>
                 <td>{{ l.moduleName }}</td>

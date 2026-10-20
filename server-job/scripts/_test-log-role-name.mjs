@@ -66,10 +66,12 @@ const LOG = P('server-job/src/perm/routes/log.route.ts');
 const OVW = P('server-job/src/perm/routes/overview.route.ts');
 const EXP = P('server-job/src/perm/routes/export.route.ts');
 const VIEW = P('web-job/src/perm/views/LogQuery.vue');
+const CSS = P('web-job/src/shared-ui/shared-ui.css');
 
 const svc = stripComments(read(SVC));
 const logSrc = stripComments(read(LOG));
 const viewSrc = stripComments(read(VIEW));
+const cssSrc = read(CSS);
 
 check('服务层导出 resolveLogRoleLabels', /export async function resolveLogRoleLabels/.test(svc));
 check('服务层有门户账号 title 兜底（operator_id 是 t_sys_account.id，不是 t_perm_user.id）',
@@ -97,6 +99,21 @@ check('日志列表：所属职位渲染成 .tag.b 胶囊（与账号管理同�
 check('日志列表：不再有裸的 {{ l.operatorRole }} 文本输出',
   !/\{\{\s*l\.operatorRole\s*\}\}/.test(viewSrc));
 check('日志详情：空职位不再输出空胶囊', /v-if="cur\.operatorRole"/.test(viewSrc));
+
+/* ---- 胶囊与表头必须左对齐（2026-10-20 用户第三次反馈：「不要歪着」）----
+   【踩过的坑】胶囊盒子在 14px（与表头文字同起点）看着是齐的，
+   但 .tag 自带 8px 内边距 → 胶囊**里的文字**落在 22px，肉眼就是表头偏左 8px。
+   → 容器 .tags 统一 -8px，盒子 6px / 文字 14px = 表头文字。
+   守卫：① 模板必须用 .tags 容器（不能直接平铺 .tag）；② CSS 必须有 -8px 抵消。 */
+check('日志列表：胶囊包在 .tags 容器里（-8px 抵消内边距，与表头文字对齐）',
+  /class="tags"/.test(viewSrc));
+check('日志列表：胶囊不再用行内 margin 硬调（那样多职位时会叠在一起）',
+  !/class="tag b"\s+style="margin/.test(viewSrc));
+check('CSS：.tb .tags 用 margin-left:-8px 抵消胶囊内边距',
+  /\.tb\s+\.tags\s*\{[^}]*margin-left:\s*-8px/.test(cssSrc));
+check('CSS：.tb .tags 是 inline-flex + gap（多职位胶囊按 2px 间距排，不叠）',
+  /\.tb\s+\.tags\s*\{[^}]*display:\s*inline-flex/.test(cssSrc) &&
+    /\.tb\s+\.tags\s*\{[^}]*gap:\s*2px/.test(cssSrc));
 
 /* ============================================================
  * 三、真接口：两页全量扫一遍，不允许出现英文编码

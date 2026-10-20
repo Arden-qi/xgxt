@@ -393,6 +393,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","
 .tb tbody tr:last-child td{border-bottom:none}
 .tb .acts{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .tb .num{font-variant-numeric:tabular-nums}
+
+/* ---- 表格里的「胶囊列」（所属职位 / 标签类单元格）----
+   【问题】表头文字距列边 14px，胶囊盒子也是 14px —— 盒子是齐的，
+     但胶囊自带 8px 左右内边距，**胶囊里的文字落在 22px**，
+     肉眼看到的就是「表头比下面的内容偏左 8px，歪着」
+     （2026-10-20 用户对操作日志的所属职位列提出）。
+   【口径】容器统一左顶 -8px：盒子 6px / 文字 14px = 表头文字，光学对齐。
+     只有第一颗需要顶，所以把 -8px 放在容器上，颗与颗之间用 gap 排（不用 margin）。 */
+.tb .tags{display:inline-flex;flex-wrap:wrap;gap:2px;margin-left:-8px}
 .tb-wrap{overflow-x:auto}
 
 /* ---- 部门结构：树形缩进（2026-10-19 按用户要求）----
