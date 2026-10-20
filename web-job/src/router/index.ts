@@ -5,6 +5,7 @@ import {
   ensureModuleStores,
   moduleAllowed,
   moduleOfPageCode,
+  pageModuleAllowed,
   menuAllowed,
   portalLandingPath,
 } from '@/store/modules';
@@ -215,15 +216,20 @@ const routes: RouteRecordRaw[] = [
     name: 'ClassStudentList',
     component: () => import('@/views/ClassStudentList.vue'),
     meta: { title: '班级花名册', pageCode: 'job:classStudent:view' },
-  },{
+  },
+
+  /*
+   * 2026-10-19 批注：删除独立「班级交接」页面（原 /class-transfer）。
+   * 交接入口在「班级管理」操作列的【交接】，这里只给老书签留一个跳转，
+   * 避免用户点到历史链接时白屏。
+   */
+  {
     path: '/class-transfer',
-    name: 'ClassTransfer',
-    component: () => import('@/views/ClassTransfer.vue'),
-    meta: { title: '班级管理', pageCode: 'job:classTransfer:view' },
+    redirect: '/teaching/class',
   },
   {
     path: '/transfer',
-    redirect: '/class-transfer',
+    redirect: '/teaching/class',
   },
 
   /* ============ 实训：未开发模块（占位页 + 权限受控） ============ */
@@ -424,9 +430,9 @@ router.beforeEach(async (to) => {
   //   根因同源 —— 门户 modules 是模块级权威，但这里只校了两套班级模块，
   //   于是「门户只授权 perm、权限库里却是系统管理员角色」的账号（linx）
   //   直连 /class、/edu/student 照样能进。
-  //   现在统一走 moduleOfPageCode()，一处映射、两处（App.vue 菜单 + 本守卫）共用。
-  const needModule = moduleOfPageCode(pageCode);
-  if (needModule && !moduleAllowed(needModule)) {
+  //   现在统一走 pageModuleAllowed()，一处映射、两处（App.vue 菜单 + 本守卫）共用。
+  //   ★ 2026-10-19：共用页（待接收学员）允许任一相关模块放行。
+  if (!pageModuleAllowed(pageCode)) {
     // 落到「当前账号有权限的任意一个页面」，避免把他甩进死循环
     const firstAllowed = myPages.value.find((p) => {
       if (p.path.includes('/:')) return false;

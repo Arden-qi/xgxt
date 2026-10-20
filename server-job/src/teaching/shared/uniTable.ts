@@ -508,9 +508,9 @@ export function tbl(
   db: Knex,
   dbName: string,
   table: string,
-  stage: TeachingStage,
-): Knex.QueryBuilder<any, any[]> {
-  // ★ P8（2026-10-19）：老表已 DROP，开关关分支删除——统一表是唯一真源
+  stage: TeachingStage | 'emp',
+): Knex.QueryBuilder {
+  if (!USE_UNI_TABLE) return db(table);
   const uni = UNI_MAP[`${dbName}.${table}`];
   if (!uni) return db(qualify(db, dbName, table)); // 未归一的表 → 仍走老库
   return uniDb(uni).where({ edu_stage: stage });
@@ -621,8 +621,8 @@ export function tblTrx(
   trx: Knex,
   dbName: string,
   table: string,
-  stage: TeachingStage,
-): Knex.QueryBuilder<any, any[]> {
+  stage: TeachingStage | 'emp',
+): Knex.QueryBuilder {
   // ⚠️ 开关关时也要带库名前缀（跨库事务场景，见上方说明）
   // ★ P8：开关关分支删除（老表已 DROP）——统一表路径固定生效
   const uni = UNI_MAP[`${dbName}.${table}`];
@@ -649,7 +649,7 @@ export function ins(
   db: Knex,
   dbName: string,
   table: string,
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   payload: Record<string, any>,
 ): Knex.QueryBuilder {
   // ★ P8：开关关分支删除
@@ -669,7 +669,7 @@ export function upd(
   qb: Knex.QueryBuilder,
   dbName: string,
   table: string,
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
 ): Knex.QueryBuilder {
   // ★ P8：开关关分支删除——update 一律补 edu_stage 条件（防跨学段误更新）
   return qb.where({ edu_stage: stage });
@@ -700,6 +700,17 @@ export function upd(
  *   它经过验证、且开关关时带库名前缀（跨库事务不会 ER_NO_SUCH_TABLE）。
  *   → **事务内读写统一表，一律用 `tblTrx` / `tblInsTrx`**，不要再造第二个同名函数。
  */
+export function trxTbl(
+  trx: any,
+  dbName: string,
+  table: string,
+  stage: TeachingStage | 'emp',
+): any {
+  if (!USE_UNI_TABLE) return trx(table);
+  const uni = UNI_MAP[`${dbName}.${table}`];
+  if (!uni) return trx(table);
+  return trx(uni).where({ edu_stage: stage });
+}
 
 /* ============================================================
  * ★ 写入（insert）
@@ -1051,7 +1062,7 @@ export async function tblIns(
   db: Knex,
   dbName: string,
   table: string,
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   payload: Record<string, any>,
 ): Promise<any> {
   // ★ P8：开关关分支删除（老表已 DROP）——insert 一律走统一表
@@ -1091,7 +1102,7 @@ export async function tblInsTrx(
   trx: Knex,
   dbName: string,
   table: string,
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   payload: Record<string, any>,
 ): Promise<any> {
   // ★ P8：开关关分支删除（老表已 DROP）——insert 一律走统一表
@@ -1178,7 +1189,7 @@ export function uniScope<T extends Record<string, any>>(qb: T): T {
  * ============================================================ */
 
 /** 班级（t_uni_class） */
-export async function listUniClasses(stage: TeachingStage, where: Record<string, any> = {}) {
+export async function listUniClasses(stage: TeachingStage | 'emp', where: Record<string, any> = {}) {
   const qb = uniDb('t_uni_class').where({ is_deleted: false, edu_stage: stage });
   for (const [k, v] of Object.entries(where)) {
     if (v !== undefined && v !== null && v !== '') qb.andWhere(k, v);
@@ -1186,7 +1197,7 @@ export async function listUniClasses(stage: TeachingStage, where: Record<string,
   return qb.select('*');
 }
 
-export async function getUniClass(stage: TeachingStage, id: string) {
+export async function getUniClass(stage: TeachingStage | 'emp', id: string) {
   const r = await uniDb('t_uni_class')
     .where({ id, is_deleted: false, edu_stage: stage })
     .first();
@@ -1194,7 +1205,7 @@ export async function getUniClass(stage: TeachingStage, id: string) {
 }
 
 /** 学生主档（t_uni_student） */
-export async function listUniStudents(stage: TeachingStage, where: Record<string, any> = {}) {
+export async function listUniStudents(stage: TeachingStage | 'emp', where: Record<string, any> = {}) {
   const qb = uniDb('t_uni_student').where({ is_deleted: false, edu_stage: stage });
   for (const [k, v] of Object.entries(where)) {
     if (v !== undefined && v !== null && v !== '') qb.andWhere(k, v);
@@ -1202,7 +1213,7 @@ export async function listUniStudents(stage: TeachingStage, where: Record<string
   return qb.select('*');
 }
 
-export async function getUniStudent(stage: TeachingStage, id: string) {
+export async function getUniStudent(stage: TeachingStage | 'emp', id: string) {
   const r = await uniDb('t_uni_student')
     .where({ id, is_deleted: false, edu_stage: stage })
     .first();
@@ -1210,7 +1221,7 @@ export async function getUniStudent(stage: TeachingStage, id: string) {
 }
 
 /** 花名册（t_uni_class_student） */
-export async function listUniRoster(stage: TeachingStage, classId: string) {
+export async function listUniRoster(stage: TeachingStage | 'emp', classId: string) {
   return uniDb('t_uni_class_student')
     .where({ is_deleted: false, edu_stage: stage, class_id: classId })
     .select('*');
@@ -1218,7 +1229,7 @@ export async function listUniRoster(stage: TeachingStage, classId: string) {
 
 /** 出勤（t_uni_attendance） */
 export async function listUniAttendance(
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   where: Record<string, any> = {},
 ) {
   const qb = uniDb('t_uni_attendance').where({ is_deleted: false, edu_stage: stage });
@@ -1229,7 +1240,7 @@ export async function listUniAttendance(
 }
 
 /** 考试（t_uni_exam） */
-export async function listUniExams(stage: TeachingStage, where: Record<string, any> = {}) {
+export async function listUniExams(stage: TeachingStage | 'emp', where: Record<string, any> = {}) {
   const qb = uniDb('t_uni_exam').where({ is_deleted: false, edu_stage: stage });
   for (const [k, v] of Object.entries(where)) {
     if (v !== undefined && v !== null && v !== '') qb.andWhere(k, v);
@@ -1238,14 +1249,14 @@ export async function listUniExams(stage: TeachingStage, where: Record<string, a
 }
 
 /** 考试字段（t_uni_exam_field） */
-export async function listUniExamFields(stage: TeachingStage, examId?: string) {
+export async function listUniExamFields(stage: TeachingStage | 'emp', examId?: string) {
   const qb = uniDb('t_uni_exam_field').where({ is_deleted: false, edu_stage: stage });
   if (examId) qb.andWhere('exam_id', examId);
   return qb.select('*');
 }
 
 /** 末班（t_uni_repeat）—— 注意 from_stage/to_stage 仍是阶段码 int，原样读 */
-export async function listUniRepeats(stage: TeachingStage, where: Record<string, any> = {}) {
+export async function listUniRepeats(stage: TeachingStage | 'emp', where: Record<string, any> = {}) {
   const qb = uniDb('t_uni_repeat').where({ is_deleted: false, edu_stage: stage });
   for (const [k, v] of Object.entries(where)) {
     if (v !== undefined && v !== null && v !== '') qb.andWhere(k, v);
@@ -1254,7 +1265,7 @@ export async function listUniRepeats(stage: TeachingStage, where: Record<string,
 }
 
 /** 调宿/退宿申请（t_uni_dorm_apply） */
-export async function listUniDormApplies(stage: TeachingStage, where: Record<string, any> = {}) {
+export async function listUniDormApplies(stage: TeachingStage | 'emp', where: Record<string, any> = {}) {
   const qb = uniDb('t_uni_dorm_apply').where({ is_deleted: false, edu_stage: stage });
   for (const [k, v] of Object.entries(where)) {
     if (v !== undefined && v !== null && v !== '') qb.andWhere(k, v);
@@ -1266,7 +1277,7 @@ export async function listUniDormApplies(stage: TeachingStage, where: Record<str
  * 计数（给 /summary 用）
  * ============================================================ */
 
-export async function countUni(table: string, stage: TeachingStage, where: Record<string, any> = {}) {
+export async function countUni(table: string, stage: TeachingStage | 'emp', where: Record<string, any> = {}) {
   const qb = uniDb(table).where({ is_deleted: false, edu_stage: stage });
   for (const [k, v] of Object.entries(where)) {
     if (v !== undefined && v !== null && v !== '') qb.andWhere(k, v);

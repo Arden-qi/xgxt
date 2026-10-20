@@ -60,7 +60,7 @@ function isTeachingStaff(roles: string[]): boolean {
  * @returns null = 不限；[] = 无权（调用方应直接返回空结果）
  */
 export async function visibleClassIds(
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   user: any,
 ): Promise<string[] | null> {
   const roles: string[] = user?.roles || [];
@@ -132,7 +132,7 @@ export async function visibleClassIds(
 export async function applyClassScope(
   qb: any,
   column: string,
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   user: any,
 ): Promise<boolean> {
   const ids = await visibleClassIds(stage, user);
@@ -144,7 +144,7 @@ export async function applyClassScope(
 
 /** 某个班是否在当前账号的数据范围内（写操作/详情用） */
 export async function assertClassInScope(
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   classId: string | null | undefined,
   user: any,
   what = '该班级',
@@ -163,7 +163,7 @@ export async function assertClassInScope(
  * 成绩保存体里只有 studentId、没有 classId，所以按学生反查所在班级再判定。
  */
 export async function assertStudentsInScope(
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   studentIds: string[],
   user: any,
   what = '该班级',
@@ -190,7 +190,7 @@ export async function assertStudentsInScope(
 
 /** 多条班级是否都在范围内（跨班考试这类：要求全部命中，否则整条不可见） */
 export async function assertClassesInScope(
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   classIds: Array<string | null | undefined>,
   user: any,
   what = '该班级',
@@ -217,7 +217,7 @@ export async function assertClassesInScope(
 export async function applyClassScopeKeepNull(
   qb: any,
   column: string,
-  stage: TeachingStage,
+  stage: TeachingStage | 'emp',
   user: any,
 ): Promise<boolean> {
   const ids = await visibleClassIds(stage, user);

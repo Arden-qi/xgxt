@@ -22,9 +22,12 @@ import { BizCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
+// 升实训单独一个文件（跨库搬迁逻辑较重，且不参与班级仓储的适配器分发）
+import * as trainingSvc from './training';
 import { transferStudent, transferTargets } from './transfer';
-import type { ClassListQuery, TeachingStage } from '../shared/dto';
+import type { ClassListQuery, ClassStage, TeachingStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
+import { normalizeClassroom } from '../shared/format';
 
 export const teachingClassRouter = Router();
 
@@ -52,10 +55,10 @@ function numOrUndef(v: unknown): number | undefined {
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
 }
-function reqStage(v: unknown): TeachingStage {
+function reqStage(v: unknown): ClassStage {
   return svc.assertStage(v);
 }
-function optStage(v: unknown): TeachingStage | undefined {
+function optStage(v: unknown): ClassStage | undefined {
   if (v === undefined || v === null || v === '') return undefined;
   return svc.assertStage(v);
 }
@@ -85,7 +88,7 @@ function requireId(v: unknown): string {
  *   规则：**NOT NULL 列的 null 一律降级成 undefined（= 不修改）**，
  *        所以下面 deptCode / phaseCode / classStatus 都用 numOrUndef（它已经把 null 归成 undefined）。
  */
-function buildSaveBody(b: Record<string, any>, stage: TeachingStage) {
+function buildSaveBody(b: Record<string, any>, stage: ClassStage) {
   // 三张表里这几列都是 NOT NULL，传 null 会炸库或抹数据 → null 一律转 undefined
   const deptCode = numOrUndef(b.deptCode);
   const phaseCode = numOrUndef(b.phaseCode);
@@ -97,6 +100,10 @@ function buildSaveBody(b: Record<string, any>, stage: TeachingStage) {
     classCode: strOrNull(b.classCode),
     deptCode,
     phaseCode,
+    // ★ 2026-10-16：阶段方案三字段（可空 —— 老班级/不选方案时不传）
+    schemeId: strOrNull(b.schemeId),
+    schemeStageId: strOrNull(b.schemeStageId),
+    schemeStageName: strOrNull(b.schemeStageName),
     headTeacherId: strOrNull(b.headTeacherId),
     headTeacherName: strOrNull(b.headTeacherName),
     teacherId: strOrNull(b.teacherId),
@@ -108,7 +115,8 @@ function buildSaveBody(b: Record<string, any>, stage: TeachingStage) {
     employmentTeacherId: strOrNull(b.employmentTeacherId),
     employmentTeacherName: strOrNull(b.employmentTeacherName),
     universityNo: strOrNull(b.universityNo),
-    classroom: strOrNull(b.classroom),
+    // ★ 2026-10-19 教室统一成「楼栋-房间号」（A栋-102 / 教学楼 A-102 → A-102）
+    classroom: normalizeClassroom(strOrNull(b.classroom)),
     openDate: dateStr(b.openDate),
     closeDate: dateStr(b.closeDate),
     classStatus,
@@ -216,11 +224,47 @@ teachingClassRouter.post(
   }),
 );
 
+/* ============================================================
+ * 8/9. 班级交接（2026-10-19 批注）
+ *   一次交接 = 5 个岗位（班主任/教员/助教/项目经理/就业老师）同时换人，
+ *   提交即生效（不走审批），并在详情抽屉里留一条记录。
+ * ============================================================ */
+
+/** 8. 某班的交接记录 */
+teachingClassRouter.get(
+  '/handover/list',
+  wrap(async (req, res) => {
+    const stage = reqStage(req.query.stage);
+    const classId = requireId(req.query.classId);
+    res.json(ok(await svc.listClassHandovers(stage, classId, req.user), '查询成功'));
+  }),
+);
+
+/** 9. 提交交接（只带「要换的新人」，没带的岗位视为不变） */
+teachingClassRouter.post(
+  '/handover',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    const classId = requireId(b.classId);
+    const row = await svc.handoverClass({ ...b, stage, classId }, req.user);
+    res.json(ok(row, '交接已生效'));
+  }),
+);
+
 /** 7. 元信息（各学段特性：有无编号 / 有无结业日期 / 阶段码选项） */
 teachingClassRouter.get(
   '/meta',
   wrap(async (req, res) => {
     res.json(ok(await svc.listClassMeta(req.user), '查询成功'));
+  }),
+);
+
+/** 7b. 阶段方案选项（★ 2026-10-16：班级表单的「阶段方案 / 阶段」两个下拉用） */
+teachingClassRouter.get(
+  '/scheme-options',
+  wrap(async (req, res) => {
+    res.json(ok(await svc.listSchemeOptions(req.user), '查询成功'));
   }),
 );
 
@@ -248,18 +292,45 @@ teachingClassRouter.get(
     res.json(ok({ classCode: await svc.genClassCodeFor(stage) }));
   }),
 );
+
 /* ============================================================
- * 11. 学生换班（末班 / 升班）
- *   末班：成绩不好 → 转到进度相同或更慢的班重修
- *   升班：成绩好   → 跳到进度更快的班
+ * 11. 升实训（2026-10-20 批注）
+ *   大学部的班 → 就业部（实训）：可选新班级名 / 就业部阶段方案 /
+ *   项目经理 / 就业老师；不再有班主任、教员、助教；整班学生一起转过去。
+ *   口径与实现细节见 class/training.ts 头部。
+ * ============================================================ */
+teachingClassRouter.post(
+  '/training-upgrade',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const r = await trainingSvc.upgradeClassToTraining(
+      {
+        classId: requireId(b.classId),
+        className: str(b.className),
+        phaseCode: numOrUndef(b.phaseCode),
+        projectManagerId: str(b.projectManagerId),
+        projectManagerName: str(b.projectManagerName),
+        employmentTeacherId: str(b.employmentTeacherId),
+        employmentTeacherName: str(b.employmentTeacherName),
+        remark: strOrNull(b.remark) ?? null,
+      },
+      req.user,
+    );
+    res.json(ok(r, `已升实训：${r.targetClassName}（${r.classCode}），转入 ${r.moved} 人`));
+  }),
+);
+
+/* ============================================================
+ * 12. 学生换班（末班 / 升班）— 成绩管理行操作用
+ *   末班：成绩不达标 → 进度相同或更慢的班重修
+ *   升班：成绩达标   → 进度更快的班
  *   ⚠️ 直接生效，不走待接收审批
  * ============================================================ */
 
-/** 11.1 可选目标班级（按进度过滤） */
 teachingClassRouter.get(
   '/transfer-targets',
   wrap(async (req, res) => {
-    const stage = reqStage(req.query.stage);
+    const stage = req.query.stage as TeachingStage;
     const fromClassId = str(req.query.fromClassId);
     if (!fromClassId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
     const mode = req.query.mode === 'promote' ? 'promote' : 'repeat';
@@ -267,12 +338,10 @@ teachingClassRouter.get(
   }),
 );
 
-/** 11.2 执行换班 */
 teachingClassRouter.post(
   '/transfer',
   wrap(async (req, res) => {
     const b = req.body || {};
-    const stage = reqStage(b.stage);
     const studentId = str(b.studentId);
     const fromClassId = str(b.fromClassId);
     const toClassId = str(b.toClassId);
@@ -281,7 +350,7 @@ teachingClassRouter.post(
     }
     const out = await transferStudent(
       {
-        stage,
+        stage: b.stage as TeachingStage,
         studentId,
         fromClassId,
         toClassId,

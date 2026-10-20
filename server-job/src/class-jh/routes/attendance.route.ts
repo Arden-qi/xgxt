@@ -210,15 +210,15 @@ attendanceRouter.post(
 
     // 明细学生必须属于该班「应到」集合，否则直接拒绝：
     // 避免写入 NOT NULL 的 student_no/student_name 时落 NULL（原先报 50001），也避免留下半截台账。
-    const invalidDetails = detailInput.filter((d) => !studentMap.has(d.studentId));
+    const invalidDetails = detailInput.filter((d: any) => !studentMap.has(d.studentId));
     if (invalidDetails.length) {
       throw new BizError(
         BizCode.STUDENT_NOT_FOUND,
-        `以下学生不在该班应到名单中：${invalidDetails.map((d) => d.studentId).join('、')}`,
+        `以下学生不在该班应到名单中：${invalidDetails.map((d: any) => d.studentId).join('、')}`,
       );
     }
 
-    const actualCount = detailInput.filter((d) => presentStatuses.includes(d.attendanceStatus)).length;
+    const actualCount = detailInput.filter((d: any) => presentStatuses.includes(d.attendanceStatus)).length;
     const attendanceRate = shouldCount > 0 ? Number(((actualCount / shouldCount) * 100).toFixed(2)) : 0;
 
     const now = new Date();
@@ -272,8 +272,8 @@ attendanceRouter.post(
       const prevDetails = (await tblTrx(trx, DB, DETAIL_TABLE, STAGE)
         .where({ attendance_id: attId })
         .select('id', 'student_id')) as Array<Record<string, any>>;
-      const prevMap = new Map(prevDetails.map((r) => [String(r.student_id), String(r.id)]));
-      const submittedIds = new Set(detailInput.map((d) => String(d.studentId)));
+      const prevMap = new Map(prevDetails.map((r: any) => [String(r.student_id), String(r.id)]));
+      const submittedIds = new Set(detailInput.map((d: any) => String(d.studentId)));
 
       // 本次未提交的旧明细 → 逻辑删除（保留审计，禁止物理删除）
       const staleIds = prevDetails.filter((r) => !submittedIds.has(String(r.student_id))).map((r) => String(r.id));

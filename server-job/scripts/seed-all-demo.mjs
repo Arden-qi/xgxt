@@ -283,7 +283,7 @@ const E = {
   CST_WAIT_ASSIGN: 1, CST_WAIT_INTERVIEW: 2, CST_TRIAL_WAIT_CLASS: 4,
   CST_TRIAL: 5, CST_FULL_FEE_PENDING: 6, CST_FORMAL: 7,
   CST_NOT_ENROLLED: 11, CST_LOST: 12,
-  DEPT_JH: 1, DEPT_UNIV: 2,
+  DEPT_JH: 1, DEPT_UNIV: 2, DEPT_EMP: 3, // 2026-10-19：就业部（实训也归它）
 };
 
 /* 缴费标准（分）——与财务 t_finance_fee_standard 一致 */
@@ -973,13 +973,20 @@ function seedClass(conn) {
 function seedClassJh(conn) {
   say('\n【4/7】初高 sms_class_jh');
 
-  // 9.1 阶段字典
+  // 9.1 阶段方案（★ 2026-10-16：一个方案可含多个阶段）
+  const PLANS = [
+    ['JHPLAN-JH', '初高部阶段方案', 1],
+    ['JHPLAN-UNI', '大学部阶段方案', 2],
+  ].map(([id, name, dept], i) => base(id, { plan_name: name, dept_code: dept, sort_no: i }));
+
+  // 9.1.1 阶段字典（挂在方案下）
   const STAGES = [
     [101, '预科', 1, 3], [102, '初中部1期', 1, 6], [103, '初中部2期', 1, 6], [104, '初中部3期', 1, 6],
     [105, '高中部1期', 1, 6], [106, '高中部2期', 1, 6], [107, '高中部3期', 1, 6],
     [201, '一阶段', 2, 4], [202, '二阶段', 2, 4], [203, '三阶段', 2, 4], [204, '四阶段', 2, 4],
   ].map(([code, name, dept, months], i) => base(`JHSTG-${code}`, {
     stage_code: code, stage_name: name, dept_code: dept, study_months: months, sort_no: i,
+    plan_id: dept === 2 ? 'JHPLAN-UNI' : 'JHPLAN-JH',
   }));
 
   // 9.2 系统设置
@@ -1172,6 +1179,7 @@ function seedClassJh(conn) {
   return {
     classes, stu, fees, att, details, exams, scores,
     async write() {
+      await insertMany(conn, `${DB.cjh}.t_class_stage_plan`, PLANS);
       await insertMany(conn, `${DB.cjh}.t_class_stage`, STAGES);
       await insertMany(conn, `${DB.cjh}.t_class_setting`, settings);
       await insertMany(conn, `${DB.cjh}.t_class_info`, classes);
@@ -1325,10 +1333,9 @@ function seedJob(conn) {
 
   // 11.1 实训班
   const classes = [base(JOB_CLASS.id, {
-    class_name: JOB_CLASS.name, class_code: JOB_CLASS.name, dept_code: E.DEPT_UNIV, stage: JOB_CLASS.stage,
-    /* ★ 2026-10-15：实训阶段的「班主任」= 项目经理（斌哥明确：项目经理职责等同实训阶段班主任）。
-     *   原来这里挂的是就业老师（S.job），导致项目经理 sunjl 登录后「我带的班」查空。 */
-    head_teacher_id: S.pm.id, head_teacher_name: S.pm.name,
+    class_name: JOB_CLASS.name, class_code: JOB_CLASS.name, dept_code: E.DEPT_EMP, stage: JOB_CLASS.stage,
+    stage_key: 'job',
+    head_teacher_id: S.job.id, head_teacher_name: S.job.name,
     teacher_id: null, teacher_name: null, assistant_id: null, assistant_name: null,
     classroom: JOB_CLASS.room, open_date: D(-60), close_date: null,
     student_count: jobStu.length, class_status: E.CLS_OPEN, attendance_rate: 97.0,
@@ -1343,9 +1350,8 @@ function seedJob(conn) {
   const baseRows = jobStu.map((s) => {
     return base(`JSB-${s.no}`, {
       student_no: s.no, student_name: s.name, gender: s.gender, age: s.age,
-      dept_code: E.DEPT_UNIV, class_id: JOB_CLASS.id, class_name: JOB_CLASS.name,
-      /* ★ 实训学生也挂项目经理（实训阶段班主任），否则项目经理看不到自己的学生 */
-      head_teacher_id: S.pm.id, head_teacher_name: S.pm.name,
+      dept_code: E.DEPT_EMP, stage_key: 'job', class_id: JOB_CLASS.id, class_name: JOB_CLASS.name,
+      head_teacher_id: S.job.id, head_teacher_name: S.job.name,
       student_status: E.ST_TRAINING, stage: JOB_CLASS.stage,
       phone: phone(seqOf(s.no)), parent_phone: parentPhone(seqOf(s.no)),
       education: '高中', enroll_date: D(-120), attendance_rate: 97.0, repeat_count: 0,

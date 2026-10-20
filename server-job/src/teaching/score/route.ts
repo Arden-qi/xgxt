@@ -12,7 +12,7 @@ import { BizError } from '../../middleware/errorHandler';
 import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 import { getScoreFormula } from '../shared/conf';
-import type { TeachingStage } from '../shared/dto';
+import type { ScoreRepeatBody, ScoreUpdateBody, TeachingStage } from '../shared/dto';
 import { isTeachingStage } from '../shared/dto';
 
 export const teachingScoreRouter = Router();

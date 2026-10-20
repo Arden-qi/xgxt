@@ -138,23 +138,21 @@ export const MENU: MenuNode[] = [
       domainNode('student'),
       domainNode('class'),
 
-      {
-        title: '班级交接',
-        path: '/class-transfer',
-        pageCode: 'job:classTransfer:view',
-        owner: '实训',
-        stage: '已完成',
-        phase: '实训',
-        desc: '换班交接：整个班换负责人（班主任/教员/助教），学生不动，提交即生效并留存快照。',
-      },
+      /*
+       * 2026-10-19 批注：删除左侧「班级交接」独立菜单（原 /class-transfer）。
+       * 交接功能本身保留 —— 入口在「班级管理」操作列的【交接】按钮，
+       * 交接记录在班级详情抽屉里；后端 /api/job/class-transfer 接口未动。
+       */
+
       {
         title: '待接收学员',
         path: '/class/consult',
         pageCode: 'class:consult:view',
-        owner: '大学部',
+        // ★ 2026-10-19：初高也走「推送 → 班主任接收」，这一页两个学段共用
+        owner: '初高中部 / 大学部',
         stage: '已完成',
-        phase: '大学',
-        desc: '咨询端推来的待接收学员：接收 / 拒绝。',
+        phase: '初高部 / 大学部',
+        desc: '咨询端推来的待接收学员：接收 / 拒绝（初高、大学共用）。',
       },
 
       domainNode('attendance'),
@@ -201,8 +199,8 @@ export const MENU: MenuNode[] = [
         pageCode: 'classjh:setting:view',
         owner: '初高中部',
         stage: '已完成',
-        phase: '初高',
-        desc: '出勤达标线与统计口径、催费提醒天数、封班可转入类型、学习阶段字典。',
+        phase: '初高部',
+        desc: '出勤达标线与统计口径、催费提醒天数、封班可转入类型、阶段方案（方案名称+所属部门+多阶段）。',
       },
     ],
   },

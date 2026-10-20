@@ -415,7 +415,7 @@ examRouter.get(
 
     // 合计行
     const total = list.reduce(
-      (acc, r) => ({
+      (acc: any, r: any) => ({
         classId: undefined,
         className: '全部班合计',
         studentCount: acc.studentCount + r.studentCount,

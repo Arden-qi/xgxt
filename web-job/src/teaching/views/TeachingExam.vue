@@ -28,7 +28,7 @@ import { stageVisible } from '@/teaching/access';
 import { isReadOnlyUser } from '@/store/permission';
 
 const STAGE_ORDER: TeachingStage[] = ['jh', 'class', 'job'];
-const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高', class: '大学', job: '就业' };
+const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高部', class: '大学部', job: '实训' };
 
 const availableStages = computed(() => STAGE_ORDER.filter((s) => stageVisible('exam', s)));
 
@@ -307,7 +307,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="没有考试记录（换个学段或日期试试）" />
+        <el-empty description="没有考试记录（换个部门或日期试试）" />
       </template>
     </el-table>
 
@@ -354,7 +354,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
             <el-table-column prop="name" label="字段" width="160" />
             <el-table-column prop="type" label="类型" width="120" />
             <template #empty>
-              <span class="te-muted">该学段没有自定义字段</span>
+              <span class="te-muted">该部门没有自定义字段</span>
             </template>
           </el-table>
         </template>

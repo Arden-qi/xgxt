@@ -108,8 +108,8 @@ dormApplyRouter.get(
 
     // 申请表只存 room_no / bed_id —— 这里批量补「楼栋名 + 床位号」，
     // 否则前端「原房间/床位」只能显示一串床位 UUID（看不懂）。
-    const roomIds = [...new Set(rows.flatMap((r: any) => [r.from_room_id, r.to_room_id]).filter(Boolean))];
-    const bedIds = [...new Set(rows.flatMap((r: any) => [r.from_bed_id, r.to_bed_id]).filter(Boolean))];
+    const roomIds = [...new Set<string>(rows.flatMap((r: any) => [r.from_room_id, r.to_room_id] as string[]).filter(Boolean))];
+    const bedIds = [...new Set<string>(rows.flatMap((r: any) => [r.from_bed_id, r.to_bed_id] as string[]).filter(Boolean))];
     const roomRows = roomIds.length
       ? await tbl(db, DB, ROOM_TABLE, STAGE).whereIn('id', roomIds).select('id', 'building_name')
       : [];

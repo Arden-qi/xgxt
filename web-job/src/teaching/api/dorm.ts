@@ -17,9 +17,9 @@ export type DormStage = 'jh' | 'class' | 'job';
 export const CLASS_DORM_STAGES: DormStage[] = ['jh', 'class', 'job'];
 
 export const DORM_STAGE_NAME: Record<DormStage, string> = {
-  jh: '初高',
-  class: '大学',
-  job: '就业',
+  jh: '初高部',
+  class: '大学部',
+  job: '实训',
 };
 
 /** 统一房间状态 1 使用中 / 2 空置 / 3 维修 / 4 停用 */

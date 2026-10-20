@@ -134,3 +134,80 @@ export function calcAge(birth: unknown): number | null {
   if (m < 0 || (m === 0 && now.getDate() < b.getDate())) age -= 1;
   return age >= 0 && age < 150 ? age : null;
 }
+
+/**
+ * 从身份证号提取出生日期（YYYY-MM-DD）；提取不出返回 null
+ *
+ * 【为什么要有它】2026-10-15 学生档案改版：表单里「出生日期」输入框取消，
+ * 改为录身份证号 → 系统按身份证号里的出生日期自动回填 birth_date，
+ * 年龄由 birth_date 实时计算（见 calcAge），实现「每年自动更新」。
+ *
+ * 支持 18 位（第 7~14 位 YYYYMMDD）与 15 位（第 7~12 位 YYMMDD，补 19）。
+ */
+export function birthFromIdCard(idCard: unknown): string | null {
+  const s = String(idCard ?? '').trim();
+  if (/^\d{17}[\dXx]$/.test(s)) {
+    const y = Number(s.slice(6, 10));
+    const m = Number(s.slice(10, 12));
+    const d = Number(s.slice(12, 14));
+    return validDate(y, m, d);
+  }
+  if (/^\d{15}$/.test(s)) {
+    const y = 1900 + Number(s.slice(6, 8));
+    const m = Number(s.slice(8, 10));
+    const d = Number(s.slice(10, 12));
+    return validDate(y, m, d);
+  }
+  return null;
+}
+
+/** 年月日合法性校验（1970-01-01 ~ 当前之后一天内都放行，只挡明显非法值） */
+function validDate(y: number, m: number, d: number): string | null {
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+  if (y < 1900 || y > new Date().getFullYear() || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
+
+/**
+ * 教室「楼栋-房间号」统一格式（2026-10-19 批注）
+ * ============================================================
+ * 规定格式输出，例如 A-201：楼栋段（1~3 位字母 或 2~8 个汉字的楼名）+ `-` + 1~6 位房号。
+ *
+ * 输入宽容、输出统一（与前端 web-job/src/teaching/classroom.ts 同一套规则）：
+ *   A栋-102 / 教学楼 A-102 / a102 / A-102  →  A-102
+ *   综合楼 201 / 综合楼201 / 综合楼-201    →  综合楼-201
+ *
+ * ⚠️ 这里只做「能认出来就归一」，认不出的**原样返回**，不在接口层硬拦：
+ *    历史数据、批量导入脚本里可能还有旧写法，硬拦会把整条保存链打断；
+ *    面向用户的格式提示由前端表单负责（保存时校验）。
+ * ⚠️ 改规则必须同步前端那份，否则页面存的和脚本存的是两种写法。
+ */
+export const CLASSROOM_PATTERN = /^(?:[A-Z]{1,3}|[\u4e00-\u9fa5]{2,8})-\d{1,6}$/;
+
+export function normalizeClassroom(v: string | null | undefined): string | null {
+  if (v === null || v === undefined) return null;
+  let s = String(v).trim();
+  if (!s) return '';
+
+  // 全角字母/数字 → 半角；各种横线（— – － ― _）→ 半角 -
+  s = s
+    .replace(/[０-９Ａ-Ｚａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[—–－―＿]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (CLASSROOM_PATTERN.test(s)) return s;
+
+  // ① 字母楼栋（可带「栋」字、可带「教学楼」之类前缀）
+  const letter = s.match(/(?:^|[^A-Za-z])([A-Za-z]{1,3})\s*栋?\s*-?\s*(\d{1,6})$/);
+  if (letter) return `${letter[1].toUpperCase()}-${letter[2]}`;
+
+  // ② 中文楼名 + 房号
+  const cn = s.match(/^([\u4e00-\u9fa5]{2,8})\s*-?\s*(\d{1,6})$/);
+  if (cn) return `${cn[1]}-${cn[2]}`;
+
+  return s;
+}

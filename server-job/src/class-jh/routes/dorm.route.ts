@@ -603,7 +603,7 @@ dormRouter.get(
 
     // 入住表只存 building_id，没有楼栋名 —— 这里批量补上楼栋号（A栋/B栋），
     // 否则前端「入住名单」只能显示一串 UUID。
-    const bIds: string[] = [...new Set(rows.map((r: any) => r.building_id as string).filter(Boolean))];
+    const bIds = [...new Set<string>(rows.map((r: any) => r.building_id as string).filter(Boolean))];
     const bRows = bIds.length
       ? await tbl(db, DB, BUILDING_TABLE, STAGE).whereIn('id', bIds).select('id', 'building_name')
       : [];

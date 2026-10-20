@@ -17,7 +17,6 @@ import {
   GENDER_NAME,
   DEPT_NAME,
   STUDENT_STATUS_NAME,
-  STAGE_NAME,
   FLOW_TYPE_NAME,
   ATTENDANCE_STATUS_NAME,
   EXAM_TYPE_NAME,
@@ -32,6 +31,8 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { writeOpLog } from '../utils/opLog';
 import { nameOf } from '../utils/enumName';
+// ★ 2026-10-16 阶段名改为「优先读阶段字典表」，常量表兜底（用户自建方案的阶段编码不在常量里）
+import { resolveStageName } from '../utils/stageDict';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
@@ -116,8 +117,8 @@ function toListItem(r: any) {
     headTeacherName: r.head_teacher_name,
     studentStatus: r.student_status,
     studentStatusName: nameOf(STUDENT_STATUS_NAME, r.student_status),
-    stage: readPhaseCode(r),
-    stageName: nameOf(STAGE_NAME, readPhaseCode(r)),
+    stage: r.stage,
+    stageName: resolveStageName(r.stage),
     phone: r.phone,
     parentPhone: r.parent_phone,
     dormNo: r.dorm_no,
@@ -147,8 +148,8 @@ function toStudent(row: any) {
     deptName: nameOf(DEPT_NAME, row.dept_code),
     classId: row.class_id,
     className: row.class_name,
-    stage: readPhaseCode(row),
-    stageName: nameOf(STAGE_NAME, readPhaseCode(row)),
+    stage: row.stage,
+    stageName: resolveStageName(row.stage),
     headTeacherId: row.head_teacher_id,
     headTeacherName: row.head_teacher_name,
     teacherId: row.teacher_id,
@@ -888,7 +889,7 @@ async function assertRepeatAllowed(studentId: string, toClassId: string): Promis
   if (!canRepeatByStage(readPhaseCode(stu))) {
     throw new BizError(
       BizCode.BUSINESS_RULE_VIOLATION,
-      `「${STAGE_NAME[readPhaseCode(stu)] ?? readPhaseCode(stu)}」阶段学生不可末班，仅非1期阶段可办理末班`,
+      `「${resolveStageName(stu.stage) || stu.stage}」阶段学生不可末班，仅非1期阶段可办理末班`,
     );
   }
   const toCls = await assertClassAcceptsIntake(toClassId, true);
@@ -1117,6 +1118,14 @@ const fromConsultSchema = z.object({
   address: z.string().optional().nullable(),
   classId: z.string().min(1, '缺少班级ID'),
   remark: z.string().optional().nullable(),
+  /**
+   * ★ 2026-10-19：初高改走「待接收」后，接收弹窗补的这几项要能带过来
+   *   （原来直建入班时这些全由初高自己生成/留空）。
+   */
+  studentNo: z.string().max(32).optional().nullable(),
+  education: z.string().max(50).optional().nullable(),
+  enrollDate: z.string().optional().nullable(),
+  studentStatus: z.coerce.number().int().optional().nullable(),
 });
 
 /**
@@ -1173,7 +1182,16 @@ studentRouter.post(
     // ---- 班级必须存在且开放 ----
     const cls = await assertClassAcceptsIntake(body.classId, false);
 
-    const studentNo = await generateStudentNo();
+    // 接收弹窗补的学号优先；留空则按初高规则自动生成
+    let studentNo = String(body.studentNo ?? '').trim();
+    if (studentNo) {
+      const dupNo = await db(TABLE).where({ student_no: studentNo, is_deleted: false }).first();
+      if (dupNo) {
+        throw new BizError(BizCode.DATA_DUPLICATE, `学号 ${studentNo} 已存在，请换一个或留空由系统生成`);
+      }
+    } else {
+      studentNo = await generateStudentNo();
+    }
     const id = randomUUID();
     const now = new Date();
     await tblIns(db, DB, TABLE, STAGE, {
@@ -1185,8 +1203,11 @@ studentRouter.post(
       dept_code: 1, // 初高部（DeptCode.JUNIOR_SENIOR）
       class_id: cls.id,
       class_name: cls.class_name,
-      [phaseCodeCol()]: readPhaseCode(cls),
-      student_status: StudentStatus.STUDYING, // 分班即入班 → 正式在读
+      stage: cls.stage,
+      // 接收时可选「试学中 / 预在读 / 正式在读」，没选就按原来的口径「正式在读」
+      student_status: body.studentStatus ?? StudentStatus.STUDYING,
+      education: body.education ?? null,
+      enroll_date: body.enrollDate ?? null,
       graduate_school: body.school ?? null,
       home_address: body.address ?? null,
       phone: body.phone ?? null,

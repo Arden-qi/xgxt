@@ -28,6 +28,49 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
 // ---------------------------------------------------------------------------
+// ★ 2026-10-15 加固：PATH 自愈 + 系统命令绝对路径
+//
+// 起因（已取证）：这台机器的机器级 PATH 被写坏了 ——
+//   %SystemRoot%\system32      实际存的是  %S  +  stemRoot%\system32
+//   C:\Program Files\nodejs\   实际存的是  C   +  \Program Files\nodejs\
+// 一个多余的分号把变量名劈成两半，于是 C:\Windows\System32 不再生效。
+// 而 System32 一丢，这些系统命令就集体「消失」，且失败是静默的：
+//   · where.exe    → 启动器 `where node` 探不到 → 误报「没有找到 Node.js」
+//   · netstat.exe  → 端口占用检测永远返回空，冲突时提示看不懂
+//   · taskkill.exe → 旧进程杀不掉，端口一直被占
+// 下面在进程内把缺失的关键目录补回 PATH（幂等），并随 process.env 同步给所有
+// 子进程（npm / vite 等）；同时给系统工具一个绝对路径兜底。
+// ---------------------------------------------------------------------------
+const SYS_ROOT = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+const REQUIRED_PATH_DIRS = [
+  path.dirname(process.execPath),                       // node.exe 所在目录（npm.cmd / npx.cmd 同目录）
+  path.join(SYS_ROOT, 'System32'),
+  SYS_ROOT,
+  path.join(SYS_ROOT, 'System32', 'Wbem'),
+  path.join(SYS_ROOT, 'System32', 'WindowsPowerShell', 'v1.0'),
+];
+
+/** 修复前系统 PATH 是否已经坏掉（必须在补之前判定，补完就看不出问题了） */
+let SYS32_WAS_MISSING = false;
+{
+  const norm = (s) => s.trim().replace(/[\\/]+$/, '').toLowerCase();
+  const current = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const have = new Set(current.map(norm));
+  const missing = REQUIRED_PATH_DIRS.filter((d) => !have.has(norm(d)));
+  SYS32_WAS_MISSING = missing.some((d) => norm(d) === norm(path.join(SYS_ROOT, 'System32')));
+  if (missing.length) {
+    process.env.PATH = [...missing, ...current].join(path.delimiter);
+  }
+}
+
+/** 系统自带工具（where / netstat / taskkill ...）的绝对路径，PATH 坏掉也能调 */
+function sysTool(name) {
+  if (process.platform !== 'win32') return name;
+  const exe = path.join(SYS_ROOT, 'System32', `${name}.exe`);
+  return fs.existsSync(exe) ? exe : name;
+}
+
+// ---------------------------------------------------------------------------
 // 参数 & 输出
 // ---------------------------------------------------------------------------
 const argv = process.argv.slice(2);
@@ -91,7 +134,7 @@ function pidsOnPort(port) {
   const pids = new Set();
   try {
     if (process.platform === 'win32') {
-      const out = spawnSync('netstat', ['-ano'], { encoding: 'utf8', windowsHide: true }).stdout || '';
+      const out = spawnSync(sysTool('netstat'), ['-ano'], { encoding: 'utf8', windowsHide: true }).stdout || '';
       for (const line of out.split(/\r?\n/)) {
         // TCP    0.0.0.0:8004    0.0.0.0:0    LISTENING    39120
         const m = line.match(/^\s*TCP\s+\S*:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
@@ -111,7 +154,7 @@ function killPids(pids) {
   for (const pid of pids) {
     try {
       if (process.platform === 'win32') {
-        spawnSync('taskkill', ['/PID', pid, '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        spawnSync(sysTool('taskkill'), ['/PID', pid, '/T', '/F'], { stdio: 'ignore', windowsHide: true });
       } else {
         spawnSync('kill', ['-9', pid], { stdio: 'ignore' });
       }
@@ -123,8 +166,13 @@ function killPids(pids) {
 
 function which(cmd) {
   const exe = process.platform === 'win32' ? `${cmd}.cmd` : cmd;
+  // node.exe 同目录里就带着 npm.cmd / npx.cmd —— 优先用它，完全不依赖 PATH
+  if (process.platform === 'win32') {
+    const local = path.join(path.dirname(process.execPath), `${cmd}.cmd`);
+    if (fs.existsSync(local)) return local;
+  }
   try {
-    const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], {
+    const r = spawnSync(process.platform === 'win32' ? sysTool('where') : 'which', [cmd], {
       encoding: 'utf8', windowsHide: true,
     });
     if (r.status === 0 && r.stdout.trim()) return r.stdout.trim().split(/\r?\n/)[0];
@@ -155,6 +203,92 @@ function ask(question) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer) => { rl.close(); resolve(answer.trim()); });
   });
+}
+
+/**
+ * ★ 2026-10-16 加固：启动器自己把 MySQL 拉起来
+ *
+ * 【起因】这台机器的 MySQL 是 D:\mysql 的绿色版（8.0.46，my.ini 里 datadir=D:/mysql/data），
+ *   它**没有注册成 Windows 服务**，用户一直靠双击 D:\mysql\start_mysql.bat 启动。
+ *   于是每次关机/重启之后 MySQL 都不在跑，而 check-env.mjs 会把「3306 没在监听」
+ *   判成致命错误（退出码 2）→ 一键启动在 [1/6] 环境自检 就停住，
+ *   用户看到的只有一句「---- 启动过程报错 ----」，完全看不出是 MySQL 没开。
+ *   这是本项目目前最高频的启动失败原因（2026-10-16 实测复现）。
+ *
+ * 【做法】在调 check-env 之前先探 DB_HOST:DB_PORT：
+ *   · 已在跑 → 直接过；
+ *   · 没在跑 → 去已知位置（本机 D:\mysql，以及安装版默认目录 / 项目同级 mysql）
+ *     找 mysqld.exe，带它自己的 my.ini 以 detached 方式拉起（与前后端服务同样
+ *     不随本窗口关闭而死），最多等 60 秒端口就绪，再继续往下走；
+ *   · 找不到或起不来 → 给针对本机的指引（日志路径 / start_mysql.bat），不静默失败。
+ */
+async function ensureMysql(env) {
+  const host = (env.get('DB_HOST') || 'localhost').toLowerCase();
+  const port = Number(env.get('DB_PORT') || 3306);
+
+  if (host !== 'localhost' && host !== '127.0.0.1') {
+    note(`DB_HOST = ${env.get('DB_HOST')}（不是本机），跳过 MySQL 自启`);
+    return;
+  }
+  if (await tcpAlive('127.0.0.1', port)) {
+    ok(`MySQL 已在运行（:${port}）`);
+    return;
+  }
+
+  warn(`MySQL 没在运行（:${port} 无监听）—— 正在尝试自动启动 ...`);
+
+  // 候选位置：绿色版（本机 D:\mysql）+ 项目同级 mysql + 安装版默认目录
+  const bases = [
+    'D:\\mysql',
+    'C:\\mysql',
+    path.resolve(ROOT, '..', 'mysql'),
+    path.resolve(ROOT, '..', '..', 'mysql'),
+    'C:\\Program Files\\MySQL',
+    'C:\\Program Files (x86)\\MySQL',
+  ];
+  const cands = [];
+  for (const base of bases) {
+    const dirs = [base];
+    try {
+      // 安装版的目录形如 C:\Program Files\MySQL\MySQL Server 8.0\
+      for (const e of fs.readdirSync(base)) dirs.push(path.join(base, e));
+    } catch { /* 目录不存在就跳过 */ }
+    for (const d of dirs) {
+      const exe = path.join(d, 'bin', 'mysqld.exe');
+      if (fs.existsSync(exe)) cands.push({ exe, ini: path.join(d, 'my.ini') });
+    }
+  }
+
+  if (!cands.length) {
+    warn('本机没找到 mysqld.exe，无法自动启动 MySQL。');
+    note('手动启动后重跑本启动器即可：本机是绿色版，双击 D:\\mysql\\start_mysql.bat。');
+    return;
+  }
+
+  for (const c of cands) {
+    const args = [];
+    // --defaults-file 必须是第一个参数，且带它就不能再依赖默认路径
+    if (fs.existsSync(c.ini)) args.push(`--defaults-file=${c.ini}`);
+    args.push(`--port=${port}`);
+
+    console.log(`    启动 MySQL：${c.exe}`);
+    try {
+      spawn(c.exe, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    } catch (e) {
+      note(`启动失败：${e.message}`);
+      continue;
+    }
+    if (await waitPort(port, 60, 'MySQL')) {
+      ok(`MySQL 已启动（:${port}）`);
+      return;
+    }
+    warn('这一份 60 秒内没就绪，试下一个候选 ...');
+  }
+
+  const baseDir = path.dirname(path.dirname(cands[0].exe));
+  warn('MySQL 自动启动失败。');
+  note(`错误日志：${path.join(baseDir, 'mysql-error.log')}`);
+  note('也可以手动双击 D:\\mysql\\start_mysql.bat 启动，再重跑本启动器。');
 }
 
 // ---------------------------------------------------------------------------
@@ -197,8 +331,30 @@ if (major < 18) {
 }
 ok(`Node ${process.versions.node}`);
 
-// ---- 1) 环境自检（调 check-env.mjs）--------------------------------------
+// ---- 0b) 系统 PATH 体检 --------------------------------------------------
+// 这台机器反复出现「PATH 里 C:\Windows\System32 被写坏」的情况，症状就是
+// where / netstat / taskkill 集体消失，而启动器却误报「没有找到 Node.js」。
+// 上面已经把缺失目录补回进程内 PATH（所以本次启动一定能跑），
+// 这里只负责把这件「看不见的事」说出来。
+if (SYS32_WAS_MISSING) {
+  warn(`系统 PATH 已被改坏：${path.join(SYS_ROOT, 'System32')} 不在里面。`);
+  note('本次启动已在进程内自动补回，可以正常继续；');
+  note('但其它程序（git、mysql 命令行、where 等）仍会受影响，建议修一次：');
+  note('双击桌面「修复PATH工具」文件夹里的「一键修复PATH.bat」。');
+} else {
+  ok('系统 PATH 正常');
+}
+
+// ---- 1) 环境自检（先确保 MySQL 在跑，再调 check-env.mjs）------------------
 step('1/6', '环境自检');
+
+// .env 要提前解析：下面既要拿它决定 MySQL 自启用哪个端口，第 2 步又要用它取后端端口
+const envMap = parseEnv(path.join(ROOT, 'server-job', '.env'));
+
+// 本机 MySQL 是绿色版、没注册服务，重启后必然不在跑 —— 先尝试自动拉起，
+// 否则 check-env 会直接判致命错误停下，而报错信息跟「MySQL 没开」看不出关系。
+await ensureMysql(envMap);
+
 const checkRes = spawnSync(process.execPath, [path.join(__dirname, 'check-env.mjs')], {
   stdio: 'inherit',
   windowsHide: true,
@@ -215,7 +371,6 @@ if (checkRes.status === 2) {
 // ---- 2) 端口处理 ---------------------------------------------------------
 step('2/6', '检查启动端口');
 
-const envMap = parseEnv(path.join(ROOT, 'server-job', '.env'));
 const BACKEND_PORT = Number(envMap.get('PORT') || 8004);
 
 const busy = [];

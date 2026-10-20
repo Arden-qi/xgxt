@@ -114,7 +114,7 @@ feeRouter.get(
     // isUrgent 为派生值，先取全量（当前筛选）再内存过滤分页
     const allRows = await query.clone().select('*').orderBy('expire_date', 'asc');
     let list = allRows.map((r: any) => toFee(r, remindDays));
-    if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
+    if (q.isUrgent !== undefined) list = list.filter((x: any) => x.isUrgent === q.isUrgent);
 
     const total = list.length;
     const paged = list.slice((q.page - 1) * q.size, q.page * q.size);
@@ -147,7 +147,7 @@ feeRouter.get(
 
     const rows = await query.clone().select('*').orderBy('expire_date', 'asc');
     let list = rows.map((r: any) => toFee(r, remindDays));
-    if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
+    if (q.isUrgent !== undefined) list = list.filter((x: any) => x.isUrgent === q.isUrgent);
 
     res.json(ok(list));
   }),
