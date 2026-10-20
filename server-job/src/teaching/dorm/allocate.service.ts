@@ -539,32 +539,60 @@ export async function searchStudents(opts: {
   const picked = [...byNo.values()].slice(0, limit);
 
   // 批量补宿舍位置：dorm_id → t_job_dorm
-  const dormIds = [...new Set(picked.map((r) => str(r.dorm_id)).filter(Boolean))];
+  const ids = picked.map((r) => str(r.id)).filter(Boolean);
+  const noList = [...new Set(picked.map((r) => str(r.student_no)).filter(Boolean))];
+  const nameList = [...new Set(picked.map((r) => str(r.student_name)).filter(Boolean))];
+
+  /**
+   * ★ 当前床位（2026-10-20 第 2 次加强）
+   *
+   * 学生表里只有 dorm_id/dorm_no，部分表连 bed_no 列都没有；而「谁住哪张床」
+   * 的权威记录在床位表（bed_status=2 已住）。不同来源的学生 id 空间还可能不一致
+   * （门户 PSB-xxx / 老表 UUID），所以按 **id → 学号 → 姓名** 三级兜底匹配。
+   *
+   * 只要命中床位，就同时带出「床位号」和「床位所属房间」——
+   * 有些环境学生主档 dorm_id 是空的，但床位表里其实已经入住了。
+   */
+  let bedRows: any[] = [];
+  if (ids.length || noList.length || nameList.length) {
+    bedRows = (await db(BED)
+      .where({ is_deleted: false })
+      .andWhere('bed_status', 2)
+      .andWhere((b: any) => {
+        if (ids.length) b.whereIn('student_id', ids);
+        if (noList.length) b.orWhereIn('student_no', noList);
+        if (nameList.length) b.orWhereIn('student_name', nameList);
+      })
+      .select('student_id', 'student_no', 'student_name', 'dorm_id', 'bed_no')) as any[];
+  }
+  const bedById = new Map<string, any>();
+  const bedByNo = new Map<string, any>();
+  const bedByName = new Map<string, any>();
+  for (const b of bedRows) {
+    if (str(b.student_id)) bedById.set(str(b.student_id), b);
+    if (str(b.student_no)) bedByNo.set(str(b.student_no), b);
+    if (str(b.student_name)) bedByName.set(str(b.student_name), b);
+  }
+  const bedOf = (r: any) =>
+    bedById.get(str(r.id)) || bedByNo.get(str(r.student_no)) || bedByName.get(str(r.student_name)) || null;
+
+  const dormIds = [
+    ...new Set([
+      ...picked.map((r) => str(r.dorm_id)),
+      ...picked.map((r) => str(bedOf(r)?.dorm_id)),
+    ]),
+  ].filter(Boolean);
   const dormRows = dormIds.length
     ? ((await db(ROOM).whereIn('id', dormIds).where({ is_deleted: false }).select('id', 'building', 'room_no')) as any[])
     : [];
   const dormMap = new Map(dormRows.map((d) => [str(d.id), d]));
 
-  /**
-   * 床位号：学生表里只有 dorm_id/dorm_no（部分表连 bed_no 列都没有），
-   * 床位以床位表的 student_id 为准 —— 只取处于「已住(2)」的那条。
-   */
-  const ids = picked.map((r) => str(r.id)).filter(Boolean);
-  const bedRows = ids.length
-    ? ((await db(BED)
-        .whereIn('student_id', ids)
-        .where({ is_deleted: false })
-        .select('student_id', 'bed_no', 'bed_status')) as any[])
-    : [];
-  const bedMap = new Map<string, string>();
-  for (const b of bedRows) {
-    if (Number(b.bed_status) === 2) bedMap.set(str(b.student_id), str(b.bed_no));
-  }
-
   return picked
     .map((r) => {
       const g = int(r.gender);
-      const dormId = str(r.dorm_id) || null;
+      const bed = bedOf(r);
+      // 学生主档没有 dorm_id 时，用床位表里那条已住记录的 dorm_id
+      const dormId = str(r.dorm_id) || str(bed?.dorm_id) || null;
       const d = dormId ? dormMap.get(dormId) : null;
       // 兜底：dorm_no 形如「1号楼-303」
       const dormNo = str(r.dorm_no) || null;
@@ -575,7 +603,7 @@ export async function searchStudents(opts: {
         building = building || b;
         room = room || rest.join('-');
       }
-      const bedNo = bedMap.get(str(r.id)) || null;
+      const bedNo = str(bed?.bed_no) || null;
       return {
         studentId: str(r.id),
         studentNo: str(r.student_no),

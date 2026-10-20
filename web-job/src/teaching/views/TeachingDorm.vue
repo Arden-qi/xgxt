@@ -428,12 +428,13 @@
           </el-select>
         </el-form-item>
 
-        <!-- 当前宿舍位置（选学生后自动显示） -->
+        <!-- 当前宿舍位置（选学生后自动显示：楼栋 / 宿舍号 / 床位号） -->
         <el-form-item v-if="curStudent" label="当前宿舍">
-          <span v-if="curStudent.dormId || curStudent.dormNo">
-            <b>{{ curStudent.building || '—' }} {{ curStudent.room || curStudent.dormNo }}</b>
-            <span v-if="curStudent.bedLabel" class="muted"> · {{ curStudent.bedLabel }}</span>
-          </span>
+          <div v-if="curStudent.dormId || curStudent.dormNo || curStudent.bedNo" class="cur-dorm">
+            <span>楼栋：<b>{{ curStudent.building || '—' }}</b></span>
+            <span>宿舍号：<b>{{ curStudent.room || '—' }}</b></span>
+            <span>床位号：<b>{{ curStudent.bedLabel || curStudent.bedNo || '—' }}</b></span>
+          </div>
           <el-tag v-else type="info" size="small">该学生当前未入住宿舍</el-tag>
         </el-form-item>
 
@@ -1351,6 +1352,9 @@ defineExpose({ openChangeList, openChangeEntry });
 /* ★ 2026-10-20 调宿弹窗：只读日期 / 行内说明间距 */
 .tdv-date { font-weight: 600; color: #443432; }
 .ml12 { margin-left: 12px; }
+/* 当前宿舍：楼栋 / 宿舍号 / 床位号 三项并排 */
+.cur-dorm { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: #443432; }
+.cur-dorm b { color: #B22A23; font-weight: 600; }
 
 .tdv-page { margin-top: 12px; justify-content: flex-end; }
 

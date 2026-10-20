@@ -83,6 +83,9 @@ check('调宿弹窗去掉「学段」选择', !dorm.includes('v-model="changeFor
 check('调宿弹窗有班级选择 + 学生远程搜索', dorm.includes('@change="onChangeClass"') && dorm.includes('remote-method="searchChangeStudents"'));
 check('学生选项带学号（区分重名）', dorm.includes('${s.studentName}（${s.studentNo}）'));
 check('选学生后回显当前宿舍', dorm.includes('label="当前宿舍"') && dorm.includes('curStudent.building'));
+check('当前宿舍显示 楼栋/宿舍号/床位号', dorm.includes('楼栋：') && dorm.includes('宿舍号：') && dorm.includes('床位号：'));
+check('调宿楼栋来自楼栋设置', dorm.includes('listAllocateBuildings(changeForm.category)'));
+check('目标床位取宿舍剩余床位', dorm.includes('freeBeds'));
 check('调宿有 类别 → 楼栋 → 目标床位', dorm.includes('label="目标床位"') && dorm.includes('loadChangeRooms'));
 check('日期只读、原因 ≤100', dorm.includes('{{ changeForm.changeDate }}') && !dorm.includes('v-model="changeForm.changeDate"') && dorm.includes('maxlength="100"'));
 check('后端路由有 classes/buildings/rooms/save', ['/classes', '/buildings', '/rooms', '/save'].every((p) => route.includes(`'${p}'`)));
