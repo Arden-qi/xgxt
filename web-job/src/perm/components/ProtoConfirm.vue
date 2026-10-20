@@ -7,7 +7,7 @@
  *
  * 用法：
  *   <ProtoConfirm v-model="confirm.show" :title="confirm.title" icon="🗑" icon-bg="var(--dg-l)"
- *     msg="确定删除该角色？" :detail="confirm.detail" :warn="confirm.warn"
+ *     msg="确定删除该职位？" :detail="confirm.detail" :warn="confirm.warn"
  *     ok-text="确认删除" ok-class="dg" @ok="doDelete" />
  */
 import { ref, watch } from 'vue';
@@ -112,7 +112,7 @@ function cancel(): void {
             style="text-align: center; font-size: 12.5px; color: var(--tx2); line-height: 1.7"
             v-html="desc"
           ></div>
-          <div v-if="detail && detail.length" style="background: #f8fafd; border-radius: 8px; padding: 11px 13px; margin-top: 14px">
+          <div v-if="detail && detail.length" style="background: #FAF7F4; border-radius: 8px; padding: 11px 13px; margin-top: 14px">
             <div
               v-for="(d, i) in detail"
               :key="i"

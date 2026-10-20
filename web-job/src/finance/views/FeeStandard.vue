@@ -407,18 +407,18 @@ onMounted(loadData);
 .tip-body {
   margin-top: 4px;
   font-size: 12px;
-  color: #8a94a6;
+  color: #9C8D88;
 }
 
 /* 卡片内通栏版式（.filter-row / .table-toolbar / .pager-bar）由 element-theme.css 统一提供 */
 
 .unit {
   margin-left: 8px;
-  color: #8a94a6;
+  color: #9C8D88;
 }
 
 .field-tip {
   font-size: 12px;
-  color: #8a94a6;
+  color: #9C8D88;
 }
 </style>

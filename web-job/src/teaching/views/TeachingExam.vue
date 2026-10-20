@@ -6,6 +6,7 @@
  * 现在：一个页面 + 学段筛选器 + 一套接口（/api/teaching/exam/*）。
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Delete, EditPen, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import {
@@ -32,12 +33,16 @@ const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高部', class: '�
 const availableStages = computed(() => STAGE_ORDER.filter((s) => stageVisible('exam', s)));
 
 const query = reactive({
+
   stage: '' as '' | TeachingStage,
   classId: '',
   examType: undefined as number | undefined,
   dateRange: [] as string[],
   keyword: '',
 });
+
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 const page = reactive({ page: 1, size: 20, total: 0 });
 
 const loading = ref(false);
@@ -412,22 +417,22 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
-  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border: 1px solid var(--el-border-color-lighter, #F1EAE5);
   border-radius: 8px;
   background: var(--el-fill-color-blank, #fff);
 }
 .te-bar-title {
   font-size: 15px;
   font-weight: 500;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--el-text-color-primary, #443432);
 }
 .te-bar-tag {
   font-size: 12px;
   line-height: 18px;
   padding: 0 6px;
   border-radius: 4px;
-  color: #185fa5;
-  background: #e6f1fb;
+  color: #B22A23;
+  background: #F9E4E1;
 }
 .te-stage {
   margin-left: auto;
@@ -448,11 +453,11 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 .te-sec {
   font-size: 13px;
   font-weight: 500;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--el-text-color-primary, #443432);
   margin: 12px 0 6px;
 }
 .te-muted {
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
   font-size: 12px;
 }
 .te-scores {

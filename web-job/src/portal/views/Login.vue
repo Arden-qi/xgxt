@@ -53,7 +53,7 @@ const demoAccounts = [
    *   （admin 是「只读管理员」，按设计不能写，见 app.ts 全局只读闸）
    *
    * 【怎么来的】见 数据库导出/sms_portal.sql 的「业务角色门户账号」段，
-   *   与「权限管理 → 用户管理」里的 t_perm_user 按【登录名】一一对应，
+   *   与「权限管理 → 账号管理」里的 t_perm_user 按【登录名】一一对应，
    *   角色由权限模块解析（middleware/auth.ts 的 resolveBusinessRoles）。
    * ============================================================ */
   { account: 'qiansy', name: '钱守义', scope: '校长（全模块）', tag: 'job' },
@@ -97,7 +97,8 @@ async function doLogin() {
       return;
     }
 
-    // 带 redirect 就回原页（但要过一遍守卫），否则落地到自己的第一个模块
+    // 带 redirect 就回原页（但要过一遍守卫），否则落到系统首页工作台
+    // ★ 2026-10-16：工作台 = 首页，服务端 landingPathOf 对所有角色统一返回 '/'
     const redirect = route.query.redirect as string | undefined;
     router.replace(redirect || res.landingPath || auth.landingHash);
   } catch (err: any) {
@@ -118,35 +119,11 @@ onMounted(() => {
     <div class="login-card">
       <!-- 左：品牌 -->
       <div class="brand-pane">
-        <div class="bp-logo">良</div>
+        <div class="bp-logo-card">
+          <img class="bp-logo" src="/logo.png" alt="良志教育" />
+        </div>
         <h1>良志学管系统</h1>
-        <p class="bp-sub">统一门户</p>
-
-        <ul class="bp-list">
-          <li>
-            <i>1</i>
-            <div>
-              <b>一次登录，全系统通行</b>
-              <span>门户签发统一凭证，各模块共用</span>
-            </div>
-          </li>
-          <li>
-            <i>2</i>
-            <div>
-              <b>目录按授权自动展开</b>
-              <span>仅在左侧显示你能进的模块与页面</span>
-            </div>
-          </li>
-          <li>
-            <i>3</i>
-            <div>
-              <b>各模块互不越界</b>
-              <span>模块负责人只看到自己的模块</span>
-            </div>
-          </li>
-        </ul>
-
-        <div class="bp-foot">良志教育 · 学管系统统一入口</div>
+        <p class="bp-sub">让教学管理更简单</p>
       </div>
 
       <!-- 右：登录表单 -->
@@ -208,7 +185,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #eef4ff 0%, #f7faff 55%, #f8fafc 100%);
+  background: linear-gradient(135deg, #FBEFED 0%, #FBF7F4 55%, #F6F3EF 100%);
   padding: 24px;
 }
 
@@ -219,97 +196,49 @@ onMounted(() => {
   background: #fff;
   border-radius: 18px;
   overflow: hidden;
-  box-shadow: 0 18px 60px rgba(16, 24, 40, 0.12);
+  box-shadow: 0 18px 60px rgba(68, 52, 50, 0.12);
 }
 
 /* ---------- 左侧品牌 ---------- */
 .brand-pane {
   width: 356px;
   flex: none;
-  padding: 34px 30px 26px;
-  background: linear-gradient(160deg, #2563eb 0%, #1d4ed8 58%, #1e40af 100%);
+  padding: 40px 36px;
+  background: linear-gradient(160deg, #CD3A33 0%, #B22A23 58%, #8C201B 100%);
   color: #fff;
   display: flex;
   flex-direction: column;
+  justify-content: center;
+}
+
+/* LOGO 白卡（2026-10-16：LOGO 放大、白色内边距收窄） */
+.bp-logo-card {
+  background: #fff;
+  border-radius: 14px;
+  padding: 10px 16px;
+  display: inline-flex;
+  align-self: flex-start;
+  box-shadow: 0 14px 40px rgba(40, 8, 5, 0.35);
+  margin-bottom: 22px;
 }
 
 .bp-logo {
-  width: 42px;
-  height: 42px;
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.26);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  font-weight: 700;
-  margin-bottom: 16px;
+  height: 72px;
+  width: auto;
+  display: block;
 }
 
 .brand-pane h1 {
-  font-size: 21px;
+  font-size: 28px;
   font-weight: 700;
-  letter-spacing: 0.6px;
+  letter-spacing: 1px;
 }
 
 .bp-sub {
-  font-size: 12.5px;
-  color: rgba(255, 255, 255, 0.72);
-  margin-top: 6px;
-  letter-spacing: 1.4px;
-}
-
-.bp-list {
-  list-style: none;
-  margin-top: 30px;
-  display: flex;
-  flex-direction: column;
-  gap: 17px;
-}
-
-.bp-list li {
-  display: flex;
-  gap: 11px;
-  align-items: flex-start;
-}
-
-.bp-list i {
-  font-style: normal;
-  width: 20px;
-  height: 20px;
-  flex: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.16);
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  font-size: 10.5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-top: 1px;
-}
-
-.bp-list b {
-  display: block;
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.5;
-}
-
-.bp-list span {
-  display: block;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.66);
-  margin-top: 3px;
-  line-height: 1.55;
-}
-
-.bp-foot {
-  margin-top: auto;
-  padding-top: 26px;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.55);
-  letter-spacing: 0.3px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  margin-top: 9px;
+  letter-spacing: 3px;
 }
 
 /* ---------- 右侧表单 ---------- */
@@ -324,12 +253,12 @@ onMounted(() => {
 .form-pane h2 {
   font-size: 19px;
   font-weight: 700;
-  color: #111827;
+  color: #443432;
 }
 
 .fp-sub {
   font-size: 12px;
-  color: #8a94a6;
+  color: #8A7B76;
   margin: 6px 0 26px;
 }
 
@@ -342,16 +271,16 @@ onMounted(() => {
 
 .fi label {
   font-size: 12px;
-  color: #6b7280;
+  color: #7A6C67;
 }
 
 .fi input {
   height: 40px;
-  border: 1px solid #e1e6ef;
+  border: 1px solid #E2D7D1;
   border-radius: 9px;
   padding: 0 13px;
   font-size: 13px;
-  color: #374151;
+  color: #5F5350;
   font-family: inherit;
   outline: none;
   transition: 0.15s;
@@ -360,19 +289,19 @@ onMounted(() => {
 }
 
 .fi input:focus {
-  border-color: #93b4f8;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  border-color: #E6A99C;
+  box-shadow: 0 0 0 3px rgba(205, 58, 51, 0.1);
 }
 
 .fi input::placeholder {
-  color: #b3bccb;
+  color: #C4B8B2;
 }
 
 .err {
   font-size: 12px;
-  color: #b91c1c;
-  background: #fef2f2;
-  border: 1px solid #fde2e2;
+  color: #B22A23;
+  background: #FDF4F2;
+  border: 1px solid #F9E4E1;
   border-radius: 8px;
   padding: 9px 12px;
   margin-bottom: 12px;
@@ -383,7 +312,7 @@ onMounted(() => {
   height: 42px;
   border: none;
   border-radius: 9px;
-  background: #2563eb;
+  background: #CD3A33;
   color: #fff;
   font-size: 14px;
   font-weight: 600;
@@ -391,12 +320,12 @@ onMounted(() => {
   letter-spacing: 2px;
   cursor: pointer;
   transition: 0.15s;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.26);
+  box-shadow: 0 2px 8px rgba(205, 58, 51, 0.26);
   margin-top: 4px;
 }
 
 .submit:hover:not(:disabled) {
-  background: #1d4ed8;
+  background: #B22A23;
 }
 
 .submit:disabled {
@@ -407,13 +336,13 @@ onMounted(() => {
 /* ---------- 演示账号 ---------- */
 .demo {
   margin-top: 26px;
-  border-top: 1px solid #eef2f7;
+  border-top: 1px solid #F1EAE5;
   padding-top: 16px;
 }
 
 .demo-title {
   font-size: 11.5px;
-  color: #9aa3b2;
+  color: #B3A69F;
   margin-bottom: 10px;
 }
 
@@ -436,13 +365,13 @@ onMounted(() => {
 }
 
 .demo-item:hover {
-  background: #f4f8ff;
-  border-color: #e1ebfb;
+  background: #FBF7F4;
+  border-color: #F9E4E1;
 }
 
 .di-name {
   font-weight: 600;
-  color: #374151;
+  color: #5F5350;
   white-space: nowrap;
 }
 
@@ -454,44 +383,44 @@ onMounted(() => {
 }
 
 .di-scope.admin {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: #FDF4F2;
+  color: #B22A23;
 }
 
 .di-scope.consult {
-  background: #f5f3ff;
-  color: #6d28d9;
+  background: #F3EFF8;
+  color: #7A5AA6;
 }
 
 .di-scope.finance {
-  background: #ecfdf5;
-  color: #047857;
+  background: #EBF5EF;
+  color: #3F7A55;
 }
 
 .di-scope.perm {
-  background: #fff7ed;
-  color: #c2410c;
+  background: #FBF3E5;
+  color: #A66A1F;
 }
 
 /* ★ 2026-10-05：就业 / 教务 / 班级 三个模块的标签配色 */
 .di-scope.job {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: #FDF4F2;
+  color: #B22A23;
 }
 
 .di-scope.edu {
-  background: #f0fdfa;
-  color: #0f766e;
+  background: #EBF5EF;
+  color: #3F7A55;
 }
 
 .di-scope.class {
-  background: #fdf2f8;
-  color: #a21caf;
+  background: #F3EFF8;
+  color: #7A5AA6;
 }
 
 .di-account {
   margin-left: auto;
-  color: #c0c4cc;
+  color: #C4B8B2;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 11px;
 }

@@ -252,7 +252,7 @@ onMounted(loadData);
 
 .range-split {
   margin: 0 6px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .toolbar {
@@ -264,22 +264,22 @@ onMounted(loadData);
 
 .tip {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .muted {
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 .detail-text {
   white-space: pre-wrap;
   line-height: 1.7;
-  color: #606266;
+  color: #7A6C67;
 }
 
 .audio-name {
   margin-top: 6px;
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 </style>

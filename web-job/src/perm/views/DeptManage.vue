@@ -4,7 +4,7 @@
  *
  * 页面结构严格对齐高保真原型《学管系统-权限体系高保真原型.html》：
  *   · 第 2682~2721 行 renderOrg()    —— KPI 4 卡 + 「部门结构」表格
- *   · 第 2722~2734 行 deptRoles()    —— 查看角色弹窗
+ *   · 第 2722~2734 行 deptRoles()    —— 查看职位弹窗
  *   · 第 2735~2748 行 deptUsers()    —— 查看账号弹窗
  *   · 第 2749~2769 行 dlgDeptForm()  —— 新建 / 编辑部门弹窗
  *   · 第 2770~2785 行 submitDept()   —— 校验 + 确认后落库
@@ -20,12 +20,12 @@
  *       避免建出「无层级名」的第 4 层。
  *
  * ⚠️ 删除规则（后端已强制，前端提前拦一次，少一次无谓请求）：
- *    · 有子部门 / 被角色引用 / 被账号引用 → 不可删（弹「不可删除」并给出关联明细）
+ *    · 有子部门 / 被职位引用 / 被账号引用 → 不可删（弹「不可删除」并给出关联明细）
  *    · 校级部门不在表格里（原型 renderOrg 用 filter(d=>d.id!=='all') 排除了根节点），天然不可删
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { PERM_ROUTE, permUserEditRoute } from '@/perm/utils/links';
+import { permUserEditRoute } from '@/perm/utils/links';
 import type {
   DeptOverview,
   PermDept,
@@ -199,7 +199,7 @@ function submitDept(): void {
         { k: '上级部门', v: isSchoolParent(form.parentId) ? '校部' : esc(nameOf(form.parentId)) },
         { k: '部门说明', v: esc(form.remark.trim()) || '—' },
       ],
-      tip: '创建后可在新建角色/账号时选择该部门。',
+      tip: '创建后可在新建职位/账号时选择该部门。',
       okText: isEdit ? '确认保存' : '确认创建',
     },
     () => {
@@ -250,7 +250,7 @@ async function delDept(node: PermDeptTreeNode): Promise<void> {
     const detail: { k: string; v: string }[] = [];
     if (childCount) detail.push({ k: '下级部门', v: `<b>${childCount}</b> 个` });
     detail.push(
-      { k: '关联角色', v: `<b>${roleCount}</b> 个` },
+      { k: '关联职位', v: `<b>${roleCount}</b> 个` },
       { k: '关联账号', v: `<b>${userCount}</b> 个` },
     );
     openConfirm(
@@ -260,8 +260,8 @@ async function delDept(node: PermDeptTreeNode): Promise<void> {
         iconBg: 'var(--dg-l)',
         msg: `部门「${node.deptName}」仍有关联数据`,
         detail,
-        desc: '请先将相关角色与账号转移至其他部门，再执行删除。',
-        okText: '查看关联角色',
+        desc: '请先将相关职位与账号转移至其他部门，再执行删除。',
+        okText: '查看关联职位',
         okClass: 'wn',
       },
       () => {
@@ -277,7 +277,7 @@ async function delDept(node: PermDeptTreeNode): Promise<void> {
       icon: '🗑',
       iconBg: 'var(--dg-l)',
       msg: `确认删除部门「${node.deptName}」？`,
-      warn: '删除后不可恢复，相关角色与账号的部门归属将同步失效。',
+      warn: '删除后不可恢复，相关职位与账号的部门归属将同步失效。',
       okText: '确认删除',
       okClass: 'dg',
     },
@@ -345,7 +345,7 @@ function onConfirmOk(): void {
 }
 
 /* ============================================================
- * 五、查看角色 / 查看账号（原型 deptRoles / deptUsers）
+ * 五、查看职位 / 查看账号（原型 deptRoles / deptUsers）
  * ============================================================ */
 
 const rolesOpen = ref(false);
@@ -356,20 +356,34 @@ const deptRolesList = ref<PermRoleListItem[]>([]);
 
 const rolesTitle = computed(
   () =>
-    `部门下角色 · <span class="em">${esc(rolesDeptName.value)}</span>` +
+    `部门下职位 · <span class="em">${esc(rolesDeptName.value)}</span>` +
     ` <span class="tag n" style="font-weight:400">${esc(rolesSub.value)}</span>`,
 );
 
 async function openDeptRoles(node: PermDeptTreeNode): Promise<void> {
   rolesDeptName.value = node.deptName;
-  rolesSub.value = `${node.roleCount || 0} 个角色`;
+  rolesSub.value = `${node.roleCount || 0} 个职位`;
   deptRolesList.value = [];
   rolesOpen.value = true;
   rolesLoading.value = true;
   try {
-    const page = await roleApi.list({ deptId: node.id, page: 1, size: 100 });
-    deptRolesList.value = page.list || [];
-    rolesSub.value = `${deptRolesList.value.length} 个角色`;
+    // ★ 2026-10-16：「账号数」改为【本部门（含子部门）内】挂该职位的人数 ——
+    //   职位接口的 userCount 是全系统口径（别的部门的咨询老师也算进来），
+    //   会出现「弹窗里咨询老师 4 人、本部门账号只有 3 个」的对不上。
+    //   这里直接拉本部门账号（与「查看账号」弹窗同源、同口径），按职位分组计数。
+    const [page, upage] = await Promise.all([
+      roleApi.list({ deptId: node.id, page: 1, size: 100 }),
+      userApi.list({ deptId: node.id, page: 1, size: 100 }),
+    ]);
+    const cnt = new Map<string, number>();
+    (upage.list || []).forEach((u: PermUserListItem) => {
+      (u.roleIds || []).forEach((rid) => cnt.set(rid, (cnt.get(rid) || 0) + 1));
+    });
+    deptRolesList.value = (page.list || []).map((r) => ({
+      ...r,
+      userCount: cnt.get(r.id) || 0,
+    }));
+    rolesSub.value = `${deptRolesList.value.length} 个职位`;
   } catch {
     /* 已提示 */
   } finally {
@@ -413,8 +427,8 @@ const isNormal = (st: string): boolean => st === '正常';
  * 六、账号详情弹窗
  *
  * 【用户反馈】「点击账号详情后有问题，应该弹出相应的页面，页面包含所有应该查看的内容」
- * 原先点「详情」只是 router.push('/user') 跳回用户管理列表页 —— 既不弹详情，
- * 还得自己再搜一次这个账号。现在就地弹完整详情（基本信息 + 所属角色 + 有效权限明细）。
+ * 原先点「详情」只是 router.push('/user') 跳回账号管理列表页 —— 既不弹详情，
+ * 还得自己再搜一次这个账号。现在就地弹完整详情（基本信息 + 所属职位 + 有效权限明细）。
  * ============================================================ */
 
 const userDetailOpen = ref(false);
@@ -428,10 +442,10 @@ function openUserDetail(u: PermUserListItem): void {
 }
 
 /* ============================================================
- * 七、角色权限弹窗（「看权限 / 编辑权限」）
+ * 七、职位权限弹窗（「看权限 / 编辑权限」）
  *
  * 【用户反馈】「部门管理页面里面看权限和编辑权限的操作都有问题，点击后应该弹出相应的页面」
- * 原先两处都只是 router.push('/assign') —— 跳过去还不知道该选哪个角色，等于把活儿丢给用户。
+ * 原先两处都只是 router.push('/assign') —— 跳过去还不知道该选哪个职位，等于把活儿丢给用户。
  * 现在直接就地叠一层权限树：查看态只读、编辑态可勾选并保存。
  * ============================================================ */
 
@@ -485,9 +499,9 @@ async function onRolePermConfirm(perms: RolePermMap): Promise<void> {
 }
 
 /**
- * 「编辑」账号仍要跳「用户管理」
- * ⚠️ 账号表单（密码策略、角色勾选、部门级联…）体量大，不在这里复刻；
- *    带上 ?edit=<id> 让用户管理把编辑表单直接打开，免去二次查找。
+ * 「编辑」账号仍要跳「账号管理」
+ * ⚠️ 账号表单（密码策略、职位勾选、部门级联…）体量大，不在这里复刻；
+ *    带上 ?edit=<id> 让账号管理把编辑表单直接打开，免去二次查找。
  */
 function gotoUserEdit(id: string): void {
   rolesOpen.value = false;
@@ -495,12 +509,7 @@ function gotoUserEdit(id: string): void {
   void router.push(permUserEditRoute(id));
 }
 
-/** 「为该部门新建角色 / 新建账号」——新建动作本来就在对应页，跳过去即可 */
-function gotoPage(path: string): void {
-  rolesOpen.value = false;
-  usersOpen.value = false;
-  void router.push(path);
-}
+/** 「为该部门新建职位 / 新建账号」按钮已随 2026-10-16 界面清理移除（gotoPage 一并删除） */
 </script>
 
 <template>
@@ -515,9 +524,9 @@ function gotoPage(path: string): void {
         <div class="n g">{{ overview?.stageTotal ?? '—' }}</div>
         <div class="l">下设学段（教学部）</div>
       </div>
-      <div class="k" @click="toast('全部门角色均在此列表')">
+      <div class="k" @click="toast('全部门职位均在此列表')">
         <div class="n p">{{ overview?.roleTotal ?? '—' }}</div>
-        <div class="l">归属角色数</div>
+        <div class="l">归属职位数</div>
       </div>
       <div class="k" @click="toast(`共 ${overview?.userTotal ?? 0} 个账号已归属部门`)">
         <div class="n w">{{ overview?.userTotal ?? '—' }}</div>
@@ -529,7 +538,7 @@ function gotoPage(path: string): void {
     <div class="card">
       <div class="card-h">
         <div class="t">
-          <span class="bar"></span>部门结构 <span class="sub">用于角色归属与账号划分</span>
+          <span class="bar"></span>部门结构 <span class="sub">用于职位归属与账号划分</span>
         </div>
         <div class="r">
           <button class="btn" type="button" @click="openAdd">＋ 新建部门</button>
@@ -542,7 +551,7 @@ function gotoPage(path: string): void {
               <th style="width: 230px">部门名称</th>
               <th style="width: 150px">上级部门</th>
               <th>部门说明</th>
-              <th style="width: 80px">角色数</th>
+              <th style="width: 80px">职位数</th>
               <th style="width: 80px">账号数</th>
               <th style="width: 250px">操作</th>
             </tr>
@@ -572,7 +581,7 @@ function gotoPage(path: string): void {
               </td>
               <td>
                 <div class="acts">
-                  <span class="lk" @click="openDeptRoles(d)">查看角色</span>
+                  <span class="lk" @click="openDeptRoles(d)">查看职位</span>
                   <span class="lk" @click="openDeptUsers(d)">查看账号</span>
                   <span class="lk" @click="openEdit(d)">编辑</span>
                   <span class="lk dg" @click="delDept(d)">删除</span>
@@ -618,11 +627,11 @@ function gotoPage(path: string): void {
           <textarea
             v-model="form.remark"
             class="inp"
-            placeholder="简述部门职责与典型角色"
+            placeholder="简述部门职责与典型职位"
           ></textarea>
         </div>
       </div>
-      <div class="notice i mt12">ℹ<div>部门用于角色归属与账号划分，删除前请确保无角色/账号关联。</div></div>
+      <div class="notice i mt12">ℹ<div>部门用于职位归属与账号划分，删除前请确保无职位/账号关联。</div></div>
       <template #footer>
         <button class="btn" type="button" @click="formOpen = false">取消</button>
         <button class="btn pri" type="button" @click="submitDept">
@@ -656,12 +665,12 @@ function gotoPage(path: string): void {
       @ok="onConfirmOk"
     />
 
-    <!-- ==================== 部门下角色（原型 deptRoles） ==================== -->
+    <!-- ==================== 部门下职位（原型 deptRoles） ==================== -->
     <ProtoDialog v-model="rolesOpen" :title="rolesTitle" size="md">
       <table v-if="deptRolesList.length" class="tb">
         <thead>
           <tr>
-            <th>角色名称</th>
+            <th>职位名称</th>
             <th>编码</th>
             <th>类型</th>
             <th>账号数</th>
@@ -684,11 +693,10 @@ function gotoPage(path: string): void {
       </table>
       <div v-else class="empty">
         <div class="ic">🎭</div>
-        {{ rolesLoading ? '加载中…' : '该部门下暂无角色' }}
+        {{ rolesLoading ? '加载中…' : '该部门下暂无职位' }}
       </div>
       <template #footer>
         <button class="btn" type="button" @click="rolesOpen = false">关闭</button>
-        <button class="btn pri" type="button" @click="gotoPage(PERM_ROUTE.role)">为该部门新建角色</button>
       </template>
     </ProtoDialog>
 
@@ -698,10 +706,9 @@ function gotoPage(path: string): void {
         <thead>
           <tr>
             <th>姓名</th>
-            <th>工号</th>
             <th>账号</th>
             <th>具体部门</th>
-            <th>角色</th>
+            <th>职位</th>
             <th>状态</th>
             <th>操作</th>
           </tr>
@@ -709,7 +716,6 @@ function gotoPage(path: string): void {
         <tbody>
           <tr v-for="u in deptUsersList" :key="u.id">
             <td><b>{{ u.userName }}</b></td>
-            <td class="num">{{ u.gwNo }}</td>
             <td><code style="font-size: 11.5px">{{ u.account }}</code></td>
             <td>{{ u.deptName }}</td>
             <td>
@@ -738,11 +744,10 @@ function gotoPage(path: string): void {
       </div>
       <template #footer>
         <button class="btn" type="button" @click="usersOpen = false">关闭</button>
-        <button class="btn pri" type="button" @click="gotoPage(PERM_ROUTE.user)">为该部门新建账号</button>
       </template>
     </ProtoDialog>
 
-    <!-- ==================== 角色权限（看权限 / 编辑权限，就地弹窗） ==================== -->
+    <!-- ==================== 职位权限（看权限 / 编辑权限，就地弹窗） ==================== -->
     <PermTreeDialog
       v-model="permOpen"
       :title="permTitle"
@@ -753,7 +758,7 @@ function gotoPage(path: string): void {
       @confirm="onRolePermConfirm"
     />
 
-    <!-- ==================== 账号详情（就地弹窗，不跳用户管理） ==================== -->
+    <!-- ==================== 账号详情（就地弹窗，不跳账号管理） ==================== -->
     <UserDetailDialog
       v-model="userDetailOpen"
       :user-id="userDetailId"

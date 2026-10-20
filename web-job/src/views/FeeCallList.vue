@@ -773,35 +773,35 @@ onMounted(() => {
   flex: 1;
   min-width: 110px;
   background: #fff;
-  border: 1px solid #ebeef5;
+  border: 1px solid #F1EAE5;
   border-radius: 6px;
   padding: 14px 16px;
-  border-left: 3px solid #409eff;
+  border-left: 3px solid #CD3A33;
 }
 .stat-card.total {
-  border-left-color: #409eff;
+  border-left-color: #CD3A33;
 }
 .stat-card.pending {
-  border-left-color: #f56c6c;
+  border-left-color: #CD3A33;
 }
 .stat-card.calling {
-  border-left-color: #e6a23c;
+  border-left-color: #C9852E;
 }
 .stat-card.ok {
-  border-left-color: #67c23a;
+  border-left-color: #5FA36F;
 }
 .stat-card.overdue {
-  border-left-color: #f56c6c;
+  border-left-color: #CD3A33;
 }
 .stat-num {
   font-size: 22px;
   font-weight: 600;
-  color: #303133;
+  color: #443432;
   line-height: 1.3;
 }
 .stat-label {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 2px;
 }
 .search-card {
@@ -816,20 +816,20 @@ onMounted(() => {
 }
 .toolbar-tip {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   line-height: 1.6;
 }
 .sub-text {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 2px;
 }
 .money {
-  color: #f56c6c;
+  color: #CD3A33;
   font-weight: 600;
 }
 .overdue-text {
-  color: #f56c6c;
+  color: #CD3A33;
   font-weight: 600;
 }
 .pager {
@@ -842,22 +842,22 @@ onMounted(() => {
 }
 .tip-line {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   line-height: 1.6;
   margin-top: 4px;
 }
 .tip-inline {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 .unit {
   margin-left: 8px;
-  color: #606266;
+  color: #7A6C67;
 }
 .log-title {
   font-weight: 600;
   font-size: 14px;
   margin: 18px 0 10px;
-  color: #303133;
+  color: #443432;
 }
 </style>

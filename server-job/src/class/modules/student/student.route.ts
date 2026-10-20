@@ -770,7 +770,7 @@ studentRouter.get(
     /**
      * 欠费口径（需求二 / 三）：缴费数据来自「财务管理」同步副本，
      * 所以这里查 sms_common.t_class_fee_sync，而不是本模块的表。
-     * 欠费 = 待缴 + 逾期 + 冻结 且 金额 > 已缴金额。
+     * 欠费 = 待缴 + 冻结 且 金额 > 已缴金额。
      *
      * 注意：学生表在 sms_class、缴费副本在 sms_common，**跨库子查询不可用**
      * （knex 的子查询会跟着外层连接走，落到 sms_common 上就找不到 t_class_student）。

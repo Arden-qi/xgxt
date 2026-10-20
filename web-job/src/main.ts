@@ -10,7 +10,7 @@ import '@/class/styles/index.css';
 // ★ 2026-10-05 深度单体合并：全系统统一设计系统
 //   （门户 / 市场咨询 / 财务 / 权限 四个模块共用的 element-theme + shared-ui）
 //   ⚠️ 必须在 element-plus 与 class/styles 之后引入，否则变量覆盖被冲掉。
-//   ⚠️ 会让就业/教务/班级老页面的主色/字号对齐到统一口径（#2563EB / 13px）——
+//   ⚠️ 会让就业/教务/班级老页面的主色/字号对齐到统一口径（#CD3A33 良志红 / 13px）——
 //      这是「统一门户版」的预期效果。
 import '@/shared-ui/element-theme.css';
 import '@/shared-ui/shared-ui.css';

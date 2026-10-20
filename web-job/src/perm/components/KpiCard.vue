@@ -43,7 +43,7 @@ defineEmits<{ (e: 'click'): void }>();
 .kpi {
   position: relative;
   background: #fff;
-  border: 1px solid #e7ebf0;
+  border: 1px solid #EFE9E4;
   border-radius: 10px;
   padding: 14px 16px;
   min-width: 0;
@@ -68,7 +68,7 @@ defineEmits<{ (e: 'click'): void }>();
 
 .kpi-label {
   font-size: 13px;
-  color: #606266;
+  color: #7A6C67;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -77,7 +77,7 @@ defineEmits<{ (e: 'click'): void }>();
 
 .kpi-filter-tip {
   font-size: 11px;
-  color: #b0b6be;
+  color: #C4B8B2;
 }
 
 .kpi.active .kpi-filter-tip {
@@ -95,39 +95,39 @@ defineEmits<{ (e: 'click'): void }>();
 
 .kpi-hint {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 2px;
 }
 
 /* 色板：一套主色 + 浅底 + 光圈，避免每个卡片各写一遍 */
 .tone-blue {
-  --tone: #3a7afe;
-  --tone-bg: #f4f8ff;
+  --tone: #CD3A33;
+  --tone-bg: #FBF7F4;
   --tone-ring: rgba(58, 122, 254, 0.16);
 }
 .tone-green {
-  --tone: #1a9c68;
-  --tone-bg: #f2fbf7;
+  --tone: #4E9A6C;
+  --tone-bg: #EBF5EF;
   --tone-ring: rgba(26, 156, 104, 0.16);
 }
 .tone-orange {
-  --tone: #e08b1a;
-  --tone-bg: #fff9f0;
+  --tone: #C9852E;
+  --tone-bg: #FBF6EE;
   --tone-ring: rgba(224, 139, 26, 0.16);
 }
 .tone-purple {
-  --tone: #7a5af5;
-  --tone-bg: #f7f5ff;
+  --tone: #8A6AC0;
+  --tone-bg: #F3EFF8;
   --tone-ring: rgba(122, 90, 245, 0.16);
 }
 .tone-red {
-  --tone: #d94a4a;
-  --tone-bg: #fef4f4;
+  --tone: #CD3A33;
+  --tone-bg: #FDF4F2;
   --tone-ring: rgba(217, 74, 74, 0.16);
 }
 .tone-gray {
-  --tone: #606266;
-  --tone-bg: #f7f8fa;
-  --tone-ring: rgba(96, 98, 102, 0.14);
+  --tone: #7A6C67;
+  --tone-bg: #FAF7F4;
+  --tone-ring: rgba(122, 108, 103, 0.14);
 }
 </style>

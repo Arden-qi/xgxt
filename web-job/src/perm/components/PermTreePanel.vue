@@ -122,7 +122,7 @@ function toggleModule(m: PermModule, checked: boolean) {
   draft.value = next;
 }
 
-/** 复制当前角色的权限映射（提交用） */
+/** 复制当前职位的权限映射（提交用） */
 function getPerms(): RolePermMap {
   const out: RolePermMap = {};
   Object.keys(draft.value).forEach((k) => {
@@ -213,15 +213,15 @@ export default { name: 'PermTreePanel' };
 }
 
 .mod {
-  border: 1px solid #e7ebf0;
+  border: 1px solid #EFE9E4;
   border-radius: 8px;
   overflow: hidden;
 }
 
 .mod-head {
-  background: #f7f9fc;
+  background: #FBF7F4;
   padding: 8px 12px;
-  border-bottom: 1px solid #eef1f5;
+  border-bottom: 1px solid #F4EEE9;
 }
 
 .mod-title {
@@ -239,14 +239,14 @@ export default { name: 'PermTreePanel' };
 .mod-name {
   font-size: 13px;
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 
 .mod-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   background: #fff;
-  border: 1px solid #e7ebf0;
+  border: 1px solid #EFE9E4;
   border-radius: 999px;
   padding: 0 7px;
 }
@@ -257,7 +257,7 @@ export default { name: 'PermTreePanel' };
 
 .item {
   padding: 8px 0;
-  border-bottom: 1px dashed #f0f2f5;
+  border-bottom: 1px dashed #F1EBE7;
   display: grid;
   grid-template-columns: 168px minmax(0, 1fr);
   gap: 10px;
@@ -270,7 +270,7 @@ export default { name: 'PermTreePanel' };
 
 .item-name {
   font-size: 13px;
-  color: #303133;
+  color: #443432;
   padding-top: 3px;
   display: flex;
   align-items: center;
@@ -278,7 +278,7 @@ export default { name: 'PermTreePanel' };
 }
 
 .item-tip {
-  color: #c0c4cc;
+  color: #C4B8B2;
   cursor: help;
   font-size: 13px;
 }

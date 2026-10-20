@@ -50,6 +50,16 @@ export enum FeeType {
   MEAL = 3,          // 餐费
   INSURANCE = 4,     // 保险费
   TRIAL_FEE = 5,     // 试学费
+  /**
+   * 押金
+   *
+   * ★ 2026-10-15 用户口径：正式学费改为「计算形式」的多选，
+   *   其中「押金 200」在系统里原先没有对应类型，故新增。
+   *   ⚠️ 这是公共契约的新增项（铁律③），涉及 enums.ts 的改动务必全员同步。
+   */
+  DEPOSIT = 6,       // 押金
+  /** 校服（同上，2026-10-15 新增） */
+  UNIFORM = 7,       // 校服
 }
 
 /** 缴费状态 */
@@ -57,7 +67,6 @@ export enum PayStatus {
   UNPAID = 1,    // 待缴
   PAID = 2,      // 已缴
   VERIFIED = 3,  // 已核对
-  OVERDUE = 4,   // 逾期
   FROZEN = 5,    // 冻结
 }
 
@@ -257,13 +266,14 @@ export const FEE_TYPE_NAME: Record<number, string> = {
   [FeeType.MEAL]: '餐费',
   [FeeType.INSURANCE]: '保险费',
   [FeeType.TRIAL_FEE]: '试学费',
+  [FeeType.DEPOSIT]: '押金',
+  [FeeType.UNIFORM]: '校服',
 };
 
 export const PAY_STATUS_NAME: Record<number, string> = {
   [PayStatus.UNPAID]: '待缴',
   [PayStatus.PAID]: '已缴',
   [PayStatus.VERIFIED]: '已核对',
-  [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
 };
 

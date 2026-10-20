@@ -1,8 +1,13 @@
 /**
- * 系统设置 / 阶段字典 / 操作日志路由（教学管理初高）
+ * 系统设置 / 阶段字典 / 阶段方案 / 操作日志路由（教学管理初高）
  *
- * 挂载：settingRouter → /api/class/setting；stageRouter → /api/class/stage；opLogRouter → /api/class/opLog。
- * 表：t_class_setting、t_class_stage、t_class_op_log。
+ * 挂载：settingRouter → /api/class/setting；stageRouter → /api/class/stage；
+ *      stageSchemeRouter → /api/class/stage-scheme；opLogRouter → /api/class/opLog。
+ * 表：t_class_setting、t_class_stage、（t_class_stage_scheme + t_class_stage_scheme_stage）、t_class_op_log。
+ *
+ * ★ 2026-10-16：「阶段字典」页签升级为「阶段方案」——
+ *   原 stageRouter（单条阶段的增删）保留不动（老接口随时可回退），
+ *   新需求（方案 = 方案名称 + 部门 + N 个阶段）走下面的 stageSchemeRouter。
  */
 
 import { Router } from 'express';
@@ -23,9 +28,18 @@ import { getAllSettings, SETTING_DEFAULTS } from '../utils/setting';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+import {
+  listSchemes,
+  getScheme,
+  createScheme,
+  updateScheme,
+  removeScheme,
+  type StageSchemeSaveInput,
+} from '../utils/stageScheme';
 
 export const settingRouter = Router();
 export const stageRouter = Router();
+export const stageSchemeRouter = Router();
 export const opLogRouter = Router();
 
 const SETTING_TABLE = 't_class_setting';
@@ -523,6 +537,116 @@ stageRouter.delete(
       opUserId: req.user?.userId,
       opUserName: req.user?.userName,
       opDesc: `删除阶段方案：${plan.plan_name}`,
+    });
+
+    res.json(ok(null, '删除成功'));
+  }),
+);
+
+/* ============================================================
+ * 5b. 阶段方案（★ 2026-10-16）
+ *
+ * 【与上面「阶段字典」的区别】
+ *   阶段字典：一条记录 = 一个阶段（平铺）。
+ *   阶段方案：一个方案 = 方案名称 + 所属部门 + N 个阶段明细（阶段名称 + 学制月数）。
+ *   例：方案一（初高部）→ 一阶段 学制2月 / 二阶段 学制2月 / 三阶段 学制2月。
+ *
+ * 【接口】
+ *   GET    /api/class/stage-scheme/list?deptCode=   方案列表（含阶段明细）
+ *   POST   /api/class/stage-scheme/add              新增方案（含阶段明细）
+ *   PUT    /api/class/stage-scheme/update/:id       修改方案（阶段明细整体覆盖）
+ *   DELETE /api/class/stage-scheme/delete/:id       删除方案（被班级引用时拒绝）
+ * ============================================================ */
+
+/** 方案保存校验（新增 / 修改共用） */
+const schemeSaveSchema = z.object({
+  schemeName: z.string().trim().min(1, '方案名称必填').max(50),
+  deptCode: z.coerce.number().int().min(1, '所属部门必填').max(2),
+  stages: z
+    .array(
+      z.object({
+        stageName: z.string().trim().min(1, '阶段名称必填').max(50),
+        studyMonths: z.coerce.number().int().min(1, '学制（月）必填'),
+      }),
+    )
+    .min(1, '至少添加一个阶段'),
+});
+
+stageSchemeRouter.get(
+  '/list',
+  checkPermission('class:setting:view'),
+  validate(z.object({ deptCode: z.coerce.number().int().optional() })),
+  wrap(async (req, res) => {
+    const q = (req as any).validated as { deptCode?: number };
+    res.json(ok(await listSchemes(q.deptCode)));
+  }),
+);
+
+stageSchemeRouter.post(
+  '/add',
+  checkPermission('class:setting:edit'),
+  validate(schemeSaveSchema),
+  wrap(async (req, res) => {
+    const body = (req as any).validated as StageSchemeSaveInput;
+    const { id } = await createScheme(body, req.user?.userId || 'system');
+
+    await writeOpLog({
+      module: 'setting',
+      bizType: '阶段方案',
+      bizId: id,
+      opUserId: req.user?.userId,
+      opUserName: req.user?.userName,
+      opDesc: `新增阶段方案「${body.schemeName}」（${nameOf(DEPT_NAME, body.deptCode)}，${body.stages.length} 个阶段）`,
+      afterValue: body as any,
+    });
+
+    res.json(ok({ id }, '新增成功'));
+  }),
+);
+
+stageSchemeRouter.put(
+  '/update/:id',
+  checkPermission('class:setting:edit'),
+  validate(schemeSaveSchema),
+  wrap(async (req, res) => {
+    const { id } = req.params;
+    const body = (req as any).validated as StageSchemeSaveInput;
+    const before = await getScheme(id);
+
+    await updateScheme(id, body, req.user?.userId || 'system');
+
+    await writeOpLog({
+      module: 'setting',
+      bizType: '阶段方案',
+      bizId: id,
+      opUserId: req.user?.userId,
+      opUserName: req.user?.userName,
+      opDesc: `修改阶段方案「${body.schemeName}」（${nameOf(DEPT_NAME, body.deptCode)}，${body.stages.length} 个阶段）`,
+      beforeValue: before as any,
+      afterValue: body as any,
+    });
+
+    res.json(ok({ id }, '保存成功'));
+  }),
+);
+
+stageSchemeRouter.delete(
+  '/delete/:id',
+  checkPermission('class:setting:edit'),
+  wrap(async (req, res) => {
+    const { id } = req.params;
+    const before = await getScheme(id);
+
+    await removeScheme(id, req.user?.userId || 'system');
+
+    await writeOpLog({
+      module: 'setting',
+      bizType: '阶段方案',
+      bizId: id,
+      opUserId: req.user?.userId,
+      opUserName: req.user?.userName,
+      opDesc: `删除阶段方案「${before?.schemeName ?? id}」`,
+      beforeValue: before as any,
     });
 
     res.json(ok(null, '删除成功'));

@@ -37,3 +37,6 @@
 /release/
 /输出/
 /server-job/tessdata/*.traineddata.gz
+
+# vite 构建时被沙箱拦住清不掉的旧产物（改名挪开的历史 dist）
+dist_old_*/

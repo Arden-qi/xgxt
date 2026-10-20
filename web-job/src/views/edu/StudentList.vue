@@ -470,12 +470,12 @@ const statsCards = computed(() => [
     label: isHigh.value ? '初高中部总人数' : '大学部总人数',
     value: stats.value.total,
     icon: '👥',
-    bg: isHigh.value ? '#e6f0ff' : '#ece9ff',
-    color: isHigh.value ? '#409eff' : '#722ed1',
+    bg: isHigh.value ? '#FDF4F2' : '#F3EFF8',
+    color: isHigh.value ? '#CD3A33' : '#7A5AA6',
   },
-  { label: '在读学生', value: stats.value.active, icon: '✓', bg: '#e8f8e8', color: '#67c23a' },
-  { label: '试学中', value: stats.value.trial, icon: '⏳', bg: '#fff3e0', color: '#e6a23c' },
-  { label: '休学/退学', value: stats.value.inactive, icon: '∅', bg: '#f0f0f0', color: '#909399' },
+  { label: '在读学生', value: stats.value.active, icon: '✓', bg: '#EBF5EF', color: '#5FA36F' },
+  { label: '试学中', value: stats.value.trial, icon: '⏳', bg: '#FBF3E5', color: '#C9852E' },
+  { label: '休学/退学', value: stats.value.inactive, icon: '∅', bg: '#F1EBE7', color: '#A2938E' },
 ]);
 
 async function loadStats() {

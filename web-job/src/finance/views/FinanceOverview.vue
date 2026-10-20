@@ -156,28 +156,28 @@ onMounted(loadData);
 
 .stat-label {
   font-size: 13px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .stat-value {
   font-size: 28px;
   font-weight: 600;
   margin: 8px 0 4px;
-  color: #303133;
+  color: #443432;
 }
 
 .stat-value.warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 
 .stat-value.money {
   font-size: 22px;
-  color: #409eff;
+  color: #CD3A33;
 }
 
 .stat-sub {
   font-size: 12px;
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 .mt12 {
@@ -200,7 +200,7 @@ onMounted(loadData);
 
 .money-label {
   font-size: 13px;
-  color: #909399;
+  color: #A2938E;
   margin-bottom: 8px;
 }
 
@@ -210,11 +210,11 @@ onMounted(loadData);
 }
 
 .money-num.income {
-  color: #f56c6c; /* 中国习惯：收入用红 */
+  color: #CD3A33; /* 中国习惯：收入用红 */
 }
 
 .money-num.expense {
-  color: #67c23a; /* 支出用绿 */
+  color: #5FA36F; /* 支出用绿 */
 }
 
 .shortcuts {

@@ -22,35 +22,35 @@
  * 一、全局变量：把 Element 的主色/圆角/字号换成原型口径
  * ============================================================ */
 :root {
-  /* ---- 主色：原型的 #2563EB（不是 Element 默认的 #409EFF）---- */
-  --el-color-primary: #2563eb;
-  --el-color-primary-light-3: #5b8def;
-  --el-color-primary-light-5: #93b4f8;
-  --el-color-primary-light-7: #bfd3f9;
-  --el-color-primary-light-8: #dce8fb;
-  --el-color-primary-light-9: #eff6ff;
-  --el-color-primary-dark-2: #1d4ed8;
+  /* ---- 主色：原型的 #CD3A33（不是 Element 默认的 #CD3A33）---- */
+  --el-color-primary: #CD3A33;
+  --el-color-primary-light-3: #DC7568;
+  --el-color-primary-light-5: #E6A99C;
+  --el-color-primary-light-7: #F2C8C3;
+  --el-color-primary-light-8: #F9E4E1;
+  --el-color-primary-light-9: #FDF4F2;
+  --el-color-primary-dark-2: #B22A23;
 
   /* ---- 语义色（与原型 .tag-* 一致）---- */
-  --el-color-success: #047857;
-  --el-color-warning: #c2410c;
-  --el-color-danger: #b91c1c;
-  --el-color-info: #6b7280;
+  --el-color-success: #3F7A55;
+  --el-color-warning: #A66A1F;
+  --el-color-danger: #B22A23;
+  --el-color-info: #7A6C67;
 
   /* ---- 文字色 ---- */
-  --el-text-color-primary: #1f2937;
-  --el-text-color-regular: #374151;
-  --el-text-color-secondary: #8a94a6;
-  --el-text-color-placeholder: #b3bccb;
+  --el-text-color-primary: #443432;
+  --el-text-color-regular: #5F5350;
+  --el-text-color-secondary: #9C8D88;
+  --el-text-color-placeholder: #C4B8B2;
 
   /* ---- 边框 / 底色 ---- */
-  --el-border-color: #e1e6ef;
-  --el-border-color-light: #e9edf3;
-  --el-border-color-lighter: #f1f4f9;
+  --el-border-color: #E2D7D1;
+  --el-border-color-light: #EFE7E2;
+  --el-border-color-lighter: #F4EEE9;
   --el-fill-color-blank: #fff;
 
-  /* ---- 圆角：原型 7px（输入框/按钮）---- */
-  --el-border-radius-base: 7px;
+  /* ---- 圆角：8px（2026-10-15 暖色主题，按钮/输入框统一 8px 圆角）---- */
+  --el-border-radius-base: 8px;
   --el-border-radius-small: 6px;
 
   /* ---- 字号：原型基准 13px（Element 默认 14px）---- */
@@ -71,22 +71,22 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei',
     'PingFang SC', sans-serif;
   font-size: 13px;
-  color: #1f2937;
-  background: #f5f8fc;
+  color: #443432;
+  background: #F6F3EF;
   -webkit-font-smoothing: antialiased;
 }
 
-/* 滚动条（原型口径 8px / #D8E0EC） */
+/* 滚动条（原型口径 8px / #DCD2CB） */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d8e0ec;
+  background: #DCD2CB;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #bfcbde;
+  background: #C9BCB5;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -96,16 +96,16 @@ body {
  * 三、卡片（el-card）→ 原型 .card
  * ============================================================ */
 .el-card {
-  border: 1px solid #e9edf3;
+  border: 1px solid #EFE7E2;
   border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+  box-shadow: 0 1px 2px rgba(68, 52, 50, 0.03);
 }
 .el-card__header {
-  border-bottom: 1px solid #f1f4f9;
+  border-bottom: 1px solid #F4EEE9;
   padding: 12px 16px;
   font-size: 13px;
   font-weight: 600;
-  color: #111827;
+  color: #443432;
 }
 .el-card__body {
   padding: 14px 16px;
@@ -116,12 +116,12 @@ body {
  * ============================================================ */
 .el-table {
   font-size: 12.5px;
-  color: #374151;
+  color: #5F5350;
 }
 /* 表头：浅灰底 + 小号加粗字（原型 thead th） */
 .el-table th.el-table__cell {
-  background: #fafbfd !important;
-  color: #6d7788;
+  background: #FAF6F2 !important;
+  color: #8A7B76;
   font-weight: 600;
   font-size: 11.5px;
   letter-spacing: 0.2px;
@@ -138,21 +138,21 @@ body {
   line-height: 1.55;
 }
 .el-table td.el-table__cell {
-  border-bottom: 1px solid #f4f6fa;
+  border-bottom: 1px solid #F6F3EF;
 }
 .el-table--border .el-table__cell {
-  border-right: 1px solid #f1f4f9;
+  border-right: 1px solid #F4EEE9;
 }
 .el-table__inner-wrapper::before {
   display: none; /* 去掉底部那条多余的线 */
 }
-/* 行 hover（原型 #F9FBFF） */
+/* 行 hover（原型 #FBF7F4） */
 .el-table tbody tr:hover > td.el-table__cell {
-  background: #f9fbff !important;
+  background: #FBF7F4 !important;
 }
 /* 斑马纹弱化（原型基本不用条纹） */
 .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background: #fcfdff;
+  background: #FDF9F7;
 }
 /* 卡片内的表格不要自带外边框 */
 .el-card .el-table {
@@ -173,21 +173,21 @@ body {
   font-weight: 400;
 }
 .el-button--primary {
-  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.25);
+  box-shadow: 0 1px 2px rgba(205, 58, 51, 0.25);
 }
 .el-button--primary:hover {
-  background: #1d4ed8;
-  border-color: #1d4ed8;
+  background: #B22A23;
+  border-color: #B22A23;
 }
 /* 次级按钮（原型 .btn-ghost） */
 .el-button--default:not(.is-text):not(.is-link) {
-  border-color: #e1e6ef;
-  color: #4b5563;
+  border-color: #E2D7D1;
+  color: #6B5C58;
 }
 .el-button--default:not(.is-text):not(.is-link):hover {
-  border-color: #bfd3f9;
-  color: #1d4ed8;
-  background: #f8fbff;
+  border-color: #F2C8C3;
+  color: #B22A23;
+  background: #FDF4F2;
 }
 /* 文字按钮（原型 .btn-link）：表格操作列常用 */
 .el-button.is-link {
@@ -204,20 +204,20 @@ body {
 .el-input__wrapper,
 .el-select__wrapper {
   border-radius: 7px;
-  box-shadow: 0 0 0 1px #e1e6ef inset;
+  box-shadow: 0 0 0 1px #E2D7D1 inset;
 }
 .el-input__wrapper:hover,
 .el-select__wrapper:hover {
-  box-shadow: 0 0 0 1px #bfd3f9 inset;
+  box-shadow: 0 0 0 1px #F2C8C3 inset;
 }
 .el-input__wrapper.is-focus,
 .el-select__wrapper.is-focused {
-  box-shadow: 0 0 0 1px #93b4f8 inset, 0 0 0 3px rgba(37, 99, 235, 0.09);
+  box-shadow: 0 0 0 1px #E6A99C inset, 0 0 0 3px rgba(205, 58, 51, 0.09);
 }
 .el-input__inner,
 .el-select__placeholder {
   font-size: 12.5px;
-  color: #374151;
+  color: #5F5350;
 }
 
 /* ============================================================
@@ -242,50 +242,50 @@ body {
 .el-tag--primary,
 .el-tag--primary.el-tag--light,
 .el-tag--primary.el-tag--plain {
-  --el-tag-bg-color: #eff6ff;
-  --el-tag-text-color: #1d4ed8;
-  background-color: #eff6ff !important;
-  color: #1d4ed8 !important;
+  --el-tag-bg-color: #FDF4F2;
+  --el-tag-text-color: #B22A23;
+  background-color: #FDF4F2 !important;
+  color: #B22A23 !important;
 }
 .el-tag--success,
 .el-tag--success.el-tag--light,
 .el-tag--success.el-tag--plain {
-  --el-tag-bg-color: #ecfdf5;
-  --el-tag-text-color: #047857;
-  background-color: #ecfdf5 !important;
-  color: #047857 !important;
+  --el-tag-bg-color: #EBF5EF;
+  --el-tag-text-color: #3F7A55;
+  background-color: #EBF5EF !important;
+  color: #3F7A55 !important;
 }
 .el-tag--warning,
 .el-tag--warning.el-tag--light,
 .el-tag--warning.el-tag--plain {
-  --el-tag-bg-color: #fff7ed;
-  --el-tag-text-color: #c2410c;
-  background-color: #fff7ed !important;
-  color: #c2410c !important;
+  --el-tag-bg-color: #FBF3E5;
+  --el-tag-text-color: #A66A1F;
+  background-color: #FBF3E5 !important;
+  color: #A66A1F !important;
 }
 .el-tag--danger,
 .el-tag--danger.el-tag--light,
 .el-tag--danger.el-tag--plain {
-  --el-tag-bg-color: #fef2f2;
-  --el-tag-text-color: #b91c1c;
-  background-color: #fef2f2 !important;
-  color: #b91c1c !important;
+  --el-tag-bg-color: #FDF4F2;
+  --el-tag-text-color: #B22A23;
+  background-color: #FDF4F2 !important;
+  color: #B22A23 !important;
 }
 .el-tag--info,
 .el-tag--info.el-tag--light,
 .el-tag--info.el-tag--plain {
   --el-tag-bg-color: #f3f4f6;
-  --el-tag-text-color: #6b7280;
+  --el-tag-text-color: #7A6C67;
   background-color: #f3f4f6 !important;
-  color: #6b7280 !important;
+  color: #7A6C67 !important;
 }
 /* 实心标签（状态筛选选中态）保持原型风格：主色底 + 白字 */
 .el-tag--primary.el-tag--dark {
-  background-color: #2563eb !important;
+  background-color: #CD3A33 !important;
   color: #fff !important;
 }
 .el-tag--info.el-tag--dark {
-  background-color: #6b7280 !important;
+  background-color: #7A6C67 !important;
   color: #fff !important;
 }
 
@@ -294,30 +294,30 @@ body {
  * ============================================================ */
 .el-dialog {
   border-radius: 14px;
-  box-shadow: 0 24px 60px rgba(16, 24, 40, 0.22);
+  box-shadow: 0 24px 60px rgba(68, 52, 50, 0.22);
 }
 .el-dialog__header {
   padding: 16px 20px;
   margin: 0;
-  border-bottom: 1px solid #f1f4f9;
+  border-bottom: 1px solid #F4EEE9;
 }
 .el-dialog__title {
   font-size: 14px;
   font-weight: 600;
-  color: #111827;
+  color: #443432;
 }
 .el-dialog__body {
   padding: 18px 20px;
   font-size: 12.5px;
-  color: #374151;
+  color: #5F5350;
 }
 .el-dialog__footer {
   padding: 13px 20px;
-  border-top: 1px solid #f1f4f9;
+  border-top: 1px solid #F4EEE9;
 }
-/* 遮罩（原型 rgba(17,24,39,.34)） */
+/* 遮罩（原型 rgba(68,52,50,.34)） */
 .el-overlay {
-  background-color: rgba(17, 24, 39, 0.34);
+  background-color: rgba(68, 52, 50, 0.34);
 }
 
 /* ============================================================
@@ -325,7 +325,7 @@ body {
  * ============================================================ */
 .el-pagination {
   font-size: 12px;
-  color: #8a94a6;
+  color: #9C8D88;
 }
 .el-pagination button,
 .el-pager li {
@@ -335,7 +335,7 @@ body {
   font-size: 12px;
 }
 .el-pager li.is-active {
-  background: #2563eb;
+  background: #CD3A33;
   color: #fff;
   font-weight: 600;
 }
@@ -354,15 +354,15 @@ body {
   border-radius: 8px;
   margin: 0 10px 2px;
   font-size: 13px;
-  color: #4b5563;
+  color: #6B5C58;
 }
 .el-menu-item:hover {
-  background: #f4f8ff;
-  color: #2563eb;
+  background: #FBF7F4;
+  color: #CD3A33;
 }
 .el-menu-item.is-active {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: #FDF4F2;
+  color: #B22A23;
   font-weight: 600;
 }
 .el-menu-item.is-active::before {
@@ -370,8 +370,8 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+  background: #CD3A33;
+  box-shadow: 0 0 0 3px rgba(205, 58, 51, 0.14);
   margin-right: 9px;
   flex: none;
 }
@@ -381,11 +381,11 @@ body {
   font-size: 12.5px;
 }
 .el-descriptions__label {
-  color: #8a94a6 !important;
+  color: #9C8D88 !important;
   font-weight: 400 !important;
 }
 .el-descriptions__content {
-  color: #1f2937 !important;
+  color: #443432 !important;
 }
 
 /* el-alert：提示条 → 原型 .note */
@@ -401,7 +401,7 @@ body {
 /* el-form 标签 */
 .el-form-item__label {
   font-size: 12px;
-  color: #6b7280;
+  color: #7A6C67;
 }
 
 /* el-message 提示（原型风格） */
@@ -427,22 +427,22 @@ body {
   display: flex;
   gap: 20px;
   padding: 0 16px;
-  border-bottom: 1px solid #f1f4f9;
+  border-bottom: 1px solid #F4EEE9;
 }
 .dept-tabs b {
   padding: 11px 0;
   font-size: 12.5px;
   font-weight: 400;
-  color: #6b7280;
+  color: #7A6C67;
   cursor: pointer;
   position: relative;
   white-space: nowrap;
 }
 .dept-tabs b:hover {
-  color: #1d4ed8;
+  color: #B22A23;
 }
 .dept-tabs b.on {
-  color: #1d4ed8;
+  color: #B22A23;
   font-weight: 600;
 }
 .dept-tabs b.on::after {
@@ -452,21 +452,21 @@ body {
   right: 0;
   bottom: -1px;
   height: 2px;
-  background: #2563eb;
+  background: #CD3A33;
   border-radius: 2px;
 }
 
 /* ---- 工具栏里的内联统计（原型 .sel-tip / statTip）---- */
 .stat-line {
   font-size: 12px;
-  color: #6b7280;
+  color: #7A6C67;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
 .stat-line b {
-  color: #1d4ed8;
+  color: #B22A23;
   font-weight: 600;
 }
 
@@ -492,7 +492,7 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 11px 4px 0;
-  color: #8a94a6;
+  color: #9C8D88;
   font-size: 12px;
   flex-wrap: wrap;
   gap: 10px;
@@ -501,10 +501,10 @@ body {
 /* ---- 金额列（原型 .money / .money.due）---- */
 .money {
   font-weight: 600;
-  color: #1f2937;
+  color: #443432;
 }
 .money.due {
-  color: #c2410c;
+  color: #A66A1F;
 }
 
 /* ---- 单元格双行（主值 + 下方小字，如「到期日期 + 剩余 N 天」）---- */
@@ -513,7 +513,7 @@ body {
 }
 .cell2 .sub {
   font-size: 11px;
-  color: #9aa3b2;
+  color: #B3A69F;
 }
 
 /* ---- 卡片内嵌表格时，去掉 el-card 的额外内边距（原型卡片是「通栏」布局）---- */
@@ -528,10 +528,10 @@ body {
 .card-flush .table-toolbar {
   padding: 12px 16px;
   margin-bottom: 0;
-  border-bottom: 1px solid #f4f6fa;
+  border-bottom: 1px solid #F6F3EF;
 }
 .card-flush .pager-bar {
   padding: 11px 16px;
-  border-top: 1px solid #f4f6fa;
+  border-top: 1px solid #F6F3EF;
 }
 

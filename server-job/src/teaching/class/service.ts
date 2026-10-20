@@ -40,6 +40,7 @@ import {
   type RoleKey,
   type StaffSlot,
 } from './handover.repo';
+import { listSchemes, type StageSchemeItem } from '../../class-jh/utils/stageScheme';
 
 const REPOS: Record<ClassStage, ClassRepo> = {
   jh: repoClassJh.repo,
@@ -203,6 +204,21 @@ export async function listClassMeta(user: any): Promise<ClassStageMeta[]> {
     phaseOptions: mergePhaseOptions(m.stage, m.phaseOptions, planOptions),
     planOptions,
   }));
+}
+
+/**
+ * ★ 2026-10-16：阶段方案选项（班级表单的「阶段方案 / 阶段」两个下拉）
+ *
+ * 方案数据存在初高库（sms_class_jh）的 t_class_stage_scheme，
+ * 但按部门区分（1 初高部 / 2 大学部）—— 三个学段的班级表单都取这一份，
+ * 前端按表单里选中的「部门」过滤，选完方案后「阶段」下拉 = 该方案的阶段明细。
+ */
+export async function listSchemeOptions(user: any): Promise<StageSchemeItem[]> {
+  const stages = await visibleStages(user);
+  if (!stages.length) {
+    throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有班级信息的访问权限');
+  }
+  return listSchemes();
 }
 
 /**

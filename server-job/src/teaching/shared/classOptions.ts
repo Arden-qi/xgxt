@@ -40,6 +40,22 @@ const pick = (r: any) => ({
 });
 
 /**
+ * ★ 各学段的班级表位置 —— **只在这里定义一份**
+ *
+ * 原来这段映射写在 `listClassesByStage` 里（if/else 三分支）；后来又要
+ * 「按 id 反查班级名」，如果再抄一份，两处迟早分叉
+ * （本项目反复踩过「同一条规则写两份、只改一份」的坑）。
+ */
+const CLASS_TABLE: Record<
+  TeachingStage,
+  { conn: typeof classJhDb; dbName: string; table: string }
+> = {
+  jh: { conn: classJhDb, dbName: 'sms_class_jh', table: 't_class_info' },
+  class: { conn: classDb, dbName: 'sms_class', table: 't_class_info' },
+  job: { conn: jobDb, dbName: 'sms_job', table: 't_job_class' },
+};
+
+/**
  * 取某学段的班级列表
  *
  * ★ 第 4 期步骤 2：改走 `tbl()` 路由（开关开=读统一表）
@@ -70,6 +86,36 @@ export async function listClassesByStage(
     name: string;
   }>;
   return rows.map(pick);
+}
+
+/**
+ * ★ 按班级 id **批量**反查班级名：`{ 班级id: 班级名 }`（2026-10-16 新增）
+ *
+ * 【为什么必须有】
+ *   初高老表 `t_class_flow` 只存 `resume_class_id`，**没有班级名字列**
+ *   （实训表有 `new_class_name` 快照）。于是初高复学单在列表「复学班级」列
+ *   恒为「—」—— 数据其实**存进库了**，只是没人把 id 翻成名字。
+ *   用户视角就是「我明明选了复学班级，列表里却没体现」。
+ *
+ * 【⚠️ 不过滤 `is_deleted` —— 与班级下拉口径相反，别「统一」掉】
+ *   这里是**历史单据的展示**：班级后来被软删，名字仍要显示出来；
+ *   显示「—」会让人以为当初没存进去。下拉则必须只列可用的班。
+ *
+ * 【为什么要批量】列表按页渲染（最多 200 行），逐行查会打 N 次库。
+ */
+export async function classNamesByIds(
+  stage: TeachingStage,
+  ids: Array<string | null | undefined>,
+): Promise<Record<string, string>> {
+  const uniq = [...new Set(ids.filter((x): x is string => !!x && x !== ''))];
+  if (!uniq.length) return {};
+  const c = CLASS_TABLE[stage];
+  const rows = (await tbl(c.conn, c.dbName, c.table, stage)
+    .whereIn('id', uniq)
+    .select('id', 'class_name')) as Array<Record<string, any>>;
+  const out: Record<string, string> = {};
+  for (const r of rows) out[String(r.id)] = String(r.class_name ?? '');
+  return out;
 }
 
 /** 取多个学段的班级，打上学段标签 */

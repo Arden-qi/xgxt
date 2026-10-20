@@ -11,16 +11,21 @@
  *   所以列不是写死的，而是从后端 `/formula` 读出来渲染的 —— 这才是"配置化"。
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage } from 'element-plus';
 import { EditPen, Refresh, Search } from '@element-plus/icons-vue';
 import {
   EXAM_RESULT_NAME,
+  REPEAT_REASON_OPTIONS,
+  REPEAT_REASON_OTHER,
   SCORE_FIELD_NAME,
   fetchScoreEntry,
   fetchScoreFormula,
   listScores,
+  repeatScore,
   saveScores,
   scoreSummary,
+  updateScore,
   type ScoreEntry,
   type ScoreFormula,
   type ScoreRow,
@@ -29,6 +34,7 @@ import {
   type TeachingStage,
 } from '@/teaching/api/score';
 import { listExams, type ExamRow } from '@/teaching/api/exam';
+import { getClassOptions, type ClassOption } from '@/teaching/api/class';
 import { stageVisible } from '@/teaching/access';
 import { isReadOnlyUser } from '@/store/permission';
 
@@ -78,16 +84,20 @@ const formulaText = computed(() => {
 
 /* ================= 查询 ================= */
 const query = reactive({
+
   stage: '' as '' | TeachingStage,
   examId: '',
   classId: '',
   keyword: '',
 });
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 const page = reactive({ page: 1, size: 20, total: 0 });
 const loading = ref(false);
 const rows = ref<ScoreRow[]>([]);
 const summary = ref<ScoreSummaryItem[]>([]);
 const examOptions = ref<ExamRow[]>([]);
+const classOptions = ref<ClassOption[]>([]);
 
 const examSelectOptions = computed(() =>
   query.stage ? examOptions.value.filter((e) => e.stage === query.stage) : examOptions.value,
@@ -137,6 +147,19 @@ async function loadExams() {
     examOptions.value = [];
   }
 }
+/**
+ * 末班弹窗的「交接到的班级」数据源
+ *
+ * ★ 用 /class/options（已结业的班后端已过滤），三学段一次取回；
+ *   选哪个学段由前端按规则过滤 —— 初高只能初高、大学只能大学、实训全部。
+ */
+async function loadClassOptions() {
+  try {
+    classOptions.value = (await getClassOptions()) || [];
+  } catch {
+    classOptions.value = [];
+  }
+}
 function handleSearch() {
   page.page = 1;
   void loadList();
@@ -150,14 +173,35 @@ function handleReset() {
   handleSearch();
 }
 
+/**
+ * 三个下拉「选完即查」，不用再点查询
+ *
+ * ★ 为什么用 setTimeout(0) 而不是直接调：
+ *   切学段时 examId/classId 会被重置成 ''，两个 watcher 会同一拍各触发一次 →
+ *   连发两个完全相同的请求。用 0 延迟把同一拍的多次触发压成一次。
+ * ★ 学生姓名不走这里 —— 输入过程每敲一个字就查一次会把库打满，
+ *   仍然必须回车或点「查询」。
+ */
+let autoTimer: number | null = null;
+function autoSearch() {
+  if (autoTimer !== null) window.clearTimeout(autoTimer);
+  autoTimer = window.setTimeout(() => {
+    autoTimer = null;
+    page.page = 1;
+    void loadList();
+    void loadSummary();
+  }, 0);
+}
+
 watch(
   () => query.stage,
   () => {
     query.examId = '';
     query.classId = '';
-    handleSearch();
+    autoSearch();
   },
 );
+watch([() => query.examId, () => query.classId], () => autoSearch());
 
 onMounted(async () => {
   try {
@@ -165,7 +209,7 @@ onMounted(async () => {
   } catch {
     formulas.value = null;
   }
-  await loadExams();
+  await Promise.all([loadExams(), loadClassOptions()]);
   await Promise.all([loadList(), loadSummary()]);
 });
 
@@ -275,6 +319,224 @@ async function submitEntry() {
 }
 
 const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.length > 0);
+
+/* ================= 列表内联改备注 ================= */
+/** 正在编辑备注的成绩行 id；null = 没在编辑 */
+const remarkEditingId = ref<string | null>(null);
+const remarkDraft = ref('');
+const remarkSaving = ref(false);
+
+function startRemarkEdit(row: ScoreRow) {
+  if (!canWrite.value) return;
+  remarkEditingId.value = row.id;
+  remarkDraft.value = row.remark ?? '';
+}
+
+/**
+ * 失焦 / 回车即保存
+ *
+ * ★ 只传 remark —— 后端据此只更新备注列，不会顺手重算综合成绩。
+ */
+async function commitRemark(row: ScoreRow) {
+  if (remarkEditingId.value !== row.id) return;
+  const next = remarkDraft.value.trim();
+  remarkEditingId.value = null;
+  if (next === (row.remark ?? '').trim()) return;
+  remarkSaving.value = true;
+  try {
+    await updateScore({ stage: row.stage, id: row.id, remark: next || null });
+    row.remark = next || null;
+    ElMessage.success('备注已保存');
+  } catch {
+    /* 错误提示由 http 拦截器统一弹 */
+  } finally {
+    remarkSaving.value = false;
+  }
+}
+
+/* ================= 编辑（改分数 / 结果 / 备注） ================= */
+const editVisible = ref(false);
+const editSaving = ref(false);
+const editRow = ref<ScoreRow | null>(null);
+const editForm = reactive({
+  writtenScore: null as number | null,
+  machineScore: null as number | null,
+  interviewScore: null as number | null,
+  otherScore: null as number | null,
+  examResult: null as number | null,
+  remark: '',
+});
+
+/** 某学段要填哪几项分数（由该学段的公式决定，和列表列头同一口径） */
+function inputFieldsOf(stage: TeachingStage): string[] {
+  const f = formulas.value?.[stage];
+  if (!f) return ['written', 'machine', 'interview'];
+  const used = new Set<string>();
+  for (const p of [...(f.writtenAvg?.parts ?? []), ...f.total.parts]) used.add(p.field);
+  return INPUT_FIELDS.filter((x) => used.has(x));
+}
+/** 该学段的「结果」默认怎么来：auto 按分数重判 / manual 老师手选 / action 由末班置值 */
+function judgeModeOf(stage: TeachingStage): 'auto' | 'manual' | 'action' {
+  return formulas.value?.[stage]?.judgeMode ?? 'auto';
+}
+
+const editFields = computed(() =>
+  editRow.value ? inputFieldsOf(editRow.value.stage) : ['written', 'machine', 'interview'],
+);
+/**
+ * 老师这次有没有动过「结果」下拉
+ *
+ * ★ 只在下拉真的改过时才把 examResult 发给后端。
+ *   否则初高每次改分数都会把「上次的结果」当成手选值写回去，
+ *   按满分比例自动重判就永久失效了。
+ */
+const editResultTouched = ref(false);
+
+/** 结果下拉旁的说明（按学段口径，避免老师不知道「不选会怎样」） */
+const judgeHint = computed(() => {
+  const st = editRow.value?.stage;
+  if (!st) return '';
+  const mode = judgeModeOf(st);
+  if (mode === 'auto') return '不选则按分数自动判定';
+  if (mode === 'manual') return '老师手选';
+  return '默认未判断';
+});
+
+function openEdit(row: ScoreRow) {
+  editRow.value = row;
+  editForm.writtenScore = row.writtenScore;
+  editForm.machineScore = row.machineScore;
+  editForm.interviewScore = row.interviewScore;
+  editForm.otherScore = row.otherScore;
+  editForm.examResult = row.examResult;
+  editForm.remark = row.remark ?? '';
+  editResultTouched.value = false;
+  editVisible.value = true;
+}
+
+async function submitEdit() {
+  const row = editRow.value;
+  if (!row) return;
+  const nums = [editForm.writtenScore, editForm.machineScore, editForm.interviewScore, editForm.otherScore];
+  if (nums.some((v) => v !== null && v !== undefined && (Number(v) < 0 || Number(v) > 100))) {
+    return ElMessage.warning('分数必须在 0 ~ 100 之间');
+  }
+  editSaving.value = true;
+  try {
+    await updateScore({
+      stage: row.stage,
+      id: row.id,
+      writtenScore: editForm.writtenScore,
+      machineScore: editForm.machineScore,
+      interviewScore: editForm.interviewScore,
+      otherScore: editForm.otherScore,
+      // ★ 三个学段都能手改结果；只有真的改过才发（没改就让后端按原口径判定）
+      ...(editResultTouched.value ? { examResult: editForm.examResult } : {}),
+      remark: editForm.remark.trim() || null,
+    });
+    ElMessage.success('已保存');
+    editVisible.value = false;
+    await Promise.all([loadList(), loadSummary()]);
+  } finally {
+    editSaving.value = false;
+  }
+}
+
+/* ================= 末班 ================= */
+const repeatVisible = ref(false);
+const repeatSaving = ref(false);
+const repeatRow = ref<ScoreRow | null>(null);
+const repeatForm = reactive({
+  targetStage: '' as '' | TeachingStage,
+  targetClassId: '',
+  repeatDate: '',
+  reason: '',
+  otherReason: '',
+  shortcoming: '',
+});
+
+/** 今天（本地时区，不能用 toISOString —— 那是 UTC，凌晨会差一天） */
+function todayStr(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * 末班可选的目标班级（按学段规则过滤）
+ *
+ * 初高 → 只能初高班；大学 → 只能大学班；实训 → 三学段任意班。
+ * 同时排除「该生当前所在班」，否则后端会以「无需末班」拒掉。
+ */
+const repeatClassOptions = computed(() => {
+  const row = repeatRow.value;
+  if (!row) return [] as ClassOption[];
+  const allow: TeachingStage[] = row.stage === 'jh' ? ['jh'] : row.stage === 'class' ? ['class'] : ['jh', 'class', 'job'];
+  return classOptions.value.filter((c) => allow.includes(c.stage) && c.classId !== row.classId);
+});
+
+/** 按学段分组的选项（实训能看到三个学段，分组才不会混在一起） */
+const repeatClassGroups = computed(() => {
+  const map = new Map<TeachingStage, ClassOption[]>();
+  for (const c of repeatClassOptions.value) {
+    const list = map.get(c.stage) || [];
+    list.push(c);
+    map.set(c.stage, list);
+  }
+  return [...map.entries()].map(([stage, list]) => ({ stage, label: STAGE_LABEL[stage], list }));
+});
+
+/** 选「其他」时必须手填原因 */
+const needCustomReason = computed(() => repeatForm.reason === REPEAT_REASON_OTHER);
+
+function openRepeat(row: ScoreRow) {
+  if (row.examResult !== 2) {
+    return ElMessage.warning('只有结果为「未通过」的学生才能末班');
+  }
+  repeatRow.value = row;
+  repeatForm.targetStage = '';
+  repeatForm.targetClassId = '';
+  repeatForm.repeatDate = todayStr();
+  repeatForm.reason = REPEAT_REASON_OPTIONS[0];
+  repeatForm.otherReason = '';
+  repeatForm.shortcoming = '';
+  repeatVisible.value = true;
+}
+
+/** 选班级时顺带把学段带出来（后端要按学段去对应的库查班级） */
+function onRepeatClassChange(classId: string) {
+  const hit = repeatClassOptions.value.find((c) => c.classId === classId);
+  repeatForm.targetStage = hit ? hit.stage : '';
+}
+
+async function submitRepeat() {
+  const row = repeatRow.value;
+  if (!row) return;
+  if (!repeatForm.targetClassId || !repeatForm.targetStage) return ElMessage.warning('请选择交接到的班级');
+  if (!repeatForm.repeatDate) return ElMessage.warning('请选择末班日期');
+  const reason = needCustomReason.value ? repeatForm.otherReason.trim() : repeatForm.reason;
+  if (!reason) return ElMessage.warning('请填写末班原因');
+
+  repeatSaving.value = true;
+  try {
+    const r = await repeatScore({
+      stage: row.stage,
+      scoreId: row.id,
+      targetStage: repeatForm.targetStage,
+      targetClassId: repeatForm.targetClassId,
+      repeatDate: repeatForm.repeatDate,
+      repeatReason: reason,
+      shortcoming: repeatForm.shortcoming.trim() || undefined,
+    });
+    ElMessage.success(
+      `已末班：${r.fromClassName || '无班级'} → ${r.toClassName}（累计第 ${r.repeatCount} 次）`,
+    );
+    repeatVisible.value = false;
+    await Promise.all([loadList(), loadSummary()]);
+  } finally {
+    repeatSaving.value = false;
+  }
+}
 </script>
 
 <template>
@@ -317,7 +579,16 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     </div>
 
     <div class="ts-filter">
-      <el-select v-model="query.examId" placeholder="全部考试" clearable filterable size="small" style="width: 220px">
+      <!-- ★ 2026-10-19：两个下拉都补了显式的「全部」项，并且选完即查（不用再点查询） -->
+      <el-select
+        v-model="query.examId"
+        placeholder="全部考试"
+        clearable
+        filterable
+        size="small"
+        style="width: 220px"
+      >
+        <el-option label="全部考试" value="" />
         <el-option
           v-for="e in examSelectOptions"
           :key="e.id"
@@ -325,10 +596,26 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           :value="e.id"
         />
       </el-select>
-      <el-select v-model="query.classId" placeholder="全部班级" clearable filterable size="small" style="width: 180px">
+      <el-select
+        v-model="query.classId"
+        placeholder="全部班级"
+        clearable
+        filterable
+        size="small"
+        style="width: 180px"
+      >
+        <el-option label="全部班级" value="" />
         <el-option v-for="c in classSelectOptions" :key="c.id" :label="c.name" :value="c.id" />
       </el-select>
-      <el-input v-model="query.keyword" placeholder="学生姓名" clearable size="small" style="width: 150px" />
+      <!-- ★ 姓名不自动查：输入过程中每敲一个字就查会打满库，仍走回车 / 查询按钮 -->
+      <el-input
+        v-model="query.keyword"
+        placeholder="学生姓名（回车查询）"
+        clearable
+        size="small"
+        style="width: 170px"
+        @keyup.enter="handleSearch"
+      />
       <el-button size="small" type="primary" :icon="Search" @click="handleSearch">查询</el-button>
       <el-button size="small" :icon="Refresh" @click="handleReset">重置</el-button>
       <div class="ts-spacer" />
@@ -376,6 +663,49 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
             {{ row.examResultName }}
           </el-tag>
           <span v-else>—</span>
+        </template>
+      </el-table-column>
+      <!-- ★ 2026-10-19 新增：备注列（班主任记录学生不足 / 问题所在，点一下就地改） -->
+      <el-table-column label="备注" min-width="180">
+        <template #default="{ row }">
+          <el-input
+            v-if="remarkEditingId === row.id"
+            v-model="remarkDraft"
+            size="small"
+            maxlength="200"
+            autofocus
+            placeholder="记录学生不足 / 问题所在"
+            @blur="commitRemark(row)"
+            @keyup.enter="commitRemark(row)"
+          />
+          <span
+            v-else
+            class="ts-remark"
+            :class="{ 'is-empty': !row.remark, 'is-readonly': !canWrite }"
+            :title="row.remark || ''"
+            @click="startRemarkEdit(row)"
+          >
+            {{ row.remark || (canWrite ? '点击填写' : '—') }}
+          </span>
+        </template>
+      </el-table-column>
+      <!-- ★ 2026-10-19 新增：功能列（编辑 / 末班） -->
+      <el-table-column label="功能" width="130" fixed="right" align="center">
+        <template #default="{ row }">
+          <el-button link type="primary" size="small" :disabled="!canWrite" @click="openEdit(row)">编辑</el-button>
+          <el-tooltip :disabled="row.examResult === 2" content="只有结果为「未通过」才能末班" placement="top">
+            <span class="ts-tip-wrap">
+              <el-button
+                link
+                type="danger"
+                size="small"
+                :disabled="!canWrite || row.examResult !== 2"
+                @click="openRepeat(row)"
+              >
+                末班
+              </el-button>
+            </span>
+          </el-tooltip>
         </template>
       </el-table-column>
       <template #empty>
@@ -471,6 +801,108 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         <el-button size="small" type="primary" :loading="entrySaving" @click="submitEntry">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- ★ 2026-10-19 新增：编辑（改分数 / 结果 / 备注） -->
+    <el-dialog v-model="editVisible" title="编辑成绩" width="560px">
+      <div v-if="editRow" class="ts-dialog-head">
+        {{ editRow.studentNo }} · {{ editRow.studentName }} ·
+        {{ editRow.className || '—' }} · {{ editRow.examName }}
+      </div>
+      <el-form label-width="90px" size="small">
+        <el-form-item v-if="editFields.includes('written')" label="笔试">
+          <el-input-number v-model="editForm.writtenScore" :min="0" :max="100" controls-position="right" style="width: 150px" />
+        </el-form-item>
+        <el-form-item v-if="editFields.includes('machine')" label="机试">
+          <el-input-number v-model="editForm.machineScore" :min="0" :max="100" controls-position="right" style="width: 150px" />
+        </el-form-item>
+        <el-form-item v-if="editFields.includes('interview')" label="面试">
+          <el-input-number v-model="editForm.interviewScore" :min="0" :max="100" controls-position="right" style="width: 150px" />
+        </el-form-item>
+        <el-form-item v-if="editFields.includes('other')" label="其他">
+          <el-input-number v-model="editForm.otherScore" :min="0" :max="100" controls-position="right" style="width: 150px" />
+        </el-form-item>
+        <el-form-item label="结果">
+          <div class="ts-field-col">
+            <el-select
+              v-model="editForm.examResult"
+              placeholder="未判断"
+              style="width: 150px"
+              @change="editResultTouched = true"
+            >
+              <el-option v-for="(n, k) in EXAM_RESULT_NAME" :key="k" :label="n" :value="Number(k)" />
+            </el-select>
+            <span class="ts-field-hint">{{ judgeHint }}</span>
+          </div>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="editForm.remark" type="textarea" :rows="3" maxlength="200" show-word-limit placeholder="记录学生不足 / 问题所在" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button size="small" @click="editVisible = false">取消</el-button>
+        <el-button size="small" type="primary" :loading="editSaving" @click="submitEdit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ★ 2026-10-19 新增：末班（转班重修） -->
+    <el-dialog v-model="repeatVisible" title="末班（转班重修）" width="620px">
+      <div v-if="repeatRow" class="ts-dialog-head">
+        {{ repeatRow.studentNo }} · {{ repeatRow.studentName }} · {{ repeatRow.examName }} ·
+        当前班级：{{ repeatRow.className || '—' }}
+      </div>
+      <el-form label-width="110px" size="small">
+        <el-form-item label="交接到的班级" required>
+          <el-select
+            v-model="repeatForm.targetClassId"
+            filterable
+            placeholder="选择目标班级"
+            style="width: 100%"
+            @change="onRepeatClassChange"
+          >
+            <el-option-group v-for="g in repeatClassGroups" :key="g.stage" :label="g.label">
+              <el-option v-for="c in g.list" :key="c.classId" :label="c.className" :value="c.classId" />
+            </el-option-group>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="末班日期" required>
+          <el-date-picker
+            v-model="repeatForm.repeatDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            :clearable="false"
+            style="width: 180px"
+          />
+        </el-form-item>
+        <el-form-item label="末班原因" required>
+          <el-select v-model="repeatForm.reason" style="width: 240px">
+            <el-option v-for="o in REPEAT_REASON_OPTIONS" :key="o" :label="o" :value="o" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="needCustomReason" label="原因说明" required>
+          <el-input v-model="repeatForm.otherReason" maxlength="60" placeholder="请填写末班原因" />
+        </el-form-item>
+        <el-form-item label="学员不足说明">
+          <el-input
+            v-model="repeatForm.shortcoming"
+            type="textarea"
+            :rows="3"
+            maxlength="200"
+            show-word-limit
+            placeholder="将同步写入成绩备注与学员档案"
+          />
+        </el-form-item>
+      </el-form>
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="末班后该生会立即转入目标班级，并在学生档案中留一条末班记录，累计末班次数 +1"
+      />
+      <template #footer>
+        <el-button size="small" @click="repeatVisible = false">取消</el-button>
+        <el-button size="small" type="danger" :loading="repeatSaving" @click="submitRepeat">确认末班</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -485,22 +917,22 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
-  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border: 1px solid var(--el-border-color-lighter, #F1EAE5);
   border-radius: 8px;
   background: var(--el-fill-color-blank, #fff);
 }
 .ts-bar-title {
   font-size: 15px;
   font-weight: 500;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--el-text-color-primary, #443432);
 }
 .ts-bar-tag {
   font-size: 12px;
   line-height: 18px;
   padding: 0 6px;
   border-radius: 4px;
-  color: #185fa5;
-  background: #e6f1fb;
+  color: #B22A23;
+  background: #F9E4E1;
 }
 .ts-stage {
   margin-left: auto;
@@ -514,7 +946,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
   gap: 10px;
 }
 .ts-card {
-  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border: 1px solid var(--el-border-color-lighter, #F1EAE5);
   border-radius: 8px;
   padding: 10px 14px;
   background: var(--el-fill-color-blank, #fff);
@@ -527,11 +959,11 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 .ts-card-stage {
   font-size: 14px;
   font-weight: 500;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--el-text-color-primary, #443432);
 }
 .ts-card-sub {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
 }
 .ts-card-b {
   display: flex;
@@ -546,11 +978,11 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 }
 .ts-card-label {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
 }
 .ts-card-f {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
 }
 .ts-filter {
   display: flex;
@@ -567,10 +999,58 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 }
 .ts-entry-tip {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
   margin: 6px 0;
 }
 .ts-entry-note {
   margin-top: 10px;
+}
+
+/* ---- 2026-10-19 新增：备注列 / 功能列 / 弹窗标题行 ---- */
+.ts-remark {
+  display: inline-block;
+  width: 100%;
+  min-height: 20px;
+  line-height: 20px;
+  padding: 0 4px;
+  border-radius: 4px;
+  cursor: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--el-text-color-primary, #443432);
+}
+.ts-remark:hover {
+  background: #fdf1ee;
+}
+.ts-remark.is-empty {
+  color: var(--el-text-color-placeholder, #a2938e);
+}
+.ts-remark.is-readonly,
+.ts-remark.is-readonly:hover {
+  cursor: default;
+  background: transparent;
+}
+.ts-tip-wrap {
+  margin-left: 12px;
+}
+.ts-tip-wrap .el-button {
+  margin-left: 0;
+}
+.ts-dialog-head {
+  font-size: 12px;
+  color: var(--el-text-color-secondary, #a2938e);
+  margin-bottom: 12px;
+}
+.ts-field-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.ts-field-hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--el-text-color-secondary, #a2938e);
 }
 </style>

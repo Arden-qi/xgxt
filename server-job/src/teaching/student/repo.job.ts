@@ -21,6 +21,7 @@
 
 import { randomUUID } from 'crypto';
 import { db } from '../../utils/db';
+import { commonDb } from '../../class/db';
 import {
   DEPT_NAME,
   GENDER_NAME,
@@ -225,6 +226,12 @@ export const repo: StudentRepo = {
     if (!allowed) return null;
 
     const base = mapRow(r);
+    // ★ 2026-10-19：实训没有自己的末班表（sms_job 里没有 t_class_repeat），
+    //   末班记录统一落在 sms_common.t_uni_repeat → 档案必须去那里读，
+    //   否则「末班成功」后详情页永远是空的。
+    const repeats = (await commonDb('t_uni_repeat')
+      .where({ edu_stage: STAGE, student_id: id, is_deleted: 0 })
+      .orderBy('repeat_time', 'desc')) as Array<Record<string, any>>;
     return {
       base,
       profile: {
@@ -258,7 +265,14 @@ export const repo: StudentRepo = {
         resumeData: str(r.resume_data),
       },
       flows: [],
-      repeats: [],
+      repeats: repeats.map((x) => ({
+        id: String(x.id),
+        fromClassName: x.from_class_name ?? null,
+        toClassName: x.to_class_name ?? null,
+        repeatReason: x.repeat_reason ?? null,
+        repeatTime: fmtDate(x.repeat_time),
+        repeatCount: x.repeat_count ?? 0,
+      })),
       extra: null,
     };
   },

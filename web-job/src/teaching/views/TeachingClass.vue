@@ -41,12 +41,12 @@
         </el-select>
       </el-form-item>
       <el-form-item v-if="phaseOptions.length" label="阶段">
-        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 140px">
+        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 140px" @change="load(1)">
           <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
-        <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px">
+        <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px" @change="load(1)">
           <!-- 2026-10-19 批注：删除「待结业」选项 -->
           <el-option v-for="s in CLASS_STATUS_SELECTABLE" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
@@ -68,6 +68,9 @@
     </el-form>
 
     <!-- 列表 -->
+    <!-- ★ 列宽纪律：内容大多只有 2~4 个字，一律用 min-width 让浏览器按需收缩/伸展，
+         不要拍固定 width —— 之前 17 列固定宽度合计约 1800px，屏幕装不下，
+         每列一大片空白（学生档案页 12 列约 1215px，是对照基准）。 -->
     <el-table v-loading="loading" :data="rows" border stripe size="small">
       <!-- 2026-10-16：原来「学段」与「部门」是两列（部门列取 row.deptName），
            批注口径下重名，合并成一列 —— 取部门名，没部门就退回学段名 -->
@@ -76,57 +79,58 @@
           <el-tag size="small" effect="plain">{{ row.deptName || row.stageName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="班级名称" min-width="130">
+      <el-table-column label="班级名称" min-width="110">
         <template #default="{ row }">
           <a class="link" @click="openDetail(row)">{{ row.className }}</a>
         </template>
       </el-table-column>
       <!-- ★ 只有实训有这一列 -->
-      <el-table-column v-if="hasClassCodeCol" label="班级编号" width="130">
+      <el-table-column v-if="hasClassCodeCol" label="班级编号" min-width="105">
         <template #default="{ row }">{{ row.classCode || '—' }}</template>
       </el-table-column>
-      <el-table-column label="阶段" width="110" align="center">
-        <template #default="{ row }">{{ row.phaseName || '—' }}</template>
+      <!-- ★ 阶段回显：优先「方案里的阶段名」，老班级退回阶段码名称（见 phaseTextOf） -->
+      <el-table-column label="阶段" min-width="90" align="center">
+        <template #default="{ row }">{{ phaseTextOf(row) }}</template>
       </el-table-column>
-      <el-table-column label="班主任" width="100">
+      <el-table-column label="班主任" min-width="70">
         <template #default="{ row }">{{ row.headTeacherName || '—' }}</template>
       </el-table-column>
-      <el-table-column label="教员" width="90">
+      <el-table-column label="教员" min-width="70">
         <template #default="{ row }">{{ row.teacherName || '—' }}</template>
       </el-table-column>
-      <el-table-column label="助教" width="90">
+      <el-table-column label="助教" min-width="70">
         <template #default="{ row }">{{ row.assistantName || '—' }}</template>
       </el-table-column>
       <!-- ★ 只有大学/实训有交棒岗位（初高没有） -->
-      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="项目经理" width="100">
+      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="项目经理" min-width="80">
         <template #default="{ row }">{{ row.projectManagerName || '—' }}</template>
       </el-table-column>
-      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="就业老师" width="100">
+      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="就业老师" min-width="80">
         <template #default="{ row }">{{ row.employmentTeacherName || '—' }}</template>
       </el-table-column>
-      <el-table-column label="人数" width="70" align="center">
+      <el-table-column label="人数" width="55" align="center">
         <template #default="{ row }">
           <b>{{ row.studentCount }}</b>
         </template>
       </el-table-column>
       <!-- ★ 列头按学段口径动态改字：初高是「今日」出勤率，别写成「出勤率」 -->
-      <el-table-column :label="rateLabel" width="100" align="center">
+      <el-table-column :label="rateLabel" min-width="92" align="center">
         <template #default="{ row }">
           <span v-if="row.attendanceRate === null">—</span>
           <span v-else :class="rateClass(row)">{{ row.attendanceRate }}%</span>
         </template>
       </el-table-column>
-      <el-table-column label="教室" width="130">
+      <el-table-column label="教室" min-width="95">
         <template #default="{ row }">{{ row.classroom || '—' }}</template>
       </el-table-column>
-      <el-table-column label="开班日期" width="110" align="center">
+      <el-table-column label="开班日期" min-width="100" align="center">
         <template #default="{ row }">{{ row.openDate || '—' }}</template>
       </el-table-column>
       <!-- ★ 只有实训有结业日期 -->
-      <el-table-column v-if="hasCloseDateCol" label="结业日期" width="110" align="center">
+      <el-table-column v-if="hasCloseDateCol" label="结业日期" min-width="100" align="center">
         <template #default="{ row }">{{ row.closeDate || '—' }}</template>
       </el-table-column>
-      <el-table-column label="状态" width="90" align="center">
+      <el-table-column label="状态" width="70" align="center">
         <template #default="{ row }">
           <el-tag :type="tagType(row.classStatus)" size="small">{{ row.classStatusName }}</el-tag>
         </template>
@@ -172,7 +176,7 @@
           <el-descriptions-item v-if="detail.base.classCode" label="班级编号">
             {{ detail.base.classCode }}
           </el-descriptions-item>
-          <el-descriptions-item label="阶段">{{ detail.base.phaseName || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="阶段">{{ phaseTextOf(detail.base) }}</el-descriptions-item>
           <el-descriptions-item label="班主任">{{ detail.base.headTeacherName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="教员">{{ detail.base.teacherName || '—' }}</el-descriptions-item>
           <el-descriptions-item label="助教">{{ detail.base.assistantName || '—' }}</el-descriptions-item>
@@ -257,7 +261,7 @@
     <el-dialog
       v-model="editVisible"
       :title="form.id ? '编辑班级' : '新增班级'"
-      width="820px"
+      width="900px"
       top="6vh"
       destroy-on-close
     >
@@ -282,22 +286,43 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="部门">
-              <el-select v-model="form.deptCode" clearable style="width: 100%" @change="onFormDeptChange">
+              <el-select v-model="form.deptCode" style="width: 100%" @change="onFormDeptChange">
                 <el-option v-for="d in DEPT_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
               </el-select>
             </el-form-item>
           </el-col>
-          <!-- ★ 2026-10-16 阶段方案：阶段下拉改成「先选方案，再选阶段」 -->
-          <el-col v-if="formPlanOptions.length" :span="8">
+          <!-- ★ 2026-10-16：阶段方案（选项按「部门」过滤；在 系统设置 · 阶段方案 页维护） -->
+          <el-col :span="8">
             <el-form-item label="阶段方案">
-              <el-select v-model="formPlanId" clearable placeholder="请选择" style="width: 100%">
-                <el-option v-for="p in formPlanOptions" :key="p.id" :label="p.name" :value="p.id" />
+              <el-select
+                v-model="form.schemeId"
+                clearable
+                placeholder="请选择方案"
+                style="width: 100%"
+                @change="onSchemeChange"
+              >
+                <el-option v-for="s in formSchemeOptions" :key="s.id" :label="s.schemeName" :value="s.id" />
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col v-if="formPhaseOptions.length" :span="8">
+          <!-- ★ 选了方案 → 阶段选项 = 方案里的阶段；没选方案 → 退回老的阶段选项（历史数据仍可编辑） -->
+          <el-col v-if="form.schemeId || formPhaseOptions.length" :span="8">
             <el-form-item label="阶段">
-              <el-select v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
+              <el-select
+                v-if="form.schemeId"
+                v-model="form.schemeStageId"
+                clearable
+                placeholder="请选择阶段"
+                style="width: 100%"
+                @change="onSchemeStageChange"
+              >
+                <!-- 选中后只显示阶段名称（宽度有限）；下拉里带一列灰字「学制X月」 -->
+                <el-option v-for="p in formSchemeStageOptions" :key="p.id" :label="p.stageName" :value="p.id">
+                  <span>{{ p.stageName }}</span>
+                  <span v-if="p.studyMonths" class="stage-months">学制{{ p.studyMonths }}月</span>
+                </el-option>
+              </el-select>
+              <el-select v-else v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
                 <el-option v-for="p in formPhaseOptions" :key="p.value" :label="p.label" :value="p.value" />
               </el-select>
             </el-form-item>
@@ -656,6 +681,7 @@
  *   「初高 G104」和「大学 G104」是两个不同的班，同名是常态。
  */
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { isReadOnlyUser } from '@/store/permission';
@@ -670,6 +696,7 @@ import {
   deleteClass,
   getClassMeta,
   getClassSummary,
+  getSchemeOptions,
   genClassCode,
   listClassHandovers,
   doClassHandover,
@@ -687,6 +714,7 @@ import {
   type ClassStage,
   type ClassStageMeta,
   type ClassSummary,
+  type SchemeOption,
   type StagePlanOption,
 } from '@/teaching/api/class';
 // 教室「楼栋-房间号」格式：归一 + 校验（前后端同一套规则，见文件头注释）
@@ -724,6 +752,9 @@ const query = reactive({
   page: 1,
   size: 20,
 });
+
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 
 /** 当前所选学段的 meta（列显隐/标签都靠它） */
 const curMeta = computed(() => metaList.value.find((m) => m.stage === query.stage) || null);
@@ -872,6 +903,10 @@ function emptyForm(stage: ClassStage): ClassSaveBody {
     // 2026-10-19：实训与就业部都归「就业部」(3)，两者只靠学段区分
     deptCode: stage === 'jh' ? 1 : stage === 'class' ? 2 : 3,
     phaseCode: undefined,
+    // ★ 2026-10-16：阶段方案（null = 未选，老班级/不选方案时为 null）
+    schemeId: null,
+    schemeStageId: null,
+    schemeStageName: null,
     headTeacherId: '',
     headTeacherName: '',
     teacherId: '',
@@ -937,6 +972,10 @@ function onFormDeptChange(v: number | undefined) {
   if (!formPlanOptions.value.some((p) => p.id === formPlanId.value)) formPlanId.value = '';
   // 2026-10-19 批注：清掉之后默认选中新部门的方案（不允许空着）
   if (!formPlanId.value) formPlanId.value = formPlanOptions.value[0]?.id || '';
+  // ★ 方案是按部门维护的：跨部门的选中值（方案 / 方案里的阶段 / 阶段名快照）一起清掉
+  form.schemeId = null;
+  form.schemeStageId = null;
+  form.schemeStageName = null;
   // 学段变了：阶段按新学段重选（onFormStageChange 会清编号/交棒/备注等学段特有字段）
   if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
   onFormStageChange();
@@ -991,16 +1030,68 @@ function onStaffChange(kind: StaffKind, id: string) {
   else form.employmentTeacherName = name;
 }
 
-function openCreate() {
+/* ---------------- ★ 2026-10-16：阶段方案（方案 + 方案里的阶段） ---------------- */
+
+/**
+ * 方案选项（系统设置 · 阶段方案页维护）
+ *
+ * 【为什么按部门过滤】
+ *   方案分部门（1 初高部 / 2 大学部）—— 与表单里的「部门」联动：
+ *   选了初高部的班，只会列出初高部的方案。
+ * 【数据从哪来】统一接口 /api/teaching/class/scheme-options（三个学段共用一份）。
+ */
+const schemeOptions = ref<SchemeOption[]>([]);
+
+async function loadSchemeOptions() {
+  try {
+    schemeOptions.value = await getSchemeOptions();
+  } catch {
+    // 拿不到方案不影响建班（退回老的「阶段」阶段码选项）
+    schemeOptions.value = [];
+  }
+}
+
+/** 表单里按当前部门过滤后的方案 */
+const formSchemeOptions = computed(() =>
+  schemeOptions.value.filter((s) => !form.deptCode || s.deptCode === form.deptCode),
+);
+
+/** 当前选中方案里的阶段（=「阶段」下拉的选项来源） */
+const formSchemeStageOptions = computed(() => {
+  const scheme = schemeOptions.value.find((s) => s.id === form.schemeId);
+  return scheme?.stages || [];
+});
+
+/** 切换方案：清掉上一个方案选中的阶段（阶段是方案内的，不跨方案复用） */
+function onSchemeChange() {
+  form.schemeStageId = null;
+  form.schemeStageName = null;
+}
+
+/** 选中方案里的阶段：把阶段名冗余存一份（列表/详情直接回显） */
+function onSchemeStageChange(id: string | null) {
+  const hit = formSchemeStageOptions.value.find((s) => s.id === id);
+  form.schemeStageName = hit ? hit.stageName : null;
+}
+
+/** 列表/详情里「阶段」列的回显：优先方案阶段名，老班级退回阶段码名称 */
+function phaseTextOf(row: Pick<ClassRow, 'schemeStageName' | 'phaseName'>): string {
+  return row.schemeStageName || row.phaseName || '—';
+}
+
+async function openCreate() {
   const stage = (query.stage || stageOptions.value[0]?.value || 'jh') as ClassStage;
   Object.assign(form, emptyForm(stage));
+  // ★ 方案选项每次打开弹窗都刷新（刚在系统设置里建完方案，回来就能选到）
+  await loadSchemeOptions();
   // 2026-10-19 批注：阶段方案要默认选中（该部门的那套方案），不用每次手点
   formPlanId.value = formPlanOptions.value[0]?.id || '';
+  form.schemeId = formSchemeOptions.value[0]?.id || null;
   editStatusFrom.value = null;
   editVisible.value = true;
 }
 
-function openEdit(row: ClassRow) {
+async function openEdit(row: ClassRow) {
   Object.assign(form, emptyForm(row.stage), {
     id: row.classId,
     className: row.className,
@@ -1008,6 +1099,9 @@ function openEdit(row: ClassRow) {
     deptCode: row.deptCode ?? undefined,
     phaseCode: row.phaseCode ?? undefined,
     classStatus: row.classStatus,
+    schemeId: row.schemeId,
+    schemeStageId: row.schemeStageId,
+    schemeStageName: row.schemeStageName,
     headTeacherId: row.headTeacherId || '',
     headTeacherName: row.headTeacherName || '',
     teacherId: row.teacherId || '',
@@ -1263,6 +1357,8 @@ async function doTrainingUpgrade() {
 onMounted(() => {
   load(1);
   loadStaff();
+  // 阶段方案选项（表单用）—— 先取一次，打开弹窗时还会再刷新
+  loadSchemeOptions();
 });
 </script>
 
@@ -1270,11 +1366,18 @@ onMounted(() => {
 .tcv {
   padding: 12px;
 }
+/* 「阶段」下拉里右侧的学制标注 */
+.stage-months {
+  float: right;
+  margin-left: 12px;
+  color: #909399;
+  font-size: 12px;
+}
 .tcv-tip {
   margin-bottom: 10px;
 }
 .muted {
-  color: #909399;
+  color: #A2938E;
   font-weight: normal;
 }
 .tcv-cards {
@@ -1285,14 +1388,14 @@ onMounted(() => {
 }
 .tcv-card {
   background: #fff;
-  border: 1px solid #ebeef5;
+  border: 1px solid #F1EAE5;
   border-radius: 6px;
   padding: 10px 14px;
   min-width: 190px;
 }
 .tcv-card__k {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 .tcv-card__v {
   font-size: 22px;
@@ -1301,7 +1404,7 @@ onMounted(() => {
 }
 .tcv-card__x {
   font-size: 12px;
-  color: #606266;
+  color: #7A6C67;
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -1344,16 +1447,16 @@ onMounted(() => {
   margin-top: 12px;
 }
 .link {
-  color: #409eff;
+  color: #CD3A33;
   cursor: pointer;
 }
 .ok {
-  color: #67c23a;
+  color: #5FA36F;
 }
 .warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 .danger {
-  color: #f56c6c;
+  color: #CD3A33;
 }
 </style>

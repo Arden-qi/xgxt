@@ -86,17 +86,16 @@ const applyForm = ref({
 const calcResult = ref<ConsultRefundCalcResult | null>(null);
 const calcLoading = ref(false);
 
-/** 可勾选的消耗项（住宿/餐费/保险 + 物品） */
+/** 可勾选的消耗项（住宿/餐费/保险 + 物品）
+ *  ★ 2026-10-16 用户指令：取消「工具包」「宿舍门禁卡」，不再参与退费扣减 */
 const DEDUCT_OPTIONS = [
   { key: 'accommodation', label: '住宿费 ¥15/天' },
   { key: 'meal', label: '餐费 ¥28/天' },
   { key: 'insurance', label: '保险费 ¥5/天' },
   { key: 'uniform', label: '校服 ¥120' },
   { key: 'bedding', label: '被褥三件套 ¥150' },
-  { key: 'toolkit', label: '工具包 ¥80' },
   { key: 'textbook', label: '教材资料 ¥60' },
   { key: 'military', label: '军训服 ¥90' },
-  { key: 'accesscard', label: '宿舍门禁卡 ¥20' },
 ];
 
 /* ---------- 学生选择（★ 2026-10-08：必填项由「学生ID」改为「学生姓名」） ---------- */
@@ -158,7 +157,7 @@ async function onStudentChange() {
 
 /** 勾选的「物品」名称（住宿/餐费/保险是每日消耗项，走 dailyItems 传） */
 function checkedItemNames(): string[] {
-  const ITEM_KEYS = ['uniform', 'bedding', 'toolkit', 'textbook', 'military', 'accesscard'];
+  const ITEM_KEYS = ['uniform', 'bedding', 'textbook', 'military'];
   return applyForm.value.deductItems
     .filter((k) => ITEM_KEYS.includes(k))
     .map((k) => {
@@ -546,7 +545,7 @@ onMounted(load);
 
 .stat-label {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
 }
 
 .stat-value {
@@ -556,11 +555,11 @@ onMounted(load);
 }
 
 .stat-value.ok {
-  color: #67c23a;
+  color: #5FA36F;
 }
 
 .stat-value.warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 
 .toolbar-row {
@@ -580,21 +579,21 @@ onMounted(load);
 
 .stu-name {
   font-weight: 600;
-  color: #303133;
+  color: #443432;
 }
 
 .stu-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 2px;
 }
 
 .ok {
-  color: #67c23a;
+  color: #5FA36F;
 }
 
 .warn {
-  color: #e6a23c;
+  color: #C9852E;
 }
 
 .dd-item {
@@ -606,13 +605,13 @@ onMounted(load);
 
 .rule-card {
   font-size: 12px;
-  color: #606266;
+  color: #7A6C67;
   line-height: 1.7;
 }
 
 .rule-title {
   font-weight: 600;
-  color: #303133;
+  color: #443432;
   margin-bottom: 4px;
 }
 
@@ -624,7 +623,7 @@ onMounted(load);
 
 .calc-box {
   width: 100%;
-  background: #f5f7fa;
+  background: #F6F3EF;
   border-radius: 6px;
   padding: 10px 12px;
   min-height: 48px;
@@ -643,13 +642,13 @@ onMounted(load);
 
 .calc-sub {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-top: 6px;
   padding: 3px 0;
 }
 
 .calc-sub-empty {
-  color: #c0c4cc;
+  color: #C4B8B2;
 }
 
 .deduct-wrap {
@@ -658,20 +657,20 @@ onMounted(load);
 
 .deduct-tip {
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   line-height: 1.6;
   margin-bottom: 6px;
 }
 
 .calc-detail {
-  color: #606266;
+  color: #7A6C67;
   padding-left: 12px;
 }
 
 .calc-formula {
   font-style: normal;
   font-size: 12px;
-  color: #909399;
+  color: #A2938E;
   margin-left: 6px;
 }
 

@@ -268,6 +268,7 @@
  * ★ 金额：接口一律传「分」，页面用「元」输入/展示。
  */
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   FEE_TYPE_OPTIONS,
@@ -299,6 +300,7 @@ const summaries = ref<RefundSummary[]>([]);
 const stageOptions = ref<Array<{ value: TeachingStage; label: string }>>([]);
 
 const query = reactive({
+
   stage: undefined as TeachingStage | undefined,
   status: undefined as number | undefined,
   keyword: '',
@@ -306,6 +308,9 @@ const query = reactive({
   page: 1,
   size: 20,
 });
+
+/* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
+useBreadcrumbStageKey(() => query.stage || '');
 
 /** 财务登记出款按钮：仅财务 / 管理员看到（后端有二次校验） */
 const canFinanceConfirm = ref(false);

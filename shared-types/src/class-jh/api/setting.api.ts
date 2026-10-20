@@ -5,7 +5,7 @@
  */
 
 import { ApiResponse, PageResponse } from '../common';
-import { ClassSetting, StageDict, StagePlan, StagePlanPhase, OpLog, DashboardStat } from '../class';
+import { ClassSetting, StageDict, StageScheme, OpLog, DashboardStat } from '../class';
 
 /* ---------------- 系统设置 ---------------- */
 
@@ -43,34 +43,35 @@ export type StageAddResponse = ApiResponse<{ id: string }>;
 /** 阶段删除响应 */
 export type StageDeleteResponse = ApiResponse<null>;
 
-/* ---------- ★ 2026-10-16 阶段方案（原阶段字典页改版） ---------- */
+/* ---------------- 阶段方案（★ 2026-10-16：阶段字典升级为方案 + 多阶段） ---------------- */
 
-/** 方案列表查询参数 */
-export interface StagePlanListQuery {
+/** 阶段方案列表查询参数 */
+export interface StageSchemeListQuery {
   deptCode?: number;
 }
 
-/** 方案列表响应（含阶段明细） */
-export type StagePlanListResponse = ApiResponse<StagePlan[]>;
+/** 阶段方案列表响应（含阶段明细） */
+export type StageSchemeListResponse = ApiResponse<StageScheme[]>;
 
-/** 方案保存入参（新增 / 编辑共用；编辑时带 id） */
-export interface StagePlanSavePayload {
-  /** 编辑时必传 */
-  id?: string;
-  planName: string;
-  deptCode: number;
-  /** 阶段明细（至少一条） */
-  phases: StagePlanPhase[];
+/** 阶段方案 · 阶段明细入参 */
+export interface StageSchemeStagePayload {
+  stageName: string;
+  /** 学制月数 */
+  studyMonths: number;
 }
 
-/** 方案新增响应 */
-export type StagePlanAddResponse = ApiResponse<{ id: string }>;
+/** 阶段方案新增 / 修改入参（修改时阶段明细整体覆盖） */
+export interface StageSchemeSavePayload {
+  schemeName: string;
+  deptCode: number;
+  stages: StageSchemeStagePayload[];
+}
 
-/** 方案编辑响应 */
-export type StagePlanUpdateResponse = ApiResponse<null>;
+/** 阶段方案新增响应 */
+export type StageSchemeAddResponse = ApiResponse<{ id: string }>;
 
-/** 方案删除响应 */
-export type StagePlanDeleteResponse = ApiResponse<null>;
+/** 阶段方案删除响应 */
+export type StageSchemeDeleteResponse = ApiResponse<null>;
 
 /* ---------------- 操作日志 ---------------- */
 

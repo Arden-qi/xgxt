@@ -418,25 +418,25 @@ onMounted(() => {
   padding: 0 6px;
   font-size: 11px;
   border-radius: 8px;
-  background: #f1f3f7;
-  color: #6b7280;
+  background: #F6F1EC;
+  color: #7A6C67;
 }
 
 .cell2 .sub {
   font-size: 11.5px;
-  color: #8a94a6;
+  color: #9C8D88;
   margin-top: 2px;
 }
 
 .income {
-  color: #1d4ed8;
+  color: #B22A23;
   font-weight: 600;
 }
 
 /* ---------- 展开区：四类分组 ---------- */
 .detail {
   padding: 8px 12px 12px;
-  background: #fafbfd;
+  background: #FAF6F2;
 }
 
 .dgrid {
@@ -446,7 +446,7 @@ onMounted(() => {
 }
 
 .dbox {
-  border: 1px solid #e5eaf2;
+  border: 1px solid #E7DDD7;
   border-radius: 8px;
   background: #fff;
   overflow: hidden;
@@ -461,32 +461,32 @@ onMounted(() => {
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
-  background: #f8fafd;
+  background: #FAF7F4;
   user-select: none;
 }
 
 .dbox h4 .dt {
-  color: #1f2937;
+  color: #443432;
 }
 
 .dbox h4 em {
   font-style: normal;
   font-size: 11px;
-  color: #8a94a6;
-  background: #eef1f6;
+  color: #9C8D88;
+  background: #F4EEE9;
   border-radius: 8px;
   padding: 0 6px;
 }
 
 .dbox h4 .money {
   margin-left: auto;
-  color: #1d4ed8;
+  color: #B22A23;
 }
 
 .dbox h4 .ar {
   font-style: normal;
   font-size: 11px;
-  color: #1d4ed8;
+  color: #B22A23;
 }
 
 .dbox .dbody {
@@ -499,7 +499,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 10px;
   padding: 8px 0;
-  border-bottom: 1px dashed #eef1f6;
+  border-bottom: 1px dashed #F4EEE9;
 }
 
 .rec:last-child {
@@ -509,29 +509,29 @@ onMounted(() => {
 .rec .l b {
   display: block;
   font-size: 12.5px;
-  color: #1f2937;
+  color: #443432;
 }
 
 .rec .l span {
   font-size: 11.5px;
-  color: #8a94a6;
+  color: #9C8D88;
 }
 
 .none {
   font-size: 12px;
-  color: #9aa3b2;
+  color: #B3A69F;
   padding: 8px 0;
 }
 
 .no-voucher {
   font-size: 11.5px;
-  color: #b7bfcc;
+  color: #C4B8B2;
 }
 
 .dtip {
   margin-top: 10px;
   font-size: 11.5px;
-  color: #9aa3b2;
+  color: #B3A69F;
 }
 
 /* 隐藏 el-table 默认展开列的小箭头（我们的「详情」在操作列） */

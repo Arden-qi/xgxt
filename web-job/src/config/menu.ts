@@ -128,16 +128,11 @@ export const MENU: MenuNode[] = [
     owner: '初高中部 / 大学部 / 实训就业',
     stage: '已完成',
     children: [
-      /* ---------- 各学段独有（不参与合并） ---------- */
-      {
-        title: '工作台',
-        path: '/class-jh/dashboard',
-        pageCode: 'classjh:dashboard:view',
-        owner: '初高中部',
-        stage: '已完成',
-        phase: '初高部',
-        desc: '在读人数、今日出勤率、临期缴费与待办事项。',
-      },
+      /* ---------- 各学段独有（不参与合并） ----------
+       * ★ 2026-10-16 原「工作台」菜单项已上移为系统首页
+       *   （侧栏置顶项，见 config/sideMenu.ts 的 WORKBENCH_GROUP；
+       *   页面本体迁到 views/Workbench.vue，/class-jh/dashboard 老路由重定向到首页）。
+       *   首页工作台的初高 KPI 块仍用 classjh:dashboard:view 权限码判显隐。 */
 
       /* ---------- 9 个合并业务域 ---------- */
       domainNode('student'),
@@ -153,10 +148,11 @@ export const MENU: MenuNode[] = [
         title: '待接收学员',
         path: '/class/consult',
         pageCode: 'class:consult:view',
-        owner: '大学部',
+        // ★ 2026-10-19：初高也走「推送 → 班主任接收」，这一页两个学段共用
+        owner: '初高中部 / 大学部',
         stage: '已完成',
-        phase: '大学部',
-        desc: '咨询端推来的待接收学员：接收 / 拒绝。',
+        phase: '初高部 / 大学部',
+        desc: '咨询端推来的待接收学员：接收 / 拒绝（初高、大学共用）。',
       },
 
       domainNode('attendance'),
@@ -204,7 +200,7 @@ export const MENU: MenuNode[] = [
         owner: '初高中部',
         stage: '已完成',
         phase: '初高部',
-        desc: '出勤达标线与统计口径、催费提醒天数、封班可转入类型、学习阶段字典。',
+        desc: '出勤达标线与统计口径、催费提醒天数、封班可转入类型、阶段方案（方案名称+所属部门+多阶段）。',
       },
     ],
   },

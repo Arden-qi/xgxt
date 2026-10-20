@@ -54,7 +54,13 @@
  *   改完回查类型与索引 Non_unique（铁律：ADD INDEX ≠ ADD UNIQUE）。
  */
 
-const DB = 'sms_common';
+/**
+ * 取当前连接的真实库名
+ *
+ * ★ 2026-10-15：原来这里是写死的 `const DB = 'sms_common'`。
+ *   换成别的库名部署时会查错库，故改为从 knex 连接动态取。
+ */
+const dbOf = (knex) => knex.client.config.connection.database || 'sms_common';
 
 /**
  * ⚠️ 2026-10-15 修复：information_schema 的列名必须【大小写不敏感】地读。
@@ -82,16 +88,34 @@ function lowerKeys(row) {
 
 async function columnType(knex, table, column) {
   const r = await knex('information_schema.COLUMNS')
-    .where({ TABLE_SCHEMA: DB, TABLE_NAME: table, COLUMN_NAME: column })
+    .where({ TABLE_SCHEMA: dbOf(knex), TABLE_NAME: table, COLUMN_NAME: column })
     .first();
   return r ? String(lowerKeys(r).column_type) : null;
 }
 
+/**
+ * 查表的索引信息
+ *
+ * ★★★ 2026-10-15 修：`select()` 里的小写列名，在 **MySQL 8.0 上会被强制转成大写 key**
+ *   （information_schema 是内部表，列名不随查询书写的大小写变化）。
+ *   而 MariaDB 会保留查询书写的小写 → 于是同一份代码：
+ *     · 本机 MariaDB  → 返回 `{index_name}` → 判断正常
+ *     · 虚拟机 MySQL 8.0 → 返回 `{INDEX_NAME}` → `r.index_name` 是 undefined
+ *       → `hasIndex()` 恒为 false → 去 ADD INDEX → 报 `Duplicate key name`
+ *
+ *   **修法：显式加 `as` 别名**，强制把 key 统一成小写。
+ *   这样底层返回大写还是小写都无所谓，代码这边永远拿到 `index_name`。
+ *   （MySQL 8.0 / MariaDB 实测均通过。）
+ */
 async function indexRows(knex, table) {
-  const rows = await knex('information_schema.STATISTICS')
-    .where({ TABLE_SCHEMA: DB, TABLE_NAME: table })
-    .select('index_name', 'non_unique', 'column_name', 'seq_in_index');
-  return rows.map(lowerKeys);
+  return await knex('information_schema.STATISTICS')
+    .where({ TABLE_SCHEMA: dbOf(knex), TABLE_NAME: table })
+    .select(
+      'INDEX_NAME as index_name',
+      'NON_UNIQUE as non_unique',
+      'COLUMN_NAME as column_name',
+      'SEQ_IN_INDEX as seq_in_index',
+    );
 }
 
 async function hasIndex(knex, table, indexName) {

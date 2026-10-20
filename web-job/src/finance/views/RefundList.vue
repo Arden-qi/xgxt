@@ -427,18 +427,18 @@ onMounted(loadData);
 /* 卡片内通栏版式（.filter-row / .table-toolbar / .pager-bar）由 element-theme.css 统一提供 */
 
 .reject-text {
-  color: #b91c1c;
+  color: #B22A23;
 }
 
 .timeline-title {
   font-size: 14px;
   font-weight: 600;
   margin: 16px 0 12px;
-  color: #303133;
+  color: #443432;
 }
 
 .by {
-  color: #909399;
+  color: #A2938E;
   font-size: 12px;
 }
 </style>

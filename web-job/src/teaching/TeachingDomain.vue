@@ -16,10 +16,12 @@
  *   原页面里可能有大量本地状态（当前页、筛选条件…）。加 :key 强制重建组件，
  *   避免 A 学段的状态串到 B 学段上。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { findTeachingDomain } from '@/teaching/domainConfig';
 import { stageAccessible, stageVisible, type StageDomain } from '@/teaching/access';
+/* 页签模式下把当前学段同步给面包屑第 4 级（unified 模式下由统一页面自己上报） */
+import { setBreadcrumbStage } from '@/store/breadcrumb';
 
 const route = useRoute();
 
@@ -98,6 +100,12 @@ watch(
 const current = computed(() => stages.value.find((s) => s.stage === active.value) || null);
 const currentComp = computed(() => current.value?.comp);
 
+/* 页签模式下，当前学段变化时同步给面包屑（值本身是中文）。
+ * unified 模式下 active 恒为空 → 上报空 = 面包屑第 4 级由统一页面负责。
+ * 页面卸载时清空，避免学段残留到非教学页面。 */
+watch(active, (v) => setBreadcrumbStage(v || ''), { immediate: true });
+onUnmounted(() => setBreadcrumbStage(''));
+
 /**
  * ★ 第 2 期：这个业务域是否已经合并成「统一页面」
  *   有值 → 直接渲染它（不再出学段页签，因为统一页面里自带学段筛选器）；
@@ -156,26 +164,26 @@ const unified = computed(() => def.value?.unified || null);
   gap: 10px;
   padding: 10px 16px;
   margin-bottom: 10px;
-  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border: 1px solid var(--el-border-color-lighter, #F1EAE5);
   border-radius: 8px;
   background: var(--el-fill-color-blank, #fff);
 }
 .td-bar-title {
   font-size: 15px;
   font-weight: 500;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--el-text-color-primary, #443432);
 }
 .td-bar-tag {
   font-size: 12px;
   line-height: 18px;
   padding: 0 6px;
   border-radius: 4px;
-  color: #185fa5;
-  background: #e6f1fb;
+  color: #B22A23;
+  background: #F9E4E1;
 }
 .td-bar-hint {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, #A2938E);
   margin-left: auto;
 }
 

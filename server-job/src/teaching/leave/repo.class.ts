@@ -82,9 +82,59 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
   };
 }
 
-/** 学生下拉 */
-export async function studentOptions(keyword: string, limit: number): Promise<StudentOption[]> {
+/**
+ * ★ 未办结（= 统一码 1 待提交 / 2 待学管 / 3 待校长）
+ *
+ * 本表 `apply_status` 与统一码一一对应（恒等），所以直接写 1/2/3。
+ * 【为什么要含「待提交」】用户口径是「已有进行中的申请的学生不再出现在下拉里」，
+ *   草稿也是一张没办完的单子；且**下拉剔除必须与 hasPending 同口径**，
+ *   否则会出现「下拉选得到、提交被拒」的错位。
+ */
+const PENDING_APPLY_STATUS = [1, 2, 3];
+
+/** 有未办结异动单的学生 id（下拉剔除用；与 hasPending 同一口径） */
+async function pendingStudentIds(): Promise<string[]> {
+  const rows = (await tbl(db, SRC, T, STAGE)
+    .where('is_deleted', 0)
+    .whereIn('apply_type', IN_SCOPE)
+    .whereIn('apply_status', PENDING_APPLY_STATUS)
+    .whereNotNull('student_id')
+    .select('student_id')) as Array<Record<string, any>>;
+  // ⚠️ 去重 + 剔空：ids 里混进 NULL 会让 `id NOT IN (..., NULL)` 恒不成立 → 名单整片空掉
+  return [...new Set(rows.map((r) => String(r.student_id || '')).filter(Boolean))];
+}
+
+/**
+ * 学生下拉
+ *
+ * ★ `opts.onlySuspended` = 只挑「当前处于休学」的学生（`student_status = 6`）。
+ *   ⚠️ 大学目前**没有复学**（`LEAVE_STAGE_BIZ.class = [1,2]`），所以这个开关
+ *      在大学这条链上暂时用不到；仍然实现，是为了让三个仓储**签名一致**
+ *      （service 按 stage 一致分派，缺参数会编译不过）。哪天大学开出复学，
+ *      这里已经是对的。
+ * ★ `opts.excludeStatuses` = 剔除这些状态的学生（service 传「终态」：
+ *   退学 7 / 流失 11 / 已就业 10 —— 已经终结、不能再办任何学籍异动）。
+ *   ⚠️ `NOT IN (...) OR IS NULL`：老数据里 `student_status` 可能为 NULL，
+ *      单写 `NOT IN` 会把这类行一起滤掉（NULL NOT IN => NULL => 不成立）。
+ * ★ `opts.excludeWithPending` = **剔掉已有未办结申请的学生**（2026-10-16 用户要求）：
+ *   以前只有 `create()` 的 `hasPending` 兜底，下拉里仍能看到这些人，选完提交才被拒。
+ *   ⚠️ 口径与 `hasPending` 共用 `PENDING_APPLY_STATUS`，改一处就够。
+ */
+export async function studentOptions(
+  keyword: string,
+  limit: number,
+  opts: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean } = {},
+): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_class', S, STAGE).where('is_deleted', 0);
+  if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
+  if (opts.excludeStatuses?.length) {
+    const ex = opts.excludeStatuses;
+    q.andWhere((b) => b.whereNotIn('student_status', ex).orWhereNull('student_status'));
+  }
+  if (opts.excludeWithPending) {
+    const ids = await pendingStudentIds();
+    if (ids.length) q.whereNotIn('id', ids);
+  }
   if (keyword) {
     q.andWhere((b) => {
       b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);
@@ -139,6 +189,25 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
   return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
+}
+
+/**
+ * ★ 批量取「学生当前状态」：`{ 学生id: student_status }`
+ *
+ * 列表要显示「学生现状」（区别于单据状态），但这是**实时值**、
+ * 不是异动单上的快照列，所以在 service 分页之后按页批量补，
+ * 一次 whereIn 拿完（不是每行查一次 —— 跨学段合并时可能有几百行）。
+ *
+ * ⚠️ 不过滤 `is_deleted`：软删的学生也要能看到状态，否则列表出现空白。
+ */
+export async function studentStatuses(ids: string[]): Promise<Record<string, number>> {
+  if (!ids.length) return {};
+  const rows = (await tbl(db, SRC, S, STAGE)
+    .whereIn('id', ids)
+    .select('id', 'student_status')) as Array<Record<string, any>>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[String(r.id)] = Number(r.student_status ?? 0);
+  return out;
 }
 
 export async function detail(id: string): Promise<LeaveRow | null> {
@@ -255,7 +324,7 @@ export async function hasPending(studentId: string): Promise<boolean> {
   const row = await tbl(db, SRC, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
     .whereIn('apply_type', IN_SCOPE)
-    .whereIn('apply_status', [1, 2, 3])
+    .whereIn('apply_status', PENDING_APPLY_STATUS)
     .first();
   return !!row;
 }
