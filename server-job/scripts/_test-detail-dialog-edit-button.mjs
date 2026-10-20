@@ -160,12 +160,12 @@ check(
 check(
   '部门管理：部门下账号弹窗行操作仍有「详情 | 编辑」',
   /@click="openUserDetail\(u\)">详情</.test(deptmCode) &&
-    /@click="gotoUserEdit\(u\.id\)">编辑</.test(deptmCode),
+    /@click="openUserEdit\(u\)">编辑</.test(deptmCode),
 );
 
 check(
-  '部门管理：gotoUserEdit 仍被行内「编辑」使用（没删成未引用函数）',
-  count(deptmCode, 'gotoUserEdit') >= 2,
+  '部门管理：编辑不再跳账号管理（gotoUserEdit 已删除，改成就地弹窗）',
+  !/gotoUserEdit/.test(deptmCode) && !/permUserEditRoute/.test(deptmCode),
   `gotoUserEdit 出现 ${count(deptmCode, 'gotoUserEdit')} 次`,
 );
 

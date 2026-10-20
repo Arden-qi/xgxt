@@ -24,8 +24,6 @@
  *    · 校级部门不在表格里（原型 renderOrg 用 filter(d=>d.id!=='all') 排除了根节点），天然不可删
  */
 import { computed, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
-import { permUserEditRoute } from '@/perm/utils/links';
 import type {
   DeptOverview,
   PermDept,
@@ -40,10 +38,9 @@ import ProtoDialog from '@/perm/components/ProtoDialog.vue';
 import ProtoConfirm from '@/perm/components/ProtoConfirm.vue';
 import PermTreeDialog from '@/perm/components/PermTreeDialog.vue';
 import UserDetailDialog from '@/perm/components/UserDetailDialog.vue';
+import UserEditDialog from '@/perm/components/UserEditDialog.vue';
 import { roleIconOf } from '@/perm/utils/roleIcon';
 import { toast } from '@/perm/utils/toast';
-
-const router = useRouter();
 
 /** 部门层级上限（shared-types 的 DeptLevel：1 校级 / 2 部门 / 3 学段） */
 const MAX_DEPT_LEVEL = 3;
@@ -418,6 +415,8 @@ const usersLoading = ref(false);
 const usersDeptName = ref('');
 const usersSub = ref('');
 const deptUsersList = ref<PermUserListItem[]>([]);
+/** 当前弹窗对应的部门 id —— 保存账号后原样再拉一次用（★ 2026-10-20） */
+const usersDeptId = ref('');
 
 const usersTitle = computed(
   () =>
@@ -426,13 +425,20 @@ const usersTitle = computed(
 );
 
 async function openDeptUsers(node: PermDeptTreeNode): Promise<void> {
+  usersDeptId.value = node.id;
   usersDeptName.value = node.deptName;
   usersSub.value = `${node.userCount || 0} 个账号`;
   deptUsersList.value = [];
   usersOpen.value = true;
+  await reloadDeptUsers();
+}
+
+/** 重拉当前部门下的账号（打开弹窗 / 就地编辑保存后都走它） */
+async function reloadDeptUsers(): Promise<void> {
+  if (!usersDeptId.value) return;
   usersLoading.value = true;
   try {
-    const page = await userApi.list({ deptId: node.id, page: 1, size: 100 });
+    const page = await userApi.list({ deptId: usersDeptId.value, page: 1, size: 100 });
     deptUsersList.value = page.list || [];
     usersSub.value = `${deptUsersList.value.length} 个账号`;
   } catch {
@@ -521,14 +527,30 @@ async function onRolePermConfirm(perms: RolePermMap): Promise<void> {
 }
 
 /**
- * 「编辑」账号仍要跳「账号管理」
- * ⚠️ 账号表单（密码策略、职位勾选、部门级联…）体量大，不在这里复刻；
- *    带上 ?edit=<id> 让账号管理把编辑表单直接打开，免去二次查找。
+ * 账号编辑：就地弹窗，不再跳「账号管理」
+ *
+ * ★ 2026-10-20 按用户要求改动。原先是 router.push('/user?edit=<id>')，
+ *   跳到账号管理页再打开编辑表单 —— 用户原话「跳转到账号管理进行修改很别扭」。
+ *   现在改用共享组件 UserEditDialog：字段、校验、保存接口与账号管理完全一致
+ *   （同一份 基本信息 表单 + PUT /api/perm/user/update），就地改、就地存。
+ *
+ * ⚠️ 保存后要做两件事：① 刷新「部门下账号」这张表（姓名可能改了）；
+ *   ② 刷新部门树 / KPI（账号状态、归属计数可能变）。
  */
-function gotoUserEdit(id: string): void {
-  rolesOpen.value = false;
-  usersOpen.value = false;
-  void router.push(permUserEditRoute(id));
+const userEditOpen = ref(false);
+const userEditId = ref('');
+const userEditRow = ref<PermUserListItem | null>(null);
+
+function openUserEdit(u: PermUserListItem): void {
+  userEditRow.value = u;
+  userEditId.value = u.id;
+  userEditOpen.value = true;
+}
+
+async function onUserEdited(): Promise<void> {
+  // 账号弹窗还开着 → 就地刷新它，别让用户看到旧姓名
+  if (usersOpen.value) await reloadDeptUsers();
+  await loadAll();
 }
 
 /** 「为该部门新建职位 / 新建账号」按钮已随 2026-10-16 界面清理移除（gotoPage 一并删除） */
@@ -776,7 +798,8 @@ function gotoUserEdit(id: string): void {
             <td>
               <span class="lk" @click="openUserDetail(u)">详情</span>
               <span class="sep">|</span>
-              <span class="lk" @click="gotoUserEdit(u.id)">编辑</span>
+              <!-- ★ 2026-10-20：就地弹「编辑账号」，不再跳账号管理页 -->
+              <span class="lk" @click="openUserEdit(u)">编辑</span>
             </td>
           </tr>
         </tbody>
@@ -803,11 +826,19 @@ function gotoUserEdit(id: string): void {
 
     <!-- ==================== 账号详情（就地弹窗，不跳账号管理） ==================== -->
     <!-- ★ 2026-10-19：底部「去编辑」按钮已删除（组件里已无此按钮，故也无 @edit 绑定）；
-         本页改账号走「部门下账号」弹窗行操作里的「编辑」→ gotoUserEdit。 -->
+         本页改账号走「部门下账号」弹窗行操作里的「编辑」→ 就地弹 UserEditDialog。 -->
     <UserDetailDialog
       v-model="userDetailOpen"
       :user-id="userDetailId"
       :fallback="userDetailRow"
+    />
+
+    <!-- ==================== 编辑账号（就地弹窗，与账号管理同一份表单） ==================== -->
+    <UserEditDialog
+      v-model="userEditOpen"
+      :user-id="userEditId"
+      :fallback="userEditRow"
+      @saved="onUserEdited"
     />
   </div>
 </template>

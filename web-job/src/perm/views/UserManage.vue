@@ -51,6 +51,7 @@ import { deptApi, exportApi, menuApi, roleApi, userApi } from '@/perm/api/perm';
 import { useOptionStore } from '@/perm/stores/option';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
 import UserDetailDialog from '@/perm/components/UserDetailDialog.vue';
+import UserEditDialog from '@/perm/components/UserEditDialog.vue';
 import ProtoConfirm from '@/perm/components/ProtoConfirm.vue';
 import { toast } from '@/perm/utils/toast';
 import { roleIconOf } from '@/perm/utils/roleIcon';
@@ -619,27 +620,34 @@ function openAdd(): void {
   formOpen.value = true;
 }
 
+/**
+ * 编辑账号 —— ★ 2026-10-20 起改走共享组件 UserEditDialog（就地弹窗）
+ *
+ * 【为什么从「内联表单」搬出去】
+ *   原先编辑复用下面那个「新建 / 编辑」合体表单（formMode = 'edit'）。
+ *   而「部门管理 → 查看账号 → 编辑」当时是 router.push('/user?edit=<id>') 跳过来
+ *   （用户原话：「跳转到账号管理进行修改很别扭」）。把编辑抽成一个共享弹窗后：
+ *     · 部门管理可以就地编辑，不再跳页；
+ *     · 两个页面用的是【同一份】字段与校验，不会各改各的。
+ *
+ * ⚠️ 下面那个内联表单（formOpen）现在只用于【新建账号】：
+ *    `formMode` 恒为 'add'，其中 `formMode === 'edit'` 的分支不会再走到。
+ *    新建账号要勾职位 / 选部门 / 推导可访问模块，那套逻辑仍留在本页。
+ */
+const userEditOpen = ref(false);
+const userEditId = ref('');
+const userEditRow = ref<PermUserListItem | null>(null);
+
+/** 打开编辑弹窗（列表行「编辑」、以及 /user?edit=<id> 深链接都走它） */
 async function openEdit(row: PermUserListItem): Promise<void> {
-  formMode.value = 'edit';
-  // ★ 载入该账号当前的门户可访问模块（列表接口已带回，无需再请求）
-  form.modules = [...(row.portalModules || [])];
-  void ensureModuleOptions();
-  Object.assign(form, {
-    id: row.id,
-    userName: row.userName,
-    account: row.account,
-    phone: row.phone,
-    gender: row.gender,
-    age: row.age,
-    deptId: row.deptId,
-    userStatus: row.userStatus,
-    // ★ 2026-10-16：编辑页不再管密码 —— 这里只清空表单里的残留值，不读入任何密码状态
-    password: '',
-  });
-  formRoleIds.value = [...row.roleIds];
-  showPwd.value = false;
-  formOpen.value = true;
-  await ensureRolePerms(formRoleIds.value);
+  userEditRow.value = row;
+  userEditId.value = row.id;
+  userEditOpen.value = true;
+}
+
+/** 共享弹窗保存成功 → 刷新列表与 KPI（部门树在别的页面，这里不用管） */
+async function onUserEdited(): Promise<void> {
+  await Promise.all([load(), loadOverview()]);
 }
 
 /** 部门选择（开发版账号只归属一个部门，所以是单选；勾选上级自动回显下级） */
@@ -1535,7 +1543,19 @@ async function doExport(): Promise<void> {
       :fallback="userDetailRow"
     />
 
-    <!-- ==================== 新建 / 编辑账号（原型 openUserForm 第 2078~2187 行） ==================== -->
+    <!-- ==================== 编辑账号（就地弹窗，与部门管理共用一份） ==================== -->
+    <!-- ★ 2026-10-20：编辑从下面那个合体表单里搬出来，抽成共享组件，
+         这样「部门管理 → 编辑账号」也能就地改，不必跳回本页。 -->
+    <UserEditDialog
+      v-model="userEditOpen"
+      :user-id="userEditId"
+      :fallback="userEditRow"
+      @saved="onUserEdited"
+    />
+
+    <!-- ==================== 新建账号（原型 openUserForm 第 2078~2187 行） ====================
+         ⚠️ ★ 2026-10-20：本表单现在【只用于新建】—— 编辑已迁到上面的 UserEditDialog，
+         `formMode` 恒为 'add'，里面 `formMode === 'edit'` 的分支不会再走到。 -->
     <ProtoDialog v-model="formOpen" :title="formTitle" size="xl">
       <!-- ★ 2026-10-19：编辑账号只保留【基本信息】→ 单列；新建账号仍是左信息 + 右职位两列 -->
       <div
