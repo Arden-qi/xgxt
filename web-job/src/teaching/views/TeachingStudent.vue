@@ -822,13 +822,16 @@ function deptLabelOf(row: { deptName?: string | null; stageName?: string | null 
  *
  * 注：4 预在读早在上一版就从**表单**里摘掉了（本数组保留它，只为让筛选下拉
  *     还能筛到历史数据；formStatusOptions 会跳过它）。
+ * ★ 2026-10-20 批注（新增学生 · 就业部）：状态要加「实训中」——
+ *   升实训后学生状态就是 8，就业部必须能选到它，否则只能靠"历史值兜底"看不能改。
  */
 const JH_STATUS_CODES = [3, 4, 5, 6, 7, 8, 9, 10, 11];
+const JOB_STATUS_CODES = [6, 7, 8, 9, 10];
 const STATUS_BY_STAGE: Record<StudentStage, number[]> = {
   jh: JH_STATUS_CODES,
   class: JH_STATUS_CODES, // ★ 批注：与初高部保持一致
-  job: [6, 7, 9, 10],
-  emp: [6, 7, 9, 10],
+  job: JOB_STATUS_CODES,
+  emp: JOB_STATUS_CODES,
   edu: JH_STATUS_CODES,
 };
 function statusAllowed(stage: StudentStage, s: number): boolean {

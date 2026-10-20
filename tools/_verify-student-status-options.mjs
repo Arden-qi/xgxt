@@ -61,12 +61,27 @@ async function clickAt(x,y){
   await send('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'left',clickCount:1});
   await send('Input.dispatchMouseEvent',{type:'mouseReleased',x,y,button:'left',clickCount:1});
 }
-/** 打开当前可见弹窗里 label=状态 的下拉，返回选项文本数组 */
-async function readStatusOptions(){
+/** 点击「可见的」元素（可选按文本过滤），取最后一个 */
+async function clickVisible(sel, contains=''){
+  const r = await ev(`(()=>{
+    const l=[...document.querySelectorAll(${JSON.stringify(sel)})].filter(e=>{
+      const b=e.getBoundingClientRect();
+      return b.width>0&&b.height>0&&(!${JSON.stringify(contains)}||e.innerText.includes(${JSON.stringify(contains)}));
+    });
+    const el=l[l.length-1]; if(!el)return null;
+    const b=el.getBoundingClientRect(); return {x:b.left+b.width/2,y:b.top+b.height/2};
+  })()`);
+  if (!r) return false;
+  await clickAt(r.x, r.y);
+  await sleep(400);
+  return true;
+}
+/** 打开当前可见弹窗里 label=xxx 的下拉，返回选项文本数组 */
+async function readOptsByLabel(label){
   const rect = await ev(`(()=>{
     const d=[...document.querySelectorAll('.el-dialog')].find(x=>x.offsetParent!==null);
     if(!d)return null;
-    const item=[...d.querySelectorAll('.el-form-item')].find(it=>(it.querySelector('.el-form-item__label')?.innerText||'').trim()==='状态');
+    const item=[...d.querySelectorAll('.el-form-item')].find(it=>(it.querySelector('.el-form-item__label')?.innerText||'').trim()===${JSON.stringify(label)});
     const wrap=item?.querySelector('.el-select__wrapper');
     if(!wrap)return null;
     const r=wrap.getBoundingClientRect();
@@ -81,10 +96,23 @@ async function readStatusOptions(){
     if(!panel)return [];
     return [...panel.querySelectorAll('.el-select-dropdown__item')].map(x=>x.innerText.trim());
   })()`);
+  return opts || [];
+}
+async function readStatusOptions(){
+  const opts = await readOptsByLabel('状态');
   await shot(`verify_status_options_${Date.now()}.png`);
   await ev(`(()=>{document.body.click();return true;})()`);
   await sleep(300);
-  return opts || [];
+  return opts;
+}
+/** 在弹窗里选中某个下拉的某一项（按文本） */
+async function pickOption(label, text){
+  const opts = await readOptsByLabel(label);
+  const hit = (opts || []).find((o) => o === text || o.includes(text));
+  if (!hit) return false;
+  const ok = await clickVisible('.el-select__popper .el-select-dropdown__item', hit);
+  await sleep(600);
+  return ok;
 }
 const fails=[];
 const check=(n,ok,d='')=>{ console.log(`  ${ok?'PASS':'FAIL'}  ${n}${d?'  → '+d:''}`); if(!ok)fails.push(n); };
@@ -126,6 +154,14 @@ async function closeDialog(){
   check('新增学生：没有「咨询中」', !createOpts.includes('咨询中'));
   check('新增学生：保留 试学中/正式在读/休学/退学/实训中/待就业',
     ['试学中','正式在读','休学','退学','实训中','待就业'].every((x)=>createOpts.includes(x)), JSON.stringify(createOpts));
+
+  // ★ 2026-10-20 批注：就业部状态要加「实训中」
+  const pickedDept = await pickOption('部门', '就业部');
+  check('新增学生：能把部门切到「就业部」', pickedDept === true);
+  const jobOpts = await readStatusOptions();
+  check('就业部状态下拉含「实训中」', (jobOpts || []).includes('实训中'), JSON.stringify(jobOpts));
+  check('就业部状态不含 待咨询/咨询中/试学中/正式在读',
+    !['待咨询','咨询中','试学中','正式在读'].some((x)=>jobOpts.includes(x)), JSON.stringify(jobOpts));
   await closeDialog();
 
   // ② 编辑初高部学生 J26007
