@@ -45,6 +45,7 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { today, fmtDate, fmtDateTime } from '../utils/date';
 import { validate } from '../middleware/validate';
+import { boolFlag } from '../utils/query';
 import { BizError } from '../middleware/errorHandler';
 import { sendNotice, NOTICE_TYPE } from '../utils/notice';
 // ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
@@ -164,6 +165,9 @@ const listSchema = z.object({
   classId: z.string().optional(),
   callStatus: z.coerce.number().int().optional(),
   onlyMine: z.coerce.boolean().optional(),
+  // ★ 2026-10-20：「仅看紧急」对就业也要生效 ——
+  //   就业行的 isUrgent 就是 overdue（逾期未缴清），这里按同一口径过滤。
+  onlyOverdue: boolFlag.optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
 });
@@ -189,6 +193,10 @@ feeCallRouter.get(
     if (q.callStatus !== undefined) base.andWhere('call_status', q.callStatus);
     if (q.startDate) base.andWhere('due_date', '>=', q.startDate);
     if (q.endDate) base.andWhere('due_date', '<=', q.endDate);
+    // 仅看逾期（= 仅看紧急）：已缴清的不算逾期，与 decorate 的 overdue 同口径
+    if (q.onlyOverdue) {
+      base.whereNot('call_status', FeeCallStatus.PAID).andWhere('due_date', '<', today());
+    }
 
     // ★ 班主任只看自己的班（数据范围）
     //   ★ 2026-10-08 修：补上项目经理 —— 原来只判班主任，

@@ -60,6 +60,8 @@ export interface FeeCallQuery {
   callStatus?: number;
   /** 只看我的（班主任：只看自己班） */
   onlyMine?: boolean;
+  /** 仅看逾期未缴清（催费页「仅看紧急」在就业部门的口径） */
+  onlyOverdue?: boolean;
   startDate?: string;
   endDate?: string;
 }

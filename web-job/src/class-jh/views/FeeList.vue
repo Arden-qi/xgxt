@@ -7,6 +7,7 @@ import { computed, ref, reactive, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh, Download, Bell, Promotion } from '@element-plus/icons-vue';
 import { FEE_TYPE_NAME, PAY_STATUS_NAME, SHARE_CHANNEL_NAME, ShareChannel } from 'shared-types/class-jh';
+import { FEE_CALL_STATUS_NAME } from 'shared-types';
 import type { FeeRecord, FeeListQuery, FeeNotify, FeeNotifyListQuery, ClassInfo } from 'shared-types/class-jh';
 import { fetchFeeList, fetchFeeNotifyList, exportFee, shareFee } from '@/class-jh/api/fee';
 import { urgeList, urgeLogList } from '@/class/api/student';
@@ -57,6 +58,32 @@ const tableData = computed<FeeRow[]>(() => {
   const start = (query.page - 1) * query.size;
   return mergedRows.value.slice(start, start + query.size);
 });
+
+/**
+ * 「缴费状态」下拉选项 —— 随部门切换口径
+ *
+ * ★ 2026-10-20 用户要求：缴费状态筛选对**所有部门**生效。
+ *   但就业的催费单是另一套状态码（1 待催缴 / 2 催缴中 / 3 已缴清），
+ *   与初高/大学的缴费状态（1 待缴 / 2 已缴 / 3 已核对 / 5 冻结）**语义不同、码位不同**。
+ *   → 单独在就业部门展示催费状态，避免「选『已缴』结果出的是催缴中」这种错配。
+ *   → 全部部门时仍用缴费状态口径，就业源按 payStatusToCallStatus() 做语义映射。
+ */
+const payStatusOptions = computed<Array<{ label: string; value: number }>>(() => {
+  const dict = query.dept === 'employ' ? FEE_CALL_STATUS_NAME : PAY_STATUS_NAME;
+  return Object.entries(dict).map(([value, label]) => ({ value: Number(value), label: String(label) }));
+});
+
+/**
+ * 缴费状态 → 就业催费单状态（仅在「全部部门」合并视图里用）
+ *   1 待缴 → 1 待催缴；2 已缴 → 3 已缴清；
+ *   3 已核对 / 5 冻结 在就业没有对应值 → 返回 null（该源不出数据，而不是忽略筛选）
+ */
+function payStatusToCallStatus(payStatus?: number): number | null | undefined {
+  if (payStatus === undefined || payStatus === null) return undefined;
+  if (payStatus === 1) return 1;
+  if (payStatus === 2) return 3;
+  return null;
+}
 
 function isJhRow(row: FeeRow) {
   return !row.dept || row.dept === '初高';
@@ -115,27 +142,71 @@ async function loadData() {
   loading.value = true;
   try {
     if (query.dept === 'class') {
-      // 大学催缴记录
-      const data = await urgeList({ page: query.page, size: query.size, classId: query.classId, feeType: query.feeType, keyword: query.keyword || undefined });
+      // 大学催缴记录：缴费状态 / 仅看紧急 / 应缴日期 三筛全生效（2026-10-20）
+      const data = await urgeList({
+        page: query.page,
+        size: query.size,
+        classId: query.classId,
+        feeType: query.feeType,
+        payStatus: query.payStatus,
+        onlyOverdue: query.isUrgent,
+        startDate: query.startDate,
+        endDate: query.endDate,
+        keyword: query.keyword || undefined,
+      });
       tableRows.value = data.list.map((r) => urgeToRow(r));
       serverTotal.value = data.total;
     } else if (query.dept === 'employ') {
-      // 就业催费单
-      const data = await fetchFeeCallList({ page: query.page, size: query.size, classId: query.classId, feeType: query.feeType, startDate: query.startDate, endDate: query.endDate, keyword: query.keyword || undefined });
+      // 就业催费单：缴费状态下拉在本部门是催费状态，直接当 callStatus 传
+      const data = await fetchFeeCallList({
+        page: query.page,
+        size: query.size,
+        classId: query.classId,
+        feeType: query.feeType,
+        callStatus: query.payStatus,
+        onlyOverdue: query.isUrgent,
+        startDate: query.startDate,
+        endDate: query.endDate,
+        keyword: query.keyword || undefined,
+      });
       tableRows.value = data.list.map((r) => callToRow(r));
       serverTotal.value = data.total;
     } else if (query.dept === 'all') {
       // 三源各取前 100 条合并（催费数据量级远小于此），应缴日期倒序，前端分页
       const kw = query.keyword || undefined;
+      const callStatus = payStatusToCallStatus(query.payStatus);
       const settled = await Promise.allSettled([
         fetchFeeList({ ...query, page: 1, size: 100 }),
-        urgeList({ page: 1, size: 100, classId: query.classId, feeType: query.feeType, keyword: kw }),
-        fetchFeeCallList({ page: 1, size: 100, classId: query.classId, feeType: query.feeType, startDate: query.startDate, endDate: query.endDate, keyword: kw }),
+        urgeList({
+          page: 1,
+          size: 100,
+          classId: query.classId,
+          feeType: query.feeType,
+          payStatus: query.payStatus,
+          onlyOverdue: query.isUrgent,
+          startDate: query.startDate,
+          endDate: query.endDate,
+          keyword: kw,
+        }),
+        // 选了「已核对 / 冻结」时就业没有对应状态 → 该源直接不出数据（而不是忽略筛选条件）
+        callStatus === null
+          ? Promise.resolve({ list: [], total: 0 } as any)
+          : fetchFeeCallList({
+              page: 1,
+              size: 100,
+              classId: query.classId,
+              feeType: query.feeType,
+              callStatus,
+              onlyOverdue: query.isUrgent,
+              startDate: query.startDate,
+              endDate: query.endDate,
+              keyword: kw,
+            }),
       ]);
       const rows: FeeRow[] = [];
       if (settled[0].status === 'fulfilled') rows.push(...settled[0].value.list.map((r) => ({ ...r, dept: '初高' } as FeeRow)));
-      if (settled[1].status === 'fulfilled') rows.push(...settled[1].value.list.map((r) => urgeToRow(r)));
-      if (settled[2].status === 'fulfilled') rows.push(...settled[2].value.list.map((r) => callToRow(r)));
+      if (settled[1].status === 'fulfilled') rows.push(...settled[1].value.list.map((r: any) => urgeToRow(r)));
+      if (settled[2].status === 'fulfilled') rows.push(...settled[2].value.list.map((r: any) => callToRow(r)));
       rows.sort((a, b) => (b.expireDate || '0000').localeCompare(a.expireDate || '0000'));
       mergedRows.value = rows;
     } else {
@@ -151,9 +222,11 @@ async function loadData() {
   }
 }
 
-/** 切部门：页码归 1 重查 */
+/** 切部门：页码归 1 重查
+ *  ★ 缴费状态的口径随部门切换（就业是催费状态码），旧值保留会让人误解，直接清掉 */
 function handleDeptChange() {
   query.page = 1;
+  query.payStatus = undefined;
   loadData();
 }
 
@@ -323,7 +396,8 @@ onMounted(() => {
     <el-card shadow="never" class="search-card">
       <!-- ★ 2026-10-19：筛选全部「选完即查」（@change → handleSearch），不用再点查询；选完不动，用户视角就是筛选没生效 -->
         <!-- ★ 2026-10-19（二次要求）：部门维度——列表加部门列，筛选加部门（初高/大学/就业）；
-             筛选全程可见；口径差异：缴费状态对初高/大学生效、仅看紧急对初高生效、应缴日期对初高/就业生效 -->
+             ★ 2026-10-20（三次要求）：三个筛选（缴费状态 / 仅看紧急 / 应缴日期）对全部部门生效，
+               取消原来的按部门禁用；就业状态码与缴费状态不同，下拉按部门切换选项集 -->
       <el-form :model="query" inline>
         <el-form-item label="部门">
           <el-select v-model="query.dept" style="width: 130px" @change="handleDeptChange">
@@ -347,24 +421,24 @@ onMounted(() => {
           </el-select>
         </el-form-item>
         <el-form-item label="缴费状态">
-          <el-select v-model="query.payStatus" placeholder="全部" clearable style="width: 120px" :disabled="query.dept === 'employ'" @change="handleSearch">
-            <el-option v-for="(name, value) in PAY_STATUS_NAME" :key="value" :label="name" :value="Number(value)" />
+          <el-select v-model="query.payStatus" placeholder="全部" clearable style="width: 120px" @change="handleSearch">
+            <el-option v-for="o in payStatusOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="仅看紧急">
-          <el-switch v-model="query.isUrgent" :disabled="query.dept === 'employ'" @change="handleSearch" />
+          <el-switch v-model="query.isUrgent" @change="handleSearch" />
         </el-form-item>
         <el-form-item label="应缴日期">
-          <el-date-picker v-model="query.startDate" type="date" value-format="YYYY-MM-DD" placeholder="开始" style="width: 140px" :disabled="query.dept === 'class'" @change="handleSearch" />
+          <el-date-picker v-model="query.startDate" type="date" value-format="YYYY-MM-DD" placeholder="开始" style="width: 140px" @change="handleSearch" />
           <span class="sep">~</span>
-          <el-date-picker v-model="query.endDate" type="date" value-format="YYYY-MM-DD" placeholder="结束" style="width: 140px" :disabled="query.dept === 'class'" @change="handleSearch" />
+          <el-date-picker v-model="query.endDate" type="date" value-format="YYYY-MM-DD" placeholder="结束" style="width: 140px" @change="handleSearch" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
           <el-button :icon="Refresh" @click="handleReset">重置</el-button>
         </el-form-item>
         <el-form-item>
-          <div class="dept-hint">注：缴费状态筛选对初高/大学生效；仅看紧急对初高生效；应缴日期对初高/就业生效</div>
+          <div class="dept-hint">注：缴费状态、仅看紧急、应缴日期对全部部门（初高/大学/就业）生效；就业的「缴费状态」是催费单状态（待催缴/催缴中/已缴清），「紧急」= 逾期未缴清</div>
         </el-form-item>
       </el-form>
     </el-card>

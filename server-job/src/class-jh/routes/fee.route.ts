@@ -16,6 +16,7 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { nameOf } from '../utils/enumName';
 import { getNumberSetting } from '../utils/setting';
+import { boolFlag } from '../../utils/query';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
@@ -113,7 +114,9 @@ const listSchema = z.object({
   payStatus: z.coerce.number().int().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
-  isUrgent: z.coerce.boolean().optional(),
+  // ★ 2026-10-20：改用显式布尔解析（z.coerce.boolean 会把 "false" 当 true，
+  //   前端把「仅看紧急」关掉后仍然只出紧急的）
+  isUrgent: boolFlag.optional(),
   keyword: z.string().optional(),
 });
 
@@ -188,6 +191,9 @@ feeRouter.get(
     if (q.classId) query.andWhere('class_id', q.classId);
     if (q.feeType) query.andWhere('fee_type', q.feeType);
     if (q.payStatus) query.andWhere('pay_status', q.payStatus);
+    // ★ 2026-10-20：导出补应缴日期筛选 —— 列表筛完导出却是全量，用户会以为筛选没生效
+    if (q.startDate) query.andWhere('expire_date', '>=', q.startDate);
+    if (q.endDate) query.andWhere('expire_date', '<=', q.endDate);
     if (q.keyword) {
       query.andWhere((qb) => {
         qb.where('student_no', 'like', `%${q.keyword}%`).orWhere('student_name', 'like', `%${q.keyword}%`);

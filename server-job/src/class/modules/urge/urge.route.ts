@@ -14,6 +14,7 @@ import { applySyncScope } from '../shared/syncScope';
 import { resolveSyncStudentId } from '../shared/studentRef';
 import { wrap } from '../../middleware/error';
 import { tbl, tblTrx, tblInsTrx, uniUpdCols } from '../../../teaching/shared/uniTable';
+import { boolFlag } from '../../../utils/query';
 
 /**
  * ★ 第 10 批：催费域切读
@@ -204,7 +205,9 @@ const urgeListSchema = z.object({
   classId: z.string().optional(),
   feeType: z.coerce.number().int().optional(),
   payStatus: z.coerce.number().int().optional(),
-  onlyOverdue: z.coerce.boolean().optional(),
+  // ★ 2026-10-20：显式布尔解析（z.coerce.boolean 会把 "false" 当 true，
+  //   前端把「仅看紧急」关掉后仍然只出逾期的）
+  onlyOverdue: boolFlag.optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   keyword: z.string().optional(),
