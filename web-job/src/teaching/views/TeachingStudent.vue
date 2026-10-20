@@ -419,11 +419,22 @@
               v-model="upgKeyword"
               placeholder="姓名 / 学号 / 手机"
               clearable
-              style="width: 200px"
-              @keyup.enter="loadUpgradeStudents"
+              style="width: 190px"
+              @keyup.enter="loadUpgradeStudents(1)"
             />
-            <el-button @click="loadUpgradeStudents">查询</el-button>
-            <span class="muted">共 {{ upgStudents.length }} 名「初高部 · 正式在读」学生</span>
+            <!-- 2026-10-20 批注②：加班级的筛选 -->
+            <el-select
+              v-model="upgClassId"
+              clearable
+              filterable
+              placeholder="全部班级"
+              style="width: 150px"
+              @change="loadUpgradeStudents(1)"
+            >
+              <el-option v-for="c in upgClassOptions" :key="c.id" :label="c.name" :value="c.id" />
+            </el-select>
+            <el-button @click="loadUpgradeStudents(1)">查询</el-button>
+            <span class="muted">共 {{ upgTotal }} 名「初高部 · 正式在读」学生</span>
           </div>
           <el-table
             ref="upgTableRef"
@@ -432,30 +443,51 @@
             border
             stripe
             size="small"
-            height="380"
             row-key="studentId"
             @selection-change="onUpgSelectionChange"
           >
-            <el-table-column type="selection" width="44" />
-            <el-table-column label="学号" width="105">
+            <el-table-column type="selection" width="44" reserve-selection />
+            <el-table-column label="学号" width="100">
               <template #default="{ row }">{{ row.studentNo }}</template>
             </el-table-column>
-            <el-table-column label="姓名" width="90">
+            <el-table-column label="姓名" width="85">
               <template #default="{ row }">{{ row.studentName }}</template>
             </el-table-column>
-            <el-table-column label="性别" width="60" align="center">
+            <el-table-column label="性别" width="55" align="center">
               <template #default="{ row }">{{ row.genderName || '—' }}</template>
             </el-table-column>
-            <el-table-column label="原班级" min-width="105">
+            <el-table-column label="原班级" min-width="100">
               <template #default="{ row }">{{ row.className || '—' }}</template>
             </el-table-column>
-            <el-table-column label="阶段" width="100">
+            <el-table-column label="阶段" width="95">
               <template #default="{ row }">{{ row.phaseName || '—' }}</template>
             </el-table-column>
-            <el-table-column label="原班主任" width="95">
+            <el-table-column label="原班主任" width="90">
               <template #default="{ row }">{{ row.headTeacherName || '—' }}</template>
             </el-table-column>
           </el-table>
+          <!-- 2026-10-20 批注①：左下角加「全选」，表格每页 15 人，剩下的翻页 -->
+          <div class="upg-foot">
+            <el-checkbox
+              :model-value="upgPageAllChecked"
+              :indeterminate="upgPageIndeterminate"
+              :disabled="!upgStudents.length"
+              @change="toggleAllPage"
+            >
+              全选本页
+            </el-checkbox>
+            <span class="muted">本页已选 {{ upgPageSelectedCount }} / {{ upgStudents.length }}</span>
+            <el-pagination
+              class="upg-pager"
+              small
+              background
+              layout="total, prev, pager, next"
+              :total="upgTotal"
+              :page-size="upgPageSize"
+              :current-page="upgPage"
+              @current-change="onUpgPageChange"
+            />
+          </div>
         </div>
 
         <div class="upg-side">
@@ -1327,6 +1359,12 @@ const upgSubmitting = ref(false);
 const upgStudents = ref<StudentRow[]>([]);
 const upgSelection = ref<StudentRow[]>([]);
 const upgKeyword = ref('');
+/** 2026-10-20 批注②：升云弹窗内的「班级」筛选（初高部班级） */
+const upgClassId = ref('');
+/** 2026-10-20 批注①：每页 15 人，剩下的翻页 */
+const upgPage = ref(1);
+const upgPageSize = 15;
+const upgTotal = ref(0);
 const upgTargets = ref<UpgradeTargetClass[]>([]);
 const upgTargetClassId = ref('');
 const upgTargetLoading = ref(false);
@@ -1335,33 +1373,66 @@ const upgTableRef = ref<any>();
 const upgTarget = computed(() => upgTargets.value.find((c) => c.id === upgTargetClassId.value) || null);
 /** 详情「基础信息」里的升云记录 */
 const upgradeRows = computed<StudentUpgradeRow[]>(() => detail.value?.upgrades || []);
+/** 升云弹窗的班级下拉：直接复用页面的班级清单，只要初高部 */
+const upgClassOptions = computed(() =>
+  classOptions.value.filter((c) => c.stage === 'jh').map((c) => ({ id: c.id, name: c.name })),
+);
+/** 本页已选人数（跨页选择也保留） */
+const upgPageSelectedCount = computed(() => {
+  const picked = new Set(upgSelection.value.map((s) => s.studentId));
+  return upgStudents.value.filter((s) => picked.has(s.studentId)).length;
+});
+const upgPageAllChecked = computed(
+  () => upgStudents.value.length > 0 && upgPageSelectedCount.value === upgStudents.value.length,
+);
+const upgPageIndeterminate = computed(
+  () => upgPageSelectedCount.value > 0 && !upgPageAllChecked.value,
+);
 
 async function openUpgrade() {
   upgradeVisible.value = true;
   upgKeyword.value = '';
+  upgClassId.value = '';
   upgRemark.value = '';
   upgSelection.value = [];
   upgTargetClassId.value = '';
+  upgPage.value = 1;
   upgTableRef.value?.clearSelection?.();
-  await Promise.all([loadUpgradeStudents(), loadUpgradeTargets()]);
+  await Promise.all([loadUpgradeStudents(1), loadUpgradeTargets()]);
 }
 
-/** 可升云学生：初高部 + 正式在读（批注口径：只有正式在读可升云） */
-async function loadUpgradeStudents() {
+/** 可升云学生：初高部 + 正式在读（批注口径：只有正式在读可升云），每页 15 人 */
+async function loadUpgradeStudents(page = upgPage.value) {
   upgLoading.value = true;
   try {
     const r = await listStudents({
       stage: 'jh',
       studentStatus: StudentStatus.STUDYING,
+      classId: upgClassId.value || undefined,
       keyword: upgKeyword.value || undefined,
-      page: 1,
-      size: 200,
+      page,
+      size: upgPageSize,
     });
     upgStudents.value = r.list;
+    upgTotal.value = r.total;
+    upgPage.value = r.page;
   } catch {
     upgStudents.value = [];
+    upgTotal.value = 0;
   } finally {
     upgLoading.value = false;
+  }
+}
+
+function onUpgPageChange(p: number) {
+  loadUpgradeStudents(p);
+}
+
+/** 左下角「全选本页」：只勾选/取消当前页（跨页已选的保留） */
+function toggleAllPage(val: boolean | string | number) {
+  const on = !!val;
+  for (const row of upgStudents.value) {
+    upgTableRef.value?.toggleRowSelection?.(row, on);
   }
 }
 
@@ -1530,6 +1601,25 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
+}
+/* ★ 2026-10-20 批注：表格左下角「全选本页」+ 右下角翻页 */
+.upg-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.upg-pager {
+  margin-left: auto;
+}
+/* ⚠️ Element Plus 默认的勾选框边框是 #E1E6EF（白底上几乎看不见，截图里像没渲染），
+   升云弹窗全靠勾选选人，这里加深一档 */
+.upg-body :deep(.el-checkbox__inner),
+.upg-foot :deep(.el-checkbox__inner) {
+  border-color: #a9b0bd;
+}
+.upg-body :deep(.el-table__header .el-checkbox__inner) {
+  border-color: #a9b0bd;
 }
 .upg-side {
   width: 300px;

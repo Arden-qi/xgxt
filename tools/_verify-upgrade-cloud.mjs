@@ -207,7 +207,84 @@ const check = (name, ok, detail = '') => {
   check('没有列退学/休学学生（只列正式在读）',
     !(dlg?.rows || []).some((r) => r.includes('退学') || r.includes('休学')),
     JSON.stringify((dlg?.rows || []).filter((r) => r.includes('退学') || r.includes('休学'))));
+  check('每页最多 15 人（批注：每页15个，剩下翻页）', (dlg?.rows || []).length <= 15, `${(dlg?.rows || []).length} 行`);
+  const pager = await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].find(x => x.offsetParent !== null && x.innerText.includes('升云'));
+    return d ? (d.querySelector('.upg-foot .el-pagination')?.innerText || '').replace(/\\s+/g, ' ').trim() : '';
+  })()`);
+  check('表格下方有翻页组件（共 11 条）', /11/.test(pager), pager);
   await shot('verify_upgrade_dialog.png');
+
+  // ① 左下角「全选本页」
+  const allChecked = await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].find(x => x.offsetParent !== null && x.innerText.includes('升云'));
+    const cb = d && [...d.querySelectorAll('.upg-foot .el-checkbox')][0];
+    if (!cb) return false;
+    cb.click();
+    return true;
+  })()`);
+  await sleep(700);
+  const pickedAll = await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].find(x => x.offsetParent !== null && x.innerText.includes('升云'));
+    return d ? (d.innerText.match(/已选\\s*(\\d+)\\s*人/) || [])[1] || '' : '';
+  })()`);
+  check('有「全选本页」且点击后本页全选', allChecked === true && Number(pickedAll) === (dlg?.rows || []).length, `已选 ${pickedAll}`);
+  // 再点一次取消
+  await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].find(x => x.offsetParent !== null && x.innerText.includes('升云'));
+    const cb = d && [...d.querySelectorAll('.upg-foot .el-checkbox')][0];
+    if (cb) cb.click();
+    return !!cb;
+  })()`);
+  await sleep(600);
+  const pickedNone = await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].find(x => x.offsetParent !== null && x.innerText.includes('升云'));
+    return d ? (d.innerText.match(/已选\\s*(\\d+)\\s*人/) || [])[1] || '' : '';
+  })()`);
+  check('再点「全选本页」可取消', pickedNone === '0', `已选 ${pickedNone}`);
+
+  // ② 班级筛选（批注：加班级的筛选）
+  const hasClassFilter = await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].find(x => x.offsetParent !== null && x.innerText.includes('升云'));
+    return !!(d && d.querySelector('.upg-bar .el-select__wrapper'));
+  })()`);
+  check('搜索框右侧有「班级」筛选', hasClassFilter === true);
+  const openedClass = await clickVisible('.upg-bar .el-select__wrapper');
+  await sleep(700);
+  const classOpts = await ev(`(() => {
+    const poppers = [...document.querySelectorAll('.el-select__popper')].filter(p => p.getBoundingClientRect().width > 0);
+    const panel = poppers[poppers.length - 1];
+    if (!panel) return [];
+    return [...panel.querySelectorAll('.el-select-dropdown__item')].map(x => x.innerText.trim());
+  })()`);
+  // ⚠️ 初高部班级名不一定是 G 开头（演示库里还有 J2602），不能按前缀断言；
+  //    正确性由下面「按班级筛选后只剩该班学生」保证
+  check('班级筛选有初高部班级可选', (classOpts || []).length > 0, JSON.stringify(classOpts));
+  await clickVisible('.el-select__popper .el-select-dropdown__item', (classOpts || [])[0] || '');
+  await sleep(1600);
+  const filteredRows = await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].find(x => x.offsetParent !== null && x.innerText.includes('升云'));
+    return d ? [...d.querySelectorAll('.el-table__row')].map(tr => tr.innerText.replace(/\\s+/g, ' ').trim()) : [];
+  })()`);
+  check('按班级筛选后只剩该班学生',
+    (filteredRows || []).length > 0 && (filteredRows || []).every((r) => r.includes((classOpts || [])[0] || '@@')),
+    `${JSON.stringify(classOpts?.[0])} → ${(filteredRows || []).length} 行`);
+  await shot('verify_upgrade_class_filter.png');
+
+  // 关掉重开（重置筛选）
+  await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].find(x => x.offsetParent !== null && x.innerText.includes('升云'));
+    const b = d && d.querySelector('.el-dialog__headerbtn');
+    if (b) b.click();
+    return !!b;
+  })()`);
+  await sleep(800);
+  await ev(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === '升云');
+    if (b) b.click();
+    return !!b;
+  })()`);
+  await sleep(1800);
 
   // ② 目标班级下拉：只应有大学部开放班
   const opened = await clickVisible('.upg-side .el-select__wrapper');
