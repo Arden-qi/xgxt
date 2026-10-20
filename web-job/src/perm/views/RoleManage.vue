@@ -1315,16 +1315,23 @@ async function doExport(): Promise<void> {
 
       <div class="card-b p0">
         <div class="tb-wrap">
-          <table class="tb">
+          <table class="tb tb-role">
             <thead>
               <tr>
-                <th style="width: 220px">职位名称</th>
-                <th style="width: 170px">所属部门</th>
-                <th style="width: 74px">关联人数</th>
-                <th style="width: 80px">权限数</th>
-                <th style="width: 72px">状态</th>
-                <th style="width: 112px">创建时间</th>
-                <th style="width: 230px">操作</th>
+                <!-- ★ 2026-10-20 列宽改百分比（合计 100）+ .tb-role 固定布局。
+                     原来写死 220/170/74/80/72/112/230px，但 table-layout 是 auto：
+                     声明的 px 只是建议值，浏览器按内容把多余宽度全砸给前两列
+                     （实测 1520 视口、表宽 1264 时「职位名称」220→290、「所属部门」170→224，
+                     两列富余 282px 占全表富余 423px 的 67%），看着就是大片空洞。
+                     新比例＝各列「内容宽 + 同样的呼吸空间」反算（每列富余 69~75px 均摊），
+                     不再让某一列独自吃掉富余（操作列实测只需 193px，给 23% 即够）。 -->
+                <th style="width: 17%">职位名称</th>
+                <th style="width: 13%">所属部门</th>
+                <th style="width: 10%">关联人数</th>
+                <th style="width: 10%">权限数</th>
+                <th style="width: 11%">状态</th>
+                <th style="width: 16%">创建时间</th>
+                <th style="width: 23%">操作</th>
               </tr>
             </thead>
             <tbody>

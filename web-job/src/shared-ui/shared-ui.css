@@ -431,6 +431,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","
 .tb.tb-dept .num{text-align:center}
 .tb.tb-dept .desc{overflow-wrap:anywhere}
 
+/* ---- 职位管理表（RoleManage）列宽 ----
+   2026-10-20：原来 7 列都写死 px 且 table-layout:auto，
+   实测 1520 视口（表宽 1264）被撑成 290/224/99/105/95/148/303，
+   前两列富余 282px（占全表富余 423px 的 67%）→ 用户看到大片空洞。
+   改 fixed + 百分比（合计 100）：各列＝内容宽 + 同一份呼吸空间（实测富余 69~75px 均摊）。
+   min-width 1080：此时操作列 248px，装得下四个链接（实测只需 193px）不折行。
+   3~5 列（关联人数/权限数/状态）内容窄且居中：表头与单元格一起居中，
+   避免出现「表头左、数字中」的错位（部门表那轮踩过的坑）。 */
+.tb.tb-role{table-layout:fixed;min-width:1080px}
+.tb.tb-role th:nth-child(3),
+.tb.tb-role td:nth-child(3),
+.tb.tb-role th:nth-child(4),
+.tb.tb-role td:nth-child(4),
+.tb.tb-role th:nth-child(5),
+.tb.tb-role td:nth-child(5){text-align:center}
+.tb.tb-role td:nth-child(2){overflow-wrap:anywhere}
+
 /* ---- 输入（原型 .inp → 设计系统口径） ---- */
 .inp,.main select.inp,.main textarea.inp{padding:6px 11px;border:1px solid #E2D7D1;border-radius:7px;background:#fff;font-size:12.5px;color:#5F5350;outline:none;transition:.15s;min-width:0;height:32px}
 textarea.inp{height:auto;padding:9px 11px;line-height:1.6}
