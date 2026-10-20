@@ -1146,9 +1146,9 @@ const formBedOptions = computed(() => {
 
 function onFormDormChange(roomId: string) {
   const r = dormRooms.value.find((x) => x.roomId === roomId);
-  if (r) {
-    form.dormNo = r.building ? `${r.building}-${r.room}` : r.room;
-  }
+  // ★ 2026-10-20：清空宿舍时要连 dorm_no 一起清（原来只清床位号，导致
+  //   「移出宿舍」实际上把旧房号又存回去，也让保存前的变更清单漏掉这一项）
+  form.dormNo = r ? (r.building ? `${r.building}-${r.room}` : r.room) : '';
   form.bedNo = '';
 }
 
@@ -1214,6 +1214,7 @@ function openCreate() {
   form.stage = st;
   // 2026-10-15 按用户要求：部门不预选默认值，由用户自己选（未选部门时学历下拉显示并集）
   formAge.value = null;
+  editOrigin.value = null;
   editVisible.value = true;
 }
 
@@ -1254,6 +1255,8 @@ async function openEdit(row: StudentRow) {
     remark: b.remark || '',
   });
   formAge.value = b.age ?? null;
+  // ★ 2026-10-20：留一份原始快照，保存时用它算「改了哪些内容」
+  editOrigin.value = { ...form };
   editVisible.value = true;
 }
 
@@ -1268,6 +1271,108 @@ function onFormClassChange(id: string) {
   }
 }
 
+/* ---------------- ★ 2026-10-20 批注：编辑保存前先列「我改了什么」 ----------------
+ * 批注原文：「若更改编辑学生，点击保存，则会出现我修改的内容有什么，是否更改」
+ * 做法：打开编辑时留一份快照（editOrigin），点保存时逐字段比出差异，
+ *   有差异 → 弹「确认修改内容」（原值 → 新值，逐条），确认后才真正提交；
+ *   无差异 → 直接提示「未检测到修改内容」并关闭，不发请求。
+ */
+const editOrigin = ref<Record<string, any> | null>(null);
+
+interface DiffRow {
+  label: string;
+  from: string;
+  to: string;
+}
+
+/** 变更清单里的文字一律转义 —— 姓名/备注是用户输入，直接拼 HTML 会有注入风险 */
+function escHtml(v: unknown): string {
+  return String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+}
+
+function buildStudentDiff(): DiffRow[] {
+  const o = editOrigin.value;
+  if (!o) return [];
+  const txt = (v: unknown) => (v === null || v === undefined ? '' : String(v).trim());
+  const genderText = (v: unknown) => (Number(v) === 1 ? '男' : Number(v) === 2 ? '女' : '');
+  const deptText = (v: unknown) =>
+    v === null || v === undefined || v === '' ? '' : DEPT_NAME[Number(v)] || String(v);
+  const classText = (id: unknown, name: unknown) => {
+    if (!id) return '';
+    return classOptions.value.find((c) => c.id === String(id))?.name || txt(name);
+  };
+  const phaseText = (v: unknown) => {
+    if (v === null || v === undefined || v === '') return '';
+    const n = Number(v);
+    // 阶段可能已被方案改名/停用，先查方案，再查学段 meta，最后兜底数字
+    for (const pl of planOptionsAll.value) {
+      const p = pl.phases.find((x) => x.value === n);
+      if (p) return p.label;
+    }
+    for (const m of meta.value) {
+      const p = m.phaseOptions.find((x) => x.value === n);
+      if (p) return p.label;
+    }
+    return String(n);
+  };
+  const statusText = (v: unknown) =>
+    v === null || v === undefined || v === '' ? '' : STUDENT_STATUS_NAME[Number(v)] || String(v);
+
+  const pairs: Array<[string, string, string]> = [
+    ['学号', txt(o.studentNo), txt(form.studentNo)],
+    ['姓名', txt(o.studentName), txt(form.studentName)],
+    ['性别', genderText(o.gender), genderText(form.gender)],
+    ['身份证号', txt(o.idCard), txt(form.idCard)],
+    ['部门', deptText(o.deptCode), deptText(form.deptCode)],
+    ['班级', classText(o.classId, o.className), classText(form.classId, form.className)],
+    ['阶段', phaseText(o.phaseCode), phaseText(form.phaseCode)],
+    ['状态', statusText(o.studentStatus), statusText(form.studentStatus)],
+    ['手机号', txt(o.phone), txt(form.phone)],
+    ['家长姓名', txt(o.parentName), txt(form.parentName)],
+    ['家长手机', txt(o.parentPhone), txt(form.parentPhone)],
+    ['籍贯', txt(o.nativePlace), txt(form.nativePlace)],
+    ['学历', txt(o.education), txt(form.education)],
+    ['毕业学校', txt(o.graduateSchool), txt(form.graduateSchool)],
+    ['入学日期', txt(o.enrollDate), txt(form.enrollDate)],
+    ['宿舍号', txt(o.dormNo), txt(form.dormNo)],
+    ['床位号', txt(o.bedNo), txt(form.bedNo)],
+    ['家庭住址', txt(o.homeAddress), txt(form.homeAddress)],
+    ['备注', txt(o.remark), txt(form.remark)],
+  ];
+  return pairs
+    .filter(([, a, b]) => a !== b)
+    .map(([label, from, to]) => ({ label, from, to }));
+}
+
+/** 弹「确认修改内容」：返回 true 才继续保存 */
+async function confirmStudentDiff(diffs: DiffRow[]): Promise<boolean> {
+  const rows = diffs
+    .map(
+      (d) =>
+        `<div style="line-height:2;font-size:13px">` +
+        `<span style="color:#606266">${escHtml(d.label)}：</span>` +
+        `<span style="color:#909399;text-decoration:line-through">${escHtml(d.from) || '（空）'}</span>` +
+        `<span style="color:#909399"> → </span>` +
+        `<b style="color:#d93026">${escHtml(d.to) || '（空）'}</b>` +
+        `</div>`,
+    )
+    .join('');
+  const html =
+    `<div style="max-height:46vh;overflow:auto">${rows}</div>` +
+    `<div style="margin-top:8px;font-size:12px;color:#909399">共 ${diffs.length} 项修改，确认后才会保存。</div>`;
+  try {
+    await ElMessageBox.confirm(html, '确认修改内容', {
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: '确定保存',
+      cancelButtonText: '返回修改',
+      type: 'warning',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function doSave() {
   if (!formRef.value) return;
   const ok = await formRef.value.validate().catch(() => false);
@@ -1275,6 +1380,16 @@ async function doSave() {
   if (form.stage !== 'jh' && !form.deptCode) {
     ElMessage.warning('「部门」必填');
     return;
+  }
+  // ★ 2026-10-20 批注：编辑时先亮出「改了哪些内容」，用户确认后才提交
+  if (form.id) {
+    const diffs = buildStudentDiff();
+    if (!diffs.length) {
+      ElMessage.info('未检测到修改内容');
+      editVisible.value = false;
+      return;
+    }
+    if (!(await confirmStudentDiff(diffs))) return;
   }
   saving.value = true;
   try {
