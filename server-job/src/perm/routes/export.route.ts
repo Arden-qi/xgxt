@@ -54,7 +54,7 @@ interface Sheet {
  * ============================================================ */
 
 async function fetchDept(page?: number, size?: number, all = false): Promise<Sheet> {
-  const columns = ['部门名称', '简称', '上级部门', '层级', '归属角色数', '归属账号数', '描述', '创建时间'];
+  const columns = ['部门名称', '简称', '上级部门', '层级', '归属职位数', '归属账号数', '描述', '创建时间'];
   const query = db('t_perm_dept').where('is_deleted', false);
   if (!all && page && size) query.limit(size).offset((page - 1) * size);
 
@@ -78,7 +78,7 @@ async function fetchDept(page?: number, size?: number, all = false): Promise<She
         简称: r.dept_short || '',
         上级部门: r.parent_id ? nameById.get(r.parent_id) || '—' : '—',
         层级: deptLevelName[r.dept_level] || '',
-        归属角色数: roleRows.filter((x: any) => ids.includes(x.dept_id)).length,
+        归属职位数: roleRows.filter((x: any) => ids.includes(x.dept_id)).length,
         归属账号数: userRows.filter((x: any) => ids.includes(x.dept_id)).length,
         描述: r.remark || '',
         创建时间: fmt(r.create_time),
@@ -89,7 +89,7 @@ async function fetchDept(page?: number, size?: number, all = false): Promise<She
 
 async function fetchRole(page?: number, size?: number, all = false): Promise<Sheet> {
   const columns = [
-    '角色名称', '角色编码', '所属部门', '角色类型', '状态', '权限点数', '关联账号数', '是否预置', '描述',
+    '职位名称', '职位编码', '所属部门', '职位类型', '状态', '权限点数', '关联账号数', '是否预置', '描述',
   ];
   const query = db('t_perm_role').where('is_deleted', false);
   if (!all && page && size) query.limit(size).offset((page - 1) * size);
@@ -104,13 +104,13 @@ async function fetchRole(page?: number, size?: number, all = false): Promise<She
   const userMap = new Map(userCounts.map((u: any) => [u.role_id, Number(u.n)]));
 
   return {
-    title: '角色清单',
+    title: '职位清单',
     columns,
     rows: rows.map((r: any) => ({
-      角色名称: r.role_name,
-      角色编码: r.role_code,
+      职位名称: r.role_name,
+      职位编码: r.role_code,
       所属部门: deptMap.get(r.dept_id) || '—',
-      角色类型: r.role_type,
+      职位类型: r.role_type,
       状态: r.role_status,
       权限点数: Number(r.perm_count || 0),
       关联账号数: userMap.get(r.id) || 0,
@@ -122,7 +122,7 @@ async function fetchRole(page?: number, size?: number, all = false): Promise<She
 
 async function fetchUser(page?: number, size?: number, all = false): Promise<Sheet> {
   const columns = [
-    '姓名', '工号', '登录账号', '手机号', '性别', '年龄', '所属部门', '角色', '账号状态', '待改密码', '最近登录',
+    '姓名', '登录账号', '手机号', '性别', '年龄', '所属部门', '职位', '账号状态', '待改密码', '最近登录',
   ];
   const query = db('t_perm_user').where('is_deleted', false);
   if (!all && page && size) query.limit(size).offset((page - 1) * size);
@@ -152,13 +152,12 @@ async function fetchUser(page?: number, size?: number, all = false): Promise<She
     columns,
     rows: rows.map((r: any) => ({
       姓名: r.user_name,
-      工号: r.gw_no,
       登录账号: r.account,
       手机号: maskPhone(r.phone),
       性别: GENDER_NAME[r.gender] || '',
       年龄: r.age ?? '',
       所属部门: deptMap.get(r.dept_id) || '—',
-      角色: joinRoleNames(roleMap.get(r.id) || []),
+      职位: joinRoleNames(roleMap.get(r.id) || []),
       账号状态: r.user_status,
       待改密码: r.need_change_pwd ? '是' : '否',
       最近登录: fmt(r.last_login_time),
@@ -173,7 +172,7 @@ async function fetchLog(
   filters: Record<string, any> = {},
 ): Promise<Sheet> {
   const columns = [
-    '操作时间', '操作人', '角色', '所属模块', '操作类型', '操作对象', '操作前', '操作后', 'IP', '结果',
+    '操作时间', '操作人', '职位', '所属模块', '操作类型', '操作对象', '操作前', '操作后', 'IP', '结果',
   ];
   const query = db('t_perm_log').where('is_deleted', false);
 
@@ -200,7 +199,7 @@ async function fetchLog(
     rows: rows.map((r: any) => ({
       操作时间: fmt(r.log_time),
       操作人: r.operator_name,
-      角色: r.operator_role || '',
+      职位: r.operator_role || '',
       所属模块: r.module_name,
       操作类型: r.action_type,
       操作对象: r.target_obj || '',

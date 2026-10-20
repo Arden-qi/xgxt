@@ -5,7 +5,7 @@
  * 前缀：  /api/perm/user
  *
  *  GET    /list                  账号列表（分页）
- *  GET    /detail?id=xxx         账号详情（含角色）
+ *  GET    /detail?id=xxx         账号详情（含职位）
  *  POST   /add                   新建账号
  *  PUT    /update                编辑账号
  *  DELETE /delete/:id            删除账号（逻辑删除）
@@ -15,9 +15,9 @@
  *  GET    /overview              账号 KPI（5 个，均可点击筛选）
  *  GET    /auth-profile?account= 账号鉴权档案（跨模块：登录模块调用）
  *
- * ⚠️ 归属决策：账号数据归【权限管理模块】所有（用户管理是权限管理的第 3 个功能页）。
- *    登录模块不建表，通过 /auth-profile 按账号取「账号 + 角色 + 权限并集 + 数据范围」。
- * ⚠️ 多角色：一个账号可挂多个角色，权限取【并集去重】，数据范围取【最宽的一档】。
+ * ⚠️ 归属决策：账号数据归【权限管理模块】所有（账号管理是权限管理的第 3 个功能页）。
+ *    登录模块不建表，通过 /auth-profile 按账号取「账号 + 职位 + 权限并集 + 数据范围」。
+ * ⚠️ 多职位：一个账号可挂多个职位，权限取【并集去重】，数据范围取【最宽的一档】。
  * ⚠️ 密码策略由规则配置（t_perm_rule / pwd 组）驱动，不写死。
  */
 
@@ -48,6 +48,12 @@ import {
   joinRoleNames,
   maskPhone,
   SCOPE_ACTION_TO_VALUE,
+  getPortalAccounts,
+  syncPortalPassword,
+  accountBusinessRefs,
+  retirePortalAccount,
+  setPortalAccountActive,
+  upsertPortalAccount,
 } from '../services/perm.service';
 
 export const userRouter = Router();
@@ -114,7 +120,7 @@ async function generatePassword(): Promise<string> {
 }
 
 /* ============================================================
- * 工具：账号 → 角色 / 权限并集 批量组装
+ * 工具：账号 → 职位 / 权限并集 批量组装
  * ============================================================ */
 
 interface UserRoleBundle {
@@ -177,6 +183,9 @@ async function buildUserListItems(rows: any[]) {
   const depts = await db('t_perm_dept').where('is_deleted', false).select('id', 'dept_name');
   const deptMap = new Map(depts.map((d: any) => [d.id, d.dept_name]));
 
+  // ★ 2026-10-16：批量带出门户账号的可访问模块（列表 / 编辑表单回显用）
+  const portalMap = await getPortalAccounts(rows.map((r: any) => r.account));
+
   const bundle = await loadUserRoleBundle(rows.map((r: any) => r.id));
 
   return rows.map((r: any) => {
@@ -211,6 +220,10 @@ async function buildUserListItems(rows: any[]) {
       createTime: r.create_time,
       createBy: r.create_by,
       remark: r.remark,
+      /** ★ 门户账号的可访问模块（没有门户账号时是空数组） */
+      portalModules: portalMap.get(String(r.account))?.modules || [],
+      /** ★ 该登录名在门户有没有账号 */
+      hasPortalAccount: portalMap.has(String(r.account)),
     };
   });
 }
@@ -265,7 +278,7 @@ userRouter.get(
     }
 
     if (q.roleId) {
-      // 按角色筛选：先取该角色下的账号 id，再作为主查询条件
+      // 按职位筛选：先取该职位下的账号 id，再作为主查询条件
       const links = await db('t_perm_user_role')
         .where({ role_id: q.roleId, is_deleted: false })
         .select('user_id');
@@ -308,6 +321,23 @@ userRouter.get(
   }),
 );
 
+/**
+ * 生成一个可用的工号（GW + 4 位数字）
+ *
+ * ⚠️ 2026-10-16：界面不再维护「工号」（所有职位统一去掉），
+ *    但 t_perm_user.gw_no 是 NOT NULL + 唯一索引（组织架构等页面仍在读它），
+ *    所以新建账号时由后端自动补号，列约束与历史数据口径都不破。
+ */
+async function nextGwNo(): Promise<string> {
+  const rows: any[] = await db(TABLE).where('gw_no', 'like', 'GW%').select('gw_no');
+  let max = 1000;
+  for (const r of rows) {
+    const m = /^GW(\d{4})$/.exec(String(r.gw_no || ''));
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return 'GW' + String(max + 1).padStart(4, '0');
+}
+
 /* ============================================================
  * 3. 新建账号
  *    POST /api/perm/user/add
@@ -317,21 +347,29 @@ userRouter.get(
 
 const addSchema = z.object({
   userName: z.string().min(1, '姓名必填').regex(NAME_RE, '姓名只能是汉字，且不少于 2 个字'),
-  gwNo: z.string().min(1, '工号必填').regex(GW_RE, '工号格式为 GW + 4 位数字，如 GW1016'),
+  // ★ 2026-10-16：界面已去掉「工号」字段（所有职位统一），这里改为可选 ——
+  //   不传就由后端自动补一个（见 nextGwNo），NOT NULL + 唯一索引都不破。
+  gwNo: z.string().regex(GW_RE, '工号格式为 GW + 4 位数字，如 GW1016').optional(),
   account: z.string().min(1, '登录账号必填').regex(ACCT_RE, '登录账号为字母/数字，4-20 位'),
   phone: z.string().min(1, '手机号必填').regex(PHONE_RE, '手机号格式不正确'),
   gender: z.coerce.number().int().refine((v) => v === 1 || v === 2, '性别只能是 1(男) 或 2(女)'),
   age: z.coerce.number().int().min(16, '年龄不得小于 16').max(70, '年龄不得大于 70'),
   deptId: z.string().min(1, '必须选择所属部门'),
   userStatus: z.string().optional(),
-  roleIds: z.array(z.string()).min(1, '至少需要分配一个角色'),
+  roleIds: z.array(z.string()).min(1, '至少需要分配一个职位'),
+  /**
+   * ★ 2026-10-16：可访问模块（门户登录后能进哪几个模块）
+   *   新增时必填 ≥1 —— 门户登录明确要求「至少有一个可见模块」，
+   *   一个都不给 = 建出来的人登不进系统。
+   */
+  modules: z.array(z.string()).min(1, '请至少勾选一个可访问模块（否则该账号无法登录）'),
   password: z.string().optional(),
   needChangePwd: z.union([z.string(), z.boolean()]).optional(),
 });
 
 userRouter.post(
   '/add',
-  checkPermission('perm:用户管理:add'),
+  checkPermission('perm:账号管理:add'),
   validate(addSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
@@ -339,8 +377,12 @@ userRouter.post(
     const dupAcct = await db(TABLE).where({ account: body.account, is_deleted: false }).first();
     if (dupAcct) throw new BizError(BizCode.USER_ACCOUNT_EXISTS, `登录账号「${body.account}」已存在`);
 
-    const dupGw = await db(TABLE).where({ gw_no: body.gwNo, is_deleted: false }).first();
-    if (dupGw) throw new BizError(BizCode.USER_GW_EXISTS, `工号「${body.gwNo}」已存在`);
+    // ⚠️ 界面不传工号 → 后端自动生成一个可用号
+    const gwNo = body.gwNo || (await nextGwNo());
+    if (body.gwNo) {
+      const dupGw = await db(TABLE).where({ gw_no: body.gwNo, is_deleted: false }).first();
+      if (dupGw) throw new BizError(BizCode.USER_GW_EXISTS, `工号「${body.gwNo}」已存在`);
+    }
 
     const dupPhone = await db(TABLE).where({ phone: body.phone, is_deleted: false }).first();
     if (dupPhone) throw new BizError(BizCode.USER_PHONE_EXISTS, `手机号 ${maskPhone(body.phone)} 已存在`);
@@ -350,13 +392,13 @@ userRouter.post(
 
     const roles = await db('t_perm_role').whereIn('id', body.roleIds).andWhere('is_deleted', false);
     if (roles.length !== body.roleIds.length) {
-      throw new BizError(BizCode.ROLE_NOT_FOUND, '存在无效的角色，请重新选择');
+      throw new BizError(BizCode.ROLE_NOT_FOUND, '存在无效的职位，请重新选择');
     }
     const disabled = roles.filter((r: any) => r.role_status === RoleStatus.DISABLED);
     if (disabled.length) {
       throw new BizError(
         BizCode.ROLE_DISABLED,
-        `角色「${disabled.map((r: any) => r.role_name).join('、')}」已停用，不可分配给账号`,
+        `职位「${disabled.map((r: any) => r.role_name).join('、')}」已停用，不可分配给账号`,
       );
     }
 
@@ -372,7 +414,7 @@ userRouter.post(
       await trx(TABLE).insert({
         id,
         user_name: body.userName,
-        gw_no: body.gwNo,
+        gw_no: gwNo,
         account: body.account,
         phone: body.phone,
         gender: body.gender,
@@ -409,11 +451,29 @@ userRouter.post(
       actionType: '新增',
       targetObj: `用户 ${body.userName}(${body.account})`,
       beforeValue: '—',
-      afterValue: `角色 ${roles.map((r: any) => r.role_name).join('、')}`,
+      afterValue: `职位 ${roles.map((r: any) => r.role_name).join('、')}`,
       ip: clientIp(req),
     });
 
-    res.json(ok({ id, password: pwd }, '已创建账号'));
+    // ★ 2026-10-16：开通/同步【门户登录账号】——
+    //   登录校验只读 sms_portal.t_sys_account；那边没有账号（或没有模块）就等于
+    //   「建了个登不进去的人」。这里用同一个初始密码 + 勾选的模块一起开好。
+    const portal = await upsertPortalAccount({
+      account: body.account,
+      userName: body.userName,
+      password: pwd,
+      phone: body.phone,
+      dept: (dept as any)?.dept_name || undefined,
+      modules: body.modules,
+    });
+
+    const portalMsg = portal.created
+      ? '（已开通门户登录）'
+      : portal.existed
+        ? '（门户登录账号已同步）'
+        : '（⚠️ 门户登录未开通，该账号暂时登不进系统）';
+
+    res.json(ok({ id, password: pwd, portal }, `已创建账号${portalMsg}`));
   }),
 );
 
@@ -426,11 +486,13 @@ const updateSchema = addSchema
   .extend({
     id: z.string().min(1, '必须传 id'),
     password: z.string().optional(),
+    /** ★ 2026-10-16：编辑时模块可选 —— 不传 = 不动门户那边的模块 */
+    modules: z.array(z.string()).optional(),
   });
 
 userRouter.put(
   '/update',
-  checkPermission('perm:用户管理:edit'),
+  checkPermission('perm:账号管理:edit'),
   validate(updateSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
@@ -444,11 +506,13 @@ userRouter.put(
       .first();
     if (dupAcct) throw new BizError(BizCode.USER_ACCOUNT_EXISTS, `登录账号「${body.account}」已存在`);
 
-    const dupGw = await db(TABLE)
-      .where({ gw_no: body.gwNo, is_deleted: false })
-      .whereNot('id', body.id)
-      .first();
-    if (dupGw) throw new BizError(BizCode.USER_GW_EXISTS, `工号「${body.gwNo}」已存在`);
+    if (body.gwNo) {
+      const dupGw = await db(TABLE)
+        .where({ gw_no: body.gwNo, is_deleted: false })
+        .whereNot('id', body.id)
+        .first();
+      if (dupGw) throw new BizError(BizCode.USER_GW_EXISTS, `工号「${body.gwNo}」已存在`);
+    }
 
     const dupPhone = await db(TABLE)
       .where({ phone: body.phone, is_deleted: false })
@@ -456,11 +520,11 @@ userRouter.put(
       .first();
     if (dupPhone) throw new BizError(BizCode.USER_PHONE_EXISTS, `手机号 ${maskPhone(body.phone)} 已存在`);
 
-    if (!body.roleIds.length) throw new BizError(BizCode.USER_NO_ROLE, '账号至少需要保留一个角色');
+    if (!body.roleIds.length) throw new BizError(BizCode.USER_NO_ROLE, '账号至少需要保留一个职位');
 
     const roles = await db('t_perm_role').whereIn('id', body.roleIds).andWhere('is_deleted', false);
     if (roles.length !== body.roleIds.length) {
-      throw new BizError(BizCode.ROLE_NOT_FOUND, '存在无效的角色，请重新选择');
+      throw new BizError(BizCode.ROLE_NOT_FOUND, '存在无效的职位，请重新选择');
     }
 
     const beforeRoleNames = await db('t_perm_user_role')
@@ -473,10 +537,11 @@ userRouter.put(
       ? !!exists.need_change_pwd
       : body.needChangePwd === true || body.needChangePwd === 'true' || body.needChangePwd === '1';
 
+    // ★ 2026-10-16：编辑里填了新密码 → 事务提交后同步到门户登录表
+    let pwdToSync = '';
     await db.transaction(async (trx) => {
       const patch: Record<string, unknown> = {
         user_name: body.userName,
-        gw_no: body.gwNo,
         account: body.account,
         phone: body.phone,
         gender: body.gender,
@@ -487,14 +552,17 @@ userRouter.put(
         update_time: new Date(),
         update_by: req.user?.userId || 'system',
       };
+      // 工号：界面已不再维护（所有职位统一去掉）—— 不传就保持库里原值不动
+      if (body.gwNo) patch.gw_no = body.gwNo;
       // 编辑时留空密码 = 不修改
       if (body.password) {
         await assertPwdStrength(body.password);
         patch.password = body.password;
+        pwdToSync = body.password; // ★ 待同步到门户登录表
       }
       await trx(TABLE).where({ id: body.id }).update(patch);
 
-      // 角色：全量覆盖（先删后插）
+      // 职位：全量覆盖（先删后插）
       await trx('t_perm_user_role').where({ user_id: body.id }).del();
       await trx('t_perm_user_role').insert(
         body.roleIds.map((rid) => ({
@@ -508,6 +576,21 @@ userRouter.put(
       );
     });
 
+    // ★ 2026-10-16：密码 / 可访问模块 / 姓名手机号 一起同步到门户登录账号。
+    //   · 改了密码 → 同步（这是用户报障的那条链路）
+    //   · 只是勾了模块 → 同步模块；门户里没有这个登录名时顺手开通
+    //   · 密码没改 → 绝不拿 passwordIfCreating 去覆盖已有账号的密码
+    if (pwdToSync || body.modules?.length) {
+      await upsertPortalAccount({
+        account: body.account,
+        userName: body.userName,
+        phone: body.phone,
+        password: pwdToSync || undefined,
+        passwordIfCreating: String(exists.password || ''),
+        modules: body.modules?.length ? body.modules : undefined,
+      });
+    }
+
     await addLog({
       operatorId: req.user?.userId,
       operatorName: req.user?.userName,
@@ -515,8 +598,8 @@ userRouter.put(
       moduleName: '权限管理',
       actionType: '修改',
       targetObj: `用户 ${exists.user_name}(${exists.account})`,
-      beforeValue: `角色 ${beforeRolesStr || '—'}`,
-      afterValue: `角色 ${roles.map((r: any) => r.role_name).join('、')}`,
+      beforeValue: `职位 ${beforeRolesStr || '—'}`,
+      afterValue: `职位 ${roles.map((r: any) => r.role_name).join('、')}`,
       ip: clientIp(req),
     });
 
@@ -531,7 +614,7 @@ userRouter.put(
 
 userRouter.put(
   '/status',
-  checkPermission('perm:用户管理:edit'),
+  checkPermission('perm:账号管理:edit'),
   validate(
     z.object({
       id: z.string().min(1, '必须传 id'),
@@ -554,6 +637,17 @@ userRouter.put(
       throw new BizError(BizCode.PRESET_ROLE_PROTECTED, '系统管理员账号不可停用或锁定');
     }
 
+    // ★ 2026-10-16 用户定的删除规则：账号有业务数据关联时【不可停用】
+    if (body.userStatus === UserStatus.DISABLED) {
+      const refs = await accountBusinessRefs(exists.account);
+      if (refs.length) {
+        throw new BizError(
+          BizCode.USER_HAS_BUSINESS_DATA,
+          `该账号存在业务数据关联（${refs.join('、')}），不可停用`,
+        );
+      }
+    }
+
     await db(TABLE).where({ id: body.id }).update({
       user_status: body.userStatus,
       // 启用时顺手解锁：错误次数归零
@@ -561,6 +655,10 @@ userRouter.put(
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
     });
+
+    // ★ 2026-10-16：同步到门户登录账号 ——
+    //   不然后台把人「停用」了，他照样能登进系统（门户那边只看 active）
+    await setPortalAccountActive(exists.account, body.userStatus === UserStatus.NORMAL);
 
     await addLog({
       operatorId: req.user?.userId,
@@ -585,7 +683,7 @@ userRouter.put(
 
 userRouter.put(
   '/reset-pwd',
-  checkPermission('perm:用户管理:resetPwd'),
+  checkPermission('perm:账号管理:resetPwd'),
   validate(
     z.object({
       userId: z.string().min(1, '必须传 userId'),
@@ -632,7 +730,15 @@ userRouter.put(
       ip: clientIp(req),
     });
 
-    res.json(ok({ newPassword }, '密码已重置'));
+    // ★ 2026-10-16：同步到门户登录表 —— 不然后台重置完密码，本人还是登不进系统
+    const portalSynced = await syncPortalPassword(exists.account, newPassword);
+
+    res.json(
+      ok(
+        { newPassword, portalSynced },
+        portalSynced ? '密码已重置' : '密码已重置（该登录名在门户无账号，暂时无法登录系统）',
+      ),
+    );
   }),
 );
 
@@ -643,7 +749,7 @@ userRouter.put(
 
 userRouter.put(
   '/unlock',
-  checkPermission('perm:用户管理:edit'),
+  checkPermission('perm:账号管理:edit'),
   validate(z.object({ id: z.string().min(1, '必须传 id') })),
   wrap(async (req, res) => {
     const { id } = (req as any).validated as { id: string };
@@ -656,6 +762,9 @@ userRouter.put(
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
     });
+
+    // ★ 2026-10-16：解锁 = 状态回到「正常」→ 门户登录账号也要跟着启用
+    await setPortalAccountActive(exists.account, true);
 
     await addLog({
       operatorId: req.user?.userId,
@@ -679,7 +788,7 @@ userRouter.put(
 
 userRouter.delete(
   '/delete/:id',
-  checkPermission('perm:用户管理:edit'),
+  checkPermission('perm:账号管理:edit'),
   wrap(async (req, res) => {
     const { id } = req.params;
     const exists = await db(TABLE).where({ id, is_deleted: false }).first();
@@ -691,9 +800,21 @@ userRouter.delete(
       .first();
     if (isAdmin) throw new BizError(BizCode.PRESET_ROLE_PROTECTED, '系统管理员账号不可删除');
 
+    // ★ 2026-10-16 用户定的删除规则：账号有业务数据关联时【不可删除】
+    const bizRefs = await accountBusinessRefs(exists.account);
+    if (bizRefs.length) {
+      throw new BizError(
+        BizCode.USER_HAS_BUSINESS_DATA,
+        `该账号存在业务数据关联（${bizRefs.join('、')}），不可删除`,
+      );
+    }
+
+    // ★ 2026-10-16：后缀两处共用（权限库 + 门户库），
+    //   两边同步改名，唯一键都腾出来给以后复用
+    const suffix = `#DEL#${Date.now()}`;
+
     await db.transaction(async (trx) => {
       // 释放唯一键：账号/工号/手机号加了唯一索引，不改则无法复用
-      const suffix = `#DEL#${Date.now()}`;
       await trx(TABLE).where({ id }).update({
         account: `${exists.account}${suffix}`.slice(0, 50),
         gw_no: `${exists.gw_no}${suffix}`.slice(0, 20),
@@ -721,7 +842,11 @@ userRouter.delete(
       ip: clientIp(req),
     });
 
-    res.json(ok(null, '删除成功'));
+    // ★ 2026-10-16：门户登录账号一并作废（改名 + 逻辑删除 + 停用）——
+    //   不然后台把人删了，他还能登录门户（只是进去什么都看不到）
+    await retirePortalAccount(exists.account, `${exists.account}${suffix}`.slice(0, 50));
+
+    res.json(ok(null, '删除成功（门户登录账号已作废）'));
   }),
 );
 

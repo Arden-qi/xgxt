@@ -791,10 +791,10 @@ function seedConsult(conn) {
       await insertMany(conn, `${DB.consult}.t_consult_student`, students);
       await insertMany(conn, `${DB.consult}.t_consult_fee_order`, orders);
       await insertMany(conn, `${DB.consult}.t_consult_history`, hist);
-      // 消费项字典 + 配置
+      // 消费项字典 + 配置（★ 2026-10-16 用户指令：取消「工具包」「宿舍门禁卡」）
       await insertMany(conn, `${DB.consult}.t_consult_consume_item`, [
-        ['校服', 12000, 1], ['被褥三件套', 15000, 2], ['工具包', 8000, 3],
-        ['教材资料', 6000, 4], ['军训服', 9000, 5], ['宿舍门禁卡', 2000, 6],
+        ['校服', 12000, 1], ['被褥三件套', 15000, 2],
+        ['教材资料', 6000, 4], ['军训服', 9000, 5],
       ].map(([name, price, sort], i) => base(`CIT-${i + 1}`, { item_name: name, price, sort_no: sort, is_enabled: 1 })));
       await insertMany(conn, `${DB.consult}.t_consult_config`, [
         base('CCFG-1', { config_key: 'trialDays', config_value: '7', remark: '试学默认天数' }),

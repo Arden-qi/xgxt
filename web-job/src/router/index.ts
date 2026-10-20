@@ -166,19 +166,19 @@ const routes: RouteRecordRaw[] = [
     path: '/perm/role',
     name: 'PermRole',
     component: () => import('@/perm/views/RoleManage.vue'),
-    meta: { title: '角色管理', module: 'perm', menuKey: 'role' },
+    meta: { title: '职位管理', module: 'perm', menuKey: 'role' },
   },
   {
     path: '/perm/user',
     name: 'PermUser',
     component: () => import('@/perm/views/UserManage.vue'),
-    meta: { title: '用户管理', module: 'perm', menuKey: 'user' },
+    meta: { title: '账号管理', module: 'perm', menuKey: 'user' },
   },
   {
     path: '/perm/assign',
     name: 'PermAssign',
     component: () => import('@/perm/views/PermAssign.vue'),
-    meta: { title: '角色-权限分配', module: 'perm', menuKey: 'assign' },
+    meta: { title: '职位权限分配', module: 'perm', menuKey: 'assign' },
   },
   /* ⚠️ 2026-10-06 用户指令：「权限管理板块里面删除规则配置页面」
    *    → 原 /perm/rule（规则配置，views/RuleConfig.vue）路由已删除。

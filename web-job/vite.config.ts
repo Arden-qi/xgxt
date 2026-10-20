@@ -70,6 +70,12 @@ export default defineConfig({
       //       现象是"接口没报错但数据全是空的"，极难排查。
       //       （这正是本期端到端自检脚本抓出来的第一个真 bug。）
       '/api/teaching': { target: 'http://localhost:8004', changeOrigin: true }, // 统一教学接口（出勤等）
+
+      // ---- ★ 2026-10-15 缴费凭证图片 ----
+      //    后端存的是相对路径 /uploads/voucher/xxx.png，由 8004 的 express.static 提供。
+      //    ⚠️ 漏了这条，浏览器会向 Vite(5173) 要图，Vite 按 SPA 兜底返回 index.html
+      //       （HTTP 200 + text/html），<img> 解码失败 → 现象就是「凭证看不到」。
+      '/uploads': { target: 'http://localhost:8004', changeOrigin: true },
     },
   },
 });

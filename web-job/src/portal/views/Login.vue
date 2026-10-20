@@ -53,7 +53,7 @@ const demoAccounts = [
    *   （admin 是「只读管理员」，按设计不能写，见 app.ts 全局只读闸）
    *
    * 【怎么来的】见 数据库导出/sms_portal.sql 的「业务角色门户账号」段，
-   *   与「权限管理 → 用户管理」里的 t_perm_user 按【登录名】一一对应，
+   *   与「权限管理 → 账号管理」里的 t_perm_user 按【登录名】一一对应，
    *   角色由权限模块解析（middleware/auth.ts 的 resolveBusinessRoles）。
    * ============================================================ */
   { account: 'qiansy', name: '钱守义', scope: '校长（全模块）', tag: 'job' },
