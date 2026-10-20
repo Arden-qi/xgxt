@@ -163,7 +163,15 @@ const listSchema = z.object({
   keyword: z.string().optional(),
   feeType: z.coerce.number().int().optional(),
   classId: z.string().optional(),
-  callStatus: z.coerce.number().int().optional(),
+  /**
+   * 催费单状态：1 待催缴 / 2 催缴中 / 3 已缴清
+   *
+   * ★ 2026-10-20：支持多值（逗号分隔，如 `1,2`）。
+   *   催费页的「缴费状态」已统一成初高/大学那套（待缴/已缴/已核对/逾期/冻结），
+   *   其中「待缴」= 待催缴 + 催缴中 两种催费单状态，单选传不进来。
+   *   单值仍然照旧可用（`3` 就是只看已缴清），不影响就业模块自己的调用。
+   */
+  callStatus: z.union([z.coerce.number().int(), z.string()]).optional(),
   onlyMine: z.coerce.boolean().optional(),
   // ★ 2026-10-20：「仅看紧急」对就业也要生效 ——
   //   就业行的 isUrgent 就是 overdue（逾期未缴清），这里按同一口径过滤。
@@ -190,7 +198,15 @@ feeCallRouter.get(
     }
     if (q.feeType !== undefined) base.andWhere('fee_type', q.feeType);
     if (q.classId) base.andWhere('class_id', q.classId);
-    if (q.callStatus !== undefined) base.andWhere('call_status', q.callStatus);
+    // 催费单状态：单值 / 逗号多值都支持（`1,2` = 待催缴 + 催缴中）
+    if (q.callStatus !== undefined && q.callStatus !== '') {
+      const arr = String(q.callStatus)
+        .split(',')
+        .map((s: string) => Number(s.trim()))
+        .filter((n: number) => Number.isInteger(n) && n > 0);
+      if (arr.length === 1) base.andWhere('call_status', arr[0]);
+      else if (arr.length > 1) base.whereIn('call_status', arr);
+    }
     if (q.startDate) base.andWhere('due_date', '>=', q.startDate);
     if (q.endDate) base.andWhere('due_date', '<=', q.endDate);
     // 仅看逾期（= 仅看紧急）：已缴清的不算逾期，与 decorate 的 overdue 同口径

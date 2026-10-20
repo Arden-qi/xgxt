@@ -57,7 +57,14 @@ export interface FeeCallQuery {
   keyword?: string;
   feeType?: number;
   classId?: string;
-  callStatus?: number;
+  /**
+   * 催费单状态：1 待催缴 / 2 催缴中 / 3 已缴清
+   *
+   * ★ 2026-10-20：支持多值（逗号分隔，如 `'1,2'`）——
+   *   催费页的「缴费状态」统一成 待缴/已缴/已核对/逾期/冻结 后，
+   *   「待缴」对应待催缴 + 催缴中两种状态。单值传法仍然有效。
+   */
+  callStatus?: number | string;
   /** 只看我的（班主任：只看自己班） */
   onlyMine?: boolean;
   /** 仅看逾期未缴清（催费页「仅看紧急」在就业部门的口径） */

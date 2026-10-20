@@ -80,14 +80,19 @@ async function upsertRows(knexInst, table, rows) {
       formSection.includes(':disabled') ? '仍有禁用：' + formSection.slice(formSection.indexOf(':disabled') - 60, formSection.indexOf(':disabled') + 60) : 'ok',
     );
 
-    /* ---- A2. 缴费状态下拉随部门切换选项集 ---- */
+    /* ---- A2. 缴费状态下拉：三部门统一一套（2026-10-20 用户要求「就业采用初高中大学的」） ---- */
     check(
-      '★ 缴费状态下拉改用 payStatusOptions（按部门切换：就业=催费单状态，其它=缴费状态）',
+      '★ 缴费状态下拉改用 payStatusOptions（不再直接遍历 PAY_STATUS_NAME）',
       formSection.includes('payStatusOptions') && !formSection.includes('v-for="(name, value) in PAY_STATUS_NAME"'),
     );
     check(
-      '★ 就业部门用 FEE_CALL_STATUS_NAME（1 待催缴 / 2 催缴中 / 3 已缴清）',
-      /const dict = query\.dept === 'employ' \? FEE_CALL_STATUS_NAME : PAY_STATUS_NAME/.test(feeList),
+      '★ 三个部门共用一套缴费状态（不再按部门切到 FEE_CALL_STATUS_NAME）',
+      !/FEE_CALL_STATUS_NAME/.test(feeList) &&
+        /Object\.entries\(PAY_STATUS_NAME\)\.map/.test(feeList),
+    );
+    check(
+      '★ 就业催费单状态折算成缴费状态（已缴清→已缴，待催缴/催缴中→待缴）',
+      /function callStatusToPayStatus[\s\S]{0,200}?PayStatus\.PAID[\s\S]{0,120}?PayStatus\.UNPAID/.test(feeList),
     );
 
     /* ---- A3. 三源都把三个参数传下去（去 disabled 不传参 = 点了没反应） ---- */
@@ -110,7 +115,7 @@ async function upsertRows(knexInst, table, rows) {
     );
     check(
       '★ 选「已核对 / 冻结」时就业无对应状态 → 该源不出数据（不静默忽略筛选）',
-      /callStatus === null[\s\S]{0,120}Promise\.resolve/.test(feeList),
+      /callQ === null[\s\S]{0,120}Promise\.resolve/.test(feeList),
     );
     check(
       '★ 页面提示文案同步（三个筛选对全部部门生效）',
@@ -173,9 +178,12 @@ async function upsertRows(knexInst, table, rows) {
       `rows=${jhUrgent.list.length}`,
     );
     check(
-      '★ 初高 isUrgent=false 返回的行确实全为非紧急（"false" 没被当成 true）',
-      jhNot.list.length > 0 && jhNot.list.every((x) => x.isUrgent === false),
-      `rows=${jhNot.list.length}`,
+      // ⚠️ 2026-10-20：逾期(4) 已算未结清后，初高这 18 行可能**全部**紧急，
+      //   所以「关掉开关」得到 0 行是正确结果 —— 断言只要「没有一行是紧急的」，
+      //   不能要求非空（否则数据一变化就误报）。
+      '★ 初高 isUrgent=false 返回的行没有一行是紧急（"false" 没被当成 true）',
+      jhNot.list.every((x) => x.isUrgent === false),
+      `rows=${jhNot.list.length}（0 行也算正常：当前数据可能全部紧急）`,
     );
     check(
       '★ 初高 开+关 = 全量（两个口径互斥且完整）',

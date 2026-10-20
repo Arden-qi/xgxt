@@ -55,6 +55,16 @@ export enum PayStatus {
   UNPAID = 1,    // 待缴
   PAID = 2,      // 已缴
   VERIFIED = 3,  // 已核对
+  /**
+   * 逾期（到期日已过、钱还没交）
+   *
+   * ★ 2026-10-20 补：库里的 `t_class_fee.pay_status` 列注释一直是
+   *   「1待缴2已缴3已核对4逾期5冻结」，演示数据里也确实写着 4，
+   *   但枚举里漏了 4 →
+   *     ① nameOf 取不到名字，缴费状态列直接空白（用户反馈「有些人没有缴费状态」）；
+   *     ② 「未结清」判断 UNPAID_STATUSES 也没算 4，逾期行不标「紧急」。
+   */
+  OVERDUE = 4,   // 逾期
   FROZEN = 5,    // 冻结
 }
 
@@ -314,6 +324,7 @@ export const PAY_STATUS_NAME: Record<number, string> = {
   [PayStatus.UNPAID]: '待缴',
   [PayStatus.PAID]: '已缴',
   [PayStatus.VERIFIED]: '已核对',
+  [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
 };
 

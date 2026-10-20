@@ -44,8 +44,15 @@ function calcRemainDays(expireDate: any): number | null {
   return Math.round((d.getTime() - today.getTime()) / (24 * 3600 * 1000));
 }
 
-/** 未结清状态 */
-const UNPAID_STATUSES = [PayStatus.UNPAID, PayStatus.FROZEN];
+/**
+ * 未结清状态（待缴 / 逾期 / 冻结）
+ *
+ * ★ 2026-10-20 补 OVERDUE：原来只算「待缴 + 冻结」，
+ *   而演示库里的逾期行 pay_status 写的是 4（逾期）→ 这类行既没状态名、也没「紧急」标记，
+ *   用户看到的正是「有些人没有缴费状态」+「逾期的不是紧急」。逾期当然是没交钱，
+ *   必须算未结清，才会在 remainDays 为负时自动打上「紧急」。
+ */
+const UNPAID_STATUSES = [PayStatus.UNPAID, PayStatus.OVERDUE, PayStatus.FROZEN];
 
 /**
  * 缴费台账行 → 实体（含派生 remainDays/isUrgent）

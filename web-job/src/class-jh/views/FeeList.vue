@@ -6,8 +6,7 @@
 import { computed, ref, reactive, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh, Download, Bell, Promotion } from '@element-plus/icons-vue';
-import { FEE_TYPE_NAME, PAY_STATUS_NAME, SHARE_CHANNEL_PUSH_OPTIONS, ShareChannel } from 'shared-types/class-jh';
-import { FEE_CALL_STATUS_NAME } from 'shared-types';
+import { FEE_TYPE_NAME, PAY_STATUS_NAME, PayStatus, SHARE_CHANNEL_PUSH_OPTIONS, ShareChannel } from 'shared-types/class-jh';
 import type { FeeRecord, FeeListQuery, FeeNotify, FeeNotifyListQuery, ClassInfo } from 'shared-types/class-jh';
 import { fetchFeeList, fetchFeeNotifyList, exportFee, shareFee } from '@/class-jh/api/fee';
 import { urgeList, urgeLogList } from '@/class/api/student';
@@ -28,6 +27,8 @@ type FeeRow = FeeRecord & {
   raw?: any;
   /** 催费次数（初高=催费记录数；大学=催缴次数；就业无此概念显示 —） */
   urgeCount?: number;
+  /** 就业原始催缴状态名（待催缴 / 催缴中 / 已缴清）：列表按统一缴费状态展示，这个值挂 title 备查 */
+  callStatusName?: string;
 };
 
 const query = reactive<FeeListQuery & {
@@ -68,28 +69,41 @@ const tableData = computed<FeeRow[]>(() => {
 });
 
 /**
- * 「缴费状态」下拉选项 —— 随部门切换口径
+ * 「缴费状态」下拉选项 —— **三个部门共用一套**（待缴 / 已缴 / 已核对 / 逾期 / 冻结）
  *
- * ★ 2026-10-20 用户要求：缴费状态筛选对**所有部门**生效。
- *   但就业的催费单是另一套状态码（1 待催缴 / 2 催缴中 / 3 已缴清），
- *   与初高/大学的缴费状态（1 待缴 / 2 已缴 / 3 已核对 / 5 冻结）**语义不同、码位不同**。
- *   → 单独在就业部门展示催费状态，避免「选『已缴』结果出的是催缴中」这种错配。
- *   → 全部部门时仍用缴费状态口径，就业源按 payStatusToCallStatus() 做语义映射。
+ * ★ 2026-10-20 用户要求：「就业的缴费状态采用初高中大学的」。
+ *   之前就业单独展示催费单状态（1 待催缴 / 2 催缴中 / 3 已缴清），
+ *   与初高/大学（1 待缴 / 2 已缴 / 3 已核对 / 4 逾期 / 5 冻结）两套码并列，用户看着分裂。
+ *   → 现在下拉只有一套缴费状态；就业的**库内真实状态**（催缴中/已缴清）不再单独成列，
+ *     而是由 callStatusToPayStatus() 翻译成缴费状态展示，原始催缴状态放在 tag 的 title 里备查。
  */
-const payStatusOptions = computed<Array<{ label: string; value: number }>>(() => {
-  const dict = query.dept === 'employ' ? FEE_CALL_STATUS_NAME : PAY_STATUS_NAME;
-  return Object.entries(dict).map(([value, label]) => ({ value: Number(value), label: String(label) }));
-});
+const payStatusOptions = computed<Array<{ label: string; value: number }>>(() =>
+  Object.entries(PAY_STATUS_NAME).map(([value, label]) => ({ value: Number(value), label: String(label) })),
+);
 
 /**
- * 缴费状态 → 就业催费单状态（仅在「全部部门」合并视图里用）
- *   1 待缴 → 1 待催缴；2 已缴 → 3 已缴清；
- *   3 已核对 / 5 冻结 在就业没有对应值 → 返回 null（该源不出数据，而不是忽略筛选）
+ * 就业催费单状态（call_status）→ 统一缴费状态
+ *   1 待催缴 → 1 待缴；2 催缴中 → 1 待缴（还没收到钱）；3 已缴清 → 2 已缴
  */
-function payStatusToCallStatus(payStatus?: number): number | null | undefined {
-  if (payStatus === undefined || payStatus === null) return undefined;
-  if (payStatus === 1) return 1;
-  if (payStatus === 2) return 3;
+function callStatusToPayStatus(callStatus: any): number {
+  const s = Number(callStatus);
+  if (s === 3) return PayStatus.PAID; // 已缴清 → 已缴
+  return PayStatus.UNPAID; // 待催缴 / 催缴中 → 待缴
+}
+
+/**
+ * 统一缴费状态 → 就业催费单的查询条件
+ *
+ *   1 待缴 → callStatus 1,2（待催缴 + 催缴中）
+ *   2 已缴 → callStatus 3
+ *   4 逾期 → callStatus 1,2 且只看已过应缴日
+ *   3 已核对 / 5 冻结 → 就业没有对应状态 → 返回 null（该源不出数据，而不是忽略筛选）
+ */
+function payStatusToCallQuery(payStatus?: number): { callStatus?: string; onlyOverdue?: boolean } | null {
+  if (payStatus === undefined || payStatus === null) return {};
+  if (payStatus === PayStatus.UNPAID) return { callStatus: '1,2' };
+  if (payStatus === PayStatus.PAID) return { callStatus: '3' };
+  if (payStatus === PayStatus.OVERDUE) return { callStatus: '1,2', onlyOverdue: true };
   return null;
 }
 
@@ -137,8 +151,10 @@ function callToRow(r: any): FeeRow {
     feeType: r.feeType,
     feeTypeName: r.feeTypeName || '',
     feeAmount: Number(r.feeAmount || 0),
-    payStatus: r.callStatus,
-    payStatusName: r.callStatusName || '',
+    // ★ 2026-10-20：就业也按统一缴费状态展示（原催缴状态留在 callStatusName 里，列上用 title 提示）
+    payStatus: callStatusToPayStatus(r.callStatus),
+    payStatusName: PAY_STATUS_NAME[callStatusToPayStatus(r.callStatus)] || '',
+    callStatusName: r.callStatusName || '',
     expireDate: r.dueDate || undefined,
     isUrgent: !!r.overdue,
     raw: r,
@@ -165,24 +181,28 @@ async function loadData() {
       tableRows.value = data.list.map((r) => urgeToRow(r));
       serverTotal.value = data.total;
     } else if (query.dept === 'employ') {
-      // 就业催费单：缴费状态下拉在本部门是催费状态，直接当 callStatus 传
-      const data = await fetchFeeCallList({
-        page: query.page,
-        size: query.size,
-        classId: query.classId,
-        feeType: query.feeType,
-        callStatus: query.payStatus,
-        onlyOverdue: query.isUrgent,
-        startDate: query.startDate,
-        endDate: query.endDate,
-        keyword: query.keyword || undefined,
-      });
+      // 就业催费单：缴费状态统一成初高/大学那套，这里翻译成 callStatus 查询
+      const m = payStatusToCallQuery(query.payStatus);
+      const data = m
+        ? await fetchFeeCallList({
+            page: query.page,
+            size: query.size,
+            classId: query.classId,
+            feeType: query.feeType,
+            callStatus: m.callStatus,
+            onlyOverdue: query.isUrgent || m.onlyOverdue,
+            startDate: query.startDate,
+            endDate: query.endDate,
+            keyword: query.keyword || undefined,
+          })
+        : { list: [], total: 0 };
       tableRows.value = data.list.map((r) => callToRow(r));
       serverTotal.value = data.total;
     } else if (query.dept === 'all') {
       // 三源各取前 100 条合并（催费数据量级远小于此），应缴日期倒序，前端分页
       const kw = query.keyword || undefined;
-      const callStatus = payStatusToCallStatus(query.payStatus);
+      // ★ 就业源：统一缴费状态 → 催费单查询条件（待缴=1,2；已缴=3；逾期=1,2+只看逾期）
+      const callQ = payStatusToCallQuery(query.payStatus);
       const settled = await Promise.allSettled([
         fetchFeeList({ ...query, page: 1, size: 100 }),
         urgeList({
@@ -197,15 +217,15 @@ async function loadData() {
           keyword: kw,
         }),
         // 选了「已核对 / 冻结」时就业没有对应状态 → 该源直接不出数据（而不是忽略筛选条件）
-        callStatus === null
+        callQ === null
           ? Promise.resolve({ list: [], total: 0 } as any)
           : fetchFeeCallList({
               page: 1,
               size: 100,
               classId: query.classId,
               feeType: query.feeType,
-              callStatus,
-              onlyOverdue: query.isUrgent,
+              callStatus: callQ.callStatus,
+              onlyOverdue: query.isUrgent || callQ.onlyOverdue,
               startDate: query.startDate,
               endDate: query.endDate,
               keyword: kw,
@@ -235,7 +255,8 @@ async function loadData() {
 }
 
 /** 切部门：页码归 1 重查
- *  ★ 缴费状态的口径随部门切换（就业是催费状态码），旧值保留会让人误解，直接清掉 */
+ *  ★ 2026-10-20：缴费状态已三部门统一（原就业那套催费状态码不再单独成列），
+ *    但切部门后旧筛选值仍可能对不上（如就业没有「已核对」），一并清掉 */
 function handleDeptChange() {
   query.page = 1;
   query.payStatus = undefined;
@@ -451,7 +472,7 @@ onMounted(() => {
           <el-button :icon="Refresh" @click="handleReset">重置</el-button>
         </el-form-item>
         <el-form-item>
-          <div class="dept-hint">注：缴费状态、仅看紧急、应缴日期对全部部门（初高/大学/就业）生效；就业的「缴费状态」是催费单状态（待催缴/催缴中/已缴清），「紧急」= 逾期未缴清</div>
+          <div class="dept-hint">注：缴费状态、仅看紧急、应缴日期对全部部门（初高/大学/就业）生效；缴费状态三部门统一（待缴/已缴/已核对/逾期/冻结），就业的催费单状态（待催缴/催缴中/已缴清）已折算为缴费状态；「紧急」= 未结清且已过应缴日（逾期一律算紧急）</div>
         </el-form-item>
       </el-form>
     </el-card>
@@ -491,7 +512,12 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="缴费状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="payStatusTagType(row.payStatus)" size="small">{{ row.payStatusName }}</el-tag>
+            <!-- ★ 2026-10-20：就业按统一缴费状态展示；原始催缴状态（待催缴/催缴中/已缴清）放 title 备查 -->
+            <el-tag
+              :type="payStatusTagType(row.payStatus)"
+              size="small"
+              :title="row.callStatusName ? `催费单状态：${row.callStatusName}` : ''"
+            >{{ row.payStatusName }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="应缴日期" width="120">
