@@ -31,6 +31,7 @@ import { classNamesByIds } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
 import { buildApplyNo } from '../shared/conf';
+import { hydrateWithArchive } from '../shared/studentRef';
 
 const T = 't_class_flow';
 const S = 't_class_student';
@@ -70,10 +71,13 @@ async function decorate(
     studentId: String(row.student_id || ''),
     studentNo: String(row.student_no || ''),
     studentName: String(row.student_name || ''),
-    gender: null,
+    // ★ 2026-10-20：本表没有 gender / parent_phone 两列，
+    //   值由 hydrateWithArchive 从学生档案补进来（补不到就保持 null）
+    // ⚠️ 保持与大学/实训一致：原样透传档案值，不在这里做数值转换
+    gender: row.gender ?? null,
     idCard: row.id_card_no || null,
     phone: row.phone || null,
-    parentPhone: null,
+    parentPhone: row.parent_phone || null,
     classId: row.class_id ? String(row.class_id) : null,
     className: row.class_name || null,
     deptName: null,
@@ -188,7 +192,25 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
       b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
     });
   }
-  if (q.classId) base.andWhere('class_id', q.classId);
+  if (q.classId) {
+    /**
+     * ★ 2026-10-20：班级筛选要「单据快照 + 档案现状」两边命中。
+     *
+     * 列表显示的学生班级已经改成**档案最新值**（见下方 hydrateWithArchive），
+     * 如果筛选还只看单据上的 class_id，就会出现：
+     *   学生从 A 班换到 B 班 → 单据 class_id 仍是 A，
+     *   列表上明明显示「B 班」，按 B 班筛却一条都出不来。
+     * 这种「看得见、筛不到」比不显示更让人困惑，所以这里一起兜住。
+     */
+    const inClass = (await tbl(db, SRC, S, STAGE)
+      .where({ is_deleted: 0, class_id: q.classId })
+      .select('id')) as Array<Record<string, any>>;
+    const ids = [...new Set(inClass.map((r) => String(r.id || '')).filter(Boolean))];
+    base.andWhere((b) => {
+      b.where('class_id', q.classId);
+      if (ids.length) b.orWhereIn('student_id', ids);
+    });
+  }
   if (q.startDate) base.andWhere('suspend_start_date', '>=', q.startDate);
   if (q.endDate) base.andWhere('suspend_start_date', '<=', q.endDate);
   if (q.bizType) base.andWhere('flow_type', await toRawLeaveBiz(STAGE, q.bizType));
@@ -204,6 +226,14 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
     .orderBy('create_time', 'desc')
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
+  /**
+   * ★ 2026-10-20 用户口径「学生档案有的字段按档案走」：
+   *   单据里的 student_name / class_name / id_card_no 是**开单时的快照**，
+   *   学生换班或改名后就会和档案脱节（实测初高缴费已有 4 条班级漂移）。
+   *   这里在装饰成 DTO 之前，用档案最新值覆盖掉快照列 ——
+   *   快照本身仍留在库里做财务追溯，只是不再拿来显示。
+   */
+  await hydrateWithArchive(STAGE, rows, { conn: db });
   // ★ 复学班名按页批量预取（一次 whereIn，不是每行查一次）
   const names = await classNamesByIds(
     STAGE,
@@ -236,6 +266,8 @@ export async function detail(id: string): Promise<LeaveRow | null> {
     | Record<string, any>
     | undefined;
   if (!row) return null;
+  // ★ 2026-10-20：详情同样以档案最新值为准（与列表口径一致，避免「列表新名、详情旧名」）
+  await hydrateWithArchive(STAGE, [row], { conn: db });
   // ★ 复学班名同样要反查（详情页也要显示）
   return decorate(row, await classNamesByIds(STAGE, [row.resume_class_id]));
 }

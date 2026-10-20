@@ -25,6 +25,7 @@ import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import { classNamesByIds } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { hydrateWithArchive } from '../shared/studentRef';
 import { buildApplyNo } from '../shared/conf';
 
 const T = 't_job_student_leave';
@@ -182,7 +183,21 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
       b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
     });
   }
-  if (q.classId) base.andWhere('class_id', q.classId);
+  if (q.classId) {
+    /**
+     * ★ 2026-10-20：班级筛选「单据快照 + 档案现状」两边命中。
+     *   列表显示的班级已改为档案最新值，只按单据 class_id 筛会出现
+     *   「显示 B 班、按 B 班筛不到」（学生换班场景）。
+     */
+    const inClass = (await tbl(db, SRC, S, STAGE)
+      .where({ is_deleted: 0, class_id: q.classId })
+      .select('id')) as Array<Record<string, any>>;
+    const ids = [...new Set(inClass.map((r) => String(r.id || '')).filter(Boolean))];
+    base.andWhere((b) => {
+      b.where('class_id', q.classId);
+      if (ids.length) b.orWhereIn('student_id', ids);
+    });
+  }
   if (q.startDate) base.andWhere('leave_date', '>=', q.startDate);
   if (q.endDate) base.andWhere('leave_date', '<=', q.endDate);
   if (q.bizType) base.andWhere('biz_type', await toRawLeaveBiz(STAGE, q.bizType));
@@ -194,6 +209,8 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
     .orderBy('create_time', 'desc')
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
+  // ★ 2026-10-20：学生属性以档案最新值为准（快照列只留作审计）
+  await hydrateWithArchive(STAGE, rows, { conn: db });
   // ★ 复学班名按页批量预取（快照为空时用它兜底）
   const names = await classNamesByIds(
     STAGE,
@@ -226,6 +243,8 @@ export async function detail(id: string): Promise<LeaveRow | null> {
     | Record<string, any>
     | undefined;
   if (!row) return null;
+  // ★ 2026-10-20：详情与列表同口径（档案最新值）
+  await hydrateWithArchive(STAGE, [row], { conn: db });
   // ★ 复学班名快照为空时按 id 反查兜底
   return decorate(row, await classNamesByIds(STAGE, [row.new_class_id]));
 }

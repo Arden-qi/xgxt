@@ -78,7 +78,7 @@ function toFee(r: any, remindDays: number) {
 }
 
 /**
- * 批量取学生联系方式：`studentId → { phone, parentPhone }`
+ * 批量取学生的**档案信息**：`studentId → { 学号/姓名/班级/部门/电话 }`
  *
  * ⚠️ 两条纪律：
  *   ① 一次 IN 查询就够（不要左连 —— `t_class_fee` 与 `t_class_student` 同名列
@@ -86,19 +86,101 @@ function toFee(r: any, remindDays: number) {
  *      is_deleted…，左连后不加表前缀会直接 ambiguous column）；
  *   ② 按 500 分片：导出场景可能一次上千个 studentId，一条超长 IN 会撞
  *      max_allowed_packet 报错。去重 + 剔空值同样不能省。
+ *
+ * ★ 2026-10-20 扩展：原来只取 phone / parent_phone（列表补联系方式），
+ *   现在**顺带把学号、姓名、班级、部门一起取回来**，用于覆盖单据上的快照列。
+ *   用户口径「学生档案有的字段按学生档案的数据走」—— 学生换班后，
+ *   缴费单上显示的班级必须是档案里的新班级，而不是开单那天的老班级。
+ *   `t_class_fee` 自己那份 class_name 仍留在库里做财务追溯，只是不再拿来显示。
+ *
+ * ⚠️ 加 `is_deleted = 0`：档案里已删除的学生不再算作有效档案
+ *   （「学生档案没有的，其他模块也不能有」）。这类单据的姓名/班级
+ *   会保留开单快照，不会突然变成空白。
  */
 async function fetchStudentContacts(studentIds: Array<string | null | undefined>) {
-  const map: Record<string, { phone: string | null; parentPhone: string | null }> = {};
+  const map: Record<
+    string,
+    {
+      studentNo: string | null;
+      studentName: string | null;
+      classId: string | null;
+      className: string | null;
+      deptCode: number | null;
+      phone: string | null;
+      parentPhone: string | null;
+    }
+  > = {};
   const ids = [...new Set(studentIds.filter((x): x is string => !!x))];
   for (let i = 0; i < ids.length; i += 500) {
     const rows = await db(STUDENT_TABLE)
+      .where('is_deleted', false)
       .whereIn('id', ids.slice(i, i + 500))
-      .select('id', 'phone', 'parent_phone');
+      .select('id', 'phone', 'parent_phone', 'student_no', 'student_name', 'class_id', 'class_name', 'dept_code');
     for (const r of rows as any[]) {
-      map[r.id] = { phone: r.phone || null, parentPhone: r.parent_phone || null };
+      map[r.id] = {
+        studentNo: r.student_no || null,
+        studentName: r.student_name || null,
+        classId: r.class_id || null,
+        className: r.class_name || null,
+        deptCode: r.dept_code == null ? null : Number(r.dept_code),
+        phone: r.phone || null,
+        parentPhone: r.parent_phone || null,
+      };
     }
   }
   return map;
+}
+
+/**
+ * ★ 2026-10-20：把档案值合并进列表行（档案有值才覆盖，档案空则保留开单快照）
+ *
+ * 「按档案走」不等于「档案空就清空」：实训/历史数据里学生档案可能缺列，
+ * 这时把单据上原有的信息保留下来，比显示成「—」有用。
+ */
+function mergeArchive<T extends Record<string, any>>(
+  list: T[],
+  archive: Awaited<ReturnType<typeof fetchStudentContacts>>,
+): T[] {
+  return list.map((x) => {
+    const s = archive[x.studentId];
+    if (!s) return x;
+    return {
+      ...x,
+      studentNo: s.studentNo || x.studentNo,
+      studentName: s.studentName || x.studentName,
+      classId: s.classId ?? x.classId,
+      className: s.className ?? x.className,
+      deptCode: s.deptCode ?? x.deptCode,
+      // 联系方式本来就只有档案有，档案没有就是 null（前端显示「—」）
+      phone: s.phone,
+      parentPhone: s.parentPhone,
+    };
+  });
+}
+
+/**
+ * ★ 2026-10-20：取「档案当前在该班」的学生 id
+ *
+ * 用途：班级筛选要「单据快照 + 档案现状」两边命中。
+ * 列表显示的班级已经改成档案最新值，如果筛选还只看单据上的 class_id，
+ * 学生换班后会出现「列表显示 B 班、按 B 班筛却一条都出不来」。
+ */
+async function studentIdsInClass(classId: string): Promise<string[]> {
+  const rows = (await db(STUDENT_TABLE)
+    .where({ is_deleted: false, class_id: classId })
+    .select('id')) as any[];
+  return [...new Set(rows.map((r) => String(r.id || '')).filter(Boolean))];
+}
+
+/** ★ 2026-10-20：按档案的姓名/学号搜人（改名后按新名字也能搜到老单据） */
+async function studentIdsByKeyword(keyword: string): Promise<string[]> {
+  const rows = (await db(STUDENT_TABLE)
+    .where('is_deleted', false)
+    .andWhere((b) => {
+      b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);
+    })
+    .select('id')) as any[];
+  return [...new Set(rows.map((r) => String(r.id || '')).filter(Boolean))];
 }
 
 /* ============================================================
@@ -129,14 +211,23 @@ feeRouter.get(
     const remindDays = await getNumberSetting('feeRemindDays');
 
     const query = db(FEE_TABLE).where('is_deleted', false);
-    if (q.classId) query.andWhere('class_id', q.classId);
+    // ★ 2026-10-20：班级筛选同时认「单据快照」和「档案现状」（学生换班后仍能筛到）
+    if (q.classId) {
+      const inClass = await studentIdsInClass(q.classId);
+      query.andWhere((qb) => {
+        qb.where('class_id', q.classId);
+        if (inClass.length) qb.orWhereIn('student_id', inClass);
+      });
+    }
     if (q.feeType) query.andWhere('fee_type', q.feeType);
     if (q.payStatus) query.andWhere('pay_status', q.payStatus);
     if (q.startDate) query.andWhere('expire_date', '>=', q.startDate);
     if (q.endDate) query.andWhere('expire_date', '<=', q.endDate);
     if (q.keyword) {
+      const hit = await studentIdsByKeyword(q.keyword);
       query.andWhere((qb) => {
         qb.where('student_no', 'like', `%${q.keyword}%`).orWhere('student_name', 'like', `%${q.keyword}%`);
+        if (hit.length) qb.orWhereIn('student_id', hit);
       });
     }
 
@@ -162,13 +253,10 @@ feeRouter.get(
     }
     const withCount = paged.map((x: any) => ({ ...x, urgeCount: urgeCountMap[x.studentId] || 0 }));
 
-    // ★ 联系电话（2026-10-20 用户要求）：缴费表不自带手机号，按本页学生批量补
+    // ★ 档案信息（2026-10-20）：缴费表不自带手机号，且姓名/班级是开单快照 ——
+    //   按本页学生批量取档案，一次性把联系方式和学生属性都对齐到档案最新值
     const contacts = await fetchStudentContacts(withCount.map((x: any) => x.studentId));
-    const withContact = withCount.map((x: any) => ({
-      ...x,
-      phone: contacts[x.studentId]?.phone ?? null,
-      parentPhone: contacts[x.studentId]?.parentPhone ?? null,
-    }));
+    const withContact = mergeArchive(withCount, contacts);
 
     res.json(page(withContact, total, q));
   }),
@@ -188,15 +276,24 @@ feeRouter.get(
     const remindDays = await getNumberSetting('feeRemindDays');
 
     const query = db(FEE_TABLE).where('is_deleted', false);
-    if (q.classId) query.andWhere('class_id', q.classId);
+    // ★ 2026-10-20：筛选口径与列表完全一致（班级/关键字都认档案现状）
+    if (q.classId) {
+      const inClass = await studentIdsInClass(q.classId);
+      query.andWhere((qb) => {
+        qb.where('class_id', q.classId);
+        if (inClass.length) qb.orWhereIn('student_id', inClass);
+      });
+    }
     if (q.feeType) query.andWhere('fee_type', q.feeType);
     if (q.payStatus) query.andWhere('pay_status', q.payStatus);
     // ★ 2026-10-20：导出补应缴日期筛选 —— 列表筛完导出却是全量，用户会以为筛选没生效
     if (q.startDate) query.andWhere('expire_date', '>=', q.startDate);
     if (q.endDate) query.andWhere('expire_date', '<=', q.endDate);
     if (q.keyword) {
+      const hit = await studentIdsByKeyword(q.keyword);
       query.andWhere((qb) => {
         qb.where('student_no', 'like', `%${q.keyword}%`).orWhere('student_name', 'like', `%${q.keyword}%`);
+        if (hit.length) qb.orWhereIn('student_id', hit);
       });
     }
 
@@ -204,13 +301,9 @@ feeRouter.get(
     let list = rows.map((r: any) => toFee(r, remindDays));
     if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
 
-    // ★ 联系电话（2026-10-20）：导出与列表同口径，按 500 分片批量补
+    // ★ 档案信息（2026-10-20）：导出与列表同口径，按 500 分片批量取档案
     const contacts = await fetchStudentContacts(list.map((x: any) => x.studentId));
-    const withContact = list.map((x: any) => ({
-      ...x,
-      phone: contacts[x.studentId]?.phone ?? null,
-      parentPhone: contacts[x.studentId]?.parentPhone ?? null,
-    }));
+    const withContact = mergeArchive(list, contacts);
 
     res.json(ok(withContact));
   }),
@@ -328,7 +421,11 @@ feeRouter.get(
       remark: n.remark,
     }));
 
-    res.json(page(list, Number(total), q));
+    // ★ 2026-10-20：催费记录上的姓名/班级是**推送当时的快照**，
+    //   这里按档案最新值覆盖，和列表、导出口径一致（学生换班后不会显示老班级）
+    const archive = await fetchStudentContacts(list.map((x: any) => x.studentId));
+
+    res.json(page(mergeArchive(list, archive), Number(total), q));
   }),
 );
 

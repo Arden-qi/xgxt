@@ -53,7 +53,11 @@ const { check, summary } = makeChecker();
     );
     check(
       '★ 后端初高按 studentId 批量补联系方式（t_class_fee 本身无电话列，必须关联学生表）',
-      feeRoute.includes('fetchStudentContacts') && feeRoute.includes("select('id', 'phone', 'parent_phone')"),
+      // ★ 2026-10-20：select 从 3 列扩到「联系方式 + 学生属性」，
+      //   因为同一个函数现在还负责把姓名/班级对齐到档案最新值，
+      //   断言改为「取了 phone 和 parent_phone 两列」而不是死磕整串。
+      feeRoute.includes('fetchStudentContacts') &&
+        /\.select\([^)]*'phone'[^)]*'parent_phone'/.test(feeRoute),
     );
     check(
       '★ 补齐逻辑按 500 分片 + 去重剔空（导出上千行不会撞 max_allowed_packet / NULL 恒不成立）',

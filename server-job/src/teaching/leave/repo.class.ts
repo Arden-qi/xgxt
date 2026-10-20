@@ -30,6 +30,7 @@ import {
 import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { hydrateWithArchive } from '../shared/studentRef';
 import { buildApplyNo } from '../shared/conf';
 
 const T = 't_class_suspend_apply';
@@ -175,7 +176,21 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
       b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
     });
   }
-  if (q.classId) base.andWhere('class_id', q.classId);
+  if (q.classId) {
+    /**
+     * ★ 2026-10-20：班级筛选「单据快照 + 档案现状」两边命中。
+     *   列表显示的班级已改为档案最新值，只按单据 class_id 筛会出现
+     *   「显示 B 班、按 B 班筛不到」（学生换班场景）。
+     */
+    const inClass = (await tbl(db, SRC, S, STAGE)
+      .where({ is_deleted: 0, class_id: q.classId })
+      .select('id')) as Array<Record<string, any>>;
+    const ids = [...new Set(inClass.map((r) => String(r.id || '')).filter(Boolean))];
+    base.andWhere((b) => {
+      b.where('class_id', q.classId);
+      if (ids.length) b.orWhereIn('student_id', ids);
+    });
+  }
   if (q.startDate) base.andWhere('apply_time', '>=', `${q.startDate} 00:00:00`);
   if (q.endDate) base.andWhere('apply_time', '<=', `${q.endDate} 23:59:59`);
   if (q.bizType) base.andWhere('apply_type', await toRawLeaveBiz(STAGE, q.bizType));
@@ -187,6 +202,8 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
     .orderBy('create_time', 'desc')
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
+  // ★ 2026-10-20：学生属性以档案最新值为准（快照列只留作审计）
+  await hydrateWithArchive(STAGE, rows, { conn: db });
   return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
 }
 
@@ -213,7 +230,10 @@ export async function detail(id: string): Promise<LeaveRow | null> {
   const row = (await tbl(db, SRC, T, STAGE).where({ id, is_deleted: 0 }).whereIn('apply_type', IN_SCOPE).first()) as
     | Record<string, any>
     | undefined;
-  return row ? decorate(row) : null;
+  if (!row) return null;
+  // ★ 2026-10-20：详情与列表同口径（档案最新值）
+  await hydrateWithArchive(STAGE, [row], { conn: db });
+  return decorate(row);
 }
 
 /** 汇总 */
