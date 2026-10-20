@@ -156,15 +156,14 @@
       </el-table-column>
     </el-table>
 
+    <!-- ★ 2026-10-20 批注：固定每页 20 条，去掉条数下拉（10/50/100），剩余的翻页看 -->
     <el-pagination
       class="tcv-page"
-      layout="total, sizes, prev, pager, next"
+      layout="total, prev, pager, next"
       :total="total"
       :current-page="query.page"
       :page-size="query.size"
-      :page-sizes="[10, 20, 50, 100]"
       @current-change="load"
-      @size-change="load(1)"
     />
 
     <!-- ============ 详情（原「花名册」，2026-10-19 改名） ============ -->
