@@ -60,6 +60,12 @@ const check = (label, cond, extra = '') => {
 
 const RAW_ASSIGN = read(P('web-job/src/perm/views/PermAssign.vue'));
 const ASSIGN = stripComments(RAW_ASSIGN);
+/* ★ 2026-10-20：权限树在本项目里是【两份独立实现】——
+   职位权限分配页一套（PermAssign）、职位管理页一套（RoleManage）。
+   上轮只改前者，用户从「职位管理 → 编辑权限」进来仍看到两个「取消」。
+   所以这里两份都要读、都要守。 */
+const RAW_ROLE = read(P('web-job/src/perm/views/RoleManage.vue'));
+const ROLE = stripComments(RAW_ROLE);
 const CSS = read(P('web-job/src/shared-ui/shared-ui.css'));
 
 /* 权限树弹窗的整段模板：从 v-model="treeOpen" 到它自己的 </ProtoDialog>
@@ -196,6 +202,72 @@ check(
 check(
   '.mod-all.on 用灰色（已全选 → 提示再点即取消）',
   /\.tree \.n \.mod-all\.on\{/.test(CSS),
+);
+
+/* ============================================================
+ * 七、职位管理页那份权限树：与上一节同口径（用户 2026-10-20 反馈漏改）
+ * ============================================================ */
+const roleTreeStart = ROLE.indexOf('v-model="treeOpen"');
+const roleTreeEnd = ROLE.indexOf('</ProtoDialog>', roleTreeStart);
+const ROLE_TREE = roleTreeStart >= 0 && roleTreeEnd > roleTreeStart ? ROLE.slice(roleTreeStart, roleTreeEnd) : '';
+
+check('职位管理页也能取到自己的权限树弹窗', ROLE_TREE.length > 500, `${ROLE_TREE.length} 字符`);
+
+check(
+  '★ RoleManage 只剩一个「关弹窗」按钮（treeOpen = false），其文案在 edit 模式下是「取消」',
+  count(ROLE_TREE, '@click="treeOpen = false"') === 1 &&
+    /\{\{\s*treeMode === 'form' \? '放弃' : treeMode === 'edit' \? '取消' : '关闭'\s*\}\}/.test(ROLE_TREE),
+  `treeOpen=false 按钮 ${count(ROLE_TREE, '@click="treeOpen = false"')} 个；` +
+    `文案三元 = ${/\{\{\s*treeMode[^}]*\}\}/.test(ROLE_TREE) ? '在' : '缺'}`,
+);
+
+/* ⚠️ 这条不能数字面「>取消</button>」：本页关闭按钮的文案是三元插值
+   （form='放弃' / edit='取消' / view='关闭'），字面量根本数不到 —— 上一版就栽在这。 */
+check(
+  'RoleManage 底栏没有任何「取消全部勾选」类按钮（只剩关弹窗那个）',
+  !/treeSelectAll\((true|false)\)/.test(ROLE_TREE),
+  `带参调用 ${count(ROLE_TREE, 'treeSelectAll(true)') + count(ROLE_TREE, 'treeSelectAll(false)')} 处（应为 0）`,
+);
+
+check(
+  'RoleManage 保留的那个「取消」是关闭弹窗（treeOpen = false）',
+  /@click="treeOpen = false">取消<\/button>/.test(ROLE_TREE) ||
+    /@click="treeOpen = false"\s*>/.test(ROLE_TREE),
+);
+
+check(
+  'RoleManage 取消勾选入口（treeSelectAll(false)）已删除',
+  !ROLE.includes('treeSelectAll(false)'),
+);
+
+check(
+  'RoleManage treeSelectAll 也收敛成无参',
+  /function treeSelectAll\(\): void \{/.test(ROLE),
+  /function treeSelectAll\(([^)]*)\)/.exec(ROLE)?.[1] === undefined
+    ? ''
+    : `签名参数 =「${/function treeSelectAll\(([^)]*)\)/.exec(ROLE)[1]}」`,
+);
+
+check(
+  'RoleManage 底栏仍保留：全选 / 一键清空 / 保存权限',
+  ROLE_TREE.includes('treeSelectAll()') &&
+    ROLE_TREE.includes('treeClear') &&
+    ROLE_TREE.includes('>保存权限</button>'),
+);
+
+check(
+  'RoleManage 清空能力没丢（treeClear 仍在，带二次确认）',
+  /function treeClear\(\): void \{/.test(ROLE),
+);
+
+check(
+  'RoleManage 底栏左侧统计仍在（删按钮没把这条挤掉）',
+  /已勾选[\s\S]{0,80}treeActionCount/.test(ROLE_TREE),
+);
+
+check(
+  '两份实现都不再有「取消全部勾选」的 toast 文案（死了的提示也一起清）',
+  !RAW_ASSIGN.includes('已取消全部勾选') && !RAW_ROLE.includes('已取消全部勾选'),
 );
 
 /* ============================================================

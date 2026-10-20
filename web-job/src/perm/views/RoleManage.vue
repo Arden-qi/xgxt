@@ -506,16 +506,23 @@ function onModToggle(m: PermModule, e: Event): void {
   treeDraft.value = next;
 }
 
-function treeSelectAll(on: boolean): void {
+/**
+ * 全选全部权限（原型 treeSelectAll）。
+ * ★ 2026-10-20：原签名 `treeSelectAll(on: boolean)`，`false` 分支是"取消全部勾选"，
+ *   对应按钮已按用户要求删除（与「一键清空」重复、又与关弹窗的「取消」撞名）。
+ *   这里收敛成无参 —— 不留一个永远走不到的分支。
+ *   要清空请用 treeClear()（带二次确认）。
+ */
+function treeSelectAll(): void {
   if (readonlyTree.value) return;
   const next: RolePermMap = {};
   modules.value.forEach((m) => {
     m.items.forEach((it) => {
-      next[permKey(m.moduleKey, it.itemName)] = on ? it.actions.map((a) => a.actionCode) : [];
+      next[permKey(m.moduleKey, it.itemName)] = it.actions.map((a) => a.actionCode);
     });
   });
   treeDraft.value = next;
-  toast(on ? '已全选全部权限' : '已取消全部勾选', 'warn');
+  toast('已全选全部权限', 'warn');
 }
 
 function treeClear(): void {
@@ -1578,8 +1585,13 @@ async function doExport(): Promise<void> {
           <b style="color: var(--brand)">{{ treeModuleCount }}</b> 个模块
         </div>
         <template v-if="!readonlyTree">
-          <button class="btn" type="button" @click="treeSelectAll(true)">全选</button>
-          <button class="btn" type="button" @click="treeSelectAll(false)">取消</button>
+          <button class="btn" type="button" @click="treeSelectAll()">全选</button>
+          <!-- ★ 2026-10-20 按用户要求删掉这里原来的「取消」（= treeSelectAll(false) 取消全部勾选）：
+               它与右侧关闭弹窗的「取消」在 edit 模式下撞名，一屏两个「取消」分不清；
+               功能上又与「一键清空」重复（后者还带二次确认）。清空请走「一键清空」。
+               现在：全选 / 一键清空 / 取消（关弹窗）/ 保存权限。
+               ⚠️ 权限树在本项目里有【两份独立实现】：本页一套、PermAssign.vue 一套，
+                  改一处必须同步另一处（上轮只改了 PermAssign 导致本页漏改）。 -->
           <button class="btn" type="button" @click="treeClear">一键清空</button>
         </template>
         <button class="btn" type="button" @click="treeOpen = false">
