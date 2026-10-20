@@ -85,22 +85,22 @@ const createdFiles = [];
     );
 
     check(
-      '③ 后端校验：方式 1~3 / 金额为正 / 日期格式 / 备注 200 字 / 截图必填',
+      '③ 后端校验：方式 1~3 / 金额为正 / 日期格式 / 备注 200 字（截图必填与否见 ⑥，现金可免）',
       /payMethod: z\.coerce\.number\(\)\.int\(\)\.min\(1\)\.max\(3/.test(route) &&
         /paidAmount: z\.coerce\.number\(\)\.int\(\)\.positive/.test(route) &&
         /payDate: z\.string\(\)\.regex\(\/\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$\//.test(route) &&
         /remark: z\.string\(\)\.max\(200/.test(route) &&
-        /dataUrl: z\.string\(\)\.min\(1, '请上传缴费截图'\)/.test(route),
+        /dataUrl: z\.string\(\)\.optional\(\)/.test(route),
     );
     check(
       '③ 后端兜「缴费时间不能晚于今天」（前端 disabled 只是 UI，接口要自己挡）',
       /body\.payDate > todayStr\(\)/.test(route) && /不能晚于今天/.test(route),
     );
     check(
-      '③ 落库写了方式/实缴金额/缴费日期/备注/凭证五项',
-      ['pay_method: body.payMethod', 'paid_amount: body.paidAmount', 'pay_date: body.payDate', 'pay_remark: body.remark', 'voucher_url: voucherUrl'].every(
+      '③ 落库写了方式/实缴金额/缴费日期/备注（凭证按需写，现金没有就不动原值）',
+      ['pay_method: body.payMethod', 'paid_amount: body.paidAmount', 'pay_date: body.payDate', 'pay_remark: body.remark'].every(
         (f) => route.includes(f),
-      ),
+      ) && /if \(voucherUrl\) updateFields\.voucher_url = voucherUrl/.test(route),
     );
     check(
       '③ 登记即报缴：待缴/逾期 → 已缴，已核对不动',
@@ -140,6 +140,27 @@ const createdFiles = [];
           (f) => feeList.includes(f),
         ) &&
         /viewVoucher\(row\)/.test(feeList),
+    );
+    check(
+      // ★ 2026-10-20 用户要求：现金可以不传截图（微信/支付宝必须传）
+      '⑥ 后端：截图必填与否按缴费方式判（现金可不传）',
+      /dataUrl: z\.string\(\)\.optional\(\)/.test(route) &&
+        /body\.payMethod !== PayMethod\.CASH[\s\S]{0,160}?请上传缴费截图/.test(route) &&
+        /if \(voucherUrl\) updateFields\.voucher_url = voucherUrl/.test(route),
+    );
+    check(
+      // 现金可以没有截图，所以「重新登记 / 查看」不能按 voucherUrl 判，得按 hasPayment
+      '⑥ 前端：现金登记后（无截图）仍能「查看」详情',
+      /function hasPayment\(row: FeeRow\): boolean/.test(feeList) &&
+        /hasPayment\(row\) \? '重新登记' : '上传缴费凭证'/.test(feeList) &&
+        /v-if="hasPayment\(row\)"/.test(feeList),
+    );
+    check(
+      '⑥ 前端：现金时截图的必填星号消失 + 提交校验放行 + 提示文案切换',
+      /:required="paymentForm\.payMethod !== PayMethod\.CASH"/.test(feeList) &&
+        /const isCash = paymentForm\.payMethod === PayMethod\.CASH/.test(feeList) &&
+        /!isCash && !voucherFile\.value/.test(feeList) &&
+        /现金可不传截图/.test(feeList),
     );
     check(
       '⑥ Vite 把 /uploads 代理到后端（否则凭证图片被当路由返回 index.html）',
@@ -276,6 +297,36 @@ const createdFiles = [];
 
     const noFee = await req(url, { method: 'POST', token, timeout: 15000, body: { ...body, feeId: 'not-exist-id' } });
     check('★ 缴费单不存在 → 40408', noFee.json?.code === 40408, `code=${noFee.json?.code} msg=${noFee.json?.message || ''}`);
+
+    /* ---- 现金：不带截图也能登记（用户 2026-10-20 要求） ---- */
+    const cashRes = await req(url, {
+      method: 'POST',
+      token,
+      timeout: 20000,
+      body: { feeId: FIX_ID, payMethod: 3, paidAmount: 120000, payDate: dayOffset(0), remark: '自检-现金收据' },
+    });
+    check('★ 现金 + 不传截图 → 也能登记成功', cashRes.json?.code === 200, `code=${cashRes.json?.code} msg=${cashRes.json?.message || ''}`);
+    const cashRow = await db('t_class_fee').where({ id: FIX_ID }).first();
+    check(
+      '★ 现金登记：方式变现金、实缴/备注更新，且原有截图不被清空',
+      Number(cashRow?.pay_method) === 3 &&
+        Number(cashRow?.paid_amount) === 120000 &&
+        cashRow?.pay_remark === '自检-现金收据' &&
+        cashRow?.voucher_url === voucherUrl,
+      JSON.stringify({ 方式: cashRow?.pay_method, 实缴: cashRow?.paid_amount, 备注: cashRow?.pay_remark, 截图: cashRow?.voucher_url }),
+    );
+
+    const wxNoShot = await req(url, {
+      method: 'POST',
+      token,
+      timeout: 15000,
+      body: { feeId: FIX_ID, payMethod: 1, paidAmount: 100, payDate: dayOffset(0) },
+    });
+    check(
+      '★ 微信支付 + 不传截图 → 仍然被拒（钱从账上走，必须有凭证）',
+      wxNoShot.json?.code !== 200 && String(wxNoShot.json?.message || '').includes('请上传缴费截图'),
+      `code=${wxNoShot.json?.code} msg=${wxNoShot.json?.message || ''}`,
+    );
 
     /* ---- 留痕 ---- */
     const log = await db('t_class_op_log').where({ biz_id: FIX_ID, is_deleted: false }).first();

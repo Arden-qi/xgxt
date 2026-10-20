@@ -23,7 +23,7 @@ import {
   SHARE_CHANNEL_NAME,
   SHARE_CHANNEL_PUSH_CODES,
 } from 'shared-types/class-jh';
-import { FeeType, PayStatus, ShareChannel } from 'shared-types/class-jh';
+import { FeeType, PayMethod, PayStatus, ShareChannel } from 'shared-types/class-jh';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
@@ -439,8 +439,13 @@ const paymentSchema = z.object({
   payDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '缴费时间格式应为 YYYY-MM-DD'),
   /** 备注（转账单号 / 说明） */
   remark: z.string().max(200, '备注最多 200 字').optional(),
-  /** 形如 data:image/png;base64,xxxx */
-  dataUrl: z.string().min(1, '请上传缴费截图'),
+  /**
+   * 缴费截图，形如 data:image/png;base64,xxxx
+   *
+   * ★ 2026-10-20 用户要求：**现金**可以不传截图（微信/支付宝必须传，钱是从账上走的）。
+   *   所以这里不设 min(1)，"必填与否"在下面按 payMethod 判（schema 层写死会一刀切）。
+   */
+  dataUrl: z.string().optional(),
 });
 
 /** 凭证图片体积上限（5MB，与咨询/财务一致） */
@@ -470,22 +475,29 @@ feeRouter.post(
     const row = await db(FEE_TABLE).where({ id: body.feeId, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.FEE_NOT_FOUND, '缴费单不存在或已被删除');
 
-    const matched = /^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/i.exec(body.dataUrl);
-    if (!matched) {
-      throw new BizError(BizCode.FORMAT_ERROR, '缴费截图只支持 PNG / JPG / WEBP / GIF 图片');
+    /* ---- 3. 截图：现金不强制，微信/支付宝必须有 ---- */
+    let voucherUrl: string | null = null;
+    let fileName = '';
+    if (body.dataUrl) {
+      const matched = /^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/i.exec(body.dataUrl);
+      if (!matched) {
+        throw new BizError(BizCode.FORMAT_ERROR, '缴费截图只支持 PNG / JPG / WEBP / GIF 图片');
+      }
+      const ext = matched[1].toLowerCase().replace('jpeg', 'jpg');
+      const buffer = Buffer.from(matched[2], 'base64');
+      if (!buffer.length) throw new BizError(BizCode.PARAM_ERROR, '图片内容为空，请重新选择');
+      if (buffer.length > VOUCHER_MAX_BYTES) {
+        throw new BizError(BizCode.PARAM_ERROR, '图片不能超过 5MB，请压缩后重试');
+      }
+      fileName = `jh_fee_${Date.now()}_${randomUUID().slice(0, 8)}.${ext}`;
+      const uploadDir = path.resolve(process.cwd(), 'uploads/voucher');
+      fs.mkdirSync(uploadDir, { recursive: true });
+      fs.writeFileSync(path.join(uploadDir, fileName), buffer);
+      voucherUrl = `/uploads/voucher/${fileName}`;
+    } else if (body.payMethod !== PayMethod.CASH) {
+      // 现金是线下交付、没有转账凭证可拍，所以只有现金允许不传
+      throw new BizError(BizCode.PARAM_ERROR, '请上传缴费截图（微信支付 / 支付宝需要凭证，现金可不传）');
     }
-    const ext = matched[1].toLowerCase().replace('jpeg', 'jpg');
-    const buffer = Buffer.from(matched[2], 'base64');
-    if (!buffer.length) throw new BizError(BizCode.PARAM_ERROR, '图片内容为空，请重新选择');
-    if (buffer.length > VOUCHER_MAX_BYTES) {
-      throw new BizError(BizCode.PARAM_ERROR, '图片不能超过 5MB，请压缩后重试');
-    }
-
-    const fileName = `jh_fee_${Date.now()}_${randomUUID().slice(0, 8)}.${ext}`;
-    const uploadDir = path.resolve(process.cwd(), 'uploads/voucher');
-    fs.mkdirSync(uploadDir, { recursive: true });
-    fs.writeFileSync(path.join(uploadDir, fileName), buffer);
-    const voucherUrl = `/uploads/voucher/${fileName}`;
 
     /* ---- 3. 写初高台账（含状态推进） ---- */
     const before = {
@@ -501,30 +513,31 @@ feeRouter.post(
       ? PayStatus.PAID
       : rawStatus;
 
-    await db(FEE_TABLE)
-      .where({ id: row.id })
-      .update({
-        voucher_url: voucherUrl,
-        pay_method: body.payMethod,
-        paid_amount: body.paidAmount,
-        pay_date: body.payDate,
-        pay_remark: body.remark ?? null,
-        pay_status: nextStatus,
-        update_time: new Date(),
-        update_by: operator?.userId ?? null,
-      });
+    const updateFields: Record<string, any> = {
+      pay_method: body.payMethod,
+      paid_amount: body.paidAmount,
+      pay_date: body.payDate,
+      pay_remark: body.remark ?? null,
+      pay_status: nextStatus,
+      update_time: new Date(),
+      update_by: operator?.userId ?? null,
+    };
+    // 现金且没传截图：保留原来的凭证，不要把它清空
+    if (voucherUrl) updateFields.voucher_url = voucherUrl;
+    await db(FEE_TABLE).where({ id: row.id }).update(updateFields);
 
     /* ---- 4. 财务侧反写（best-effort）：只写凭证/日期/备注，状态交给财务核对流程 ---- */
     let financeSynced = false;
     if (row.source_system === 'finance' && row.source_id) {
       try {
+        const finFields: Record<string, any> = {
+          pay_date: body.payDate,
+          remark: body.remark ?? null,
+        };
+        if (voucherUrl) finFields.voucher_url = voucherUrl;
         const affected = await db('sms_finance.t_finance_fee')
           .where({ id: String(row.source_id), is_deleted: false })
-          .update({
-            voucher_url: voucherUrl,
-            pay_date: body.payDate,
-            remark: body.remark ?? null,
-          });
+          .update(finFields);
         financeSynced = Number(affected) > 0;
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -541,7 +554,7 @@ feeRouter.post(
       classId: row.class_id,
       opUserId: operator?.userId,
       opUserName: operator?.userName,
-      opDesc: `登记缴费：${nameOf(PAY_METHOD_NAME, body.payMethod)} ${(body.paidAmount / 100).toFixed(2)} 元（${fileName}）`,
+      opDesc: `登记缴费：${nameOf(PAY_METHOD_NAME, body.payMethod)} ${(body.paidAmount / 100).toFixed(2)} 元${fileName ? `（${fileName}）` : '（现金·无截图）'}`,
       beforeValue: before,
       afterValue: {
         payStatus: nextStatus,
@@ -554,7 +567,7 @@ feeRouter.post(
 
     res.json(
       ok(
-        { feeId: row.id, voucherUrl, payStatus: nextStatus, financeSynced },
+        { feeId: row.id, voucherUrl: voucherUrl ?? row.voucher_url ?? null, payStatus: nextStatus, financeSynced },
         '缴费登记成功',
       ),
     );

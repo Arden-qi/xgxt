@@ -73,8 +73,13 @@ export interface FeePaymentPayload {
   payDate: string;
   /** 备注（转账单号 / 说明），可空 */
   remark?: string;
-  /** 缴费截图 data:image/png;base64,xxxx（PNG / JPG / WEBP / GIF，≤ 5MB） */
-  dataUrl: string;
+  /**
+   * 缴费截图 data:image/png;base64,xxxx（PNG / JPG / WEBP / GIF，≤ 5MB）
+   *
+   * ★ 2026-10-20 用户要求：**现金**可以不传（线下交付没有转账截图）；
+   *   微信支付 / 支付宝必传，否则后端报「请上传缴费截图」。
+   */
+  dataUrl?: string;
 }
 
 /** 登记缴费响应 */

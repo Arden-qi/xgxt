@@ -372,13 +372,16 @@ async function submitPayment() {
     ElMessage.warning('请填写正确的缴费金额');
     return;
   }
-  if (!voucherFile.value) {
-    ElMessage.warning('请上传缴费截图');
+  // ★ 2026-10-20 用户要求：现金是线下交付、没有转账凭证，可以不传截图；
+  //   微信支付 / 支付宝必须传（钱是从账上走的，要对得上）。
+  const isCash = paymentForm.payMethod === PayMethod.CASH;
+  if (!isCash && !voucherFile.value) {
+    ElMessage.warning('请上传缴费截图（微信支付 / 支付宝需要凭证）');
     return;
   }
   paymentSubmitting.value = true;
   try {
-    const dataUrl = await readAsDataUrl(voucherFile.value);
+    const dataUrl = voucherFile.value ? await readAsDataUrl(voucherFile.value) : undefined;
     await submitFeePayment({
       feeId: paymentRow.value.feeId,
       payMethod: paymentForm.payMethod,
@@ -405,10 +408,25 @@ async function submitPayment() {
  */
 function viewVoucher(row: FeeRow) {
   const url = row?.voucherUrl;
-  if (!url) return;
   voucherViewRow.value = row;
-  voucherViewUrl.value = /^https?:\/\//i.test(url) ? url : url.startsWith('/') ? url : `/${url}`;
+  voucherViewUrl.value = url
+    ? /^https?:\/\//i.test(url)
+      ? url
+      : url.startsWith('/')
+        ? url
+        : `/${url}`
+    : '';
   voucherViewVisible.value = true;
+}
+
+/**
+ * 这一行是否已经登记过缴费
+ *
+ * ★ 不能只看「有没有截图」：**现金**登记时截图是非必填的，
+ *   只有 payMethod / paidAmount 才是"登记过"的可靠标志。
+ */
+function hasPayment(row: FeeRow): boolean {
+  return row.payMethod != null || !!row.voucherUrl;
 }
 
 /* ============ 导出 ============ */
@@ -590,9 +608,9 @@ onMounted(() => {
           <template #default="{ row }">
             <template v-if="!row.dept || row.dept === '初高'">
               <el-button link type="primary" size="small" @click="openPayment(row)">
-                {{ row.voucherUrl ? '重新登记' : '上传缴费凭证' }}
+                {{ hasPayment(row) ? '重新登记' : '上传缴费凭证' }}
               </el-button>
-              <el-button v-if="row.voucherUrl" link type="success" size="small" @click="viewVoucher(row)">
+              <el-button v-if="hasPayment(row)" link type="success" size="small" @click="viewVoucher(row)">
                 查看
               </el-button>
             </template>
@@ -664,7 +682,8 @@ onMounted(() => {
             placeholder="转账单号 / 其他说明，可留空"
           />
         </el-form-item>
-        <el-form-item label="缴费截图" required>
+        <!-- ★ 现金：截图为非必填（线下交付没有转账截图） -->
+        <el-form-item label="缴费截图" :required="paymentForm.payMethod !== PayMethod.CASH">
           <el-upload
             ref="voucherUploadRef"
             :auto-upload="false"
@@ -676,7 +695,12 @@ onMounted(() => {
           >
             <el-icon><Plus /></el-icon>
           </el-upload>
-          <div class="upload-tip">从本地选择图片：jpg / png / webp，单张不超过 5MB</div>
+          <div class="upload-tip">
+            <template v-if="paymentForm.payMethod === PayMethod.CASH">
+              现金可不传截图；如需留存收据也可从本地选一张（jpg / png / webp，≤ 5MB）
+            </template>
+            <template v-else>从本地选择图片：jpg / png / webp，单张不超过 5MB</template>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
