@@ -467,17 +467,24 @@ function todayStr(): string {
  *
  * 初高 → 只能初高班；大学 → 只能大学班；实训 → 三学段任意班。
  * 同时排除「该生当前所在班」，否则后端会以「无需末班」拒掉。
+ *
+ * ⚠️ 就业部（emp）已并入班级学段枚举，但就业部不办末班 —— 这里显式排除掉，
+ *    顺便把类型收窄回 TeachingStage（下游 STAGE_LABEL 只认三个学段）。
  */
-const repeatClassOptions = computed(() => {
+type RepeatClassOption = Omit<ClassOption, 'stage'> & { stage: TeachingStage };
+
+const repeatClassOptions = computed<RepeatClassOption[]>(() => {
   const row = repeatRow.value;
-  if (!row) return [] as ClassOption[];
+  if (!row) return [];
   const allow: TeachingStage[] = row.stage === 'jh' ? ['jh'] : row.stage === 'class' ? ['class'] : ['jh', 'class', 'job'];
-  return classOptions.value.filter((c) => allow.includes(c.stage) && c.classId !== row.classId);
+  return classOptions.value.filter(
+    (c): c is RepeatClassOption => c.stage !== 'emp' && allow.includes(c.stage) && c.classId !== row.classId,
+  );
 });
 
 /** 按学段分组的选项（实训能看到三个学段，分组才不会混在一起） */
 const repeatClassGroups = computed(() => {
-  const map = new Map<TeachingStage, ClassOption[]>();
+  const map = new Map<TeachingStage, RepeatClassOption[]>();
   for (const c of repeatClassOptions.value) {
     const list = map.get(c.stage) || [];
     list.push(c);

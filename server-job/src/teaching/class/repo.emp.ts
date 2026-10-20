@@ -94,6 +94,10 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase)),
+    // 就业部/实训仍按数字阶段码（就业部阶段方案）走，不落阶段方案三列 —— 与 repo.job 同口径取空
+    schemeId: str(r.scheme_id),
+    schemeStageId: str(r.scheme_stage_id),
+    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
