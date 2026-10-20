@@ -83,28 +83,24 @@ const payStatusOptions = computed<Array<{ label: string; value: number }>>(() =>
 
 /**
  * 就业催费单状态（call_status）→ 统一缴费状态
- *   1 待催缴 → 1 待缴；2 催缴中 → 1 待缴（还没收到钱）；3 已缴清 → 2 已缴
+ *   3 已缴清 → 2 已缴
+ *   1 待催缴 / 2 催缴中：还没收到钱 → 待缴；**已过应缴日则为逾期**（2026-10-20 用户反馈
+ *   「剩余 -12 天了还显示待缴」—— 逾期不在催费单状态里，只能按日期派生）
  */
-function callStatusToPayStatus(callStatus: any): number {
+function callStatusToPayStatus(callStatus: any, dueDate?: string | null): number {
   const s = Number(callStatus);
   if (s === 3) return PayStatus.PAID; // 已缴清 → 已缴
-  return PayStatus.UNPAID; // 待催缴 / 催缴中 → 待缴
+  return isPastDate(dueDate) ? PayStatus.OVERDUE : PayStatus.UNPAID;
 }
 
-/**
- * 统一缴费状态 → 就业催费单的查询条件
- *
- *   1 待缴 → callStatus 1,2（待催缴 + 催缴中）
- *   2 已缴 → callStatus 3
- *   4 逾期 → callStatus 1,2 且只看已过应缴日
- *   3 已核对 / 5 冻结 → 就业没有对应状态 → 返回 null（该源不出数据，而不是忽略筛选）
- */
-function payStatusToCallQuery(payStatus?: number): { callStatus?: string; onlyOverdue?: boolean } | null {
-  if (payStatus === undefined || payStatus === null) return {};
-  if (payStatus === PayStatus.UNPAID) return { callStatus: '1,2' };
-  if (payStatus === PayStatus.PAID) return { callStatus: '3' };
-  if (payStatus === PayStatus.OVERDUE) return { callStatus: '1,2', onlyOverdue: true };
-  return null;
+/** 日期串（YYYY-MM-DD / 带时间）是否早于今天 */
+function isPastDate(dateStr?: string | null): boolean {
+  if (!dateStr) return false;
+  const d = String(dateStr).slice(0, 10);
+  const now = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+  return d < today;
 }
 
 function isJhRow(row: FeeRow) {
@@ -151,9 +147,10 @@ function callToRow(r: any): FeeRow {
     feeType: r.feeType,
     feeTypeName: r.feeTypeName || '',
     feeAmount: Number(r.feeAmount || 0),
-    // ★ 2026-10-20：就业也按统一缴费状态展示（原催缴状态留在 callStatusName 里，列上用 title 提示）
-    payStatus: callStatusToPayStatus(r.callStatus),
-    payStatusName: PAY_STATUS_NAME[callStatusToPayStatus(r.callStatus)] || '',
+    // ★ 2026-10-20：就业也按统一缴费状态展示（原催缴状态留在 callStatusName 里，列上用 title 提示）；
+    //    未缴清且已过应缴日 → 逾期（催费单本身没有「逾期」这个状态）
+    payStatus: callStatusToPayStatus(r.callStatus, r.dueDate),
+    payStatusName: PAY_STATUS_NAME[callStatusToPayStatus(r.callStatus, r.dueDate)] || '',
     callStatusName: r.callStatusName || '',
     expireDate: r.dueDate || undefined,
     isUrgent: !!r.overdue,
@@ -181,28 +178,23 @@ async function loadData() {
       tableRows.value = data.list.map((r) => urgeToRow(r));
       serverTotal.value = data.total;
     } else if (query.dept === 'employ') {
-      // 就业催费单：缴费状态统一成初高/大学那套，这里翻译成 callStatus 查询
-      const m = payStatusToCallQuery(query.payStatus);
-      const data = m
-        ? await fetchFeeCallList({
-            page: query.page,
-            size: query.size,
-            classId: query.classId,
-            feeType: query.feeType,
-            callStatus: m.callStatus,
-            onlyOverdue: query.isUrgent || m.onlyOverdue,
-            startDate: query.startDate,
-            endDate: query.endDate,
-            keyword: query.keyword || undefined,
-          })
-        : { list: [], total: 0 };
+      // 就业催费单：缴费状态统一成初高/大学那套，由后端按口径翻译（待缴/逾期靠应缴日区分）
+      const data = await fetchFeeCallList({
+        page: query.page,
+        size: query.size,
+        classId: query.classId,
+        feeType: query.feeType,
+        payStatus: query.payStatus,
+        onlyOverdue: query.isUrgent,
+        startDate: query.startDate,
+        endDate: query.endDate,
+        keyword: query.keyword || undefined,
+      });
       tableRows.value = data.list.map((r) => callToRow(r));
       serverTotal.value = data.total;
     } else if (query.dept === 'all') {
       // 三源各取前 100 条合并（催费数据量级远小于此），应缴日期倒序，前端分页
       const kw = query.keyword || undefined;
-      // ★ 就业源：统一缴费状态 → 催费单查询条件（待缴=1,2；已缴=3；逾期=1,2+只看逾期）
-      const callQ = payStatusToCallQuery(query.payStatus);
       const settled = await Promise.allSettled([
         fetchFeeList({ ...query, page: 1, size: 100 }),
         urgeList({
@@ -216,20 +208,18 @@ async function loadData() {
           endDate: query.endDate,
           keyword: kw,
         }),
-        // 选了「已核对 / 冻结」时就业没有对应状态 → 该源直接不出数据（而不是忽略筛选条件）
-        callQ === null
-          ? Promise.resolve({ list: [], total: 0 } as any)
-          : fetchFeeCallList({
-              page: 1,
-              size: 100,
-              classId: query.classId,
-              feeType: query.feeType,
-              callStatus: callQ.callStatus,
-              onlyOverdue: query.isUrgent || callQ.onlyOverdue,
-              startDate: query.startDate,
-              endDate: query.endDate,
-              keyword: kw,
-            }),
+        // 选了「已核对 / 冻结」时就业没有对应状态 → 后端 payStatus 翻译成 1=0，该源不出数据
+        fetchFeeCallList({
+          page: 1,
+          size: 100,
+          classId: query.classId,
+          feeType: query.feeType,
+          payStatus: query.payStatus,
+          onlyOverdue: query.isUrgent,
+          startDate: query.startDate,
+          endDate: query.endDate,
+          keyword: kw,
+        }),
       ]);
       const rows: FeeRow[] = [];
       if (settled[0].status === 'fulfilled') {

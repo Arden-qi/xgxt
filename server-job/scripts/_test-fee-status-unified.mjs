@@ -56,6 +56,15 @@ function dayOffset(n) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/**
+ * 初高夹具（复现用户原话「哪个人都 -12 天了还是代缴不是逾期」）
+ * 库里 pay_status 都写 **1 待缴**（财务侧从不写 4），靠到期日判断该不该显示逾期
+ */
+const JH_FIX = [
+  { key: 'late', pay: 1, offset: -12, expect: 4, expectName: '逾期', label: '待缴 + 到期日过去 12 天' },
+  { key: 'soon', pay: 1, offset: 10, expect: 1, expectName: '待缴', label: '待缴 + 还剩 10 天' },
+];
+
 /** 就业夹具：1 待催缴（逾期） / 2 催缴中（未到期） / 3 已缴清（逾期也不该算紧急） */
 const CALL_FIX = [
   { key: 'wait', callStatus: 1, due: -3, label: '待催缴·已逾期' },
@@ -65,6 +74,7 @@ const CALL_FIX = [
 
 (async () => {
   let db = null;
+  let dbJh = null;
   try {
     /* ================= A. 静态契约 ================= */
     const enumsJh = read('shared-types', 'src', 'class-jh', 'enums.ts');
@@ -94,6 +104,32 @@ const CALL_FIX = [
     );
     check('③ 逾期标签色 = danger（原来落到冻结的灰色，看着像没状态）', /status === 4\) return 'danger'/.test(fmt));
 
+    // ★ 第三个坑（用户第二次反馈）：财务从不写 4，逾期必须按到期日派生，且筛选也按派生值
+    check(
+      '③ 初高：待缴 + 已过到期日 → 派生为逾期（effectivePayStatus）',
+      /function effectivePayStatus[\s\S]{0,300}?PayStatus\.UNPAID[\s\S]{0,160}?PayStatus\.OVERDUE/.test(feeRoute),
+    );
+    check(
+      '③ 初高：缴费状态不能在 SQL 层按 pay_status 筛（派生后必须按展示状态筛）',
+      !/if \(q\.payStatus\) query\.andWhere\('pay_status'/.test(feeRoute) &&
+        /if \(q\.payStatus\) list = list\.filter\(\(x\) => x\.payStatus === q\.payStatus\)/.test(feeRoute),
+    );
+    check(
+      '③ 大学：催缴列表同样按到期日派生逾期',
+      /rawPayStatus === PayStatus\.UNPAID && overdueDays > 0 \? PayStatus\.OVERDUE/.test(
+        read('server-job', 'src', 'class', 'modules', 'urge', 'urge.route.ts'),
+      ),
+    );
+    check(
+      '③ 就业：未缴清且已过应缴日 → 逾期（前端 callStatusToPayStatus 带 dueDate）',
+      /callStatusToPayStatus\(callStatus: any, dueDate\?: string \| null\)/.test(feeList),
+    );
+    check(
+      '③ 就业：筛选按统一 payStatus 由后端翻译（待缴排掉过期、逾期按应缴日）',
+      /payStatus: z\.coerce\.number\(\)\.int\(\)\.optional\(\)/.test(feeCallRoute) &&
+        /q\.payStatus === 4\) base\.whereIn\('call_status', \[1, 2\]\)\.andWhere\('due_date', '<', t\)/.test(feeCallRoute),
+    );
+
     check(
       '④ 缴费状态下拉三部门共用 PAY_STATUS_NAME',
       /Object\.entries\(PAY_STATUS_NAME\)\.map/.test(feeList) && !/FEE_CALL_STATUS_NAME/.test(feeList),
@@ -104,7 +140,7 @@ const CALL_FIX = [
     );
     check(
       '④ 就业行按折算后的状态显示（原始催缴状态挂 title 备查）',
-      /payStatus: callStatusToPayStatus\(r\.callStatus\)/.test(feeList) && /催费单状态：/.test(feeList),
+      /payStatus: callStatusToPayStatus\(r\.callStatus, r\.dueDate\)/.test(feeList) && /催费单状态：/.test(feeList),
     );
     check(
       '⑤ 就业接口 callStatus 支持多值（「待缴」= 待催缴 1 + 催缴中 2）',
@@ -147,6 +183,69 @@ const CALL_FIX = [
       '★ 逾期行的状态名就是「逾期」',
       overdueRows.length === 0 || overdueRows.every((r) => r.payStatusName === '逾期'),
       [...new Set(overdueRows.map((r) => r.payStatusName))].join('/') || '无逾期行',
+    );
+
+    /* ---- B1.5 初高夹具：库里是「待缴」但已过到期日 → 展示必须是「逾期」 ---- */
+    dbJh = conn('sms_class_jh');
+    for (const [i, f] of JH_FIX.entries()) {
+      const row = {
+        id: `${P}jh-${f.key}`,
+        create_time: nowText(),
+        create_by: 'selftest',
+        is_deleted: 0,
+        student_id: `${P}jhstu${i}`,
+        student_no: `${P}JH${i}`,
+        student_name: `派生测试${f.key}`,
+        class_id: null,
+        class_name: null,
+        dept_code: 1,
+        fee_type: 1,
+        fee_amount: 80000,
+        pay_status: f.pay,
+        pay_date: null,
+        expire_date: dayOffset(f.offset),
+        voucher_url: null,
+        source_system: 'local',
+        source_id: `${P}jhdiff${f.key}`,
+        period: null,
+      };
+      const exists = await dbJh('t_class_fee').where({ id: row.id }).first('id');
+      if (exists) await dbJh('t_class_fee').where({ id: row.id }).update(row);
+      else await dbJh('t_class_fee').insert(row);
+    }
+    const jhFixRes = await req(`${BASE}/api/class-jh/fee/list?keyword=${P}&page=1&size=50`, { token, timeout: 20000 });
+    const jhFixRows = jhFixRes.json?.data?.list || [];
+    const byNo = Object.fromEntries(jhFixRows.map((r) => [r.studentNo, r]));
+    check(
+      '★ 库里「待缴」但已过到期日 12 天 → 展示为「逾期」且标紧急（用户报的就是这条）',
+      byNo[`${P}JH0`]?.payStatusName === '逾期' &&
+        byNo[`${P}JH0`]?.payStatus === 4 &&
+        byNo[`${P}JH0`]?.rawPayStatus === 1 &&
+        byNo[`${P}JH0`]?.isUrgent === true,
+      JSON.stringify({
+        状态: byNo[`${P}JH0`]?.payStatusName,
+        原始: byNo[`${P}JH0`]?.rawPayStatus,
+        剩余: byNo[`${P}JH0`]?.remainDays,
+      }),
+    );
+    check(
+      '★ 未过到期日的「待缴」仍是「待缴」（不能把没到期的一起算逾期）',
+      byNo[`${P}JH1`]?.payStatusName === '待缴' && byNo[`${P}JH1`]?.payStatus === 1,
+      `状态=${byNo[`${P}JH1`]?.payStatusName} 剩余=${byNo[`${P}JH1`]?.remainDays}`,
+    );
+    const f4 = await req(`${BASE}/api/class-jh/fee/list?payStatus=4&keyword=${P}&page=1&size=50`, { token, timeout: 20000 });
+    const f4Nos = (f4.json?.data?.list || []).map((r) => r.studentNo).sort();
+    check(
+      '★ 按「逾期」筛选能筛出派生的逾期行（不能只认库里的 4）',
+      JSON.stringify(f4Nos) === JSON.stringify([`${P}JH0`]),
+      `实际 ${f4Nos.join(',') || '空'}`,
+    );
+    const f1 = await req(`${BASE}/api/class-jh/fee/list?payStatus=1&keyword=${P}&page=1&size=50`, { token, timeout: 20000 });
+    const f1Nos = (f1.json?.data?.list || []).map((r) => r.studentNo).sort();
+    check(
+      '★ 按「待缴」筛选不含逾期行（显示什么就筛什么）',
+      JSON.stringify(f1Nos) === JSON.stringify([`${P}JH1`]),
+      `实际 ${f1Nos.join(',') || '空'}`,
     );
 
     /* ---- B2. 就业：造 3 行夹具，验证统一状态与多值筛选 ---- */
@@ -214,6 +313,36 @@ const CALL_FIX = [
       `total=${overdueOnly.total} 状态=${overdueOnly.list.map((r) => r.callStatus).join(',')}`,
     );
 
+    /* ---- B2.5 就业按统一 payStatus 筛选（后端翻译，前端不再自己折算） ---- */
+    const byPay = async (ps) => {
+      const r = await req(`${BASE}/api/job/fee-call/page?page=1&size=50&keyword=${P}&payStatus=${ps}`, { token, timeout: 20000 });
+      return { code: r.json?.code, list: r.json?.data?.list || [], total: r.json?.data?.total };
+    };
+    const pay1 = await byPay(1);
+    check(
+      '★ 就业 payStatus=1 待缴 → 只有未过应缴日的（催缴中）',
+      pay1.total === 1 && pay1.list[0]?.callStatus === 2,
+      `total=${pay1.total} 状态=${pay1.list.map((r) => r.callStatus).join(',')}`,
+    );
+    const pay4 = await byPay(4);
+    check(
+      '★ 就业 payStatus=4 逾期 → 只有未缴清且已过应缴日的',
+      pay4.total === 1 && pay4.list[0]?.callStatus === 1,
+      `total=${pay4.total} 状态=${pay4.list.map((r) => r.callStatus).join(',')}`,
+    );
+    const pay2 = await byPay(2);
+    check(
+      '★ 就业 payStatus=2 已缴 → 只有已缴清',
+      pay2.total === 1 && pay2.list[0]?.callStatus === 3,
+      `total=${pay2.total}`,
+    );
+    const pay3 = await byPay(3);
+    check(
+      '★ 就业 payStatus=3 已核对 → 无此状态，不出数据（不是忽略条件）',
+      pay3.code === 200 && pay3.total === 0,
+      `total=${pay3.total}`,
+    );
+
     /* ---- B3. 前端编译产物：状态不再空白、提示文案已改 ---- */
     const fe = await req(`${BASE}/src/class-jh/views/FeeList.vue`, { timeout: 15000 });
     check(
@@ -224,6 +353,15 @@ const CALL_FIX = [
   } catch (e) {
     check('脚本执行未抛异常', false, e?.message || String(e));
   } finally {
+    if (dbJh) {
+      try {
+        await dbJh('t_class_fee').whereIn('id', JH_FIX.map((f) => `${P}jh-${f.key}`)).update({ is_deleted: 1 });
+        console.log(`（已逻辑删除 ${JH_FIX.length} 行初高夹具）`);
+      } catch (e) {
+        console.log(`（初高清理失败，人工处理：${e?.message || e}）`);
+      }
+      await dbJh.destroy();
+    }
     if (db) {
       try {
         await db('t_job_fee_call').whereIn('id', CALL_FIX.map((f) => `${P}${f.key}`)).update({ is_deleted: 1 });

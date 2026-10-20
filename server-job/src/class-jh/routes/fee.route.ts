@@ -55,6 +55,25 @@ function calcRemainDays(expireDate: any): number | null {
 const UNPAID_STATUSES = [PayStatus.UNPAID, PayStatus.OVERDUE, PayStatus.FROZEN];
 
 /**
+ * 计算「对外展示用的缴费状态」
+ *
+ * ★ 2026-10-20 第二个坑：用户看到「剩余 -12 天了还显示待缴，为什么不显示逾期？」
+ *   原因：财务侧根本不写 4（财务枚举只有 1待缴/2待核对/3已缴/5冻结，4 只存在于列注释里），
+ *   所以过了到期日的行，库里 pay_status 还是 **1 待缴** —— 4 靠数据是等不来的。
+ *   → 逾期只能**按日期派生**：还是待缴、且到期日已过 → 展示为「逾期」。
+ *
+ * 派生只针对「待缴(1)」：
+ *   · 已缴(2) / 已核对(3)：钱已经收了，过期也不叫逾期，状态不变；
+ *   · 冻结(5)：冻结期间本来就不该催，保持冻结，别被改成逾期。
+ */
+function effectivePayStatus(rawPayStatus: number, remainDays: number | null): number {
+  if (rawPayStatus === PayStatus.UNPAID && remainDays !== null && remainDays < 0) {
+    return PayStatus.OVERDUE;
+  }
+  return rawPayStatus;
+}
+
+/**
  * 缴费台账行 → 实体（含派生 remainDays/isUrgent）
  *
  * ★ 2026-10-20 用户要求：列表补「学生手机号 / 家长手机号」。
@@ -62,11 +81,15 @@ const UNPAID_STATUSES = [PayStatus.UNPAID, PayStatus.OVERDUE, PayStatus.FROZEN];
  *   21 列里没有任何 phone 列），联系方式只在学生表 t_class_student 上，
  *   → 由调用方按 studentId 批量补齐（见 fetchStudentContacts），
  *   这里只负责把补好的值透传出去，缺学生档时给 null（前端显示 —）。
+ *
+ * ★ 2026-10-20：payStatus 输出的是**派生后的状态**（逾期按到期日算），
+ *   rawPayStatus 保留库里的原值，方便排查「为什么这条是逾期」。
  */
 function toFee(r: any, remindDays: number) {
   const remainDays = calcRemainDays(r.expire_date);
+  const payStatus = effectivePayStatus(r.pay_status, remainDays);
   const isUrgent =
-    UNPAID_STATUSES.includes(r.pay_status) && remainDays !== null && remainDays <= remindDays;
+    UNPAID_STATUSES.includes(payStatus) && remainDays !== null && remainDays <= remindDays;
   return {
     feeId: r.id,
     studentId: r.student_id,
@@ -80,8 +103,10 @@ function toFee(r: any, remindDays: number) {
     feeType: r.fee_type,
     feeTypeName: nameOf(FEE_TYPE_NAME, r.fee_type),
     feeAmount: r.fee_amount,
-    payStatus: r.pay_status,
-    payStatusName: nameOf(PAY_STATUS_NAME, r.pay_status),
+    payStatus,
+    payStatusName: nameOf(PAY_STATUS_NAME, payStatus),
+    /** 库里的原值（1 待缴 / 2 已缴 / 3 已核对 / 4 逾期 / 5 冻结） */
+    rawPayStatus: r.pay_status,
     payDate: r.pay_date,
     expireDate: r.expire_date,
     remainDays,
@@ -259,7 +284,10 @@ feeRouter.get(
       });
     }
     if (q.feeType) query.andWhere('fee_type', q.feeType);
-    if (q.payStatus) query.andWhere('pay_status', q.payStatus);
+    // ⚠️ 缴费状态**不能按库里的 pay_status 在 SQL 里筛**：
+    //    逾期是按到期日派生的（见 effectivePayStatus），库里可能还写着「待缴」。
+    //    若在这里 where pay_status=4 → 一条都查不到；where pay_status=1 → 又会把
+    //    显示成「逾期」的行带出来。所以统一等映射完按「展示状态」筛。
     if (q.startDate) query.andWhere('expire_date', '>=', q.startDate);
     if (q.endDate) query.andWhere('expire_date', '<=', q.endDate);
     if (q.keyword) {
@@ -276,6 +304,8 @@ feeRouter.get(
     let list = allRows
       .map((r: any) => toFee(r, remindDays))
       .filter((x: any) => withinUrgeWindow(x, windowDays));
+    // ★ 缴费状态按派生后的状态筛（逾期 = 待缴 + 已过到期日，见 effectivePayStatus）
+    if (q.payStatus) list = list.filter((x) => x.payStatus === q.payStatus);
     if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
 
     const total = list.length;
@@ -330,7 +360,7 @@ feeRouter.get(
       });
     }
     if (q.feeType) query.andWhere('fee_type', q.feeType);
-    if (q.payStatus) query.andWhere('pay_status', q.payStatus);
+    // ⚠️ 缴费状态与列表同口径：导出也按派生后的状态筛（SQL 层不筛 pay_status，原因见 /list）
     // ★ 2026-10-20：导出补应缴日期筛选 —— 列表筛完导出却是全量，用户会以为筛选没生效
     if (q.startDate) query.andWhere('expire_date', '>=', q.startDate);
     if (q.endDate) query.andWhere('expire_date', '<=', q.endDate);
@@ -347,6 +377,8 @@ feeRouter.get(
     let list = rows
       .map((r: any) => toFee(r, remindDays))
       .filter((x: any) => withinUrgeWindow(x, windowDays));
+    // ★ 导出与列表同一缴费状态口径（逾期按到期日派生）
+    if (q.payStatus) list = list.filter((x) => x.payStatus === q.payStatus);
     if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
 
     // ★ 档案信息（2026-10-20）：导出与列表同口径，按 500 分片批量取档案

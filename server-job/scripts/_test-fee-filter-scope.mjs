@@ -104,8 +104,9 @@ async function upsertRows(knexInst, table, rows) {
     );
     const callBlock = feeList.slice(feeList.indexOf('fetchFeeCallList({'), feeList.indexOf('});', feeList.indexOf('fetchFeeCallList({')));
     check(
-      '★ 就业 fetchFeeCallList 传 callStatus / onlyOverdue / startDate / endDate',
-      ['callStatus', 'onlyOverdue', 'startDate', 'endDate'].every((k) => callBlock.includes(k)),
+      // 2026-10-20：缴费状态统一后，就业不再前端折算 callStatus，直接传统一 payStatus 给后端翻译
+      '★ 就业 fetchFeeCallList 传 payStatus / onlyOverdue / startDate / endDate',
+      ['payStatus', 'onlyOverdue', 'startDate', 'endDate'].every((k) => callBlock.includes(k)),
       callBlock.replace(/\s+/g, ' ').slice(0, 160),
     );
     check(
@@ -113,9 +114,10 @@ async function upsertRows(knexInst, table, rows) {
       (feeList.match(/onlyOverdue: query\.isUrgent/g) || []).length >= 2,
       `出现 ${(feeList.match(/onlyOverdue: query\.isUrgent/g) || []).length} 次`,
     );
+    const feeCallRoute = read('server-job', 'src', 'routes', 'feeCall.route.ts');
     check(
-      '★ 选「已核对 / 冻结」时就业无对应状态 → 该源不出数据（不静默忽略筛选）',
-      /callQ === null[\s\S]{0,120}Promise\.resolve/.test(feeList),
+      '★ 选「已核对 / 冻结」时就业无对应状态 → 后端翻译成 1=0 / 该源不出数据（不静默忽略筛选）',
+      /payStatus: query\.payStatus/.test(feeList) && /whereRaw\('1 = 0'\)/.test(feeCallRoute),
     );
     check(
       '★ 页面提示文案同步（三个筛选对全部部门生效）',
@@ -254,9 +256,22 @@ async function upsertRows(knexInst, table, rows) {
 
     const urgePaid = await urge('&payStatus=1');
     check(
-      '★ 大学「缴费状态」筛选生效（payStatus=1 待缴 只出待缴行）',
-      urgePaid.list.length > 0 && urgePaid.list.every((r) => r.payStatus === 1) && ids(urgePaid).includes(URGE_FIX.overdue),
+      // 2026-10-20：逾期改为按到期日派生后，「待缴」= 未缴清且**没过**应缴日，
+      // 夹具里那条过期的（pay_status=1 + 2020 年到期）归到「逾期」，不再算待缴。
+      '★ 大学「缴费状态」= 待缴 → 只出未过应缴日的未缴行（过期那条算逾期）',
+      urgePaid.list.length > 0 &&
+        urgePaid.list.every((r) => r.payStatus === 1) &&
+        ids(urgePaid).includes(URGE_FIX.future) &&
+        !ids(urgePaid).includes(URGE_FIX.overdue),
       `rows=${urgePaid.list.length}`,
+    );
+    const urgeOverdue = await urge('&payStatus=4');
+    check(
+      '★ 大学「缴费状态」= 逾期 → 出「待缴 + 已过应缴日」的行（库里还是 1，按到期日派生）',
+      urgeOverdue.list.length === 1 &&
+        ids(urgeOverdue).includes(URGE_FIX.overdue) &&
+        urgeOverdue.list.every((r) => r.payStatus === 4),
+      `rows=${urgeOverdue.list.length}`,
     );
 
     const urgeDate = await urge(`&startDate=${DATE_OLD}&endDate=${DATE_OLD}`);

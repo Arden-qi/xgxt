@@ -172,6 +172,18 @@ const listSchema = z.object({
    *   单值仍然照旧可用（`3` 就是只看已缴清），不影响就业模块自己的调用。
    */
   callStatus: z.union([z.coerce.number().int(), z.string()]).optional(),
+  /**
+   * 统一缴费状态（催费页用，与初高/大学同一套码：1待缴 2已缴 3已核对 4逾期 5冻结）
+   *
+   * ★ 2026-10-20：催费页「缴费状态」三部门统一后，就业侧不能再让前端自己折算
+   *   （「待缴」还要排掉已过期的、「逾期」要按应缴日派生），这里按展示口径翻译成
+   *   call_status + due_date 条件：
+   *     1 待缴 → call_status 1,2 且未过应缴日
+   *     2 已缴 → call_status 3（已缴清）
+   *     4 逾期 → call_status 1,2 且已过应缴日
+   *     3 已核对 / 5 冻结 → 就业没有这些状态 → 不出数据（不是忽略条件）
+   */
+  payStatus: z.coerce.number().int().optional(),
   onlyMine: z.coerce.boolean().optional(),
   // ★ 2026-10-20：「仅看紧急」对就业也要生效 ——
   //   就业行的 isUrgent 就是 overdue（逾期未缴清），这里按同一口径过滤。
@@ -209,6 +221,14 @@ feeCallRouter.get(
     }
     if (q.startDate) base.andWhere('due_date', '>=', q.startDate);
     if (q.endDate) base.andWhere('due_date', '<=', q.endDate);
+    // 统一缴费状态 → 催费单状态 + 应缴日（口径见 payStatus 注释）
+    if (q.payStatus !== undefined) {
+      const t = today();
+      if (q.payStatus === 1) base.whereIn('call_status', [1, 2]).andWhere('due_date', '>=', t);
+      else if (q.payStatus === 2) base.where('call_status', 3);
+      else if (q.payStatus === 4) base.whereIn('call_status', [1, 2]).andWhere('due_date', '<', t);
+      else base.whereRaw('1 = 0'); // 已核对 / 冻结：就业无此状态
+    }
     // 仅看逾期（= 仅看紧急）：已缴清的不算逾期，与 decorate 的 overdue 同口径
     if (q.onlyOverdue) {
       base.whereNot('call_status', FeeCallStatus.PAID).andWhere('due_date', '<', today());

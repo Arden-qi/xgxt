@@ -249,7 +249,20 @@ urgeRouter.get(
     await applySyncScope(base, user);
     if (query.classId) base.where('class_id', query.classId);
     if (query.feeType) base.where('fee_type', query.feeType);
-    if (query.payStatus) base.where('pay_status', query.payStatus);
+    // ★ 2026-10-20：缴费状态按「展示口径」筛。
+    //   财务侧不写 4（逾期只存在于列注释里），过了到期日的行库里还是「待缴」，
+    //   所以「逾期」= 库里就是 4，或者「待缴 + 已过到期日」；「待缴」则要排掉已过期的。
+    if (query.payStatus === PayStatus.OVERDUE) {
+      base.where(function (this: Knex.QueryBuilder) {
+        this.where('pay_status', PayStatus.OVERDUE).orWhere(function (this: Knex.QueryBuilder) {
+          this.where('pay_status', PayStatus.UNPAID).andWhere('expire_date', '<', t);
+        });
+      });
+    } else if (query.payStatus === PayStatus.UNPAID) {
+      base.where('pay_status', PayStatus.UNPAID).andWhere('expire_date', '>=', t);
+    } else if (query.payStatus) {
+      base.where('pay_status', query.payStatus);
+    }
     if (query.startDate) base.where('expire_date', '>=', query.startDate);
     if (query.endDate) base.where('expire_date', '<=', query.endDate);
     if (query.onlyOverdue) base.where('expire_date', '<', t).whereNot('pay_status', PayStatus.PAID);
@@ -266,13 +279,18 @@ urgeRouter.get(
       return rows.map((r) => {
         const c = rowsToCamel<Record<string, unknown>>([r])[0];
         const expire = r.expire_date as string;
-        const paid = (r.pay_status as number) === PayStatus.PAID;
+        const rawPayStatus = Number(r.pay_status ?? 0);
+        const paid = rawPayStatus === PayStatus.PAID;
         const overdueDays = paid ? 0 : daysBetween(expire, t);
+        // ★ 2026-10-20：逾期按到期日派生（库里可能还写着「待缴」）
+        const payStatus =
+          rawPayStatus === PayStatus.UNPAID && overdueDays > 0 ? PayStatus.OVERDUE : rawPayStatus;
         const amount = Number(r.amount ?? 0);
         return {
           ...c,
           feeTypeName: FeeTypeName[r.fee_type as number] ?? '未知',
-          payStatusName: PayStatusName[r.pay_status as number] ?? '未知',
+          payStatus,
+          payStatusName: PayStatusName[payStatus] ?? '未知',
           amountYuan: (amount / 100).toFixed(2),
           overdueDays,
           isOverdue: overdueDays > 0,
