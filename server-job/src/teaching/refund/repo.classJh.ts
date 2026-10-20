@@ -24,6 +24,7 @@ import { toRawRefundStatus, toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import { tbl, tblInsTrx, tblTrx } from '../shared/uniTable';
+import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 
 const T = 't_class_refund';
 const S = 't_class_student';
@@ -73,8 +74,10 @@ async function decorate(row: Record<string, any>): Promise<RefundRow> {
 }
 
 /** 学生下拉 */
-export async function studentOptions(keyword: string, limit: number): Promise<StudentOption[]> {
+export async function studentOptions(keyword: string, limit: number, user?: any): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_class_jh', S, STAGE).where('is_deleted', 0);
+  /* ★ 数据范围：项目经理/班主任只能选自己带的班的学生 */
+  if (user && !(await applyClassScope(q, 'class_id', STAGE, user))) return [];
   if (keyword) {
     q.andWhere((b) => {
       b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);
@@ -106,7 +109,7 @@ export async function findStudent(id: string) {
 }
 
 /** 分页查询 */
-export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; total: number }> {
+export async function list(q: RefundListQuery, user?: any): Promise<{ rows: RefundRow[]; total: number }> {
   const base = tbl(db, DB, T, STAGE).where('is_deleted', 0);
   if (q.keyword) {
     base.andWhere((b) => {
@@ -124,6 +127,9 @@ export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; tot
     if (q.status === 3) base.whereIn('refund_status', [3, 4, 5]);
     else base.andWhere('refund_status', raw);
   }
+
+  /* ★ 数据范围：只看我负责的班的退费单 */
+  if (user) await applyClassScopeKeepNull(base, 'class_id', STAGE, user);
 
   const [{ total }] = (await base.clone().count({ total: '*' })) as Array<{ total: number }>;
   const rows = (await base

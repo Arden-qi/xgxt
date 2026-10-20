@@ -58,6 +58,7 @@ import type { DormRepo } from './types';
 import { bedNoText } from 'shared-types/class';
 import { hasRole, RoleCode, StudentStatus } from 'shared-types';
 import { tbl, tblIns, upd } from '../shared/uniTable';
+import { visibleClassIds } from '../shared/dataScope';
 
 const DORM_T = 't_job_dorm';
 const BED_T = 't_job_dorm_bed';
@@ -160,18 +161,13 @@ export function makeRepo(stage: TeachingStage): DormRepo {
     if (hasRole(roles, RoleCode.TEACH_DEAN)) return null;
     if (hasRole(roles, RoleCode.SYS_ADMIN)) return null;
 
-    // ★ 业务用户 id（U004…）优先；老 token 没这个字段时回退到门户 userId
-    const uid = String(user?.businessUserId || user?.userId || user?.id || '');
-    if (!uid) return [];
-
-    // 班主任 / 教员 / 助教：班主任、任课老师、助理任一命中都算「我的班」
-    const classes = await tbl(db, SRC_DB, CLASS_T, stage)
-      .where({ is_deleted: false })
-      .andWhere((b: any) => {
-        b.where('head_teacher_id', uid).orWhere('teacher_id', uid).orWhere('assistant_id', uid);
-      })
-      .select('id');
-    const classIds = classes.map((c: any) => String(c.id));
+    /* ★ 2026-10-19：统一走「交棒模型」的班级范围（与出勤/成绩/班级同口径）
+         · 项目经理 → 自己负责且未结业的实训班
+         · 就业老师 → 已结业（交棒）的班
+         · 班主任三人组 → 自己带的班
+         原来这里只按 head/teacher/assistant 查，项目经理/就业老师匹配不到 → 恒为空。 */
+    const classIds = await visibleClassIds(stage, user);
+    if (classIds === null) return null;
     if (!classIds.length) return [];
 
     // ★ 直接问学生主档「你住哪间房」，不再经床位表中转

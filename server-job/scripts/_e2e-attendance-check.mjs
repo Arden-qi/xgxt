@@ -237,6 +237,10 @@ function conn(dbName) {
     };
     tokenAdmin = await login('admin');
     tokenJh = await login('sunmin'); // 初高账号
+    /** ★ 数据范围按「责任人列」过滤后，夹具班必须挂在 sunmin 名下，否则她读不到详情 */
+    const jhHeadId = (() => {
+      try { return JSON.parse(Buffer.from(String(tokenJh).split('.')[1], 'base64').toString()).userId || ''; } catch { return ''; }
+    })();
     const tokenJob = await login('zhouj'); // 实训账号
     check(
       '登录 admin / sunmin(初高) / zhouj(实训)',
@@ -252,7 +256,7 @@ function conn(dbName) {
       create_time: now,
       class_name: `${TAG}出勤自检班`,
       stage: 201,
-      head_teacher_id: 'test-head',
+      head_teacher_id: jhHeadId || 'test-head',
       head_teacher_name: '自检班主任',
       teacher_id: 'test-teacher',
       teacher_name: '自检教员',
@@ -264,7 +268,9 @@ function conn(dbName) {
       await mirror('sms_class_jh', 't_class_info', cRow, 'jh');
     }
     const studentIds = [];
-    for (let i = 1; i <= 3; i++) {
+    /* ★ 4 个在班学生，但只有前 3 人有出勤明细 —— 第 4 人用来验证
+       「详情要返回该班全部学生」（无明细的按出勤显示，2026-10-19 需求） */
+    for (let i = 1; i <= 4; i++) {
       const sid = randomUUID();
       studentIds.push(sid);
       made.students.push(sid);
@@ -283,7 +289,7 @@ function conn(dbName) {
       const sRow = await jhDb('t_class_student').where({ id: sid }).first();
       await mirror('sms_class_jh', 't_class_student', sRow, 'jh');
     }
-    console.log(`  已造夹具：1 个测试班 + 3 个在班学生（含统一表镜像）`);
+    console.log(`  已造夹具：1 个测试班 + 4 个在班学生（含统一表镜像；前 3 人有出勤明细）`);
 
     /* ---------- A. 班级下拉 ---------- */
     const cls = await req(`${API}/classes`, { token: tokenAdmin });
@@ -350,16 +356,27 @@ function conn(dbName) {
     const d = await req(`${API}/detail?stage=jh&id=${attId}`, { token: tokenAdmin });
     const details = d.json?.data?.details || [];
     const pairs = [];
-    let readOk = details.length === 3;
+    /** 有明细的 3 人：校验原码 → 统一状态名 */
+    let readOk = details.length >= 3;
     for (const row of details) {
       const rawRow = await probe(jhDb, 'sms_class_jh', 't_class_attendance_detail', 'jh')
         .where({ attendance_id: attId, student_id: row.studentId, is_deleted: 0 })
         .first();
-      const expect = JH_RAW_TO_NAME[Number(rawRow?.attendance_status)];
+      if (!rawRow) continue; // 第 4 人没有明细 → 由下面的「全班学生」断言单独覆盖
+      const expect = JH_RAW_TO_NAME[Number(rawRow.attendance_status)];
       pairs.push(`${rawRow?.student_name?.replace(TAG, '')}: 原码${rawRow?.attendance_status}→${row.statusName}(应${expect})`);
       if (row.statusName !== expect) readOk = false;
     }
     check('★ 读路径：初高原码 → 统一状态名 全对', readOk, pairs.join(' | '));
+
+    /* ★ 新增需求（2026-10-19）：详情要看到该班**全部**学生，
+       没有明细的在班学生按「出勤」显示（此前只返回有明细的行）。 */
+    const noRec = details.find((x) => x.studentId === studentIds[3]);
+    check(
+      '★ 详情返回该班全部学生（无明细的在班学生按「出勤」显示）',
+      details.length === 4 && noRec?.statusName === '出勤',
+      `明细 ${details.length} 行；第 4 人=${noRec?.statusName ?? '缺失'}`,
+    );
 
     /* ---------- D. ★ 写路径断言：统一码 → 初高原码 ---------- */
     // 用初高账号（sunmin）写：学生1=迟到(3) 学生2=病假(7) 学生3=出勤(1)

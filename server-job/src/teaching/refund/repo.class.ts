@@ -28,6 +28,7 @@ import { toRawRefundStatus, toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 
 const T = 't_class_refund_apply';
 const ITEM = 't_class_refund_item';
@@ -109,8 +110,10 @@ async function loadItems(ids: string[]): Promise<Record<string, Array<Record<str
 }
 
 /** 学生下拉 */
-export async function studentOptions(keyword: string, limit: number): Promise<StudentOption[]> {
+export async function studentOptions(keyword: string, limit: number, user?: any): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_class', S, STAGE).where('is_deleted', 0);
+  /* ★ 数据范围：项目经理/班主任只能选自己带的班的学生 */
+  if (user && !(await applyClassScope(q, 'class_id', STAGE, user))) return [];
   if (keyword) {
     q.andWhere((b) => {
       b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);
@@ -142,7 +145,7 @@ export async function findStudent(id: string) {
 }
 
 /** 分页查询 */
-export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; total: number }> {
+export async function list(q: RefundListQuery, user?: any): Promise<{ rows: RefundRow[]; total: number }> {
   // ★ 切读接入：t_class_refund_apply → t_uni_refund（统一表是超集，列名同名保留）
   const base = tbl(db, SRC, T, STAGE).where('is_deleted', 0);
   if (q.keyword) {
@@ -158,6 +161,9 @@ export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; tot
     if (q.status === 3) base.whereIn('refund_status', [3, 4, 5]);
     else base.andWhere('refund_status', await toRawRefundStatus(STAGE, q.status));
   }
+
+  /* ★ 数据范围：只看我负责的班的退费单 */
+  if (user) await applyClassScopeKeepNull(base, 'class_id', STAGE, user);
 
   const [{ total }] = (await base.clone().count({ total: '*' })) as Array<{ total: number }>;
   const rows = (await base

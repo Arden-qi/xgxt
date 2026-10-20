@@ -39,6 +39,7 @@ import type {
 import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
 
 const T = 't_job_class';
 const ROSTER_T = 't_job_class_student';
@@ -197,6 +198,8 @@ export const repo: ClassRepo = {
   async list(q, user) {
     const qb = buildBase(q);
     await applyScope(qb, user);
+    /* ★ 交棒模型：项目经理只看未结业的实训班，就业老师只看已结业的班 */
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) return [];
     const rows = (await qb.orderBy('create_time', 'desc')) as Array<Record<string, any>>;
     const counts = await countStudents(rows.map((r) => String(r.id)));
     return rows.map((r) => mapRow(r, counts.get(String(r.id)) ?? 0));
@@ -383,6 +386,9 @@ export const repo: ClassRepo = {
   async summary(q, user) {
     const qb = buildBase(q);
     await applyScope(qb, user);
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) {
+      return { stage: STAGE, stageName: STAGE_NAME, total: 0, openCount: 0, closedCount: 0, graduatingCount: 0, graduatedCount: 0, studentCount: 0 };
+    }
     const rows = (await qb.select('id', 'class_status')) as Array<Record<string, any>>;
     const counts = await countStudents(rows.map((r) => String(r.id)));
     let studentCount = 0;

@@ -15,6 +15,7 @@ import { db as classJhDb } from '../../class-jh/utils/db';
 import { db as classDb } from '../../class/db';
 import { db as jobDb } from '../../utils/db';
 import { tbl } from './uniTable';
+import { visibleClassIds } from './dataScope';
 import type { TeachingStage } from './dto';
 import { TEACHING_STAGE_NAME } from './dto';
 
@@ -45,18 +46,23 @@ const CLASS_TABLE: Record<
  * 取某学段的班级列表
  *
  * ★ 第 4 期步骤 2：改走 `tbl()` 路由（开关开=读统一表）
- *   这个函数被出勤/考试/成绩/退费/宿舍五个域共用，
- *   班级下拉取不到数据 → 五个域的界面同时空掉，
- *   所以它是切读的关键一环，不能漏。
+ * ★ 2026-10-19：可选传 `user` → 按角色数据范围过滤（项目经理只看自己的实训班等）。
+ *    不传 = 不过滤（内部工具/历史调用保持原行为）。
  */
 export async function listClassesByStage(
   stage: TeachingStage,
+  user?: any,
 ): Promise<Array<{ id: string; name: string }>> {
   const c = CLASS_TABLE[stage];
   const rows = (await tbl(c.conn, c.dbName, c.table, stage)
     .where('is_deleted', 0)
     .select('id', 'class_name as name')) as Array<{ id: string; name: string }>;
-  return rows.map((r) => ({ id: String(r.id), name: String(r.name ?? '') }));
+  const all = rows.map((r) => ({ id: String(r.id), name: String(r.name ?? '') }));
+  if (!user) return all;
+  const ids = await visibleClassIds(stage, user);
+  if (ids === null) return all;
+  const allow = new Set(ids);
+  return all.filter((c2) => allow.has(c2.id));
 }
 
 /**
@@ -90,10 +96,10 @@ export async function classNamesByIds(
 }
 
 /** 取多个学段的班级，打上学段标签 */
-export async function listClassesOfStages(stages: TeachingStage[]): Promise<ClassOption[]> {
+export async function listClassesOfStages(stages: TeachingStage[], user?: any): Promise<ClassOption[]> {
   const out: ClassOption[] = [];
   for (const s of stages) {
-    for (const c of await listClassesByStage(s)) {
+    for (const c of await listClassesByStage(s, user)) {
       out.push({ stage: s, stageName: TEACHING_STAGE_NAME[s], id: c.id, name: c.name });
     }
   }

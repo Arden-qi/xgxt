@@ -34,6 +34,7 @@ import { listClassesByStage } from '../shared/classOptions';
 import { db } from '../../utils/db';
 import { StudentStatus } from 'shared-types';
 import type { StudentRepo, StudentStat } from './types';
+import { assertStudentsInScope } from '../shared/dataScope';
 
 const REPOS: Record<StudentStage, StudentRepo> = {
   jh: repoClassJh.repo,
@@ -166,6 +167,8 @@ export async function getStudentDetail(
   user: any,
 ): Promise<StudentDetail> {
   await assertStageView(user, stage);
+  /* edu（教务）不是带班概念，不做班级级范围 */
+  if (stage !== 'edu') await assertStudentsInScope(stage as any, [id], user, '该学生');
   const d = await REPOS[stage].detail(id, user);
   if (!d) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或没有访问权限');
   return d;

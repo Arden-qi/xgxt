@@ -452,7 +452,7 @@ import {
 } from '@/teaching/api/class';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
-const STAGE_LABEL: Record<ClassStage, string> = { jh: '初高', class: '大学', job: '实训' };
+const STAGE_LABEL: Record<ClassStage, string> = { jh: '初高', class: '大学', job: '就业' };
 
 const stageOptions = computed(() => visibleStageOptions('class', CLASS_STAGES, STAGE_LABEL));
 

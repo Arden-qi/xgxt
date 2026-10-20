@@ -12,10 +12,11 @@ import * as repoJob from './repo.job';
 import type { ExamDetail, ExamListQuery, ExamRow, ExamSaveBody, TeachingStage } from '../shared/dto';
 import { TEACHING_STAGES } from '../shared/dto';
 import { assertStageCode, visibleStagesBy, type StageCodeMap } from '../shared/stageAccess';
+import { assertClassesInScope } from '../shared/dataScope';
 import { listClassesOfStages, type ClassOption } from '../shared/classOptions';
 
 type Repo = {
-  list: (q: ExamListQuery) => Promise<ExamRow[]>;
+  list: (q: ExamListQuery, user?: any) => Promise<ExamRow[]>;
   detail: (id: string) => Promise<ExamDetail | null>;
   save: (b: ExamSaveBody, userId: string, userName: string) => Promise<{ id: string }>;
   remove: (id: string, userId: string) => Promise<void>;
@@ -63,7 +64,27 @@ export async function listExams(
   if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有考试管理的访问权限');
   if (q.stage) await assertStageView(user, q.stage);
 
-  const parts = await Promise.all(stages.map((s) => REPOS[s].list(q)));
+  return listExamsForStages(stages, q, user);
+}
+
+/**
+ * ★ 2026-10-19：给「成绩管理页的考试下拉」用的内部实现 —— **不做考试域判权**
+ *
+ * 【为什么单独拆出来】
+ *   成绩页（`/teaching/score/*`）要选考试，必须读考试列表；但班主任/教员只有
+ *   成绩码（`class:grade:view`），没有考试码（`class:exam:view`）。
+ *   直接调 `/api/teaching/exam/list` 会 403 —— 实测「大学部班主任点成绩管理报无权限」。
+ *
+ *   于是成绩域自己开一个只读的 `/exam-options`，用**成绩域的权限码**判权，
+ *   再复用这里的查询逻辑。这样既不放开考试域的写操作，也不用给老师发考试权限。
+ *   （与 P3 时代 `examScore.route.ts` 的 `/exam-options` 是同一个思路。）
+ */
+export async function listExamsForStages(
+  stages: TeachingStage[],
+  q: ExamListQuery,
+  user?: any,
+): Promise<{ total: number; page: number; size: number; list: ExamRow[] }> {
+  const parts = await Promise.all(stages.map((s) => REPOS[s].list(q, user)));
   const merged = parts.flat();
   merged.sort((a, b) => {
     if (a.examDate !== b.examDate) return a.examDate < b.examDate ? 1 : -1;
@@ -81,6 +102,7 @@ export async function getExamDetail(
 ): Promise<ExamDetail> {
   await assertStageView(user, stage);
   const d = await REPOS[stage].detail(id);
+  if (d) await assertClassesInScope(stage, d.record.classIds || [], user, '该班级考试');
   if (!d) throw new BizError(BizCode.EXAM_NOT_FOUND, '考试不存在');
   return d;
 }

@@ -43,6 +43,17 @@ import { isReadOnlyUser } from '@/store/permission';
  * 学段（只显示有权限的）
  * ============================================================ */
 const STAGE_ORDER: TeachingStage[] = ['jh', 'class', 'job'];
+
+/**
+ * ★ 2026-10-19 口径调整：本页把「学段」改称「部门」，
+ *   且实训对外统一叫「就业」。
+ *   ⚠️ 只在本页生效：后端/其它页返回的 stageName 仍是旧叫法，
+ *      所以展示一律走 deptName()，不直接渲染 row.stageName。
+ */
+const DEPT_NAME: Record<string, string> = { jh: '初高', class: '大学', job: '就业' };
+const deptName = (stage?: string | null): string =>
+  stage ? (DEPT_NAME[stage] ?? STAGE_NAME[stage as TeachingStage] ?? stage) : '';
+
 /** 各学段的原页面路径与权限码（与合并前一致） */
 
 const availableStages = computed(() =>
@@ -183,8 +194,7 @@ function today(): string {
 const entryStage = computed<TeachingStage | ''>(
   () => entry.stage || (availableStages.value.length === 1 ? availableStages.value[0] : ''),
 );
-/** 大学是「手工填人数」，另两个是「按人勾状态」 */
-const isManualStage = computed(() => entryStage.value === 'class');
+/* ★ 2026-10-19：三个部门统一「按人勾状态」——大学部不再手工填人数 */
 
 const entryClassOptions = computed(() =>
   entryStage.value ? classOptions.value.filter((c) => c.stage === entryStage.value) : [],
@@ -210,7 +220,7 @@ function openEntry(row?: AttendanceRow) {
 }
 
 async function loadBoard() {
-  if (isManualStage.value || !entryStage.value || !entry.classId) {
+  if (!entryStage.value || !entry.classId) {
     board.value = null;
     return;
   }
@@ -233,23 +243,21 @@ const NEED_REASON = [2, 5, 6, 7];
 
 async function submitEntry() {
   const stage = entryStage.value as TeachingStage;
-  if (!stage) return ElMessage.warning('请选择学段');
+  if (!stage) return ElMessage.warning('请选择部门');
   if (!entry.classId) return ElMessage.warning('请选择班级');
   if (!entry.attendanceDate) return ElMessage.warning('请选择日期');
 
   const payload: any = { stage, classId: entry.classId, attendanceDate: entry.attendanceDate };
-  if (isManualStage.value) {
-    payload.shouldCount = Number(entry.shouldCount);
-    payload.actualCount = Number(entry.actualCount);
-  } else {
-    const list = board.value?.rows || [];
-    if (!list.length) return ElMessage.warning('该班当天没有在班学生');
-    const missing = list.find((r) => NEED_REASON.includes(Number(r.status)) && !r.reason);
-    if (missing) {
-      return ElMessage.warning(`「${missing.studentName || missing.studentId}」状态为${UNIFIED_STATUS_NAME[Number(missing.status)]}，必须填写原因`);
-    }
-    payload.rows = list.map((r) => ({ studentId: r.studentId, status: Number(r.status), reason: r.reason || null }));
+  /* 三个部门统一：按人提交（后端据此算应到/实到/出勤率） */
+  const list = board.value?.rows || [];
+  if (!list.length) return ElMessage.warning('该班当天没有在班学生');
+  const missing = list.find((r) => NEED_REASON.includes(Number(r.status)) && !r.reason);
+  if (missing) {
+    return ElMessage.warning(
+      `「${missing.studentName || missing.studentId}」状态为${UNIFIED_STATUS_NAME[Number(missing.status)]}，必须填写原因`,
+    );
   }
+  payload.rows = list.map((r) => ({ studentId: r.studentId, status: Number(r.status), reason: r.reason || null }));
 
   entrySaving.value = true;
   try {
@@ -268,10 +276,10 @@ async function submitEntry() {
 async function handleExport() {
   const list = await exportAttendance(baseParams());
   if (!list.length) return ElMessage.warning('没有可导出的数据');
-  const head = ['日期', '学段', '班级', '教员', '班主任', '应到', '实到', '未到', '出勤率(%)'];
+  const head = ['日期', '部门', '班级', '教员', '班主任', '应到', '实到', '未到', '出勤率(%)'];
   const lines = list.map((r) => [
     r.attendanceDate,
-    r.stageName,
+    deptName(r.stage),
     r.className,
     r.teacherName ?? '',
     r.headTeacherName ?? '',
@@ -297,10 +305,10 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 
 <template>
   <div class="ta-page">
-    <!-- ===== 顶部：学段筛选 ===== -->
+    <!-- ===== 顶部：部门筛选 ===== -->
     <div class="ta-bar">
       <span class="ta-bar-title">出勤管理</span>
-      <span class="ta-bar-tag">统一入口 · 三学段合一</span>
+      <span class="ta-bar-tag">统一入口 · 三部门合一</span>
       <el-radio-group v-model="query.stage" size="small" class="ta-stage">
         <el-radio-button label="">全部</el-radio-button>
         <el-radio-button
@@ -308,7 +316,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           :key="s"
           :label="s"
         >
-          {{ STAGE_NAME[s] }}
+          {{ deptName(s) }}
         </el-radio-button>
       </el-radio-group>
     </div>
@@ -317,7 +325,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <div v-if="summary.length" class="ta-cards">
       <div v-for="s in summary" :key="s.stage" class="ta-card">
         <div class="ta-card-h">
-          <span class="ta-card-stage">{{ s.stageName }}</span>
+          <span class="ta-card-stage">{{ deptName(s.stage) }}</span>
           <span class="ta-card-sub">{{ s.classCount }} 个班 · {{ s.totalRecords }} 条记录</span>
         </div>
         <div class="ta-card-b">
@@ -336,7 +344,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         <el-option
           v-for="c in classSelectOptions"
           :key="c.stage + c.id"
-          :label="c.stage === query.stage || !query.stage ? `[${c.stageName}] ${c.name}` : c.name"
+          :label="c.stage === query.stage || !query.stage ? `[${deptName(c.stage)}] ${c.name}` : c.name"
           :value="c.id"
         />
       </el-select>
@@ -362,10 +370,10 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <el-table v-loading="loading" :data="rows" size="small" border stripe>
       <el-table-column type="index" label="序号" width="60" align="center" />
       <el-table-column prop="attendanceDate" label="日期" width="112" align="center" sortable />
-      <el-table-column prop="stageName" label="学段" width="70" align="center">
+      <el-table-column prop="stageName" label="部门" width="70" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain" :type="row.stage === 'jh' ? 'warning' : row.stage === 'class' ? 'primary' : 'success'">
-            {{ row.stageName }}
+            {{ deptName(row.stage) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -391,7 +399,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="没有出勤记录（换个学段或日期试试）" />
+        <el-empty description="没有出勤记录（换个部门或日期试试）" />
       </template>
     </el-table>
 
@@ -410,11 +418,15 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     </div>
 
     <!-- ===== 详情弹窗 ===== -->
-    <el-dialog v-model="detailVisible" title="出勤详情" width="720px">
+    <el-dialog
+      v-model="detailVisible"
+      :title="detail ? `出勤详情（本班 ${detail.details.length} 人）` : '出勤详情'"
+      width="720px"
+    >
       <div v-loading="detailLoading">
         <template v-if="detail">
           <el-descriptions :column="3" size="small" border>
-            <el-descriptions-item label="学段">{{ detail.record.stageName }}</el-descriptions-item>
+            <el-descriptions-item label="部门">{{ deptName(detail.record.stage) }}</el-descriptions-item>
             <el-descriptions-item label="班级">{{ detail.record.className }}</el-descriptions-item>
             <el-descriptions-item label="日期">{{ detail.record.attendanceDate }}</el-descriptions-item>
             <el-descriptions-item label="应到">{{ detail.record.shouldCount }}</el-descriptions-item>
@@ -436,14 +448,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
               <template #default="{ row }">{{ row.reason || '—' }}</template>
             </el-table-column>
           </el-table>
-          <el-alert
-            v-if="detail.record.stage === 'class'"
-            type="info"
-            :closable="false"
-            show-icon
-            title="大学部不逐人记状态，明细只有「缺勤名单」"
-            class="ta-detail-note"
-          />
+          <!-- ★ 2026-10-19：大学部已改为逐人登记，原来那条「只有缺勤名单」的提示不再成立，已删除 -->
         </template>
       </div>
     </el-dialog>
@@ -451,9 +456,9 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
     <!-- ===== 录入弹窗 ===== -->
     <el-dialog v-model="entryVisible" title="录入 / 修改出勤" width="760px">
       <el-form :inline="true" size="small" class="ta-entry-form">
-        <el-form-item label="学段">
-          <el-select v-model="entry.stage" placeholder="选择学段" style="width: 110px">
-            <el-option v-for="s in availableStages" :key="s" :label="STAGE_NAME[s]" :value="s" />
+        <el-form-item label="部门">
+          <el-select v-model="entry.stage" placeholder="选择部门" style="width: 110px">
+            <el-option v-for="s in availableStages" :key="s" :label="deptName(s)" :value="s" />
           </el-select>
         </el-form-item>
         <el-form-item label="班级">
@@ -466,21 +471,8 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         </el-form-item>
       </el-form>
 
-      <!-- 大学：手工填人数 -->
-      <template v-if="isManualStage">
-        <el-alert type="info" :closable="false" show-icon title="大学部由老师手工填写应到 / 实到人数（不逐人登记）" />
-        <el-form :inline="true" size="small" class="ta-entry-form">
-          <el-form-item label="应到人数">
-            <el-input-number v-model="entry.shouldCount" :min="0" />
-          </el-form-item>
-          <el-form-item label="实到人数">
-            <el-input-number v-model="entry.actualCount" :min="0" />
-          </el-form-item>
-        </el-form>
-      </template>
-
-      <!-- 初高 / 实训：按人登记 -->
-      <template v-else>
+      <!-- 三个部门统一：按人登记 -->
+      <template>
         <div v-loading="boardLoading">
           <div v-if="board" class="ta-board-tip">
             {{ board.className }} · {{ board.attendanceDate }} · 在班 {{ board.shouldCount }} 人
@@ -506,7 +498,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
               </template>
             </el-table-column>
           </el-table>
-          <el-empty v-else description="请选择学段与班级" />
+          <el-empty v-else description="请选择部门与班级" />
         </div>
       </template>
 

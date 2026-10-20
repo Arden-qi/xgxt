@@ -11,6 +11,8 @@ import * as repoClassJh from './repo.classJh';
 import * as repoClass from './repo.class';
 import * as repoJob from './repo.job';
 import type {
+  ExamListQuery,
+  ExamRow,
   ScoreEntry,
   ScoreListQuery,
   ScoreRow,
@@ -21,9 +23,11 @@ import type {
 import { TEACHING_STAGE_NAME } from '../shared/dto';
 import { assertStageCode, visibleStagesBy, type StageCodeMap } from '../shared/stageAccess';
 import { getScoreFormula } from '../shared/conf';
+import { listExamsForStages } from '../exam/service';
+import { assertClassInScope, assertStudentsInScope } from '../shared/dataScope';
 
 type Repo = {
-  list: (q: ScoreListQuery) => Promise<ScoreRow[]>;
+  list: (q: ScoreListQuery, user?: any) => Promise<ScoreRow[]>;
   entry: (examId: string, classId: string) => Promise<ScoreEntry>;
   save: (b: ScoreSaveBody, userId: string) => Promise<{ saved: number }>;
 };
@@ -57,7 +61,7 @@ export async function listScores(
   if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有成绩管理的访问权限');
   if (q.stage) await assertStageView(user, q.stage);
 
-  const parts = await Promise.all(stages.map((s) => REPOS[s].list(q)));
+  const parts = await Promise.all(stages.map((s) => REPOS[s].list(q, user)));
   const merged = parts.flat();
   merged.sort((a, b) => (a.studentNo ?? '').localeCompare(b.studentNo ?? '', 'zh-Hans-CN'));
 
@@ -72,6 +76,7 @@ export async function getEntry(
   user: any,
 ): Promise<ScoreEntry> {
   await assertStageView(user, stage);
+  await assertClassInScope(stage, classId, user, '该班级成绩');
   return REPOS[stage].entry(examId, classId);
 }
 
@@ -79,6 +84,12 @@ export async function saveScores(body: ScoreSaveBody, user: any) {
   await assertStageView(user, body.stage);
   if (!body.examId) throw new BizError(BizCode.PARAM_ERROR, '缺少考试ID');
   if (!body.rows?.length) throw new BizError(BizCode.PARAM_ERROR, '成绩数据不能为空');
+  await assertStudentsInScope(
+    body.stage,
+    body.rows.map((r) => r.studentId),
+    user,
+    '该班级成绩',
+  );
   return REPOS[body.stage].save(body, user?.userId || 'system');
 }
 
@@ -92,7 +103,7 @@ export async function scoreSummary(
 
   const out: ScoreSummaryItem[] = [];
   for (const s of stages) {
-    const rows = await REPOS[s].list({ ...q, stage: s, page: 1, size: Number.MAX_SAFE_INTEGER });
+    const rows = await REPOS[s].list({ ...q, stage: s, page: 1, size: Number.MAX_SAFE_INTEGER }, user);
     const entered = rows.filter((r) => r.totalScore !== null && r.totalScore !== undefined);
     const totalSum = entered.reduce((a, r) => a + Number(r.totalScore ?? 0), 0);
     const pass = rows.filter((r) => r.examResult === 1).length;
@@ -111,4 +122,36 @@ export async function scoreSummary(
   // formulas 仅用于确保配置可读（后续可按学段展示"口径说明"）
   void formulas;
   return out;
+}
+
+/**
+ * ★ 2026-10-19：成绩页的「考试下拉」专用只读接口
+ *
+ * 【解决什么】
+ *   大学部班主任只有成绩码 `class:grade:view`，没有考试码 `class:exam:view`，
+ *   页面调 `/api/teaching/exam/list` 会被 403（实测：点成绩管理就弹「没有操作权限」）。
+ *
+ * 【口径】
+ *   · 判权用**成绩域**的 CODES（jh: classjh:score:view / class: class:grade:view / job: job:examScore:view）
+ *   · 数据复用考试域的查询（只读、不外放考试域写操作）
+ */
+export async function listExamOptions(
+  stage: TeachingStage | undefined,
+  keyword: string | undefined,
+  user: any,
+): Promise<ExamRow[]> {
+  const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
+  if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有成绩管理的访问权限');
+  if (stage) await assertStageView(user, stage);
+
+  const r = await listExamsForStages(
+    stages,
+    {
+      keyword,
+      page: 1,
+      size: 200,
+    } as unknown as ExamListQuery,
+    user,
+  );
+  return r.list;
 }

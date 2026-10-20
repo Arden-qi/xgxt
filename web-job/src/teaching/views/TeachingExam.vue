@@ -28,7 +28,7 @@ import { stageVisible } from '@/teaching/access';
 import { isReadOnlyUser } from '@/store/permission';
 
 const STAGE_ORDER: TeachingStage[] = ['jh', 'class', 'job'];
-const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高', class: '大学', job: '实训' };
+const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高', class: '大学', job: '就业' };
 
 const availableStages = computed(() => STAGE_ORDER.filter((s) => stageVisible('exam', s)));
 
@@ -230,7 +230,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
   <div class="te-page">
     <div class="te-bar">
       <span class="te-bar-title">考试管理</span>
-      <span class="te-bar-tag">统一入口 · 三学段合一</span>
+      <span class="te-bar-tag">统一入口 · 三部门合一</span>
       <el-radio-group v-model="query.stage" size="small" class="te-stage">
         <el-radio-button label="">全部</el-radio-button>
         <el-radio-button v-for="s in availableStages" :key="s" :label="s">

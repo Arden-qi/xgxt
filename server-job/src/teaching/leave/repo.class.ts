@@ -30,6 +30,7 @@ import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
 import { buildApplyNo } from '../shared/conf';
+import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 
 const T = 't_class_suspend_apply';
 const S = 't_class_student';
@@ -121,8 +122,11 @@ export async function studentOptions(
   keyword: string,
   limit: number,
   opts: { onlySuspended?: boolean; excludeStatuses?: number[]; excludeWithPending?: boolean } = {},
+  user?: any,
 ): Promise<StudentOption[]> {
   const q = tbl(db, 'sms_class', S, STAGE).where('is_deleted', 0);
+  /* ★ 数据范围：项目经理/班主任只能选自己带的班的学生 */
+  if (user && !(await applyClassScope(q, 'class_id', STAGE, user))) return [];
   if (opts.onlySuspended) q.andWhere('student_status', StudentStatus.SUSPENDED);
   if (opts.excludeStatuses?.length) {
     const ex = opts.excludeStatuses;
@@ -166,7 +170,7 @@ export async function findStudent(id: string): Promise<StudentSnapshot | null> {
 }
 
 /** 分页（★ 始终限定在 休学/退学） */
-export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total: number }> {
+export async function list(q: LeaveListQuery, user?: any): Promise<{ rows: LeaveRow[]; total: number }> {
   const base = tbl(db, SRC, T, STAGE).where('is_deleted', 0).whereIn('apply_type', IN_SCOPE);
   if (q.keyword) {
     base.andWhere((b) => {
@@ -178,6 +182,9 @@ export async function list(q: LeaveListQuery): Promise<{ rows: LeaveRow[]; total
   if (q.endDate) base.andWhere('apply_time', '<=', `${q.endDate} 23:59:59`);
   if (q.bizType) base.andWhere('apply_type', await toRawLeaveBiz(STAGE, q.bizType));
   if (q.status) base.andWhere('apply_status', await toRawLeaveStatus(STAGE, q.status));
+
+  /* ★ 数据范围：只看我负责的班的单据 */
+  if (user) await applyClassScopeKeepNull(base, 'class_id', STAGE, user);
 
   const [{ total }] = (await base.clone().count({ total: '*' })) as Array<{ total: number }>;
   const rows = (await base

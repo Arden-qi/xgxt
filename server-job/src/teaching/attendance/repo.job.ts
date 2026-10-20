@@ -26,8 +26,9 @@ import type {
   AttendanceRow,
   AttendanceSaveBody,
 } from '../shared/dto';
-import { NEED_REASON_STATUSES, UNIFIED_STATUS_NAME } from '../shared/dto';
+import { NEED_REASON_STATUSES, UnifiedAttendanceStatus, UNIFIED_STATUS_NAME } from '../shared/dto';
 import { tbl, tblAs, tblInsTrx, tblRef, tblTrx } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
 
 const TABLE = 't_job_attendance';
 const SUMMARY = 't_job_attendance_summary';
@@ -95,11 +96,13 @@ async function roster(classId: string, runner: any = db) {
     .orderBy('cs.student_no', 'asc')) as Array<Record<string, any>>;
 }
 
-export async function list(q: AttendanceListQuery): Promise<AttendanceRow[]> {
+export async function list(q: AttendanceListQuery, user?: any): Promise<AttendanceRow[]> {
   const qb = tbl(db, 'sms_job', SUMMARY, STAGE).where('is_deleted', 0);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.startDate) qb.andWhere('attend_date', '>=', q.startDate);
   if (q.endDate) qb.andWhere('attend_date', '<=', q.endDate);
+  /* 角色数据范围：项目经理只看自己未结业的实训班；就业老师只看自己接手的班 */
+  if (user && !(await applyClassScope(qb, 'class_id', STAGE, user))) return [];
   const rows = (await qb.orderBy('attend_date', 'desc')) as Array<Record<string, any>>;
   return rows.map(mapRow);
 }
@@ -112,12 +115,37 @@ export async function detail(id: string): Promise<AttendanceDetail | null> {
   const raw = (await tbl(db, 'sms_job', TABLE, STAGE)
     .where({ class_id: rec.class_id, attend_date: fmtDate(rec.attend_date), is_deleted: 0 })
     .orderBy('student_no')) as Array<Record<string, any>>;
+  const map = new Map(raw.map((d) => [String(d.student_id), d]));
 
+  /* ★ 2026-10-19：详情要能看到「该班全部学生」。
+     实训的明细表按「逐人登记」写，但补录/中途入班时仍可能缺行 ——
+     按在班名册铺一遍，缺记录的按「出勤」显示；名册外的历史明细追加在末尾。 */
+  const students = await roster(rec.class_id);
   const details: AttendanceDetailRow[] = [];
+  const seen = new Set<string>();
+  for (const s of students) {
+    const sid = String(s.student_id);
+    seen.add(sid);
+    const d = map.get(sid);
+    const status = d
+      ? ((await toUnifiedStatus(STAGE, Number(d.attend_status))) ?? 0)
+      : UnifiedAttendanceStatus.PRESENT;
+    details.push({
+      studentId: sid,
+      studentNo: ((d?.student_no ?? s.student_no) as string) ?? null,
+      studentName: ((d?.student_name ?? s.student_name) as string) ?? null,
+      status,
+      statusName: UNIFIED_STATUS_NAME[status] ?? '未知',
+      reason: (d?.reason as string) ?? null,
+      phone: (s.phone as string) ?? null,
+    });
+  }
   for (const d of raw) {
+    const sid = String(d.student_id ?? '');
+    if (seen.has(sid)) continue;
     const status = (await toUnifiedStatus(STAGE, Number(d.attend_status))) ?? 0;
     details.push({
-      studentId: String(d.student_id ?? ''),
+      studentId: sid,
       studentNo: (d.student_no as string) ?? null,
       studentName: (d.student_name as string) ?? null,
       status,

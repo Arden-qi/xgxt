@@ -29,13 +29,16 @@ import {
   type ScoreSummaryItem,
   type TeachingStage,
 } from '@/teaching/api/score';
-import { listExams, type ExamRow } from '@/teaching/api/exam';
+import type { ExamRow } from '@/teaching/api/exam';
+import { listScoreExamOptions } from '@/teaching/api/score';
 import { stageVisible } from '@/teaching/access';
 import { isReadOnlyUser } from '@/store/permission';
 
 const STAGE_ORDER: TeachingStage[] = ['jh', 'class', 'job'];
 /** ⚠️ 三套权限码写法都不同 */
-const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高', class: '大学', job: '实训' };
+const STAGE_LABEL: Record<TeachingStage, string> = { jh: '初高', class: '大学', job: '就业' };
+/** 模板里 row.stage 是 any，直接索引会报 TS7053 */
+const stageLabel = (s?: string | null): string => (s && STAGE_LABEL[s as TeachingStage]) || s || '';
 /** 输入项的固定展示顺序 */
 const INPUT_FIELDS = ['written', 'machine', 'interview', 'other'] as const;
 
@@ -136,8 +139,7 @@ async function loadSummary() {
 }
 async function loadExams() {
   try {
-    const r = await listExams({ size: 200 });
-    examOptions.value = r.list || [];
+    examOptions.value = (await listScoreExamOptions()) || [];
   } catch {
     examOptions.value = [];
   }
@@ -247,7 +249,7 @@ watch(() => [entryForm.stage, entryForm.examId, entryForm.classId], () => void l
 async function submitEntry() {
   if (!entry.value) return;
   const stage = entryStage.value as TeachingStage;
-  if (!stage || !entryForm.examId) return ElMessage.warning('请选择学段与考试');
+  if (!stage || !entryForm.examId) return ElMessage.warning('请选择部门与考试');
 
   const rowsPayload = entry.value.rows.map((r) => ({
     studentId: r.studentId,
@@ -271,7 +273,7 @@ async function submitEntry() {
   entrySaving.value = true;
   try {
     const r = await saveScores({ stage, examId: entryForm.examId, rows: rowsPayload });
-    ElMessage.success(`已保存 ${r.saved} 条成绩（综合成绩由后端按本学段公式计算）`);
+    ElMessage.success(`已保存 ${r.saved} 条成绩（综合成绩由后端按本部门公式计算）`);
     entryVisible.value = false;
     await Promise.all([loadList(), loadSummary()]);
   } finally {
@@ -286,7 +288,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
   <div class="ts-page">
     <div class="ts-bar">
       <span class="ts-bar-title">成绩管理</span>
-      <span class="ts-bar-tag">统一入口 · 三学段合一</span>
+      <span class="ts-bar-tag">统一入口 · 三部门合一</span>
       <el-radio-group v-model="query.stage" size="small" class="ts-stage">
         <el-radio-button label="">全部</el-radio-button>
         <el-radio-button v-for="s in availableStages" :key="s" :label="s">
@@ -302,13 +304,13 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
       type="info"
       :closable="false"
       show-icon
-      :title="`本学段口径：${formulaText}`"
+      :title="`本部门口径：${formulaText}`"
     />
 
     <div v-if="summary.length" class="ts-cards">
       <div v-for="s in summary" :key="s.stage" class="ts-card">
         <div class="ts-card-h">
-          <span class="ts-card-stage">{{ s.stageName }}</span>
+          <span class="ts-card-stage">{{ stageLabel(s.stage) }}</span>
           <span class="ts-card-sub">{{ s.enteredCount }}/{{ s.totalStudents }} 已录</span>
         </div>
         <div class="ts-card-b">
@@ -326,7 +328,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         <el-option
           v-for="e in examSelectOptions"
           :key="e.id"
-          :label="query.stage ? e.examName : `[${e.stageName}] ${e.examName}`"
+          :label="query.stage ? e.examName : `[${STAGE_LABEL[e.stage]}] ${e.examName}`"
           :value="e.id"
         />
       </el-select>
@@ -342,10 +344,10 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 
     <el-table v-loading="loading" :data="rows" size="small" border stripe>
       <el-table-column type="index" label="序号" width="60" align="center" />
-      <el-table-column prop="stageName" label="学段" width="70" align="center">
+      <el-table-column prop="stageName" label="部门" width="70" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain" :type="row.stage === 'jh' ? 'warning' : row.stage === 'class' ? 'primary' : 'success'">
-            {{ row.stageName }}
+            {{ stageLabel(row.stage) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -384,7 +386,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="没有成绩记录（换个学段或考试试试）" />
+        <el-empty description="没有成绩记录（换个部门或考试试试）" />
       </template>
     </el-table>
 
@@ -404,7 +406,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
 
     <el-dialog v-model="entryVisible" title="录入成绩" width="820px">
       <el-form :inline="true" size="small">
-        <el-form-item label="学段">
+        <el-form-item label="部门">
           <el-select v-model="entryForm.stage" style="width: 110px">
             <el-option v-for="s in availableStages" :key="s" :label="STAGE_LABEL[s]" :value="s" />
           </el-select>
@@ -460,14 +462,14 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
             <template #default="{ row }">{{ row.totalScore ?? '—' }}</template>
           </el-table-column>
         </el-table>
-        <el-empty v-else description="请选择学段与考试" />
+        <el-empty v-else description="请选择部门与考试" />
         <el-alert
           v-if="entry"
           class="ts-entry-note"
           type="info"
           :closable="false"
           show-icon
-          title="综合成绩由后端按本学段公式计算，保存后自动回填"
+          title="综合成绩由后端按本部门公式计算，保存后自动回填"
         />
       </div>
 

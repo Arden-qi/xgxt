@@ -446,6 +446,8 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
     if (resId2) reg('sms_job', 't_job_student_leave', resId2);
     // 模拟「建单时没填班」的老单：直接把单上的复学班清空
     await dbJob('t_job_student_leave').where({ id: resId2 }).update({ new_class_id: null });
+    /* ★ 切读后产品读的是统一表：夹具必须同时清统一表，否则「单上无班」根本没生效 */
+    if (USE_UNI) await uniDb('t_uni_approval').where({ id: resId2 }).update({ new_class_id: null });
     const apR2 = await req(`${API}/approve`, {
       method: 'POST',
       token: tDean,

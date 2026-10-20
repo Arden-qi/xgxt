@@ -73,6 +73,9 @@ const TAG = '【自检】';
     check('服务就绪（后端 8004 + 前端 5173）', backendReady && frontendReady);
 
     const tokenJh = await login('sunmin'); // 初高：有 classjh:score:view
+    /* ★ 数据范围按责任人过滤后，夹具班必须挂到登录人名下 */
+    const decodeUid = (tk) => { try { return JSON.parse(Buffer.from(String(tk).split('.')[1], 'base64').toString()).userId || ''; } catch { return ''; } };
+    const jhHeadId = decodeUid(tokenJh);
     // ★ 大学/实训的成绩页只授权给校长+管理员 → 用 qiansy(校长)
     const tokenAll = await login('qiansy');
     const tokenAdmin = await login('admin');
@@ -106,6 +109,8 @@ const TAG = '【自检】';
         id: jhClassId,
         class_name: `${TAG}成绩初高班`,
         stage: 201,
+        /* ★ 数据范围按责任人过滤：夹具班必须挂到 sunmin 名下，否则她看不到/不能录 */
+        head_teacher_id: jhHeadId || null,
         head_teacher_name: '自检班主任',
         teacher_name: '自检教员',
         is_deleted: 0,

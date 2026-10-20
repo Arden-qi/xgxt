@@ -17,6 +17,7 @@ import type {
 import { EXAM_CONTENT_TYPE_NAME, EXAM_STATUS_NAME, EXAM_TYPE_NAME } from '../shared/dto';
 import { tbl, tblIns } from '../shared/uniTable';
 import { assertExamNotDuplicated } from './uniExamUnique';
+import { applyClassScope } from '../shared/dataScope';
 
 const T = 't_class_exam';
 const F = 't_class_exam_field';
@@ -62,13 +63,15 @@ function mapRow(r: Record<string, any>): ExamRow {
   };
 }
 
-export async function list(q: ExamListQuery): Promise<ExamRow[]> {
+export async function list(q: ExamListQuery, user?: any): Promise<ExamRow[]> {
   const qb = tbl(db, 'sms_class_jh', T, STAGE).where('is_deleted', 0);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.examType) qb.andWhere('exam_type', q.examType);
   if (q.startDate) qb.andWhere('exam_date', '>=', q.startDate);
   if (q.endDate) qb.andWhere('exam_date', '<=', q.endDate);
   if (q.keyword) qb.andWhere('exam_name', 'like', `%${q.keyword}%`);
+  /* ★ 数据范围：班主任只看自己带的班的考试；项目经理/就业按交棒阶段 */
+  if (user && !(await applyClassScope(qb, 'class_id', STAGE, user))) return [];
   const rows = (await qb.orderBy('exam_date', 'desc')) as Array<Record<string, any>>;
   return rows.map(mapRow);
 }

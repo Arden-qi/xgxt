@@ -121,3 +121,16 @@ teachingScoreRouter.get(
     res.json(ok(await getScoreFormula(), '查询成功'));
   }),
 );
+
+/**
+ * 6. 考试下拉（只读）
+ *    ★ 2026-10-19：班主任只有成绩码、没有考试码，直接调 `/api/teaching/exam/list`
+ *      会被 403（实测「点成绩管理就弹无权限」）。本接口用**成绩域**的权限码判权，
+ *      只返回考试列表供选择，不放开考试域的写操作。
+ */
+teachingScoreRouter.get(
+  '/exam-options',
+  wrap(async (req, res) => {
+    res.json(ok(await svc.listExamOptions(optStage(req.query.stage), str(req.query.keyword), req.user)));
+  }),
+);

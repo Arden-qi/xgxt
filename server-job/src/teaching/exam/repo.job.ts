@@ -17,6 +17,7 @@ import type {
 import { EXAM_CONTENT_TYPE_NAME, EXAM_TYPE_NAME } from '../shared/dto';
 import { tbl, tblIns } from '../shared/uniTable';
 import { assertExamNotDuplicated } from './uniExamUnique';
+import { visibleClassIds } from '../shared/dataScope';
 
 const T = 't_job_exam';
 const C = 't_job_class';
@@ -63,7 +64,7 @@ function mapRow(r: Record<string, any>, contents: ExamContentItem[] = []): ExamR
   };
 }
 
-export async function list(q: ExamListQuery): Promise<ExamRow[]> {
+export async function list(q: ExamListQuery, user?: any): Promise<ExamRow[]> {
   const qb = tbl(db, 'sms_job', T, STAGE).where('is_deleted', 0);
   // 多班：用 FIND_IN_SET 精确匹配逗号串里的某一个 id
   if (q.classId) qb.andWhereRaw('FIND_IN_SET(?, class_ids)', [q.classId]);
@@ -71,6 +72,17 @@ export async function list(q: ExamListQuery): Promise<ExamRow[]> {
   if (q.startDate) qb.andWhere('exam_time', '>=', `${q.startDate} 00:00:00`);
   if (q.endDate) qb.andWhere('exam_time', '<=', `${q.endDate} 23:59:59`);
   if (q.keyword) qb.andWhere('exam_name', 'like', `%${q.keyword}%`);
+  /* ★ 数据范围：实训考试是「多班共考」，班级存在 class_ids 逗号串里 → 用 FIND_IN_SET */
+  if (user) {
+    const ids = await visibleClassIds(STAGE, user);
+    if (ids && !ids.length) return [];
+    if (ids) {
+      qb.andWhereRaw(
+        '(' + ids.map(() => 'FIND_IN_SET(?, class_ids)').join(' OR ') + ')',
+        ids,
+      );
+    }
+  }
   const rows = (await qb.orderBy('exam_time', 'desc')) as Array<Record<string, any>>;
   return rows.map((r) => mapRow(r));
 }

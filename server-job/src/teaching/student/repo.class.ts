@@ -31,6 +31,7 @@ import type {
 import { calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScopeKeepNull } from '../shared/dataScope';
 
 const T = 't_class_student';
 const GRADE_TABLE = 't_class_grade';
@@ -149,7 +150,10 @@ export const repo: StudentRepo = {
   supportUnassigned: true,
 
   async list(q, user) {
-    const qb = buildBase(q, user).orderBy('student_no', 'asc');
+    const qb = buildBase(q, user);
+    /* ★ 数据范围：班主任只看自己班的学生（applyDataScope 只到「部门」粒度） */
+    await applyClassScopeKeepNull(qb, 'class_id', STAGE, user);
+    qb.orderBy('student_no', 'asc');
     const rows = (await qb) as Array<Record<string, any>>;
     return rows.map(mapRow);
   },

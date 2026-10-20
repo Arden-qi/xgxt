@@ -78,7 +78,7 @@ const STAGE_ORDER = ['jh', 'class', 'job', 'edu'] as const;
 const STAGE_LABEL: Record<string, string> = {
   jh: '初高',
   class: '大学',
-  job: '实训',
+  job: '就业',
   edu: '教务',
   就业: '就业',
 };

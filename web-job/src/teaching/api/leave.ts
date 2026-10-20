@@ -15,7 +15,7 @@ export type { TeachingStage };
 export const STAGE_NAME: Record<TeachingStage, string> = {
   jh: '初高',
   class: '大学',
-  job: '实训',
+  job: '就业',
 };
 
 /** 统一业务类型 */
@@ -151,7 +151,7 @@ export interface LeaveDepartment {
 export const LEAVE_DEPARTMENTS_DEFAULT: LeaveDepartment[] = [
   { code: 'jh', name: '初高中', stage: 'jh' },
   { code: 'class', name: '大学', stage: 'class' },
-  { code: 'job', name: '实训', stage: 'job' },
+  { code: 'job', name: '就业', stage: 'job' },
   { code: 'employ', name: '就业', stage: null },
 ];
 

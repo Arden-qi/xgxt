@@ -13,7 +13,7 @@ export type { TeachingStage };
 export const STAGE_NAME: Record<TeachingStage, string> = {
   jh: '初高',
   class: '大学',
-  job: '实训',
+  job: '就业',
 };
 
 /** 统一状态码（= 实训那套 ApprovalStatus） */

@@ -526,7 +526,7 @@ import {
 } from '@/teaching/api/dorm';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
-const STAGE_LABEL: Record<DormStage, string> = { jh: '初高', class: '大学', job: '实训' };
+const STAGE_LABEL: Record<DormStage, string> = { jh: '初高', class: '大学', job: '就业' };
 
 const DORM_STAGE_ORDER: DormStage[] = ['jh', 'class', 'job'];
 const stageOptions = computed(() => visibleStageOptions('dorm', DORM_STAGE_ORDER, STAGE_LABEL));

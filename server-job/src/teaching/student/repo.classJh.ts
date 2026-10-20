@@ -29,6 +29,7 @@ import type {
 import { calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScopeKeepNull } from '../shared/dataScope';
 
 const T = 't_class_student';
 const CLASS_TABLE = 't_class_info';
@@ -148,6 +149,7 @@ export const repo: StudentRepo = {
   async list(q, user) {
     const qb = buildBase(q);
     await applyScope(qb, user);
+    await applyClassScopeKeepNull(qb, 'class_id', STAGE, user);
     const rows = (await qb.orderBy('create_time', 'desc')) as Array<Record<string, any>>;
     return rows.map(mapRow);
   },

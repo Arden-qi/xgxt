@@ -35,6 +35,7 @@ import type {
 import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -202,6 +203,8 @@ export const repo: ClassRepo = {
 
   async list(q, user) {
     const qb = buildBase(q, user);
+    // ★ 统一口径：交棒模型（项目经理/就业老师看不到初高；班主任只看自己带的班）
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) return [];
     // ★ 本班级范围要叠白名单（applyScope 只处理了部门级）
     const ids = await scopedClassIds(user);
     if (ids) {
@@ -358,6 +361,9 @@ export const repo: ClassRepo = {
 
   async summary(q, user) {
     const qb = buildBase(q, user);
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) {
+      return { stage: STAGE, stageName: STAGE_NAME, total: 0, openCount: 0, closedCount: 0, graduatingCount: 0, graduatedCount: 0, studentCount: 0 };
+    }
     const ids = await scopedClassIds(user);
     if (ids) {
       if (!ids.length) {

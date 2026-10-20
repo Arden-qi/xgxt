@@ -17,6 +17,7 @@ import type {
 } from '../shared/dto';
 import { EXAM_CONTENT_TYPE_NAME, EXAM_TYPE_NAME } from '../shared/dto';
 import { tbl, tblInsTrx, tblTrx } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
 import { assertExamNotDuplicated } from './uniExamUnique';
 
 const T = 't_class_exam';
@@ -66,13 +67,15 @@ async function contentsOf(examIds: string[]): Promise<Map<string, ExamContentIte
   return out;
 }
 
-export async function list(q: ExamListQuery): Promise<ExamRow[]> {
+export async function list(q: ExamListQuery, user?: any): Promise<ExamRow[]> {
   const qb = tbl(db, 'sms_class', T, STAGE).where('is_deleted', 0);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.examType) qb.andWhere('exam_type', q.examType);
   if (q.startDate) qb.andWhere('exam_date', '>=', q.startDate);
   if (q.endDate) qb.andWhere('exam_date', '<=', q.endDate);
   if (q.keyword) qb.andWhere('exam_name', 'like', `%${q.keyword}%`);
+  /* ★ 数据范围：班主任只看自己带的班的考试；项目经理/就业按交棒阶段 */
+  if (user && !(await applyClassScope(qb, 'class_id', STAGE, user))) return [];
   const rows = (await qb.orderBy('exam_date', 'desc')) as Array<Record<string, any>>;
   const cmap = await contentsOf(rows.map((r) => String(r.id)));
   return rows.map((r) => mapRow(r, cmap.get(String(r.id)) ?? []));

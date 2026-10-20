@@ -141,3 +141,15 @@ export function scoreSummary(p: { stage?: TeachingStage; examId?: string; classI
 export function fetchScoreFormula() {
   return http.get<Record<TeachingStage, ScoreScopeItem>>('/api/teaching/score/formula');
 }
+
+/**
+ * ★ 2026-10-19：成绩页的考试下拉（只读）
+ *
+ * 为什么不再调 `/api/teaching/exam/list`：
+ *   大学部班主任只有成绩码 `class:grade:view`，没有考试码 `class:exam:view`，
+ *   调考试域接口会被 403 →「点成绩管理就弹无权限」。
+ *   这个接口用成绩域的权限码判权，只返回考试列表。
+ */
+export function listScoreExamOptions(p: { stage?: TeachingStage; keyword?: string } = {}) {
+  return http.get<import('./exam').ExamRow[]>('/api/teaching/score/exam-options', p);
+}

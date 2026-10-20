@@ -28,6 +28,7 @@ import type {
 import { TEACHING_STAGES, TEACHING_STAGE_NAME } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
 import type { ClassDetail, ClassRepo } from './types';
+import { assertClassInScope } from '../shared/dataScope';
 
 const REPOS: Record<TeachingStage, ClassRepo> = {
   jh: repoClassJh.repo,
@@ -130,6 +131,7 @@ export async function getClassDetail(
   user: any,
 ): Promise<ClassDetail | null> {
   await assertStageView(user, stage);
+  await assertClassInScope(stage, id, user, '该班级');
   return pick(stage).detail(id, user);
 }
 
@@ -148,6 +150,7 @@ export async function removeClass(stage: TeachingStage, id: string, user: any): 
 /** 花名册 */
 export async function listClassRoster(stage: TeachingStage, id: string, user: any) {
   await assertStageView(user, stage);
+  await assertClassInScope(stage, id, user, '该班级花名册');
   return pick(stage).roster(id, user);
 }
 

@@ -118,7 +118,7 @@ export const UNIFIED_STATUS_NAME: Record<number, string> = {
 export const STAGE_NAME: Record<TeachingStage, string> = {
   jh: '初高',
   class: '大学',
-  job: '实训',
+  job: '就业',
 };
 
 export function listAttendance(p: ListParams) {
