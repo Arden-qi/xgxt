@@ -33,6 +33,24 @@ import type {
   TeachingStage,
 } from '../shared/dto';
 
+/**
+ * ★ 2026-10-21：办理入住时的学生候选
+ *
+ * 数据范围与房间列表同源（班主任 = 自己的班），默认只给**还没入住**的学生，
+ * 避免把已住学生的床位重复占用。
+ */
+export interface DormCandidateRow {
+  stage: TeachingStage;
+  studentId: string;
+  studentNo: string;
+  studentName: string;
+  gender: number;
+  classId: string | null;
+  className: string | null;
+  /** 已入住时的宿舍号（本次候选默认都是 null） */
+  dormNo: string | null;
+}
+
 export interface DormRepo {
   readonly stage: TeachingStage;
   meta(): DormStageMeta;
@@ -66,6 +84,8 @@ export interface DormRepo {
   beds(dormId: string, user: any): Promise<DormBedRow[]>;
   /** 在住学生名单（跨房间） */
   residents(q: DormListQuery, user: any): Promise<DormResidentRow[]>;
+  /** 办理入住时的学生候选（按数据范围过滤，默认排除已入住） */
+  candidates(q: { keyword?: string; limit?: number }, user: any): Promise<DormCandidateRow[]>;
   /** 分派床位（学生入住） */
   assign(body: DormAssignBody, userId: string): Promise<void>;
   /** 退宿（直接生效，管理员纠错用，不走审批） */

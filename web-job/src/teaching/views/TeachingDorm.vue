@@ -131,20 +131,20 @@
       <el-table-column label="操作" width="170" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" @click="openBeds(row)">床位</el-button>
-          <el-button v-if="canEdit(row)" link type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button v-if="canEdit(row) && !isOnlyHeadTeacher" link type="primary" @click="openEdit(row)">编辑</el-button>
           <!--
             ★ 删除的前置条件：房间里没有入住学生（2026-10-19）
               住着人的房间直接禁用删除按钮 —— 与其让用户点了再吃一个报错，
               不如在按钮上就把话说清楚。后端 repo.remove() 还会再拦一次（双保险）。
           -->
           <el-tooltip
-            v-if="canEdit(row) && row.occupiedCount > 0"
+            v-if="canEdit(row) && !isOnlyHeadTeacher && row.occupiedCount > 0"
             content="该宿舍有学生入住，不能删除；请先办理退宿"
             placement="top"
           >
             <span><el-button link type="danger" disabled>删除</el-button></span>
           </el-tooltip>
-          <el-button v-else-if="canEdit(row)" link type="danger" @click="doDelete(row)">删除</el-button>
+          <el-button v-else-if="canEdit(row) && !isOnlyHeadTeacher" link type="danger" @click="doDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -351,14 +351,25 @@
           <span>{{ assignBedRow?.bedLabel }}</span>
         </el-form-item>
         <el-form-item label="学生" required>
-          <el-input v-model="assignStudentText" placeholder="输入学号或姓名搜索" />
-        </el-form-item>
-        <el-form-item v-if="assignCandidates.length" label="候选">
-          <el-radio-group v-model="assignStudentId">
-            <el-radio v-for="c in assignCandidates" :key="c.studentId" :value="c.studentId">
-              {{ c.studentName }}（{{ c.studentNo }}）
-            </el-radio>
-          </el-radio-group>
+          <el-select
+            v-model="assignStudentId"
+            filterable
+            remote
+            clearable
+            reserve-keyword
+            :remote-method="searchAssignStudents"
+            :loading="assignLoading"
+            placeholder="输入学号或姓名搜索（本班未入住学生）"
+            style="width: 100%"
+            @change="onAssignStudentChange"
+          >
+            <el-option
+              v-for="c in assignOptions"
+              :key="c.studentId"
+              :label="`${c.studentName}（${c.studentNo}）${c.className ? ' · ' + c.className : ''}`"
+              :value="c.studentId"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="入住日期">
           <el-date-picker v-model="assignDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
@@ -657,6 +668,7 @@ import {
   listDormResidents,
   listDormChanges,
   listDormOccupancyRates,
+  listDormCandidates,
   saveDorm,
   deleteDorm,
   assignBed,
@@ -674,6 +686,7 @@ import {
   DORM_APPROVAL_TAG,
   type DormBedRow,
   type DormChangeRow,
+  type DormCandidateRow,
   type DormResidentRow,
   type DormRow,
   type DormStage,
@@ -905,31 +918,50 @@ async function doCheckout(b: DormBedRow) {
 const assignVisible = ref(false);
 const assigning = ref(false);
 const assignBedRow = ref<DormBedRow | null>(null);
-const assignStudentText = ref('');
 const assignStudentId = ref('');
 const assignDate = ref(new Date().toISOString().slice(0, 10));
 
-/** 候选学生：先从在住名单里排除已入住的，再用文本过滤（跨学段名单来源不同，先给最简可用版） */
-const assignCandidates = computed(() => {
-  const kw = assignStudentText.value.trim();
-  if (!kw) return [];
-  const live = new Set(residents.value.map((r) => r.studentId));
-  return residents.value
-    .filter((r) => !live.has(r.studentId) || true)
-    .filter(
-      (r) =>
-        r.studentName.includes(kw) ||
-        (r.studentNo || '').includes(kw),
-    )
-    .slice(0, 8);
-});
+/**
+ * ★ 2026-10-21：入住改成「远程搜索学生」
+ *
+ * 旧实现是从在住名单（residents）里过滤 —— 还没入住的学生根本不在名单里，
+ * 班主任分到宿舍后无法把学生填进去。
+ * 新接口 `/candidates` 按数据范围下发（班主任 = 自己班、且未入住），
+ * 姓名 / 学号前后模糊。
+ */
+const assignOptions = ref<DormCandidateRow[]>([]);
+const assignLoading = ref(false);
+const assignSelected = ref<DormCandidateRow | null>(null);
 
-function openAssign(b: DormBedRow) {
+async function searchAssignStudents(keyword?: string) {
+  const stage = curDorm.value?.stage;
+  if (!stage) return;
+  assignLoading.value = true;
+  try {
+    const list = await listDormCandidates({ stage, keyword: keyword || undefined });
+    // 保留当前选中项，避免刷新候选后显示成 id
+    const cur = assignSelected.value;
+    assignOptions.value =
+      cur && !list.some((s) => s.studentId === cur.studentId) ? [cur, ...list] : list;
+  } catch {
+    assignOptions.value = assignSelected.value ? [assignSelected.value] : [];
+  } finally {
+    assignLoading.value = false;
+  }
+}
+
+function onAssignStudentChange(id: string) {
+  assignSelected.value = assignOptions.value.find((s) => s.studentId === id) || null;
+}
+
+async function openAssign(b: DormBedRow) {
   assignBedRow.value = b;
-  assignStudentText.value = '';
   assignStudentId.value = '';
-  assignDate.value = new Date().toISOString().slice(0, 10);
+  assignSelected.value = null;
+  assignOptions.value = [];
+  assignDate.value = todayStr();
   assignVisible.value = true;
+  await searchAssignStudents();
 }
 
 async function doAssign() {

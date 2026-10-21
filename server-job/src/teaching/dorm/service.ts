@@ -43,7 +43,7 @@ import {
 } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
 import { USE_UNI_TABLE } from '../shared/uniTable';
-import type { DormRepo } from './types';
+import type { DormCandidateRow, DormRepo } from './types';
 
 /**
  * ★★ 同一房间被多个学段查出来时，**保留哪个学段的行**（2026-10-19）
@@ -319,6 +319,34 @@ export async function listResidents(
 
   const parts = await Promise.all(scanStages.map((s) => REPOS[s].residents(q, user)));
   return dedupResidents(parts.flat());
+}
+
+/** 办理入住的学生候选（按数据范围过滤；班主任只给自己的班） */
+export async function listCandidates(
+  stage: TeachingStage | undefined,
+  keyword: string | undefined,
+  user: any,
+): Promise<DormCandidateRow[]> {
+  const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
+  if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有宿舍管理的访问权限');
+  if (stage) await assertStageView(user, stage);
+
+  // 与 listResidents 同口径：老表模式三学段查同一批行，只扫一个学段
+  const scanStages =
+    !stage && !USE_UNI_TABLE && stages.length > 1
+      ? [STAGE_KEEP_PRIORITY.find((s) => stages.includes(s)) ?? stages[0]]
+      : stages;
+
+  const parts = await Promise.all(scanStages.map((s) => REPOS[s].candidates({ keyword }, user)));
+  const seen = new Set<string>();
+  const out: DormCandidateRow[] = [];
+  for (const r of parts.flat()) {
+    const key = r.studentId || `${r.studentNo}|${r.studentName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out.slice(0, 100);
 }
 
 /** 楼栋下拉（合并三学段，同名去重 —— 楼栋名只是个标签，不是实体） */

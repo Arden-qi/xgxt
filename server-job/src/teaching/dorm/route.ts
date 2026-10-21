@@ -153,6 +153,22 @@ teachingDormRouter.get(
   }),
 );
 
+/**
+ * 4.1 办理入住的学生候选（★ 2026-10-21）
+ * 班主任只会拿到自己班、且还没入住的学生；教务/校长拿全量。
+ */
+teachingDormRouter.get(
+  '/candidates',
+  wrap(async (req, res) => {
+    res.json(
+      ok(
+        await svc.listCandidates(optStage(req.query.stage), str(req.query.keyword) || undefined, req.user),
+        '查询成功',
+      ),
+    );
+  }),
+);
+
 /** 5. 楼栋下拉 */
 teachingDormRouter.get(
   '/buildings',

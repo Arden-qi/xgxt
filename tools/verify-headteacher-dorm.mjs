@@ -71,6 +71,13 @@ check('「新增房间」对班主任隐藏', dorm.includes('canCreate && !isOnl
 check('保持「调宿/退宿申请」入口', dorm.includes('调宿/退宿申请'));
 check('班主任判定排除更高角色', dorm.includes('HEAD_TEACHER_SUPERIOR_ROLES') && dorm.includes('RoleCode.TEACH_HEAD'));
 check('SUPER_TEST 不受影响', /isSuperTest\.value\) return false/.test(dorm));
+check('班主任看不到房间「编辑 / 删除」', (dorm.match(/canEdit\(row\) && !isOnlyHeadTeacher/g) || []).length >= 3);
+check('入住改用「学生候选」接口', dorm.includes('listDormCandidates') && dorm.includes('remote-method="searchAssignStudents"'));
+
+const repo = read('server-job/src/teaching/dorm/repo.uni.ts');
+check('房间范围含「分派给本班」', repo.includes('ASSIGN_T') && repo.includes('t_edu_dorm_assignment'));
+check('「我的班」兼容 id 与姓名', repo.includes('head_teacher_name') && repo.includes('permUid'));
+check('入住候选按数据范围过滤', repo.includes('async candidates') && repo.includes('IN_SCHOOL_STATUS'));
 
 console.log('\n▶ 运行时检查');
 // ① 班主任：能进页面、能发起调宿，但（前端）不给建房间/班级分派
@@ -108,6 +115,53 @@ if (acad.status === 200 && acad.body?.data?.token) {
   check('教务班级分派数据源 200', classes.status === 200, `${(classes.body?.data || []).length} 个班`);
 } else {
   check('教务登录', false, `HTTP ${acad.status}`);
+}
+
+/* ③ 闭环：教务分派 → 班主任只能看到分给本班的那几间，并且能拿到本班未入住学生 */
+console.log('\n▶ 分派 → 班主任可见');
+const acadToken = acad.body?.data?.token;
+const sunLogin = await req('POST', '/api/portal/account/login', { body: { account: 'sunmin', password: PWD } });
+const sunToken = sunLogin.body?.data?.token;
+if (acadToken && sunToken) {
+  const m = await req('GET', `/api/teaching/dorm/allocate/rooms?category=1&building=${encodeURIComponent('1号楼')}`, { token: acadToken });
+  const f = await req('GET', `/api/teaching/dorm/allocate/rooms?category=2&building=${encodeURIComponent('3号楼')}`, { token: acadToken });
+  const male = (m.body?.data || []).find((r) => !r.full);
+  const female = (f.body?.data || []).find((r) => !r.full);
+
+  if (!male || !female) {
+    check('找到可分派的男/女寝房间', false);
+  } else {
+    const save = await req('POST', '/api/teaching/dorm/allocate/save', {
+      token: acadToken,
+      body: {
+        className: 'G2601',
+        headTeacherName: '孙敏',
+        maleRoomIds: [male.roomId],
+        femaleRoomIds: [female.roomId],
+      },
+    });
+    check('教务把 G2601 分到房间', save.status === 200 && save.body?.code === 200, save.body?.message || save.raw.slice(0, 80));
+
+    const list = await req('GET', '/api/teaching/dorm/list?stage=jh&page=1&size=100', { token: sunToken });
+    const rows = list.body?.data?.list || [];
+    const ids = new Set(rows.map((r) => r.dormId));
+    const allowed = new Set([male.roomId, female.roomId]);
+    check(
+      '班主任只看到分给本班的房间',
+      ids.has(male.roomId) && ids.has(female.roomId) && rows.every((r) => allowed.has(r.dormId)),
+      `${rows.map((r) => `${r.buildingName}${r.roomNo}`).join('、') || '空'}`,
+    );
+
+    const cand = await req('GET', '/api/teaching/dorm/candidates?stage=jh', { token: sunToken });
+    const candRows = cand.body?.data || [];
+    check(
+      '班主任能拿到本班未入住学生',
+      cand.status === 200 && candRows.length > 0 && candRows.every((c) => ['G2601', 'J2602'].includes(c.className)),
+      `${candRows.length} 人（${[...new Set(candRows.map((c) => c.className))].join('/')}）`,
+    );
+  }
+} else {
+  check('取教务/班主任 token', false);
 }
 
 console.log(`\n===== 结果：${pass} 通过 / ${fail} 失败 =====`);
