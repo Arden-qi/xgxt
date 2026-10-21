@@ -367,6 +367,19 @@ export async function createDormChange(body: Record<string, unknown>) {
 }
 
 /**
+ * 13.1 审批通过（★ 2026-10-21）
+ * 后端会同步改床位与学生主档：调宿 = 放旧床 + 占新床；退宿 = 放旧床 + 清宿舍。
+ */
+export async function approveDormChange(body: { stage: DormStage; id: string }) {
+  return http.post(`${BASE}/change/approve`, body);
+}
+
+/** 13.2 审批驳回（只改状态，理由写 remark） */
+export async function rejectDormChange(body: { stage: DormStage; id: string; reason: string }) {
+  return http.post(`${BASE}/change/reject`, body);
+}
+
+/**
  * 14. 入住率可选项
  *
  * ★ 选项是**后端从当前数据里去重算出来的**，前端不写死档位。

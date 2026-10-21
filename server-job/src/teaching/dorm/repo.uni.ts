@@ -984,6 +984,22 @@ export function makeRepo(stage: TeachingStage): DormRepo {
         const c = await tbl(db, SRC_DB, CLASS_T, stage).where({ id: String(st.class_id) }).first();
         className = c ? str(c.class_name) : null;
       }
+
+      /**
+       * ★ 2026-10-21：床位号也要落库（审批页与审批通过后的释放/占用都靠它）
+       *   老实现把 old_bed_no / new_bed_no 写死 null，导致审批通过时
+       *   退宿释放不了旧床位、调宿也说不清换到哪张床。
+       */
+      let oldBedNo: string | null = null;
+      let newBedNo: string | null = null;
+      if (body.oldBedId) {
+        const ob = await T_BED().where({ id: String(body.oldBedId) }).first();
+        if (ob) oldBedNo = bedNoText(ob.bed_no);
+      }
+      if (!isCheckout && body.newBedId) {
+        const nb = await T_BED().where({ id: String(body.newBedId) }).first();
+        if (nb) newBedNo = bedNoText(nb.bed_no);
+      }
   
       const id = randomUUID();
       await tblIns(db, SRC_DB, CHANGE_T, stage, {
@@ -1004,11 +1020,11 @@ export function makeRepo(stage: TeachingStage): DormRepo {
         old_dorm_id: body.oldDormId ? String(body.oldDormId) : null,
         old_dorm_no: oldDorm ? str(oldDorm.dorm_no) : null,
         old_bed_id: body.oldBedId ? String(body.oldBedId) : null,
-        old_bed_no: null,
+        old_bed_no: oldBedNo,
         new_dorm_id: isCheckout ? null : body.newDormId ? String(body.newDormId) : null,
         new_dorm_no: isCheckout ? null : newDorm ? str(newDorm.dorm_no) : null,
         new_bed_id: isCheckout ? null : body.newBedId ? String(body.newBedId) : null,
-        new_bed_no: null,
+        new_bed_no: newBedNo,
         change_date: body.changeDate,
         change_reason: body.changeReason,
         approval_status: 2, // 直接进「待审批」，避免还要再点一次提交
@@ -1019,10 +1035,22 @@ export function makeRepo(stage: TeachingStage): DormRepo {
     async applyChangeOnApproved(changeId, userId) {
       const a = await T_CHANGE().where({ id: String(changeId), is_deleted: false }).first();
       if (!a) throw new Error('调宿单不存在');
-  
-      // ① 释放旧床位
-      if (a.old_bed_id) {
-        await T_BED().where({ id: String(a.old_bed_id) }).update({
+
+      /**
+       * ① 释放旧床位
+       *
+       * 老单据可能没记 `old_bed_id`（上一版 changeCreate 写死 null），
+       * 这时按「学生 id + 已住」反查一次，避免退宿批了床位还占着。
+       */
+      let oldBedId = a.old_bed_id ? String(a.old_bed_id) : '';
+      if (!oldBedId && a.student_id) {
+        const ob = await T_BED()
+          .where({ is_deleted: false, bed_status: 2, student_id: String(a.student_id) })
+          .first();
+        if (ob) oldBedId = String(ob.id);
+      }
+      if (oldBedId) {
+        await T_BED().where({ id: oldBedId }).update({
           bed_status: 1,
           student_id: null,
           student_no: null,
@@ -1062,6 +1090,34 @@ export function makeRepo(stage: TeachingStage): DormRepo {
       // ④ 两端 used_count 重算
       if (a.old_dorm_id) await refreshUsedCount(String(a.old_dorm_id));
       if (a.new_dorm_id) await refreshUsedCount(String(a.new_dorm_id));
+    },
+
+    /** ★ 2026-10-21：审批通过 —— 先落库（换床/退宿），再把单据置为已通过 */
+    async changeApprove(changeId, userId) {
+      const a = await T_CHANGE().where({ id: String(changeId), is_deleted: false }).first();
+      if (!a) throw new Error('申请不存在或已删除');
+      const st = Number(a.approval_status ?? 0);
+      if (st !== 2 && st !== 3) throw new Error('该申请不是「待审批」状态，不能重复审批');
+      await repo.applyChangeOnApproved(changeId, userId);
+      await T_CHANGE().where({ id: String(changeId) }).update({
+        approval_status: 4, // 已通过
+        update_time: new Date(),
+        update_by: userId,
+      });
+    },
+
+    /** ★ 2026-10-21：审批驳回 —— 只改状态，不动床位/学生 */
+    async changeReject(changeId, reason, userId) {
+      const a = await T_CHANGE().where({ id: String(changeId), is_deleted: false }).first();
+      if (!a) throw new Error('申请不存在或已删除');
+      const st = Number(a.approval_status ?? 0);
+      if (st !== 2 && st !== 3) throw new Error('该申请不是「待审批」状态，不能重复审批');
+      await T_CHANGE().where({ id: String(changeId) }).update({
+        approval_status: 5, // 已驳回
+        remark: reason || null,
+        update_time: new Date(),
+        update_by: userId,
+      });
     },
   
     async summary(q, user) {

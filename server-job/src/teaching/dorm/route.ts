@@ -368,3 +368,28 @@ teachingDormRouter.post(
     res.json(ok(r, '申请已提交，等待审批'));
   }),
 );
+
+/**
+ * 13.1 审批通过（★ 2026-10-21）
+ * 通过时同步改床位与学生主档：调宿 = 放旧床 + 占新床；退宿 = 放旧床 + 清空宿舍。
+ */
+teachingDormRouter.post(
+  '/change/approve',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    await svc.approveDormChange(stage, requireId(b.id, '申请ID'), req.user);
+    res.json(ok(null, '已通过，床位与学生宿舍已更新'));
+  }),
+);
+
+/** 13.2 审批驳回（只改状态，不动床位） */
+teachingDormRouter.post(
+  '/change/reject',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    await svc.rejectDormChange(stage, requireId(b.id, '申请ID'), String(b.reason ?? ''), req.user);
+    res.json(ok(null, '已驳回'));
+  }),
+);

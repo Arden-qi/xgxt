@@ -63,6 +63,7 @@ export interface AllocateStudentRow {
   dormNo: string | null;
   building: string | null;
   room: string | null;
+  bedId: string | null;
   bedNo: string | null;
   bedLabel: string | null;
 }

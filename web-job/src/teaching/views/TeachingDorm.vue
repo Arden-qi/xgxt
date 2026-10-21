@@ -556,7 +556,7 @@
         type="info"
         :closable="false"
         show-icon
-        title="审批动作在「教学管理 → 审批中心 → 宿舍调宿」里处理，这里只做查询。"
+        title="审批动作在「宿舍管理 → 申请审批」里处理，这里只做查询。"
       />
     </el-dialog>
       </el-tab-pane>
@@ -565,6 +565,11 @@
            ★ 2026-10-21：班主任不显示该子页面（班级层面的分派归教务） -->
       <el-tab-pane v-if="!isOnlyHeadTeacher" label="班级分派" name="allocate" lazy>
         <DormAllocate />
+      </el-tab-pane>
+
+      <!-- ★ 2026-10-21：申请审批（班主任提交的换宿/退宿单；通过后自动改床位与学生宿舍） -->
+      <el-tab-pane v-if="canApproveDorm" label="申请审批" name="approval" lazy>
+        <DormChangeApproval />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -646,6 +651,8 @@ import { isReadOnlyUser, isSuperTest, myRoles } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
 /** ★ 2026-10-20 宿舍管理的第二个子页面：班级分派 */
 import DormAllocate from './DormAllocate.vue';
+/** ★ 2026-10-21 第三个子页面：申请审批（接收班主任的换宿/退宿申请） */
+import DormChangeApproval from './DormChangeApproval.vue';
 /** ★ 2026-10-20 调宿弹窗：班级 / 学生搜索 / 楼栋床位（与班级分派同一套接口） */
 import {
   listAllocateClasses,
@@ -695,7 +702,7 @@ import {
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
 /** ★ 2026-10-20 子页面页签：宿舍房间（原页面） / 班级分派（教务给各班分宿舍） */
-const mainTab = ref<'rooms' | 'allocate'>('rooms');
+const mainTab = ref<'rooms' | 'allocate' | 'approval'>('rooms');
 
 /**
  * ★ 2026-10-21：班主任（且没有更高业务角色）不参与「建房间」和「班级分派」
@@ -721,11 +728,27 @@ const isOnlyHeadTeacher = computed(() => {
   return !roles.some((r) => HEAD_TEACHER_SUPERIOR_ROLES.includes(r));
 });
 
-/** 班主任若停留在「班级分派」页签，角色判定生效后强制回到「宿舍房间」 */
+/**
+ * ★ 2026-10-21：谁能看「申请审批」页签
+ *   教务老师 / 校长 / 学管主任（审批角色）/ 系统管理员（只读可看）
+ *   SUPER_TEST 测试号全功能可见；班主任看不到。
+ */
+const APPROVER_ROLES: string[] = [
+  RoleCode.ACAD_STAFF,
+  RoleCode.RM_PRINCIPAL,
+  RoleCode.TEACH_DEAN,
+  RoleCode.SYS_ADMIN,
+];
+const canApproveDorm = computed(
+  () => isSuperTest.value || myRoles.value.some((r) => APPROVER_ROLES.includes(r)),
+);
+
+/** 班主任若停留在「班级分派 / 申请审批」页签，角色判定生效后强制回到「宿舍房间」 */
 watch(
-  isOnlyHeadTeacher,
-  (v) => {
-    if (v && mainTab.value === 'allocate') mainTab.value = 'rooms';
+  [isOnlyHeadTeacher, canApproveDorm],
+  () => {
+    if (mainTab.value === 'allocate' && isOnlyHeadTeacher.value) mainTab.value = 'rooms';
+    if (mainTab.value === 'approval' && !canApproveDorm.value) mainTab.value = 'rooms';
   },
   { immediate: true },
 );
@@ -1369,6 +1392,8 @@ async function doCreateChange() {
       bizType: changeForm.bizType,
       studentId: changeForm.studentId,
       oldDormId: curStudent.value.dormId || undefined,
+      // ★ 2026-10-21：旧床位必须带上 —— 审批通过时要靠它释放原床位（退宿尤其重要）
+      oldBedId: curStudent.value.bedId || undefined,
       newDormId: targetRoom?.roomId,
       newBedId: changeForm.targetBedId || undefined,
       changeDate: changeForm.changeDate,

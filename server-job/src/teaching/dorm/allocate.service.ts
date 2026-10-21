@@ -473,6 +473,7 @@ export interface AllocateStudentRow {
   dormNo: string | null;
   building: string | null;
   room: string | null;
+  bedId: string | null;
   bedNo: string | null;
   bedLabel: string | null;
 }
@@ -563,7 +564,7 @@ export async function searchStudents(opts: {
         if (noList.length) b.orWhereIn('student_no', noList);
         if (nameList.length) b.orWhereIn('student_name', nameList);
       })
-      .select('student_id', 'student_no', 'student_name', 'dorm_id', 'bed_no')) as any[];
+      .select('id', 'student_id', 'student_no', 'student_name', 'dorm_id', 'bed_no')) as any[];
   }
   const bedById = new Map<string, any>();
   const bedByNo = new Map<string, any>();
@@ -617,6 +618,7 @@ export async function searchStudents(opts: {
         dormNo,
         building,
         room,
+        bedId: str(bed?.id) || null,
         bedNo,
         bedLabel: bedNo === null ? null : bedNoText(bedNo),
       } satisfies AllocateStudentRow;

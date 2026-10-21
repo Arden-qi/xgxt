@@ -18,7 +18,7 @@
  *   jh classjh:dorm:view / class class:dorm:view / job job:dorm:view
  */
 
-import { BizCode } from 'shared-types';
+import { BizCode, hasRole, RoleCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { makeRepo } from './repo.uni';
 import type {
@@ -591,4 +591,52 @@ export async function createDormChange(
   }
   // 换宿/退宿申请三学段都可提交（ rooms 可写，申请当然也可写）
   return pick(stage).changeCreate(body, user?.userId || '');
+}
+
+/**
+ * ★ 2026-10-21：宿舍申请审批
+ *
+ * 谁能批：教务老师 / 校长 / 学管主任（学管主任本身就是审批角色）。
+ * 班主任只发起，不审批 —— 前端「申请审批」页签也不会给班主任。
+ */
+function assertDormApprover(user: any): void {
+  const roles: string[] = user?.roles ?? [];
+  const ok =
+    hasRole(roles, RoleCode.ACAD_STAFF) ||
+    hasRole(roles, RoleCode.RM_PRINCIPAL) ||
+    hasRole(roles, RoleCode.TEACH_DEAN);
+  if (!ok) {
+    throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有教务老师 / 校长 / 学管主任可以审批宿舍申请');
+  }
+}
+
+export async function approveDormChange(
+  stage: TeachingStage,
+  changeId: string,
+  user: any,
+): Promise<void> {
+  await assertStageView(user, stage);
+  assertDormApprover(user);
+  try {
+    await pick(stage).changeApprove(changeId, user?.userId || 'system');
+  } catch (e) {
+    // 仓储抛的是普通 Error（申请不存在 / 不是待审批）→ 转成可读的参数错误
+    throw new BizError(BizCode.PARAM_ERROR, (e as Error).message || '审批失败');
+  }
+}
+
+export async function rejectDormChange(
+  stage: TeachingStage,
+  changeId: string,
+  reason: string,
+  user: any,
+): Promise<void> {
+  await assertStageView(user, stage);
+  assertDormApprover(user);
+  if (!reason || !reason.trim()) throw new BizError(BizCode.PARAM_ERROR, '驳回原因必填');
+  try {
+    await pick(stage).changeReject(changeId, reason.trim(), user?.userId || 'system');
+  } catch (e) {
+    throw new BizError(BizCode.PARAM_ERROR, (e as Error).message || '驳回失败');
+  }
 }

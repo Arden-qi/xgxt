@@ -97,6 +97,9 @@ export interface DormRepo {
   /** 调宿/退宿申请 */
   changeList(q: DormListQuery, user: any): Promise<DormChangeRow[]>;
   changeCreate(body: DormChangeCreateBody, userId: string): Promise<{ id: string }>;
+  /** ★ 2026-10-21：审批通过 / 驳回（通过时同步床位与学生主档） */
+  changeApprove(changeId: string, userId: string): Promise<void>;
+  changeReject(changeId: string, reason: string, userId: string): Promise<void>;
   /** 审批通过后的落库动作（换床 / 释放床位），各学段表不同 */
   applyChangeOnApproved(changeId: string, userId: string): Promise<void>;
 
