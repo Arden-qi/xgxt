@@ -274,11 +274,11 @@
               <el-input v-model="form.className" maxlength="50" placeholder="留空自动生成占位名" />
             </el-form-item>
           </el-col>
-          <!-- ★ 只有实训有班级编号（而且必填 + 唯一） -->
-          <el-col v-if="curMeta?.hasClassCode" :span="8">
-            <el-form-item label="班级编号" required>
-              <el-input v-model="form.classCode" maxlength="32" placeholder="如 SX20260001">
-                <template #append>
+          <!-- ★ 2026-10-21 用户口径：班级编号三部门统一（初高部/大学部/就业部），必填 -->
+          <el-col :span="8">
+            <el-form-item label="班级编号" prop="classCode">
+              <el-input v-model="form.classCode" maxlength="32" placeholder="Q17/J101/T101">
+                <template v-if="canGenCode" #append>
                   <el-link type="primary" @click="doGenCode">生成</el-link>
                 </template>
               </el-input>
@@ -769,6 +769,13 @@ const hasCloseDateCol = computed(() =>
 );
 
 /**
+ * ★ 2026-10-21：编号「生成」按钮只对实训/就业部有
+ *   生成器按实训的 SX+年份 规则出号（repo.job / repo.emp），初高和大学没有这套规则，
+ *   所以只保留输入框、不给生成按钮 —— 不要造一个用了就出错的按钮。
+ */
+const canGenCode = computed(() => form.stage === 'job' || form.stage === 'emp');
+
+/**
  * ★ 出勤率列头必须随口径变：初高是「今日出勤率」，大学/实训是「累计出勤率」。
  *   混着写会被读成同一种指标 —— 今日 92% 和累计 92% 完全不是一回事。
  *   （判断依据直接用初高这个固定事实，不去猜 meta 的其它标志位。）
@@ -868,6 +875,17 @@ const isTrainPhase = computed(() => Number(form.phaseCode) === TRAIN_PHASE_CODE)
  *   规则写成 computed，切换阶段后红星与校验会立刻跟着变。
  */
 const rules = computed<FormRules>(() => ({
+  // ★ 2026-10-21：班级编号三部门统一必填（历史班级留空，首次编辑时补）
+  classCode: [
+    { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        if (String(value ?? '').trim()) callback();
+        else callback(new Error('请填写班级编号，如 Q17 / J101 / T101'));
+      },
+      trigger: 'submit',
+    },
+  ],
   projectManagerName: isTrainPhase.value
     ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
     : [],
@@ -1135,7 +1153,7 @@ function onFormStageChange() {
 async function doGenCode() {
   const r = await genClassCode(form.stage);
   if (r?.classCode) form.classCode = r.classCode;
-  else ElMessage.info('该部门没有班级编号（只有实训有）');
+  else ElMessage.info('该部门没有自动生成规则（只有实训/就业部有），请手工填写');
 }
 
 async function doSave() {

@@ -643,19 +643,16 @@ app.use(
   teachingLeaveRouter,
 );
 
-// ★ 学生档案（第六个合并的业务域）—— ★ 唯一有 **4 个学段** 的域（多一个「教务」）
-//   权限码：classjh:student:view / class:student:view / job:empArchive:view / edu:student:view
+// ★ 学生档案（第六个合并的业务域）—— 三个学段：初高 / 大学 / 就业部
+//   ★ 2026-10-21 用户口径：学生档案界面删除「就业」「教务」两个入口
+//     （edu:student:view 从这里摘掉 —— 教务模块自己的页面还在，只是不再进学生档案）
+//   权限码：classjh:student:view / class:student:view / job:empArchive:view
 app.use(
   '/api/teaching/student',
   authMiddleware,
   denyReadOnlyAdmin,
   denyApprovalOnlyWrite,
-  requireAnyPage([
-    'classjh:student:view',
-    'class:student:view',
-    'job:empArchive:view',
-    'edu:student:view',
-  ]),
+  requireAnyPage(['classjh:student:view', 'class:student:view', 'job:empArchive:view']),
   teachingStudentRouter,
 );
 

@@ -36,6 +36,27 @@ const FLOW_TABLE = 't_class_flow';
 const REPEAT_TABLE = 't_class_repeat';
 const STAGE = 'jh' as const;
 
+/**
+ * ★ 2026-10-21：按「阶段方案阶段」筛选
+ *
+ * 学生表只存阶段码（int），方案阶段在**班级**上（scheme_stage_id），
+ * 所以只能按学生所在班级关联 —— 不能拿学生自己的 stage 去比，两套编码没有映射关系。
+ */
+function applySchemeFilter(qb: any, q: StudentListQuery): void {
+  const classOf = () => tbl(db, 'sms_class_jh', CLASS_TABLE, STAGE);
+  if (q.schemeStageId) {
+    qb.whereIn('class_id', classOf().where('scheme_stage_id', q.schemeStageId).select('id'));
+  }
+  if (q.noScheme) {
+    qb.andWhere((b: any) => {
+      b.whereNull('class_id').orWhereNotIn(
+        'class_id',
+        classOf().whereNotNull('scheme_stage_id').whereNot('scheme_stage_id', '').select('id'),
+      );
+    });
+  }
+}
+
 function str(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null;
   return String(v);
@@ -68,6 +89,8 @@ function mapRow(r: Record<string, any>): StudentRow {
     className: str(r.class_name),
     phaseCode: phase,
     phaseName: phase === null ? '' : (STAGE_NAME[phase] ?? ''),
+    // 由 service 层按班级统一回填（见 attachSchemeStageNames）
+    schemeStageName: null,
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -125,6 +148,7 @@ function buildBase(q: StudentListQuery) {
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.studentStatus) qb.andWhere('student_status', q.studentStatus);
   if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
+  applySchemeFilter(qb, q);
   if (q.keyword) {
     qb.andWhere((b: any) => {
       b.where('student_no', 'like', `%${q.keyword}%`)

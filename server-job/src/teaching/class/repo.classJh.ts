@@ -3,7 +3,7 @@
  * ============================================================
  *
  * 【与实训的四处结构差异（本段特有的坑）】
- *   ① **没有 `class_code` 列** → 统一 `classCode` 恒为 null
+ *   ① 班级编号 `class_code`：★ 2026-10-21 已补列（三部门统一必填 + 唯一）
  *   ② **没有 `close_date` 列** → 统一 `closeDate` 恒为 null
  *   ③ 教室列名是 `classroom`（与实训同名，但长度 100 vs 50）
  *   ④ **没有 `project_manager_*` / `employment_teacher_*` / `university_no`**
@@ -80,6 +80,17 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * ★ 2026-10-21：班级编号唯一性校验（同表内全局唯一，与实训/就业部同口径）
+ *   编辑时排除自己，否则「不动编号只改别的字段」会被自己挡住。
+ */
+async function assertClassCodeUnique(code: string, excludeId?: string): Promise<void> {
+  const q = tbl(db, 'sms_class_jh', T, STAGE).where({ class_code: code, is_deleted: false });
+  if (excludeId) q.andWhereNot('id', excludeId);
+  const hit = (await q.first()) as Record<string, any> | undefined;
+  if (hit) throw new Error(`班级编号「${code}」已存在`);
+}
+
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
   const status = Number(r.class_status ?? CLASS_STATUS.OPEN);
   const phase = readPhaseCode(r);
@@ -88,7 +99,7 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     stageName: STAGE_NAME,
     classId: String(r.id),
     className: String(r.class_name ?? ''),
-    classCode: null,
+    classCode: str(r.class_code),
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
@@ -202,7 +213,7 @@ export const repo: ClassRepo = {
     return {
       stage: STAGE,
       stageName: STAGE_NAME,
-      hasClassCode: false,
+      hasClassCode: true,
       hasCloseDate: false,
       hasSealAction: true,
       classroomLabel: '教室',
@@ -268,10 +279,15 @@ export const repo: ClassRepo = {
     set('classroom', body.classroom);
     set('open_date', body.openDate);
     set('remark', body.remark);
+    // ★ 2026-10-21：班级编号（三部门统一必填 + 同表唯一）
+    set('class_code', body.classCode === undefined ? undefined : String(body.classCode ?? '').trim());
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
-    // ★ 这张表没 class_code / close_date / 交棒字段
 
     if (body.id) {
+      // 编辑：也要必填 —— 历史班级第一次编辑时补上（用户口径：班级编号必填）
+      const code = String(body.classCode ?? '').trim();
+      if (!code) throw new Error('班级编号必填');
+      await assertClassCodeUnique(code, body.id);
       if (body.classStatus !== undefined) {
         const cur = (await tbl(db, 'sms_class_jh', T, STAGE).where({ id: body.id }).first()) as
           | Record<string, any>
@@ -291,6 +307,10 @@ export const repo: ClassRepo = {
     // ★ 2026-10-15 放宽：班主任/教员允许不选（列已迁改为可空），不再前置拦截。
     //   同部门内名称不重复（用占位名也能过 —— 带秒级时间戳）
     const deptCode = Number(body.deptCode ?? 1);
+    // ★ 2026-10-21：班级编号必填 + 唯一（与实训/就业部同口径）
+    const classCode = String(body.classCode ?? '').trim();
+    if (!classCode) throw new Error('班级编号必填');
+    await assertClassCodeUnique(classCode);
     const dupName = (await tbl(db, 'sms_class_jh', T, STAGE)
       .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
@@ -299,6 +319,7 @@ export const repo: ClassRepo = {
     const id = randomUUID();
     await tblIns(db, 'sms_class_jh', T, STAGE, {
       id,
+      class_code: classCode,
       class_name: className, // ★ create 时名称可能被自动占位（见上）
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时给兜底值

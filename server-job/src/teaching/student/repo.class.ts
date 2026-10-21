@@ -33,9 +33,31 @@ import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 
 const T = 't_class_student';
+const CLASS_TABLE = 't_class_info';
 const GRADE_TABLE = 't_class_grade';
 const REPEAT_TABLE = 't_class_repeat';
 const STAGE = 'class' as const;
+
+/**
+ * ★ 2026-10-21：按「阶段方案阶段」筛选
+ *
+ * 学生表只存阶段码（int），方案阶段在**班级**上（scheme_stage_id），
+ * 只能按学生所在班级关联 —— 两套编码之间没有映射关系。
+ */
+function applySchemeFilter(qb: any, q: StudentListQuery): void {
+  const classOf = () => tbl(db, 'sms_class', CLASS_TABLE, STAGE);
+  if (q.schemeStageId) {
+    qb.whereIn('class_id', classOf().where('scheme_stage_id', q.schemeStageId).select('id'));
+  }
+  if (q.noScheme) {
+    qb.andWhere((b: any) => {
+      b.whereNull('class_id').orWhereNotIn(
+        'class_id',
+        classOf().whereNotNull('scheme_stage_id').whereNot('scheme_stage_id', '').select('id'),
+      );
+    });
+  }
+}
 
 /** 大学的学习阶段（201~206 + 13 实训） */
 const PHASE_NAME: Record<number, string> = {
@@ -80,6 +102,8 @@ function mapRow(r: Record<string, any>): StudentRow {
     className: str(r.class_name),
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    // 由 service 层按班级统一回填（见 attachSchemeStageNames）
+    schemeStageName: null,
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -125,6 +149,7 @@ function buildBase(q: StudentListQuery, user: any) {
   if (q.deptCode) qb.where('dept_code', q.deptCode);
   if (q.studentStatus) qb.where('student_status', q.studentStatus);
   if (q.phaseCode) qb.where('stage', q.phaseCode);
+  applySchemeFilter(qb, q);
   if (q.keyword) {
     const k = q.keyword;
     qb.where(function (this: any) {
