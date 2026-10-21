@@ -44,7 +44,12 @@ async function classOf(stage: ClassStage, id: string): Promise<ClassRow> {
   const row = (await uniDb('t_uni_class')
     .where({ id, edu_stage: stage, is_deleted: 0 })
     .first()) as Record<string, any> | undefined;
-  if (!row) throw new BizError(BizCode.PARAM_ERROR, '班级不存在');
+  if (!row) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      '班级不存在或已被删除，请刷新列表后重试（若刚删了班级，请先在班级管理里恢复）',
+    );
+  }
   const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
   return {
     id: String(row.id),
