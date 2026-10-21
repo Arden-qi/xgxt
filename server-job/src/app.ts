@@ -74,6 +74,7 @@ import { teachingLeaveRouter } from './teaching/leave/route';
 import { teachingStudentRouter } from './teaching/student/route';
 import { teachingClassRouter } from './teaching/class/route';
 import { teachingDormRouter } from './teaching/dorm/route';
+import { teachingDormAllocateRouter } from './teaching/dorm/allocate.route';
 // ★ 宿舍楼栋设置（系统设置页与宿舍管理共用的楼栋字典）
 import { teachingBuildingRouter } from './teaching/dorm/building.route';
 import { denyReadOnlyAdmin } from './teaching/shared/readOnlyGuard';
@@ -687,6 +688,24 @@ app.use(
   denyApprovalOnlyWrite,
   requireAnyPage(['classjh:classInfo:view', 'class:info:view', 'job:class:view']),
   teachingClassRouter,
+);
+
+  /**
+   * ★ 班级宿舍分派（宿舍管理的子页面）
+   *
+   * 必须挂在 `/api/teaching/dorm` **之前** —— 后者会把 `/allocate/*`
+   * 一并吃进 teachingDormRouter（没有匹配路由时才 next() 到后面），
+   * 提前挂载可以避免依赖 fallthrough 的隐式行为。
+   *
+   * 权限码与宿舍域完全一致（教务老师已有 classjh:dorm:view），不新增权限点。
+   */
+  app.use(
+  '/api/teaching/dorm/allocate',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage(['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view']),
+  teachingDormAllocateRouter,
 );
 
   app.use(

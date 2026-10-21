@@ -56,7 +56,7 @@ import type {
   TeachingStage,
 } from '../shared/dto';
 import { fmtDate, fmtDateTime } from '../shared/format';
-import type { DormRepo } from './types';
+import type { DormCandidateRow, DormRepo } from './types';
 import { bedNoText } from 'shared-types/class';
 import { hasRole, RoleCode, StudentStatus } from 'shared-types';
 import { tbl, tblIns, upd } from '../shared/uniTable';
@@ -68,6 +68,17 @@ const CHANGE_T = 't_job_dorm_change';
 /** ★ 实训的学生主档是 `t_student_base`（**不是** t_job_student —— 那张表不存在） */
 const STUDENT_T = 't_student_base';
 const CLASS_T = 't_job_class';
+/** ★ 班级分派关系（教务给班级分的房间）—— 班主任据此看到自己班的房间 */
+const ASSIGN_T = 'sms_edu.t_edu_dorm_assignment';
+/** ★ 学生主档的候选来源（本学段表 + 门户活数据），入住/候选都按这个顺序兜底 */
+const PERM_STUDENT = 'sms_perm.t_student_base';
+const STUDENT_SOURCES = [
+  'sms_class_jh.t_class_student',
+  'sms_class.t_class_student',
+  'sms_job.t_student_base',
+  'sms_edu.t_student_base',
+  PERM_STUDENT,
+];
 
 /**
  * ★ 三学段共用同一套「老表名」，库名统一写 sms_job。
@@ -138,54 +149,170 @@ export function makeRepo(stage: TeachingStage): DormRepo {
     roomStatusIsInt: true,
   });
   
+/** ★ 班级表来源：三学段的班级表都要看（宿舍是合并页，班主任可能带别的学段的班） */
+const CLASS_SOURCES = [
+  'sms_class_jh.t_class_info',
+  'sms_class.t_class_info',
+  'sms_job.t_job_class',
+];
+
+/**
+ * ★ 2026-10-21：解析「我的班」—— 同时兼容三种存法，别只认一种
+ *
+ * 现实里同一件事有三种数据：
+ *   ① 班级表 `t_class_info.head_teacher_id` = 权限库用户 id（U008…）；
+ *   ② 门户学生表 `t_student_base.head_teacher_id` = **门户账号 UUID**（token 里的 userId）；
+ *   ③ 演示库干脆只填了 `head_teacher_name = '孙敏'`，id 列是 '123456' 这种脏值。
+ * 只按 ① 查 → 班主任的班一个都找不到（宿舍页恒空、入住候选为空）。
+ * → 这里把 id（业务 id / 门户 id）和姓名都作为命中条件，能查到哪种算哪种。
+ *
+ * ⚠️ 还要**跨学段**查班级表：合并页里「大学的班主任」也可能被安排带初高的班
+ *   （实测 Q30 的班主任是 zhanght，但 Q30 在 sms_class_jh.t_class_info 里）。
+ *   只查当前 stage 的班级表 → 分派给该班的房间永远看不到。
+ */
+async function myClasses(user: any): Promise<{ privileged: boolean; names: string[]; ids: string[] }> {
+    const roles: string[] = user?.roles ?? [];
+    const privileged =
+      hasRole(roles, RoleCode.RM_PRINCIPAL) ||
+      hasRole(roles, RoleCode.ACAD_STAFF) ||
+      hasRole(roles, RoleCode.TEACH_DEAN) ||
+      hasRole(roles, RoleCode.SYS_ADMIN);
+    if (privileged) return { privileged: true, names: [], ids: [] };
+
+    const portalUid = String(user?.businessUserId || user?.userId || user?.id || '');
+    const userName = String(user?.userName || user?.name || '').trim();
+
+    // 权限库业务 id（U008）：token 没带就按账号查一次
+    let permUid = String(user?.businessUserId || '');
+    if (!permUid && user?.account) {
+      try {
+        const u = (await db('sms_perm.t_perm_user').where({ account: String(user.account) }).first()) as any;
+        permUid = u?.id ? String(u.id) : '';
+      } catch {
+        permUid = '';
+      }
+    }
+
+    const names = new Set<string>();
+    const ids = new Set<string>();
+
+    const collect = (rows: any[]) => {
+      for (const r of rows) {
+        if (str(r.class_name)) names.add(String(r.class_name));
+        if (r.id && str(r.class_name)) ids.add(String(r.id));
+      }
+    };
+
+    // ① 班级表：班主任/教师/助理（业务 id 或姓名）—— **三学段班级表都查**
+    for (const table of CLASS_SOURCES) {
+      try {
+        const rows = (await db(table)
+          .where({ is_deleted: false })
+          .andWhere((b: any) => {
+            if (permUid) b.where('head_teacher_id', permUid).orWhere('teacher_id', permUid).orWhere('assistant_id', permUid);
+            if (userName) {
+              b.orWhere('head_teacher_name', userName).orWhere('teacher_name', userName).orWhere('assistant_name', userName);
+            }
+          })
+          .select('id', 'class_name')) as any[];
+        collect(rows);
+      } catch {
+        /* 表/列不存在 → 跳过 */
+      }
+    }
+
+    // ② 门户学生表（活数据）：head_teacher_id 存的是门户 UUID
+    try {
+      const rows = (await db(PERM_STUDENT)
+        .where({ is_deleted: false })
+        .whereNotNull('class_name')
+        .andWhere((b: any) => {
+          if (portalUid) b.where('head_teacher_id', portalUid).orWhere('teacher_id', portalUid).orWhere('assistant_id', portalUid);
+          if (userName) b.orWhere('head_teacher_name', userName);
+        })
+        .distinct('class_name')) as any[];
+      collect(rows);
+    } catch {
+      /* 跳过 */
+    }
+
+    // ③ 本学段学生表（老数据）
+    try {
+      const rows = (await tbl(db, SRC_DB, STUDENT_T, stage)
+        .where({ is_deleted: false })
+        .whereNotNull('class_name')
+        .andWhere((b: any) => {
+          if (portalUid) b.where('head_teacher_id', portalUid).orWhere('teacher_id', portalUid).orWhere('assistant_id', portalUid);
+          if (userName) b.orWhere('head_teacher_name', userName);
+        })
+        .distinct('class_name', 'class_id')) as any[];
+      collect(rows);
+    } catch {
+      /* 跳过 */
+    }
+
+    return { privileged: false, names: [...names], ids: [...ids] };
+  }
+
   /**
    * ★ 数据范围：沿用实训原有的角色判定口径
    *   校长 / 学管（学管主任·教质经理）/ 教务老师 / 系统管理员 → 全量
-   *   班主任 / 教员 / 助教 → 只看自己班的学生所住的宿舍
+   *   班主任 / 教员 / 助教 → 只看自己班的宿舍（分派给本班的 + 本班学生住的）
    *
    * ⚠️ RoleCode 是**字符串枚举**（不是数字），别按数字写。
    *   实训没有「宿舍管理员」这个角色，教务老师（ACAD_STAFF）就是宿舍口的管理者。
-   *
-   * ⚠️⚠️ 2026-10-12 修 bug：班主任进宿舍页恒为「0 间 / 暂无数据」，三处原因：
-   *   ①【ID 空间错配】门户 token 里的 `userId` 是**门户账号 id（UUID）**，
-   *     而班级表 `head_teacher_id` 存的是**权限库用户 id**（U004…）——直接比永远比不中。
-   *     现在优先用 `user.businessUserId`（鉴权中间件从 /api/perm/remote/account-profile 取回）。
-   *   ②【数据来源错了】原来靠床位表 `bed_status=2 且 student_id=我班学生` 反查房间，
-   *     但统一床位表的 `student_id` 全为 NULL（实测 184 行无一填了学生）→ 恒空。
-   *     「谁住哪」的权威来源是学生主档的 `dorm_id`（直接就是房间主键）。
-   *   ③【学管漏了】学管主任（TEACH_DEAN，运行时码是 TEACH_QTY）没被算成全量角色。
    */
   async function scopedDormIds(user: any): Promise<string[] | null> {
-    const roles: string[] = user?.roles ?? [];
-    if (hasRole(roles, RoleCode.RM_PRINCIPAL)) return null;
-    if (hasRole(roles, RoleCode.ACAD_STAFF)) return null;
-    // ★ 学管主任 / 教质经理（别名感知，运行时给的是 TEACH_QTY）
-    if (hasRole(roles, RoleCode.TEACH_DEAN)) return null;
-    if (hasRole(roles, RoleCode.SYS_ADMIN)) return null;
+    const mine = await myClasses(user);
+    if (mine.privileged) return null;
+    if (!mine.names.length && !mine.ids.length) return [];
 
-    // ★ 业务用户 id（U004…）优先；老 token 没这个字段时回退到门户 userId
-    const uid = String(user?.businessUserId || user?.userId || user?.id || '');
-    if (!uid) return [];
+    /**
+     * ★ 2026-10-21：班主任能看到**教务分派给本班的宿舍**（哪怕还没有学生入住）。
+     *
+     * 之前只按「本班学生住哪间」反查 → 教务刚分派完、班主任还没填学生时，
+     * 班主任看到的是「暂无数据」，等于分派白做了。
+     * → 把 `t_edu_dorm_assignment` 里本班的分派房间一起并进可见范围：
+     *   分给这个班哪几间，班主任就只能看到哪几间。
+     */
+    const assigned = mine.names.length
+      ? ((await db(ASSIGN_T)
+          .whereIn('class_name', mine.names)
+          .where({ is_deleted: false })
+          .distinct('room_id')) as any[])
+      : [];
 
-    // 班主任 / 教员 / 助教：班主任、任课老师、助理任一命中都算「我的班」
-    const classes = await tbl(db, SRC_DB, CLASS_T, stage)
-      .where({ is_deleted: false })
-      .andWhere((b: any) => {
-        b.where('head_teacher_id', uid).orWhere('teacher_id', uid).orWhere('assistant_id', uid);
-      })
-      .select('id');
-    const classIds = classes.map((c: any) => String(c.id));
-    if (!classIds.length) return [];
+    const ids = new Set<string>();
+    // ① 分派给本班的房间
+    for (const a of assigned) {
+      const id = str(a.room_id);
+      if (id) ids.add(id);
+    }
 
-    // ★ 直接问学生主档「你住哪间房」，不再经床位表中转
-    const staying = await tbl(db, SRC_DB, STUDENT_T, stage)
-      .whereIn('class_id', classIds)
-      .where({ is_deleted: false })
-      .whereIn('student_status', IN_SCHOOL_STATUS)
-      .whereNotNull('dorm_id')
-      .andWhere('dorm_id', '<>', '')
-      .distinct('dorm_id');
-    return staying.map((s: any) => String(s.dorm_id));
+    // ② 本班学生已经入住的房间（学生主档 dorm_id 是权威来源）
+    const stayingFilters = (b: any) => {
+      if (mine.ids.length) b.whereIn('class_id', mine.ids);
+      if (mine.names.length) b.orWhereIn('class_name', mine.names);
+    };
+    const stayingSources: Array<() => any> = [
+      () => tbl(db, SRC_DB, STUDENT_T, stage),
+      () => db(PERM_STUDENT),
+    ];
+    for (const src of stayingSources) {
+      try {
+        const rows = (await src()
+          .where({ is_deleted: false })
+          .whereIn('student_status', IN_SCHOOL_STATUS)
+          .whereNotNull('dorm_id')
+          .andWhere('dorm_id', '<>', '')
+          .andWhere(stayingFilters)
+          .distinct('dorm_id')) as any[];
+        for (const s of rows) if (str(s.dorm_id)) ids.add(String(s.dorm_id));
+      } catch {
+        /* 表不存在 → 跳过 */
+      }
+    }
+    return [...ids];
   }
   
   /** 房间列表 + 实时已住（数 t_job_dorm_bed 里 bed_status=2 的条数） */
@@ -543,8 +670,114 @@ export function makeRepo(stage: TeachingStage): DormRepo {
       return out;
     },
   
+    /**
+     * ★ 办理入住的学生候选（2026-10-21）
+     *
+     * 数据范围：
+     *   · 校长 / 教务 / 学管 / 管理员 → 全量学生；
+     *   · 班主任 / 教员 / 助教 → 只列自己班的学生（与房间列表同一套「我的班」判定）。
+     * 只返回**还没入住**的学生（学生主档 dorm_id 为空，且床位表里没有占床记录），
+     * 避免把已住学生的床位重复占用。
+     *
+     * 取数：本学段学生表 + 门户学生表（演示库只有后者有活数据），按学号去重。
+     */
+    async candidates(q, user): Promise<DormCandidateRow[]> {
+      const mine = await myClasses(user);
+      if (!mine.privileged && !mine.names.length && !mine.ids.length) return [];
+
+      const kw = str(q.keyword)?.trim();
+      const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 100);
+      const sources = ['stage', PERM_STUDENT]; // 本学段学生表 + 门户活数据
+      const rows: any[] = [];
+
+      for (const table of sources) {
+        try {
+          // 本学段表名映射（tbl 会按 stage 换成 sms_class_jh / sms_class）
+          const base = table === PERM_STUDENT ? db(PERM_STUDENT) : tbl(db, SRC_DB, STUDENT_T, stage);
+          const qb = base
+            .where({ is_deleted: false })
+            .whereIn('student_status', IN_SCHOOL_STATUS)
+            // 未入住：dorm_id 为空（老数据可能是空串）
+            .andWhere((b: any) => b.whereNull('dorm_id').orWhere('dorm_id', ''));
+          if (!mine.privileged) {
+            qb.andWhere((b: any) => {
+              if (mine.ids.length) b.whereIn('class_id', mine.ids);
+              if (mine.names.length) b.orWhereIn('class_name', mine.names);
+            });
+          }
+          if (kw) {
+            qb.andWhere((b: any) =>
+              b.where('student_name', 'like', `%${kw}%`).orWhere('student_no', 'like', `%${kw}%`),
+            );
+          }
+          rows.push(
+            ...((await qb
+              .select('id', 'student_no', 'student_name', 'gender', 'class_id', 'class_name', 'dorm_no')
+              .limit(limit)) as any[]),
+          );
+        } catch {
+          /* 表不存在 → 跳过 */
+        }
+      }
+
+      // 按学号去重（同一学生在多张表里是投影）
+      const byNo = new Map<string, any>();
+      for (const r of rows) {
+        const key = str(r.student_no) || String(r.id);
+        if (!byNo.has(key)) byNo.set(key, r);
+      }
+      const picked = [...byNo.values()].slice(0, limit);
+
+      // 兜底：床位表里已占床的（学生主档可能没回写 dorm_id）不算候选
+      const ids = picked.map((r) => String(r.id));
+      const nos = picked.map((r) => str(r.student_no)).filter(Boolean) as string[];
+      const usedIds = new Set<string>();
+      const usedNos = new Set<string>();
+      if (ids.length || nos.length) {
+        const beds = (await T_BED()
+          .where({ is_deleted: false, bed_status: 2 })
+          .andWhere((b: any) => {
+            if (ids.length) b.whereIn('student_id', ids);
+            if (nos.length) b.orWhereIn('student_no', nos);
+          })
+          .select('student_id', 'student_no')) as any[];
+        for (const b of beds) {
+          if (str(b.student_id)) usedIds.add(String(b.student_id));
+          if (str(b.student_no)) usedNos.add(String(b.student_no));
+        }
+      }
+
+      return picked
+        .filter((r) => !usedIds.has(String(r.id)) && !usedNos.has(str(r.student_no) || ''))
+        .map((r) => {
+          const g = numOrNull(r.gender) ?? 0;
+          return {
+            stage,
+            studentId: String(r.id),
+            studentNo: str(r.student_no) || '',
+            studentName: str(r.student_name) || '',
+            gender: g,
+            classId: str(r.class_id),
+            className: str(r.class_name),
+            dormNo: str(r.dorm_no),
+          } satisfies DormCandidateRow;
+        });
+    },
+
     async assign(body: DormAssignBody, userId: string) {
-      const st = await tbl(db, SRC_DB, STUDENT_T, stage).where({ id: String(body.studentId), is_deleted: false }).first();
+      /**
+       * ★ 2026-10-21：学生主档兜底（与本文件 changeCreate 同口径）
+       *   部分环境（演示库 / 门户投影）里本学段学生表没有在读学生，
+       *   活数据在 `sms_perm.t_student_base`。只查前者会直接「学生不存在」。
+       */
+      let st: any = await tbl(db, SRC_DB, STUDENT_T, stage)
+        .where({ id: String(body.studentId), is_deleted: false })
+        .first();
+      if (!st) {
+        st = await db(PERM_STUDENT)
+          .where({ id: String(body.studentId), is_deleted: false })
+          .first();
+      }
       if (!st) throw new Error('学生不存在');
       if (!IN_SCHOOL_STATUS.includes(numOrNull(st.student_status) ?? 0)) {
         throw new Error('该学生不是在读状态，不能办理入住');
@@ -597,10 +830,17 @@ export function makeRepo(stage: TeachingStage): DormRepo {
   
       await refreshUsedCount(String(body.dormId));
       // 学生主档同步宿舍号（合并前的页面也是这么做的）
-      await tbl(db, SRC_DB, STUDENT_T, stage).where({ id: String(body.studentId) }).update({
+      const synced = await tbl(db, SRC_DB, STUDENT_T, stage).where({ id: String(body.studentId) }).update({
         dorm_id: dorm.id,
         dorm_no: dorm.dorm_no,
       });
+      // ★ 学生来自门户表时，本学段表 update 影响 0 行 → 回写门户表
+      if (!synced) {
+        await db(PERM_STUDENT).where({ id: String(body.studentId) }).update({
+          dorm_id: dorm.id,
+          dorm_no: dorm.dorm_no,
+        });
+      }
       void genderName;
     },
   
@@ -621,7 +861,12 @@ export function makeRepo(stage: TeachingStage): DormRepo {
         update_by: userId,
       });
       if (sid) {
-        await tbl(db, SRC_DB, STUDENT_T, stage).where({ id: String(sid) }).update({ dorm_id: null, dorm_no: null });
+        const cleared = await tbl(db, SRC_DB, STUDENT_T, stage)
+          .where({ id: String(sid) })
+          .update({ dorm_id: null, dorm_no: null });
+        if (!cleared) {
+          await db(PERM_STUDENT).where({ id: String(sid) }).update({ dorm_id: null, dorm_no: null });
+        }
       }
       await refreshUsedCount(String(dormId));
     },
@@ -665,7 +910,27 @@ export function makeRepo(stage: TeachingStage): DormRepo {
       const list = await qb.orderBy('create_time', 'desc');
       const uid = String(user?.userId ?? user?.id ?? '');
       const roles: string[] = user?.roles ?? [];
-  
+
+      /**
+       * ★ 2026-10-21：床位号兜底
+       *
+       * 早期单据只存了 old_bed_id / new_bed_id，*_bed_no 是 NULL ——
+       * 审批表就会显示「1号楼-303」却看不到床位。这里按 id 回查床位表补上，
+       * 老数据也不用洗。
+       */
+      const bedIds = [
+        ...new Set(
+          list
+            .flatMap((a: any) => [str(a.old_bed_id), str(a.new_bed_id)])
+            .filter(Boolean) as string[],
+        ),
+      ];
+      const bedMap = new Map<string, string>();
+      if (bedIds.length) {
+        const beds = (await T_BED().whereIn('id', bedIds).select('id', 'bed_no')) as any[];
+        for (const b of beds) bedMap.set(String(b.id), bedNoText(b.bed_no));
+      }
+
       return list.map((a: any) => {
         const st = Number(a.approval_status ?? 1);
         const isPending = st === 2 || st === 3;
@@ -693,10 +958,10 @@ export function makeRepo(stage: TeachingStage): DormRepo {
           headTeacherName: str(a.head_teacher_name),
           oldDormId: str(a.old_dorm_id),
           oldDormNo: str(a.old_dorm_no),
-          oldBedNo: str(a.old_bed_no),
+          oldBedNo: str(a.old_bed_no) || bedMap.get(str(a.old_bed_id) || '') || null,
           newDormId: str(a.new_dorm_id),
           newDormNo: str(a.new_dorm_no),
-          newBedNo: str(a.new_bed_no),
+          newBedNo: str(a.new_bed_no) || bedMap.get(str(a.new_bed_id) || '') || null,
           changeDate: fmtDate(a.change_date) ?? '',
           changeReason: String(a.change_reason ?? ''),
           approvalStatus: st,
@@ -714,7 +979,22 @@ export function makeRepo(stage: TeachingStage): DormRepo {
       if (!isCheckout && !body.newDormId) throw new Error('调换宿舍必须选择目标宿舍');
       if (!isCheckout && !body.newBedId) throw new Error('调换宿舍必须选择目标床位');
   
-      const st = await tbl(db, SRC_DB, STUDENT_T, stage).where({ id: String(body.studentId), is_deleted: false }).first();
+      /**
+       * ★ 学生主档兜底（2026-10-20）
+       *
+       * 宿舍域的学生快照取自 `t_student_base`，但部分环境（演示库 / 门户投影）
+       * 里这张表没有在读学生，学生实际在 `sms_perm.t_student_base`。
+       * 调宿申请若只认前者会直接「学生不存在」，所以补一层门户学生表兜底 ——
+       * 单子仍写本学段的 t_job_dorm_change，快照列用兜底表的姓名/学号/性别。
+       */
+      let st: any = await tbl(db, SRC_DB, STUDENT_T, stage)
+        .where({ id: String(body.studentId), is_deleted: false })
+        .first();
+      if (!st) {
+        st = await db('sms_perm.t_student_base')
+          .where({ id: String(body.studentId), is_deleted: false })
+          .first();
+      }
       if (!st) throw new Error('学生不存在');
   
       let oldDorm: any = null;
@@ -730,12 +1010,44 @@ export function makeRepo(stage: TeachingStage): DormRepo {
         if (Number(bed.bed_status) === 3) throw new Error('目标床位已停用');
       }
   
-      let className: string | null = null;
-      if (st.class_id) {
+      /**
+       * 班级名：优先用学生快照里的 class_name（门户/教务学生表只有班级名、没有 class_id），
+       * 没有才回班级表按 class_id 反查。
+       */
+      let className: string | null = str(st.class_name);
+      if (!className && st.class_id) {
         const c = await tbl(db, SRC_DB, CLASS_T, stage).where({ id: String(st.class_id) }).first();
         className = c ? str(c.class_name) : null;
       }
-  
+
+      /**
+       * ★ 2026-10-21：床位号也要落库（审批页与审批通过后的释放/占用都靠它）
+       *   老实现把 old_bed_no / new_bed_no 写死 null，导致审批通过时
+       *   退宿释放不了旧床位、调宿也说不清换到哪张床。
+       */
+      let oldBedNo: string | null = null;
+      let newBedNo: string | null = null;
+      if (body.oldBedId) {
+        const ob = await T_BED().where({ id: String(body.oldBedId) }).first();
+        if (ob) oldBedNo = bedNoText(ob.bed_no);
+      }
+      if (!isCheckout && body.newBedId) {
+        const nb = await T_BED().where({ id: String(body.newBedId) }).first();
+        if (nb) newBedNo = bedNoText(nb.bed_no);
+      }
+
+      /**
+       * ★ 2026-10-21：防重复提交
+       *   同一学生、同一类型、同一目标床位已有一条「待审批」时直接拦下 ——
+       *   否则审批表会出现多条一模一样的单子，批一条还留两条。
+       */
+      const dupQb = T_CHANGE()
+        .where({ is_deleted: false, student_id: String(body.studentId), approval_status: 2 })
+        .andWhere('biz_type', isCheckout ? 2 : 1);
+      if (!isCheckout && body.newBedId) dupQb.andWhere('new_bed_id', String(body.newBedId));
+      const dupRow = await dupQb.first();
+      if (dupRow) throw new Error('该学生已有相同的待审批申请，请勿重复提交');
+
       const id = randomUUID();
       await tblIns(db, SRC_DB, CHANGE_T, stage, {
         id,
@@ -755,11 +1067,11 @@ export function makeRepo(stage: TeachingStage): DormRepo {
         old_dorm_id: body.oldDormId ? String(body.oldDormId) : null,
         old_dorm_no: oldDorm ? str(oldDorm.dorm_no) : null,
         old_bed_id: body.oldBedId ? String(body.oldBedId) : null,
-        old_bed_no: null,
+        old_bed_no: oldBedNo,
         new_dorm_id: isCheckout ? null : body.newDormId ? String(body.newDormId) : null,
         new_dorm_no: isCheckout ? null : newDorm ? str(newDorm.dorm_no) : null,
         new_bed_id: isCheckout ? null : body.newBedId ? String(body.newBedId) : null,
-        new_bed_no: null,
+        new_bed_no: newBedNo,
         change_date: body.changeDate,
         change_reason: body.changeReason,
         approval_status: 2, // 直接进「待审批」，避免还要再点一次提交
@@ -770,10 +1082,22 @@ export function makeRepo(stage: TeachingStage): DormRepo {
     async applyChangeOnApproved(changeId, userId) {
       const a = await T_CHANGE().where({ id: String(changeId), is_deleted: false }).first();
       if (!a) throw new Error('调宿单不存在');
-  
-      // ① 释放旧床位
-      if (a.old_bed_id) {
-        await T_BED().where({ id: String(a.old_bed_id) }).update({
+
+      /**
+       * ① 释放旧床位
+       *
+       * 老单据可能没记 `old_bed_id`（上一版 changeCreate 写死 null），
+       * 这时按「学生 id + 已住」反查一次，避免退宿批了床位还占着。
+       */
+      let oldBedId = a.old_bed_id ? String(a.old_bed_id) : '';
+      if (!oldBedId && a.student_id) {
+        const ob = await T_BED()
+          .where({ is_deleted: false, bed_status: 2, student_id: String(a.student_id) })
+          .first();
+        if (ob) oldBedId = String(ob.id);
+      }
+      if (oldBedId) {
+        await T_BED().where({ id: oldBedId }).update({
           bed_status: 1,
           student_id: null,
           student_no: null,
@@ -797,14 +1121,50 @@ export function makeRepo(stage: TeachingStage): DormRepo {
           update_by: userId,
         });
       }
-      // ③ 学生主档同步
-      await tbl(db, SRC_DB, STUDENT_T, stage).where({ id: String(a.student_id) }).update({
-        dorm_id: a.new_dorm_id ?? null,
-        dorm_no: a.new_dorm_no ?? null,
-      });
+      // ③ 学生主档同步（本学段表没有该学生时，退回门户学生表，见 changeCreate 的兜底说明）
+      const synced = await tbl(db, SRC_DB, STUDENT_T, stage)
+        .where({ id: String(a.student_id) })
+        .update({
+          dorm_id: a.new_dorm_id ?? null,
+          dorm_no: a.new_dorm_no ?? null,
+        });
+      if (!synced) {
+        await db('sms_perm.t_student_base').where({ id: String(a.student_id) }).update({
+          dorm_id: a.new_dorm_id ?? null,
+          dorm_no: a.new_dorm_no ?? null,
+        });
+      }
       // ④ 两端 used_count 重算
       if (a.old_dorm_id) await refreshUsedCount(String(a.old_dorm_id));
       if (a.new_dorm_id) await refreshUsedCount(String(a.new_dorm_id));
+    },
+
+    /** ★ 2026-10-21：审批通过 —— 先落库（换床/退宿），再把单据置为已通过 */
+    async changeApprove(changeId, userId) {
+      const a = await T_CHANGE().where({ id: String(changeId), is_deleted: false }).first();
+      if (!a) throw new Error('申请不存在或已删除');
+      const st = Number(a.approval_status ?? 0);
+      if (st !== 2 && st !== 3) throw new Error('该申请不是「待审批」状态，不能重复审批');
+      await repo.applyChangeOnApproved(changeId, userId);
+      await T_CHANGE().where({ id: String(changeId) }).update({
+        approval_status: 4, // 已通过
+        update_time: new Date(),
+        update_by: userId,
+      });
+    },
+
+    /** ★ 2026-10-21：审批驳回 —— 只改状态，不动床位/学生 */
+    async changeReject(changeId, reason, userId) {
+      const a = await T_CHANGE().where({ id: String(changeId), is_deleted: false }).first();
+      if (!a) throw new Error('申请不存在或已删除');
+      const st = Number(a.approval_status ?? 0);
+      if (st !== 2 && st !== 3) throw new Error('该申请不是「待审批」状态，不能重复审批');
+      await T_CHANGE().where({ id: String(changeId) }).update({
+        approval_status: 5, // 已驳回
+        remark: reason || null,
+        update_time: new Date(),
+        update_by: userId,
+      });
     },
   
     async summary(q, user) {

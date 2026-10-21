@@ -1,5 +1,7 @@
 <template>
   <div class="tdv">
+    <el-tabs v-model="mainTab" class="tdv-main-tabs">
+      <el-tab-pane label="宿舍房间" name="rooms">
     <!-- 说明条 -->
     <el-alert class="tdv-tip" type="info" :closable="false" show-icon>
       <template #title>
@@ -72,7 +74,8 @@
       <el-form-item>
         <el-button type="primary" @click="load(1)">查询</el-button>
         <el-button @click="reset">重置</el-button>
-        <el-button v-if="canCreate" type="success" @click="openCreate">新增房间</el-button>
+        <!-- ★ 班主任不建房间（房间由教务/学管统一建） -->
+        <el-button v-if="canCreate && !isOnlyHeadTeacher" type="success" @click="openCreate">新增房间</el-button>
         <el-button type="warning" @click="openChange">调宿/退宿申请</el-button>
       </el-form-item>
     </el-form>
@@ -128,20 +131,20 @@
       <el-table-column label="操作" width="170" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" @click="openBeds(row)">床位</el-button>
-          <el-button v-if="canEdit(row)" link type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button v-if="canEdit(row) && !isOnlyHeadTeacher" link type="primary" @click="openEdit(row)">编辑</el-button>
           <!--
             ★ 删除的前置条件：房间里没有入住学生（2026-10-19）
               住着人的房间直接禁用删除按钮 —— 与其让用户点了再吃一个报错，
               不如在按钮上就把话说清楚。后端 repo.remove() 还会再拦一次（双保险）。
           -->
           <el-tooltip
-            v-if="canEdit(row) && row.occupiedCount > 0"
+            v-if="canEdit(row) && !isOnlyHeadTeacher && row.occupiedCount > 0"
             content="该宿舍有学生入住，不能删除；请先办理退宿"
             placement="top"
           >
             <span><el-button link type="danger" disabled>删除</el-button></span>
           </el-tooltip>
-          <el-button v-else-if="canEdit(row)" link type="danger" @click="doDelete(row)">删除</el-button>
+          <el-button v-else-if="canEdit(row) && !isOnlyHeadTeacher" link type="danger" @click="doDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -348,14 +351,25 @@
           <span>{{ assignBedRow?.bedLabel }}</span>
         </el-form-item>
         <el-form-item label="学生" required>
-          <el-input v-model="assignStudentText" placeholder="输入学号或姓名搜索" />
-        </el-form-item>
-        <el-form-item v-if="assignCandidates.length" label="候选">
-          <el-radio-group v-model="assignStudentId">
-            <el-radio v-for="c in assignCandidates" :key="c.studentId" :value="c.studentId">
-              {{ c.studentName }}（{{ c.studentNo }}）
-            </el-radio>
-          </el-radio-group>
+          <el-select
+            v-model="assignStudentId"
+            filterable
+            remote
+            clearable
+            reserve-keyword
+            :remote-method="searchAssignStudents"
+            :loading="assignLoading"
+            placeholder="输入学号或姓名搜索（本班未入住学生）"
+            style="width: 100%"
+            @change="onAssignStudentChange"
+          >
+            <el-option
+              v-for="c in assignOptions"
+              :key="c.studentId"
+              :label="`${c.studentName}（${c.studentNo}）${c.className ? ' · ' + c.className : ''}`"
+              :value="c.studentId"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="入住日期">
           <el-date-picker v-model="assignDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
@@ -368,21 +382,55 @@
     </el-dialog>
 
     <!-- ============ 调宿 / 退宿申请 ============ -->
-    <el-dialog v-model="changeVisible" title="发起调宿 / 退宿申请" width="620px" top="8vh">
+    <!--
+      ★ 2026-10-20 改版（按需求重排）：
+        ① 去掉「学段」——三个学段本来就合并了，再选一次是重复信息；
+        ② 第一排：类型（调换宿舍 / 退宿）；
+        ③ 第二排：班级（来自班级管理已建班级）；
+        ④ 学生改成**搜索框**（姓名/学号前后模糊），选项显示「姓名（学号）」区分重名；
+           班级与学生联动：选了班级只搜这个班的学生；
+        ⑤ 选学生后自动显示当前宿舍位置；
+        ⑥ 调换宿舍：先选类别（男寝/女寝）→ 楼栋 → 目标床位（下拉列出各宿舍空床位）；
+        ⑦ 日期自动取当天、只读；原因必填、≤100 字。
+    -->
+    <el-dialog v-model="changeVisible" title="发起调宿 / 退宿申请" width="680px" top="6vh">
       <el-form label-width="100px">
-        <el-form-item label="学段" required>
-          <el-select v-model="changeForm.stage" style="width: 100%" @change="onChangeStageChange">
-            <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
-          </el-select>
-        </el-form-item>
+        <!-- 第一排：类型 -->
         <el-form-item label="类型" required>
-          <el-radio-group v-model="changeForm.bizType">
+          <el-radio-group v-model="changeForm.bizType" @change="onChangeBizType">
             <el-radio :value="1">调换宿舍</el-radio>
             <el-radio :value="2">退宿</el-radio>
           </el-radio-group>
         </el-form-item>
+
+        <!-- 第二排：班级 -->
+        <el-form-item label="班级" required>
+          <el-select
+            v-model="changeForm.className"
+            filterable
+            clearable
+            placeholder="选择班级"
+            style="width: 100%"
+            @change="onChangeClass"
+          >
+            <el-option v-for="c in changeClasses" :key="c.className" :label="c.className" :value="c.className" />
+          </el-select>
+        </el-form-item>
+
+        <!-- 学生：搜索框（姓名 / 学号前后模糊） -->
         <el-form-item label="学生" required>
-          <el-select v-model="changeForm.studentId" filterable placeholder="选学生" style="width: 100%">
+          <el-select
+            v-model="changeForm.studentId"
+            filterable
+            remote
+            clearable
+            reserve-keyword
+            :remote-method="searchChangeStudents"
+            :loading="studentLoading"
+            placeholder="输入姓名或学号搜索"
+            style="width: 100%"
+            @change="onChangeStudent"
+          >
             <el-option
               v-for="s in changeStudents"
               :key="s.studentId"
@@ -391,11 +439,69 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="日期" required>
-          <el-date-picker v-model="changeForm.changeDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+
+        <!-- 当前宿舍位置（选学生后自动显示：楼栋 / 宿舍号 / 床位号） -->
+        <el-form-item v-if="curStudent" label="当前宿舍">
+          <div v-if="curStudent.dormId || curStudent.dormNo || curStudent.bedNo" class="cur-dorm">
+            <span>楼栋：<b>{{ curStudent.building || '—' }}</b></span>
+            <span>宿舍号：<b>{{ curStudent.room || '—' }}</b></span>
+            <span>床位号：<b>{{ curStudent.bedLabel || curStudent.bedNo || '—' }}</b></span>
+          </div>
+          <el-tag v-else type="info" size="small">该学生当前未入住宿舍</el-tag>
         </el-form-item>
+
+        <!-- 调换宿舍：类别 → 楼栋 → 空床位 -->
+        <template v-if="changeForm.bizType === 1">
+          <el-form-item label="类别" required>
+            <el-radio-group v-model="changeForm.category" @change="onChangeCategory">
+              <el-radio :value="1">男寝</el-radio>
+              <el-radio :value="2">女寝</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="楼栋" required>
+            <el-select v-model="changeForm.building" placeholder="选择楼栋" style="width: 100%" @change="loadChangeRooms">
+              <el-option v-for="b in changeBuildings" :key="b" :label="b" :value="b" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="目标床位" required>
+            <el-select
+              v-model="changeForm.targetBedId"
+              filterable
+              :disabled="!changeForm.building"
+              :placeholder="changeForm.building ? '选择空余床位（宿舍 · 床位）' : '请先选择楼栋'"
+              style="width: 100%"
+              :loading="changeRoomsLoading"
+            >
+              <el-option-group v-for="r in changeRoomsWithBeds" :key="r.roomId" :label="`${r.building} ${r.room}（余 ${r.remaining} 床）`">
+                <el-option
+                  v-for="b in r.freeBeds"
+                  :key="b.bedId"
+                  :label="`${r.building} ${r.room} · ${b.bedLabel}`"
+                  :value="b.bedId"
+                />
+              </el-option-group>
+            </el-select>
+            <div v-if="changeForm.building && !changeRoomsWithBeds.length && !changeRoomsLoading" class="tdv-hint">
+              该楼栋暂无空余床位
+            </div>
+          </el-form-item>
+        </template>
+
+        <!-- 日期：当天，只读 -->
+        <el-form-item label="日期">
+          <span class="tdv-date">{{ changeForm.changeDate }}</span>
+          <el-text type="info" size="small" class="ml12">自动取当天日期，不可修改</el-text>
+        </el-form-item>
+
         <el-form-item label="原因" required>
-          <el-input v-model="changeForm.changeReason" type="textarea" :rows="3" maxlength="500" show-word-limit />
+          <el-input
+            v-model="changeForm.changeReason"
+            type="textarea"
+            :rows="3"
+            maxlength="100"
+            show-word-limit
+            placeholder="请填写调宿 / 退宿原因（不超过 100 字）"
+          />
         </el-form-item>
       </el-form>
       <el-alert
@@ -450,9 +556,22 @@
         type="info"
         :closable="false"
         show-icon
-        title="审批动作在「教学管理 → 审批中心 → 宿舍调宿」里处理，这里只做查询。"
+        title="审批动作在「宿舍管理 → 申请审批」里处理，这里只做查询。"
       />
     </el-dialog>
+      </el-tab-pane>
+
+      <!-- ★ 2026-10-20 新增：教务给各班分派宿舍（左右两栏男寝 / 女寝）
+           ★ 2026-10-21：班主任不显示该子页面（班级层面的分派归教务） -->
+      <el-tab-pane v-if="!isOnlyHeadTeacher" label="班级分派" name="allocate" lazy>
+        <DormAllocate />
+      </el-tab-pane>
+
+      <!-- ★ 2026-10-21：申请审批（班主任提交的换宿/退宿单；通过后自动改床位与学生宿舍） -->
+      <el-tab-pane v-if="canApproveDorm" label="申请审批" name="approval" lazy>
+        <DormChangeApproval />
+      </el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
@@ -527,8 +646,23 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { isReadOnlyUser } from '@/store/permission';
+import { RoleCode } from 'shared-types';
+import { isReadOnlyUser, isSuperTest, myRoles } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
+/** ★ 2026-10-20 宿舍管理的第二个子页面：班级分派 */
+import DormAllocate from './DormAllocate.vue';
+/** ★ 2026-10-21 第三个子页面：申请审批（接收班主任的换宿/退宿申请） */
+import DormChangeApproval from './DormChangeApproval.vue';
+/** ★ 2026-10-20 调宿弹窗：班级 / 学生搜索 / 楼栋床位（与班级分派同一套接口） */
+import {
+  listAllocateClasses,
+  listAllocateBuildings,
+  listAllocateRooms,
+  searchAllocateStudents,
+  type AllocateClassRow,
+  type AllocateRoomRow,
+  type AllocateStudentRow,
+} from '@/teaching/api/dormAllocate';
 import {
   listDormBuildings as fetchBuildingSettings,
   type DormBuildingRow,
@@ -541,6 +675,7 @@ import {
   listDormResidents,
   listDormChanges,
   listDormOccupancyRates,
+  listDormCandidates,
   saveDorm,
   deleteDorm,
   assignBed,
@@ -558,6 +693,7 @@ import {
   DORM_APPROVAL_TAG,
   type DormBedRow,
   type DormChangeRow,
+  type DormCandidateRow,
   type DormResidentRow,
   type DormRow,
   type DormStage,
@@ -565,6 +701,58 @@ import {
 } from '@/teaching/api/dorm';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
+/** ★ 2026-10-20 子页面页签：宿舍房间（原页面） / 班级分派（教务给各班分宿舍） */
+const mainTab = ref<'rooms' | 'allocate' | 'approval'>('rooms');
+
+/**
+ * ★ 2026-10-21：班主任（且没有更高业务角色）不参与「建房间」和「班级分派」
+ *
+ * 业务口径：班主任在宿舍域只做「查看本班住宿 + 发起调宿/退宿申请」，
+ * 房间由教务/学管统一建，班级层面的分派也归教务。
+ *
+ * 【为什么要排除更高角色】
+ *   一个人可能同时是班主任 + 教务老师 / 校长 / 管理员（演示库就有这种复合角色）。
+ *   只要他还有这些角色，就不该被当成"纯班主任"降权。
+ *   SUPER_TEST（万能测试号）永远按全功能展示。
+ */
+const HEAD_TEACHER_SUPERIOR_ROLES: string[] = [
+  RoleCode.ACAD_STAFF,
+  RoleCode.RM_PRINCIPAL,
+  RoleCode.SYS_ADMIN,
+  RoleCode.TEACH_DEAN,
+];
+const isOnlyHeadTeacher = computed(() => {
+  if (isSuperTest.value) return false;
+  const roles = myRoles.value;
+  if (!roles.includes(RoleCode.TEACH_HEAD)) return false;
+  return !roles.some((r) => HEAD_TEACHER_SUPERIOR_ROLES.includes(r));
+});
+
+/**
+ * ★ 2026-10-21：谁能看「申请审批」页签
+ *   教务老师 / 校长 / 学管主任（审批角色）/ 系统管理员（只读可看）
+ *   SUPER_TEST 测试号全功能可见；班主任看不到。
+ */
+const APPROVER_ROLES: string[] = [
+  RoleCode.ACAD_STAFF,
+  RoleCode.RM_PRINCIPAL,
+  RoleCode.TEACH_DEAN,
+  RoleCode.SYS_ADMIN,
+];
+const canApproveDorm = computed(
+  () => isSuperTest.value || myRoles.value.some((r) => APPROVER_ROLES.includes(r)),
+);
+
+/** 班主任若停留在「班级分派 / 申请审批」页签，角色判定生效后强制回到「宿舍房间」 */
+watch(
+  [isOnlyHeadTeacher, canApproveDorm],
+  () => {
+    if (mainTab.value === 'allocate' && isOnlyHeadTeacher.value) mainTab.value = 'rooms';
+    if (mainTab.value === 'approval' && !canApproveDorm.value) mainTab.value = 'rooms';
+  },
+  { immediate: true },
+);
+
 const STAGE_LABEL: Record<DormStage, string> = { jh: '初高', class: '大学', job: '实训' };
 
 const DORM_STAGE_ORDER: DormStage[] = ['jh', 'class', 'job'];
@@ -644,7 +832,13 @@ function categoryName(row: DormRow): string {
 /** ★ 只有可写学段（大学 hasCreate=false）才给新增按钮 */
 const canCreate = computed(() => {
   if (isReadOnlyUser.value) return false;
-  if (query.stage) return !!curMeta.value?.hasCreate;
+  /**
+   * ★ 2026-10-21：meta 没拉到（网络抖动 / 接口异常 / 首屏还没返回）时**不要隐藏按钮**。
+   *   之前 `metaList` 为空 → `some()` 恒 false → 班主任偶尔看到「没有新增房间」，
+   *   刷新一下又有了。写权限真正的闸在后端（40302），前端不该用空数组当"无权限"。
+   */
+  if (!metaList.value.length) return true;
+  if (query.stage) return curMeta.value ? !!curMeta.value.hasCreate : true;
   return metaList.value.some((m) => m.hasCreate);
 });
 /** 行级：这一行所属学段能不能编辑 */
@@ -747,31 +941,50 @@ async function doCheckout(b: DormBedRow) {
 const assignVisible = ref(false);
 const assigning = ref(false);
 const assignBedRow = ref<DormBedRow | null>(null);
-const assignStudentText = ref('');
 const assignStudentId = ref('');
 const assignDate = ref(new Date().toISOString().slice(0, 10));
 
-/** 候选学生：先从在住名单里排除已入住的，再用文本过滤（跨学段名单来源不同，先给最简可用版） */
-const assignCandidates = computed(() => {
-  const kw = assignStudentText.value.trim();
-  if (!kw) return [];
-  const live = new Set(residents.value.map((r) => r.studentId));
-  return residents.value
-    .filter((r) => !live.has(r.studentId) || true)
-    .filter(
-      (r) =>
-        r.studentName.includes(kw) ||
-        (r.studentNo || '').includes(kw),
-    )
-    .slice(0, 8);
-});
+/**
+ * ★ 2026-10-21：入住改成「远程搜索学生」
+ *
+ * 旧实现是从在住名单（residents）里过滤 —— 还没入住的学生根本不在名单里，
+ * 班主任分到宿舍后无法把学生填进去。
+ * 新接口 `/candidates` 按数据范围下发（班主任 = 自己班、且未入住），
+ * 姓名 / 学号前后模糊。
+ */
+const assignOptions = ref<DormCandidateRow[]>([]);
+const assignLoading = ref(false);
+const assignSelected = ref<DormCandidateRow | null>(null);
 
-function openAssign(b: DormBedRow) {
+async function searchAssignStudents(keyword?: string) {
+  const stage = curDorm.value?.stage;
+  if (!stage) return;
+  assignLoading.value = true;
+  try {
+    const list = await listDormCandidates({ stage, keyword: keyword || undefined });
+    // 保留当前选中项，避免刷新候选后显示成 id
+    const cur = assignSelected.value;
+    assignOptions.value =
+      cur && !list.some((s) => s.studentId === cur.studentId) ? [cur, ...list] : list;
+  } catch {
+    assignOptions.value = assignSelected.value ? [assignSelected.value] : [];
+  } finally {
+    assignLoading.value = false;
+  }
+}
+
+function onAssignStudentChange(id: string) {
+  assignSelected.value = assignOptions.value.find((s) => s.studentId === id) || null;
+}
+
+async function openAssign(b: DormBedRow) {
   assignBedRow.value = b;
-  assignStudentText.value = '';
   assignStudentId.value = '';
-  assignDate.value = new Date().toISOString().slice(0, 10);
+  assignSelected.value = null;
+  assignOptions.value = [];
+  assignDate.value = todayStr();
   assignVisible.value = true;
+  await searchAssignStudents();
 }
 
 async function doAssign() {
@@ -978,52 +1191,216 @@ const changeVisible = ref(false);
 const changeListVisible = ref(false);
 const changeLoading = ref(false);
 const changeSaving = ref(false);
-const changeStudents = ref<DormResidentRow[]>([]);
+
+/** 班级下拉（来自班级管理已建班级） */
+const changeClasses = ref<AllocateClassRow[]>([]);
+/** 学生搜索结果（姓名 / 学号前后模糊） */
+const changeStudents = ref<AllocateStudentRow[]>([]);
+const studentLoading = ref(false);
+/** 当前选中的学生（用于回显当前宿舍） */
+const curStudent = ref<AllocateStudentRow | null>(null);
+
+/** 目标宿舍：楼栋 → 房间（含空闲床位明细） */
+const changeBuildings = ref<string[]>([]);
+const changeRooms = ref<AllocateRoomRow[]>([]);
+const changeRoomsLoading = ref(false);
+/** 只保留还有空床位的房间，下拉里按房间分组列床位 */
+const changeRoomsWithBeds = computed(() => changeRooms.value.filter((r) => r.freeBeds.length > 0));
+
+/** 本地当天日期（不用 toISOString —— 那是 UTC，早上 8 点前会变成昨天） */
+function todayStr(): string {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
 
 const changeForm = reactive({
-  stage: 'job' as DormStage,
   bizType: 1,
+  className: '',
   studentId: '',
-  changeDate: new Date().toISOString().slice(0, 10),
+  category: 1,
+  building: '',
+  targetBedId: '',
+  changeDate: todayStr(),
   changeReason: '',
 });
 
-function onChangeStageChange() {
+function resetChangeForm() {
+  Object.assign(changeForm, {
+    bizType: 1,
+    className: '',
+    studentId: '',
+    category: 1,
+    building: '',
+    targetBedId: '',
+    changeDate: todayStr(),
+    changeReason: '',
+  });
+  curStudent.value = null;
   changeStudents.value = [];
-  changeForm.studentId = '';
+  changeBuildings.value = [];
+  changeRooms.value = [];
 }
 
+/** 打开发起申请弹窗 */
 async function openChange() {
-  if (changeForm.stage !== query.stage) changeForm.stage = query.stage || 'job';
-  changeStudents.value = residents.value.filter((r) => r.stage === changeForm.stage);
-  if (!changeStudents.value.length) {
-    changeStudents.value = residents.value;
-  }
+  resetChangeForm();
   changeVisible.value = true;
+  /**
+   * ★ 2026-10-20 修复：弹窗一打开就要把默认类别（男寝）的楼栋拉出来。
+   *   之前只在「切换类别 / 选学生」时才拉，导致刚打开时楼栋下拉是空的，
+   *   用户以为「无数据」，目标床位也跟着没得选。
+   */
+  void onChangeCategory();
+  try {
+    changeClasses.value = (await listAllocateClasses()) || [];
+  } catch (e) {
+    ElMessage.error((e as Error).message || '加载班级失败');
+    changeClasses.value = [];
+  }
+}
+
+/** 班级变化 → 清空学生 / 目标床位，并按班级重搜学生 */
+async function onChangeClass() {
+  changeForm.studentId = '';
+  curStudent.value = null;
+  changeForm.targetBedId = '';
+  await searchChangeStudents('');
+}
+
+/** 学生搜索（远程）：空关键字 = 列出该班全部学生 */
+async function searchChangeStudents(keyword: string) {
+  studentLoading.value = true;
+  try {
+    const list = await searchAllocateStudents({
+      className: changeForm.className || undefined,
+      keyword: keyword || undefined,
+    });
+    // 保留当前已选学生，避免刷新候选后 el-select 把选中项显示成 id
+    const cur = curStudent.value;
+    changeStudents.value =
+      cur && !list.some((s) => s.studentId === cur.studentId) ? [cur, ...list] : list;
+  } catch {
+    changeStudents.value = curStudent.value ? [curStudent.value] : [];
+  } finally {
+    studentLoading.value = false;
+  }
+}
+
+/** 选学生 → 回显当前宿舍，并按性别预选目标类别 */
+async function onChangeStudent(studentId: string) {
+  const s = changeStudents.value.find((x) => x.studentId === studentId) || null;
+  curStudent.value = s;
+  changeForm.targetBedId = '';
+  if (s) {
+    changeForm.category = s.gender === 2 ? 2 : 1;
+    await onChangeCategory();
+  }
+}
+
+/** 切换类型：调宿时按学生性别预选类别；退宿不需要目标宿舍 */
+async function onChangeBizType() {
+  changeForm.targetBedId = '';
+  if (changeForm.bizType === 1) {
+    if (curStudent.value) {
+      changeForm.category = curStudent.value.gender === 2 ? 2 : 1;
+    }
+    // 没选学生时也要保证当前类别的楼栋已经加载出来
+    await onChangeCategory();
+  }
+}
+
+/** 类别变化 → 重拉该类别楼栋，清空楼栋 / 床位 */
+async function onChangeCategory() {
+  changeForm.building = '';
+  changeForm.targetBedId = '';
+  changeRooms.value = [];
+  try {
+    changeBuildings.value = (await listAllocateBuildings(changeForm.category)) || [];
+  } catch {
+    changeBuildings.value = [];
+  }
+}
+
+/** 楼栋变化 → 拉该楼栋的房间与空床位 */
+async function loadChangeRooms() {
+  changeForm.targetBedId = '';
+  if (!changeForm.building) {
+    changeRooms.value = [];
+    return;
+  }
+  changeRoomsLoading.value = true;
+  try {
+    changeRooms.value = (await listAllocateRooms(changeForm.category, changeForm.building)) || [];
+  } catch (e) {
+    ElMessage.error((e as Error).message || '加载宿舍失败');
+    changeRooms.value = [];
+  } finally {
+    changeRoomsLoading.value = false;
+  }
 }
 
 async function doCreateChange() {
-  if (!changeForm.studentId) {
+  if (!changeForm.className) {
+    ElMessage.warning('请选择班级');
+    return;
+  }
+  if (!changeForm.studentId || !curStudent.value) {
     ElMessage.warning('请选择学生');
     return;
   }
-  if (!changeForm.changeReason.trim()) {
+  const reason = changeForm.changeReason.trim();
+  if (!reason) {
     ElMessage.warning('请填写原因');
     return;
   }
+  if ([...reason].length > 100) {
+    ElMessage.warning('原因不能超过 100 个字符');
+    return;
+  }
+
+  let targetRoom: AllocateRoomRow | undefined;
+  if (changeForm.bizType === 1) {
+    if (!changeForm.building) {
+      ElMessage.warning('请选择楼栋');
+      return;
+    }
+    if (!changeForm.targetBedId) {
+      ElMessage.warning('请选择目标床位');
+      return;
+    }
+    targetRoom = changeRooms.value.find((r) =>
+      r.freeBeds.some((b) => b.bedId === changeForm.targetBedId),
+    );
+    if (!targetRoom) {
+      ElMessage.warning('目标床位不存在或已被占用，请重新选择');
+      return;
+    }
+  }
+
   changeSaving.value = true;
   try {
+    /**
+     * ★ 学段下拉已去掉（三学段合并展示）。落库学段取当前账号**可见的第一个宿舍学段**
+     *   （教务老师 = 初高）；三学段共用同一批宿舍表，弹窗里的楼栋/床位都来自它。
+     *   后端 changeCreate 还留了一层兜底：请求学段没权限时退回可见学段。
+     */
+    const stage = ((stageOptions.value[0]?.value as DormStage) || 'job') as DormStage;
     await createDormChange({
-      stage: changeForm.stage,
+      stage,
       bizType: changeForm.bizType,
       studentId: changeForm.studentId,
+      oldDormId: curStudent.value.dormId || undefined,
+      // ★ 2026-10-21：旧床位必须带上 —— 审批通过时要靠它释放原床位（退宿尤其重要）
+      oldBedId: curStudent.value.bedId || undefined,
+      newDormId: targetRoom?.roomId,
+      newBedId: changeForm.targetBedId || undefined,
       changeDate: changeForm.changeDate,
-      changeReason: changeForm.changeReason,
+      changeReason: reason,
     });
     ElMessage.success('申请已提交，等待审批');
     changeVisible.value = false;
-    changeForm.changeReason = '';
-    changeForm.studentId = '';
   } catch (e) {
     ElMessage.error((e as Error).message || '提交失败');
   } finally {
@@ -1081,6 +1458,12 @@ defineExpose({ openChangeList, openChangeEntry });
 .warn { color: #C9852E; }
 .danger { color: #CD3A33; }
 .muted { color: #A2938E; font-size: 12px; }
+/* ★ 2026-10-20 调宿弹窗：只读日期 / 行内说明间距 */
+.tdv-date { font-weight: 600; color: #443432; }
+.ml12 { margin-left: 12px; }
+/* 当前宿舍：楼栋 / 宿舍号 / 床位号 三项并排 */
+.cur-dorm { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: #443432; }
+.cur-dorm b { color: #B22A23; font-weight: 600; }
 
 .tdv-page { margin-top: 12px; justify-content: flex-end; }
 

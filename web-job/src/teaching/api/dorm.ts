@@ -295,6 +295,28 @@ export async function listDormResidents(q: DormQuery) {
   return r as unknown as DormResidentRow[];
 }
 
+/**
+ * 4.1 办理入住的学生候选（★ 2026-10-21）
+ *
+ * 后端按数据范围过滤：班主任只拿到自己班、且还没入住的学生；
+ * 教务/校长拿全量。关键字对姓名 / 学号前后模糊。
+ */
+export interface DormCandidateRow {
+  stage: DormStage;
+  studentId: string;
+  studentNo: string;
+  studentName: string;
+  gender: number;
+  classId: string | null;
+  className: string | null;
+  dormNo: string | null;
+}
+
+export async function listDormCandidates(q: { stage?: DormStage; keyword?: string }) {
+  const r = await http.get(`${BASE}/candidates${qs(q)}`);
+  return r as unknown as DormCandidateRow[];
+}
+
 /** 5. 楼栋下拉 */
 export async function listDormBuildings(stage?: DormStage) {
   const r = await http.get(`${BASE}/buildings${qs({ stage })}`);
@@ -342,6 +364,19 @@ export async function listDormChanges(q: DormQuery) {
 /** 13. 发起调宿/退宿申请（三学段都允许，含大学） */
 export async function createDormChange(body: Record<string, unknown>) {
   return http.post(`${BASE}/change/create`, body);
+}
+
+/**
+ * 13.1 审批通过（★ 2026-10-21）
+ * 后端会同步改床位与学生主档：调宿 = 放旧床 + 占新床；退宿 = 放旧床 + 清宿舍。
+ */
+export async function approveDormChange(body: { stage: DormStage; id: string }) {
+  return http.post(`${BASE}/change/approve`, body);
+}
+
+/** 13.2 审批驳回（只改状态，理由写 remark） */
+export async function rejectDormChange(body: { stage: DormStage; id: string; reason: string }) {
+  return http.post(`${BASE}/change/reject`, body);
 }
 
 /**

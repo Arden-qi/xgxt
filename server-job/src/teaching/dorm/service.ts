@@ -18,7 +18,7 @@
  *   jh classjh:dorm:view / class class:dorm:view / job job:dorm:view
  */
 
-import { BizCode } from 'shared-types';
+import { BizCode, hasRole, RoleCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { makeRepo } from './repo.uni';
 import type {
@@ -43,7 +43,7 @@ import {
 } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
 import { USE_UNI_TABLE } from '../shared/uniTable';
-import type { DormRepo } from './types';
+import type { DormCandidateRow, DormRepo } from './types';
 
 /**
  * ★★ 同一房间被多个学段查出来时，**保留哪个学段的行**（2026-10-19）
@@ -321,6 +321,34 @@ export async function listResidents(
   return dedupResidents(parts.flat());
 }
 
+/** 办理入住的学生候选（按数据范围过滤；班主任只给自己的班） */
+export async function listCandidates(
+  stage: TeachingStage | undefined,
+  keyword: string | undefined,
+  user: any,
+): Promise<DormCandidateRow[]> {
+  const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
+  if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有宿舍管理的访问权限');
+  if (stage) await assertStageView(user, stage);
+
+  // 与 listResidents 同口径：老表模式三学段查同一批行，只扫一个学段
+  const scanStages =
+    !stage && !USE_UNI_TABLE && stages.length > 1
+      ? [STAGE_KEEP_PRIORITY.find((s) => stages.includes(s)) ?? stages[0]]
+      : stages;
+
+  const parts = await Promise.all(scanStages.map((s) => REPOS[s].candidates({ keyword }, user)));
+  const seen = new Set<string>();
+  const out: DormCandidateRow[] = [];
+  for (const r of parts.flat()) {
+    const key = r.studentId || `${r.studentNo}|${r.studentName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out.slice(0, 100);
+}
+
 /** 楼栋下拉（合并三学段，同名去重 —— 楼栋名只是个标签，不是实体） */
 export async function listBuildings(
   stage: TeachingStage | undefined,
@@ -515,8 +543,26 @@ export async function listDormChanges(
   const stages: TeachingStage[] = q.stage ? [q.stage] : await visibleStages(user);
   if (!stages.length) return [];
   if (q.stage) await assertStageView(user, q.stage);
-  const parts = await Promise.all(stages.map((s) => REPOS[s].changeList(q, user)));
-  const rows = parts.flat();
+
+  /**
+   * ★ 2026-10-21 修「同一条申请显示 3 遍」：
+   *   老表模式下三学段读的是**同一张** t_job_dorm_change，
+   *   按 stages 逐个查就会把同一行返回三次（和当初 listResidents 的问题一模一样）。
+   *   → 未开统一表时只扫一个学段；开了统一表才按学段分开查。
+   */
+  const scanStages =
+    !q.stage && !USE_UNI_TABLE && stages.length > 1
+      ? [STAGE_KEEP_PRIORITY.find((s) => stages.includes(s)) ?? stages[0]]
+      : stages;
+
+  const parts = await Promise.all(scanStages.map((s) => REPOS[s].changeList(q, user)));
+  const seen = new Set<string>();
+  const rows: DormChangeRow[] = [];
+  for (const r of parts.flat()) {
+    if (seen.has(r.changeId)) continue;
+    seen.add(r.changeId);
+    rows.push(r);
+  }
   rows.sort((a, b) => {
     const sa = TEACHING_STAGES.indexOf(a.stage);
     const sb = TEACHING_STAGES.indexOf(b.stage);
@@ -531,16 +577,90 @@ export async function createDormChange(
   body: DormChangeCreateBody,
   user: any,
 ): Promise<{ id: string }> {
-  await assertStageView(user, body.stage);
+  /**
+   * ★ 2026-10-20：合并页的调宿弹窗已去掉「学段」选择。
+   *
+   * 请求里的 stage 只用于决定落哪套表；三学段共用同一批宿舍表（切读关闭时
+   * 更是同一张物理表），所以**不能因为账号没有该学段权限就拒绝**。
+   * → 优先用请求的学段；没权限时退回该账号**可见的第一个宿舍学段**；
+   *   一个都没有才真正拒绝。
+   */
+  let stage = body.stage;
+  try {
+    await assertStageView(user, stage);
+  } catch (e) {
+    const list = await visibleStages(user);
+    if (!list.length) throw e;
+    stage = list[0];
+    body = { ...body, stage };
+  }
   if (body.bizType !== 1 && body.bizType !== 2) {
     throw new BizError(BizCode.PARAM_ERROR, '业务类型只能是 1 调换宿舍 / 2 退宿');
   }
   if (!body.changeReason || !body.changeReason.trim()) {
     throw new BizError(BizCode.PARAM_ERROR, '原因必填');
   }
+  // ★ 2026-10-20：原因长度按字符数卡 100（前端 textarea 的 maxlength 能被绕过）
+  if ([...body.changeReason.trim()].length > 100) {
+    throw new BizError(BizCode.PARAM_ERROR, '原因不能超过 100 个字符');
+  }
   if (!body.changeDate) {
     throw new BizError(BizCode.PARAM_ERROR, '日期必填');
   }
   // 换宿/退宿申请三学段都可提交（ rooms 可写，申请当然也可写）
-  return pick(body.stage).changeCreate(body, user?.userId || '');
+  try {
+    return await pick(stage).changeCreate(body, user?.userId || '');
+  } catch (e) {
+    // 仓储抛的业务错误（重复提交 / 床位被占 / 学生不存在）转成可读 40000
+    if (e instanceof BizError) throw e;
+    throw new BizError(BizCode.PARAM_ERROR, (e as Error).message || '提交失败');
+  }
+}
+
+/**
+ * ★ 2026-10-21：宿舍申请审批
+ *
+ * 谁能批：教务老师 / 校长 / 学管主任（学管主任本身就是审批角色）。
+ * 班主任只发起，不审批 —— 前端「申请审批」页签也不会给班主任。
+ */
+function assertDormApprover(user: any): void {
+  const roles: string[] = user?.roles ?? [];
+  const ok =
+    hasRole(roles, RoleCode.ACAD_STAFF) ||
+    hasRole(roles, RoleCode.RM_PRINCIPAL) ||
+    hasRole(roles, RoleCode.TEACH_DEAN);
+  if (!ok) {
+    throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有教务老师 / 校长 / 学管主任可以审批宿舍申请');
+  }
+}
+
+export async function approveDormChange(
+  stage: TeachingStage,
+  changeId: string,
+  user: any,
+): Promise<void> {
+  await assertStageView(user, stage);
+  assertDormApprover(user);
+  try {
+    await pick(stage).changeApprove(changeId, user?.userId || 'system');
+  } catch (e) {
+    // 仓储抛的是普通 Error（申请不存在 / 不是待审批）→ 转成可读的参数错误
+    throw new BizError(BizCode.PARAM_ERROR, (e as Error).message || '审批失败');
+  }
+}
+
+export async function rejectDormChange(
+  stage: TeachingStage,
+  changeId: string,
+  reason: string,
+  user: any,
+): Promise<void> {
+  await assertStageView(user, stage);
+  assertDormApprover(user);
+  if (!reason || !reason.trim()) throw new BizError(BizCode.PARAM_ERROR, '驳回原因必填');
+  try {
+    await pick(stage).changeReject(changeId, reason.trim(), user?.userId || 'system');
+  } catch (e) {
+    throw new BizError(BizCode.PARAM_ERROR, (e as Error).message || '驳回失败');
+  }
 }
