@@ -432,7 +432,6 @@ export async function generateRoomsForBuilding(
   body: DormRoomGenBody,
   user: any,
 ): Promise<{ created: number; revived: number; skipped: number; total: number }> {
-  const stage = body.stage ?? DEFAULT_DORM_STAGE;
   /**
    * ★ 权限：有宿舍页权限的人按学段校验，纯「系统设置」入口的人放行
    *
@@ -442,13 +441,27 @@ export async function generateRoomsForBuilding(
    *   —— 而「新增楼栋自动生成房间」本来就是他在这个页面该做的事。
    *   → 所以：有宿舍权限的人仍按学段卡（防止跨学段乱写）；
    *     一个宿舍学段权限都没有的人 = 从设置页进来的，放行。
+   *
+   * 【2026-10-21 修】楼栋设置面板不传 stage，旧逻辑兜底 DEFAULT_DORM_STAGE='job'（实训），
+   *   导致「有部分学段宿舍权限」的人（如教务老师只有初高）保存楼栋必被 403
+   *   「没有实训宿舍管理的访问权限」—— 卡的恰恰是最该用这个功能的人。
+   *   → 现在分三种情况：
+   *     ① 显式传了 stage → 照旧严格校验；
+   *     ② 没传 + 有宿舍权限 → 用他可见的第一个学段（生成到他管得着的宿舍里）；
+   *     ③ 没传 + 没有任何宿舍权限 → 纯设置页入口，用默认学段。
    */
   const visible = await visibleStages(user);
-  if (visible.length && !visible.includes(stage)) {
-    throw new BizError(
-      BizCode.NO_OPERATION_PERMISSION,
-      `没有${TEACHING_STAGE_NAME[stage]}宿舍管理的访问权限`,
-    );
+  let stage: TeachingStage;
+  if (body.stage) {
+    stage = body.stage;
+    if (visible.length && !visible.includes(stage)) {
+      throw new BizError(
+        BizCode.NO_OPERATION_PERMISSION,
+        `没有${TEACHING_STAGE_NAME[stage]}宿舍管理的访问权限`,
+      );
+    }
+  } else {
+    stage = visible[0] ?? DEFAULT_DORM_STAGE;
   }
   assertWritable(stage);
 
