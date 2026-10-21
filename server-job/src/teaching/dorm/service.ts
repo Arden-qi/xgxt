@@ -321,11 +321,13 @@ export async function listResidents(
   return dedupResidents(parts.flat());
 }
 
-/** 办理入住的学生候选（按数据范围过滤；班主任只给自己的班） */
+/** 办理入住的学生候选（按数据范围过滤；班主任只给自己的班）；classId/className 用于班级-学生联动 */
 export async function listCandidates(
   stage: TeachingStage | undefined,
   keyword: string | undefined,
   user: any,
+  classId?: string,
+  className?: string,
 ): Promise<DormCandidateRow[]> {
   const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
   if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有宿舍管理的访问权限');
@@ -337,7 +339,9 @@ export async function listCandidates(
       ? [STAGE_KEEP_PRIORITY.find((s) => stages.includes(s)) ?? stages[0]]
       : stages;
 
-  const parts = await Promise.all(scanStages.map((s) => REPOS[s].candidates({ keyword }, user)));
+  const parts = await Promise.all(
+    scanStages.map((s) => REPOS[s].candidates({ keyword, classId, className }, user)),
+  );
   const seen = new Set<string>();
   const out: DormCandidateRow[] = [];
   for (const r of parts.flat()) {
@@ -347,6 +351,31 @@ export async function listCandidates(
     out.push(r);
   }
   return out.slice(0, 100);
+}
+
+/**
+ * ★ 2026-10-21：办理入住弹窗的「班级」下拉选项
+ *   · 校长/教务/学管/管理员 → 本学段「班级管理」的全部班级；
+ *   · 班主任/教员/助教 → 只返回名下班级。
+ */
+export async function listCheckinClasses(
+  stage: TeachingStage | undefined,
+  user: any,
+): Promise<Array<{ classId: string | null; className: string }>> {
+  const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
+  if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有宿舍管理的访问权限');
+  if (stage) await assertStageView(user, stage);
+  const parts = await Promise.all(stages.map((s) => REPOS[s].checkinClasses(user)));
+  // 跨学段合并去重（班主任的班可能跨学段；班级名相同视为同一项）
+  const seen = new Set<string>();
+  const out: Array<{ classId: string | null; className: string }> = [];
+  for (const r of parts.flat()) {
+    const key = r.classId ? `id:${r.classId}` : `name:${r.className}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
 }
 
 /** 楼栋下拉（合并三学段，同名去重 —— 楼栋名只是个标签，不是实体） */

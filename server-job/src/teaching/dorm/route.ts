@@ -156,16 +156,35 @@ teachingDormRouter.get(
 /**
  * 4.1 办理入住的学生候选（★ 2026-10-21）
  * 班主任只会拿到自己班、且还没入住的学生；教务/校长拿全量。
+ * 4.1.1 补充（2026-10-21）：classId/className —— 弹窗里选了班级后只出该班学生（班级-学生联动）。
  */
 teachingDormRouter.get(
   '/candidates',
   wrap(async (req, res) => {
     res.json(
       ok(
-        await svc.listCandidates(optStage(req.query.stage), str(req.query.keyword) || undefined, req.user),
+        await svc.listCandidates(
+          optStage(req.query.stage),
+          str(req.query.keyword) || undefined,
+          req.user,
+          str(req.query.classId) || undefined,
+          str(req.query.className) || undefined,
+        ),
         '查询成功',
       ),
     );
+  }),
+);
+
+/**
+ * 4.2 办理入住弹窗的「班级」下拉选项（★ 2026-10-21）
+ *   校长/教务/学管/管理员 → 本学段「班级管理」的全部班级；
+ *   班主任/教员/助教 → 只返回名下班级。
+ */
+teachingDormRouter.get(
+  '/classes',
+  wrap(async (req, res) => {
+    res.json(ok(await svc.listCheckinClasses(optStage(req.query.stage), req.user), '查询成功'));
   }),
 );
 

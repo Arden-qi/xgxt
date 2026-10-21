@@ -236,6 +236,10 @@
             <el-table-column label="床位" prop="bedLabel" width="90" />
             <el-table-column label="学号" prop="studentNo" width="110" />
             <el-table-column label="姓名" prop="studentName" />
+            <!-- ★ 2026-10-21 新增班级列（按学生反查，快照缺失显示 —） -->
+            <el-table-column label="班级" min-width="110">
+              <template #default="{ row }">{{ row.className || '—' }}</template>
+            </el-table-column>
             <el-table-column label="性别" prop="genderName" width="60" align="center" />
             <el-table-column label="入住日期" prop="checkInDate" width="110" align="center" />
           </el-table>
@@ -349,6 +353,26 @@
         </el-form-item>
         <el-form-item label="床位">
           <span>{{ assignBedRow?.bedLabel }}</span>
+        </el-form-item>
+        <!-- ★ 2026-10-21 班级下拉：与下面的学生选择联动（选班 → 学生只出该班的）；
+             班主任登录时选项只有名下班级（后端按数据范围下发） -->
+        <el-form-item label="班级">
+          <el-select
+            v-model="assignClassId"
+            clearable
+            filterable
+            placeholder="全部班级"
+            :loading="assignClassLoading"
+            style="width: 100%"
+            @change="onAssignClassChange"
+          >
+            <el-option
+              v-for="c in assignClasses"
+              :key="c.classId ?? c.className"
+              :label="c.className"
+              :value="c.classId ?? c.className"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="学生" required>
           <el-select
@@ -676,6 +700,8 @@ import {
   listDormChanges,
   listDormOccupancyRates,
   listDormCandidates,
+  listDormCheckinClasses,
+  type DormCheckinClassRow,
   saveDorm,
   deleteDorm,
   assignBed,
@@ -956,12 +982,56 @@ const assignOptions = ref<DormCandidateRow[]>([]);
 const assignLoading = ref(false);
 const assignSelected = ref<DormCandidateRow | null>(null);
 
+/**
+ * ★ 2026-10-21 班级下拉（与学生联动）
+ * 选项后端按数据范围下发：校长/教务/学管/管理员 = 本学段「班级管理」全部班级；
+ * 班主任/教员/助教 = 只有名下班级。value 优先用 classId（演示快照可能只有班名，
+ * 后端两个字段都兜）。
+ */
+const assignClasses = ref<DormCheckinClassRow[]>([]);
+const assignClassLoading = ref(false);
+const assignClassId = ref<string>('');
+
+/** 当前选中的班（value 可能是 classId 也可能是 className 兜底值） */
+function assignClassFilter(): { classId?: string; className?: string } {
+  const picked = assignClasses.value.find(
+    (c) => (c.classId ?? c.className) === assignClassId.value,
+  );
+  if (!picked) return {};
+  return { classId: picked.classId ?? undefined, className: picked.className };
+}
+
+async function loadAssignClasses() {
+  const stage = curDorm.value?.stage;
+  if (!stage) return;
+  assignClassLoading.value = true;
+  try {
+    assignClasses.value = await listDormCheckinClasses(stage);
+  } catch {
+    assignClasses.value = [];
+  } finally {
+    assignClassLoading.value = false;
+  }
+}
+
+/** 选了班 → 清掉已选学生、按新班级重拉候选（保留关键字搜索） */
+function onAssignClassChange() {
+  assignStudentId.value = '';
+  assignSelected.value = null;
+  assignOptions.value = [];
+  searchAssignStudents();
+}
+
 async function searchAssignStudents(keyword?: string) {
   const stage = curDorm.value?.stage;
   if (!stage) return;
   assignLoading.value = true;
   try {
-    const list = await listDormCandidates({ stage, keyword: keyword || undefined });
+    const list = await listDormCandidates({
+      stage,
+      keyword: keyword || undefined,
+      ...assignClassFilter(),
+    });
     // 保留当前选中项，避免刷新候选后显示成 id
     const cur = assignSelected.value;
     assignOptions.value =
@@ -982,9 +1052,10 @@ async function openAssign(b: DormBedRow) {
   assignStudentId.value = '';
   assignSelected.value = null;
   assignOptions.value = [];
+  assignClassId.value = '';
   assignDate.value = todayStr();
   assignVisible.value = true;
-  await searchAssignStudents();
+  await Promise.all([loadAssignClasses(), searchAssignStudents()]);
 }
 
 async function doAssign() {

@@ -157,6 +157,16 @@ const CLASS_SOURCES = [
 ];
 
 /**
+ * ★ 2026-10-21：各学段「班级管理」的班级表（办理入住弹窗的班级下拉按学段取这里）
+ *   班级下拉必须是**本学段**的班 —— 往初高宿舍里塞大学班的学生没有意义。
+ */
+const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
+  jh: 'sms_class_jh.t_class_info',
+  class: 'sms_class.t_class_info',
+  job: 'sms_job.t_job_class',
+};
+
+/**
  * ★ 2026-10-21：解析「我的班」—— 同时兼容三种存法，别只认一种
  *
  * 现实里同一件事有三种数据：
@@ -408,7 +418,51 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
     if (q.onlyVacant) rows = rows.filter((r: DormRow) => r.occupiedCount < r.bedCount);
     return rows;
   }
-  
+
+  /**
+   * ★ 2026-10-21：床位表没有班级快照列 → 按学生 id / 学号反查班级
+   *   查本学段学生表 + 门户学生表，id、学号两个键都记（有的行只有其一）。
+   *   beds()（在住名单）与 residents()（跨房间名单）共用。
+   */
+  async function studentClassMap(rows: Array<Record<string, any>>) {
+    const ids = [...new Set(rows.map((b) => str(b.student_id)).filter(Boolean) as string[])];
+    const nos = [...new Set(rows.map((b) => str(b.student_no)).filter(Boolean) as string[])];
+    const byId = new Map<string, { classId: string | null; className: string }>();
+    const byNo = new Map<string, { classId: string | null; className: string }>();
+    if (!ids.length && !nos.length) return { byId, byNo };
+    for (const table of ['stage', PERM_STUDENT]) {
+      try {
+        const base = table === PERM_STUDENT ? db(PERM_STUDENT) : tbl(db, SRC_DB, STUDENT_T, stage);
+        const qb = base
+          .where({ is_deleted: false })
+          .select('id', 'student_no', 'class_id', 'class_name');
+        qb.andWhere((b: any) => {
+          if (ids.length) b.whereIn('id', ids);
+          if (nos.length) b.orWhereIn('student_no', nos);
+        });
+        for (const r of (await qb) as any[]) {
+          const cn = str(r.class_name);
+          if (!cn) continue;
+          const val = { classId: str(r.class_id), className: cn };
+          if (str(r.id)) byId.set(String(r.id), val);
+          if (str(r.student_no)) byNo.set(String(r.student_no), val);
+        }
+      } catch {
+        /* 表不存在 → 跳过 */
+      }
+    }
+    return { byId, byNo };
+  }
+
+  /** 按床位行取班级（先按学生 id，再按学号兜底） */
+  function classOfBed(b: Record<string, any>, cls: Awaited<ReturnType<typeof studentClassMap>>) {
+    return (
+      (str(b.student_id) ? cls.byId.get(String(b.student_id)) : undefined) ??
+      cls.byNo.get(str(b.student_no) || '') ??
+      null
+    );
+  }
+
   const repo: DormRepo = {
     stage,
     meta: () => meta(stage),
@@ -617,11 +671,12 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       }
       return { created, revived, skipped };
     },
-  
+
     async beds(dormId) {
       const list = await T_BED()
         .where({ dorm_id: String(dormId), is_deleted: false })
         .orderBy('bed_no', 'asc');
+      const cls = await studentClassMap(list);
       return list.map((b: any) => {
         const st = Number(b.bed_status ?? 1);
         return {
@@ -630,13 +685,13 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
           bedLabel: bedNoText(b.bed_no),
           bedStatus: st,
           bedStatusName: DORM_BED_STATUS_NAME[st] ?? '空闲',
-          // ★ 床位表自带快照，不用 join
+          // ★ 床位表自带学生快照（没有班级列，班级按学生反查），不用 join
           studentId: str(b.student_id),
           studentNo: str(b.student_no),
           studentName: str(b.student_name),
           gender: numOrNull(b.student_gender),
           checkInDate: fmtDate(b.check_in_date),
-          className: null,
+          className: classOfBed(b, cls),
         };
       });
     },
@@ -645,6 +700,7 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       const rows = await roomRows({ ...q, page: 1, size: 9999 }, user);
       const byId = new Map(rows.map((r) => [r.dormId, r]));
       const beds = await T_BED().where({ is_deleted: false, bed_status: 2 });
+      const cls = await studentClassMap(beds);
       const out: DormResidentRow[] = [];
       for (const b of beds) {
         const room = byId.get(String(b.dorm_id));
@@ -663,11 +719,77 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
           bedNo: String(b.bed_no ?? ''),
           bedLabel: bedNoText(b.bed_no),
           checkInDate: fmtDate(b.check_in_date),
-          classId: null,
-          className: null,
+          classId: classOfBed(b, cls)?.classId ?? null,
+          className: classOfBed(b, cls)?.className ?? null,
         });
       }
       return out;
+    },
+
+    /**
+     * ★ 2026-10-21：办理入住弹窗的「班级」下拉
+     *
+     * · privileged（校长/教务/学管/管理员）→ 本学段「班级管理」的全部班级；
+     * · 班主任/教员/助教 → 只返回名下班级。取数与 candidates 同口径：
+     *   先从学生表（本学段 + 门户）distinct 出「我班学生的班级」，
+     *   保证下拉的 classId/className 与学生行的 class_id/class_name 必然对得上，
+     *   联动过滤不会因为「班级表 id 和学生快照 id 不一致」而漏人；
+     *   学生表里查不到的（班还没招学生）→ 再从班级表把「我的班」补出来。
+     */
+    async checkinClasses(user): Promise<Array<{ classId: string | null; className: string }>> {
+      const mine = await myClasses(user);
+      const out = new Map<string, { classId: string | null; className: string }>();
+      const add = (id: any, name: any) => {
+        const cn = str(name);
+        if (!cn) return;
+        const key = str(id) ? `id:${String(id)}` : `name:${cn}`;
+        if (!out.has(key)) out.set(key, { classId: str(id), className: cn });
+      };
+
+      if (mine.privileged) {
+        try {
+          const rows = (await db(STAGE_CLASS_TABLE[stage])
+            .where({ is_deleted: false })
+            .select('id', 'class_name')
+            .orderBy('class_name', 'asc')) as any[];
+          for (const r of rows) add(r.id, r.class_name);
+        } catch {
+          /* 表不存在 → 跳过 */
+        }
+        return [...out.values()];
+      }
+
+      if (!mine.names.length && !mine.ids.length) return [];
+
+      for (const table of ['stage', PERM_STUDENT]) {
+        try {
+          const base = table === PERM_STUDENT ? db(PERM_STUDENT) : tbl(db, SRC_DB, STUDENT_T, stage);
+          const rows = (await base
+            .where({ is_deleted: false })
+            .andWhere((b: any) => {
+              if (mine.ids.length) b.whereIn('class_id', mine.ids);
+              if (mine.names.length) b.orWhereIn('class_name', mine.names);
+            })
+            .distinct('class_id', 'class_name')) as any[];
+          for (const r of rows) add(r.class_id, r.class_name);
+        } catch {
+          /* 跳过 */
+        }
+      }
+      try {
+        const rows = (await db(STAGE_CLASS_TABLE[stage])
+          .where({ is_deleted: false })
+          .andWhere((b: any) => {
+            if (mine.ids.length) b.whereIn('id', mine.ids);
+            if (mine.names.length) b.orWhereIn('class_name', mine.names);
+          })
+          .select('id', 'class_name')
+          .orderBy('class_name', 'asc')) as any[];
+        for (const r of rows) add(r.id, r.class_name);
+      } catch {
+        /* 跳过 */
+      }
+      return [...out.values()].sort((a, b) => a.className.localeCompare(b.className, 'zh'));
     },
   
     /**
@@ -703,6 +825,14 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
             qb.andWhere((b: any) => {
               if (mine.ids.length) b.whereIn('class_id', mine.ids);
               if (mine.names.length) b.orWhereIn('class_name', mine.names);
+            });
+          }
+          // ★ 2026-10-21 班级-学生联动：弹窗选了班级 → 候选只出该班学生
+          //   id 精确匹配为主，姓名兜底（演示数据里学生快照可能只存了班名）
+          if (q.classId || q.className) {
+            qb.andWhere((b: any) => {
+              if (q.classId) b.where('class_id', String(q.classId));
+              if (q.className) b.orWhere('class_name', String(q.className));
             });
           }
           if (kw) {

@@ -84,8 +84,17 @@ export interface DormRepo {
   beds(dormId: string, user: any): Promise<DormBedRow[]>;
   /** 在住学生名单（跨房间） */
   residents(q: DormListQuery, user: any): Promise<DormResidentRow[]>;
-  /** 办理入住时的学生候选（按数据范围过滤，默认排除已入住） */
-  candidates(q: { keyword?: string; limit?: number }, user: any): Promise<DormCandidateRow[]>;
+  /** 办理入住时的学生候选（按数据范围过滤，默认排除已入住）；classId/className 用于班级-学生联动 */
+  candidates(
+    q: { keyword?: string; limit?: number; classId?: string; className?: string },
+    user: any,
+  ): Promise<DormCandidateRow[]>;
+  /**
+   * ★ 2026-10-21：办理入住弹窗的「班级」下拉选项
+   *   · 校长/教务/学管/管理员 → 本学段「班级管理」里的全部班级；
+   *   · 班主任/教员/助教 → 只返回名下班级。
+   */
+  checkinClasses(user: any): Promise<Array<{ classId: string | null; className: string }>>;
   /** 分派床位（学生入住） */
   assign(body: DormAssignBody, userId: string): Promise<void>;
   /** 退宿（直接生效，管理员纠错用，不走审批） */
