@@ -25,6 +25,7 @@ import { toRawRefundStatus, toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import { tbl } from '../shared/uniTable';
+import { hydrateWithArchive, ARCHIVE_TABLE } from '../shared/studentRef';
 
 const T = 't_class_refund_apply';
 const ITEM = 't_class_refund_item';
@@ -67,7 +68,7 @@ async function decorate(
 
   return {
     stage: STAGE,
-    stageName: '大学',
+    stageName: '大学部',
     id: String(row.id),
     studentId: String(row.student_id || ''),
     studentNo: String(row.student_no || ''),
@@ -148,7 +149,21 @@ export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; tot
       b.where('student_name', 'like', `%${q.keyword}%`).orWhere('student_no', 'like', `%${q.keyword}%`);
     });
   }
-  if (q.classId) base.andWhere('class_id', q.classId);
+  if (q.classId) {
+    /**
+     * ★ 2026-10-20：班级筛选「单据快照 + 档案现状」两边命中。
+     *   列表显示的班级已改为档案最新值，只按单据 class_id 筛会出现
+     *   「显示 B 班、按 B 班筛不到」（学生换班场景）。
+     */
+    const inClass = (await tbl(db, ARCHIVE_TABLE[STAGE].dbName, S, STAGE)
+      .where({ is_deleted: 0, class_id: q.classId })
+      .select('id')) as Array<Record<string, any>>;
+    const ids = [...new Set(inClass.map((r) => String(r.id || '')).filter(Boolean))];
+    base.andWhere((b) => {
+      b.where('class_id', q.classId);
+      if (ids.length) b.orWhereIn('student_id', ids);
+    });
+  }
   if (q.startDate) base.andWhere('apply_time', '>=', `${q.startDate} 00:00:00`);
   if (q.endDate) base.andWhere('apply_time', '<=', `${q.endDate} 23:59:59`);
 
@@ -164,6 +179,8 @@ export async function list(q: RefundListQuery): Promise<{ rows: RefundRow[]; tot
     .limit(q.size)
     .offset((q.page - 1) * q.size)) as Array<Record<string, any>>;
 
+  // ★ 2026-10-20：学生属性以档案最新值为准（快照列只留作审计）
+  await hydrateWithArchive(STAGE, rows, { conn: db });
   const itemMap = await loadItems(rows.map((r) => String(r.id)));
   return {
     rows: await Promise.all(rows.map((r) => decorate(r, itemMap[String(r.id)] || []))),
@@ -177,6 +194,8 @@ export async function detail(id: string): Promise<RefundRow | null> {
     | Record<string, any>
     | undefined;
   if (!row) return null;
+  // ★ 2026-10-20：详情与列表同口径（档案最新值）
+  await hydrateWithArchive(STAGE, [row], { conn: db });
   const rows = (await db(ITEM).where({ refund_id: id, is_deleted: 0 })) as Array<
     Record<string, any>
   >;

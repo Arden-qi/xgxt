@@ -21,7 +21,7 @@
  * 【断言】走真实流程（建单 → 提交 → 学管审批通过），逐学段核对目标状态：
  *   · 初高：休学 → 6，复学 → **5**（本次修的）
  *   · 实训：休学 → 6，复学 → **8**（实训本来就是 8，别被上面那刀改坏）
- *   · 大学：休学 → 6（大学无复学）
+ *   · 大学：休学 → 6；复学 → 5（2026-10-16 起大学开放复学，与初高同口径）
  *
  * 【跑法】在 server-job 目录下（前后端已在 8004/5173 运行）：
  *     node scripts/_test-leave-status-sideeffect.mjs
@@ -245,30 +245,33 @@ const STAGE_CONF = {
       );
     }
 
-    /* ================= 大学：只有休学（无复学） ================= */
+    /* ================= 大学：休学 → 6，复学 → 5（2026-10-16 起开放） ================= */
     {
       const stage = 'class';
       const c = STAGE_CONF[stage];
-      const { stu } = await mkFixtures(stage);
+      const { stu, cls } = await mkFixtures(stage);
 
       const s1 = await runToApproved(stage, tCls, stu, BIZ.SUSPEND);
       check('[class] 休学审批通过', s1.ok, s1.msg);
-      const now = await db(c.db)(c.stu).where({ id: stu.id }).first();
+      let now = await db(c.db)(c.stu).where({ id: stu.id }).first();
       check(
         '[class] 休学 → 学生状态 = 6（休学）',
         Number(now?.student_status) === SS.SUSPENDED,
         `实际 ${now?.student_status}`,
       );
 
-      const bad = await req(`${API}/create`, {
-        method: 'POST',
-        token: tCls,
-        body: { stage, studentId: stu.id, bizType: BIZ.RESUME, leaveReason: '自检RSS-大学复学（应被拒）' },
-      });
+      const s2 = await runToApproved(stage, tCls, stu, BIZ.RESUME, cls.id);
+      check('[class] 复学审批通过（发起时填复学班）', s2.ok, s2.msg);
+      now = await db(c.db)(c.stu).where({ id: stu.id }).first();
       check(
-        '[class] 大学发起复学 → 被拒（该学段没有复学）',
-        bad.json?.code !== 200 && String(bad.json?.message || '').includes('不支持'),
-        `code=${bad.json?.code} msg=${bad.json?.message}`,
+        '★★[class] 复学 → 学生状态 = 5（正式在读）—— 大学与初高同口径，不是 8（实训中）',
+        Number(now?.student_status) === SS.STUDYING,
+        `实际 ${now?.student_status}${Number(now?.student_status) === SS.TRAINING ? '（错：写成实训中了）' : ''}`,
+      );
+      check(
+        '[class] 复学 → 学生回到所选的复学班',
+        String(now?.class_id) === String(cls.id),
+        `class_id=${now?.class_id}`,
       );
     }
   } catch (e) {

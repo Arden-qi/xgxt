@@ -4,7 +4,8 @@
  * ★ 审批链统一采用「实训那一套」：
  *    休学 1 步（学管）· 复学 1 步（学管）· 退学 2 步（学管 → 校长）
  * ★ 业务类型：1 休学 · 2 退学 · 3 复学
- * ⚠️ 大学**没有「复学」**（业务事实，见 `/meta` 的 stageBizTypes）
+ * ★ 2026-10-16 起三学段（初高/大学/实训）都支持复学（见 `/meta` 的 stageBizTypes）；
+ *   复学（bizType=3）时 `newClassId`（复学班）必填、学生下拉只列休学中的学生
  */
 
 import { http } from '@/api/request';
@@ -13,8 +14,8 @@ import type { TeachingStage } from './attendance';
 export type { TeachingStage };
 
 export const STAGE_NAME: Record<TeachingStage, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '实训',
 };
 

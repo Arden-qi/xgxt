@@ -36,7 +36,7 @@ const settingSaving = ref(false);
 const settingValues = reactive<Record<string, string>>({});
 
 /** 数字型设置键 */
-const NUMBER_KEYS = ['attendanceTargetRate', 'feeRemindDays', 'refundThresholdAmount', 'closedClassIntakeTypes'];
+const NUMBER_KEYS = ['attendanceTargetRate', 'feeRemindDays', 'feeUrgeWindowDays', 'refundThresholdAmount', 'closedClassIntakeTypes'];
 /** 布尔型设置键 */
 const BOOLEAN_KEYS = ['allowStudentAdd'];
 
@@ -202,7 +202,7 @@ async function submitScheme() {
 async function handleDeleteScheme(row: StageScheme) {
   try {
     await ElMessageBox.confirm(
-      `确定删除方案「${row.schemeName}」吗？（已被班级使用的方案不可删）`,
+      `确定删除方案「${row.schemeName}」吗？（方案下已有班级 / 学生正在使用的阶段不可删）`,
       '删除确认',
       {
         type: 'warning',

@@ -18,7 +18,7 @@
  *   菜单分组计算整体抽到 config/sideMenu.ts，与首页快捷入口共用同一份口径。
  */
 import { RouterView, useRoute, useRouter } from 'vue-router';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 /* ★ 第 1 期「入口合并」：matchTeachingPath —— 直连老路由时，左侧菜单要亮在合并后的菜单项上 */
 import { matchTeachingPath } from '@/teaching/domainConfig';
 import { ROLE_CODE_NAME } from 'shared-types';
@@ -44,6 +44,8 @@ import { changeMyPassword, verifyMyPassword } from '@/portal/api/portal';
  *   注：原先在本文件 import 的 moduleAllowed / moduleOfPageCode / pageEnabled
  *   已随菜单计算一并搬去 sideMenu.ts，本文件不再直接使用，故不再重复引入。 */
 import { useSideMenu, type ViewChild } from '@/config/sideMenu';
+/* ★ 催费/缴费菜单红点：有待催办事项（初高待缴/大学逾期/就业待催缴）时菜单项亮红点 */
+import { useFeeUrgeBadge } from '@/store/feeUrgeBadge';
 
 const route = useRoute();
 const router = useRouter();
@@ -51,8 +53,6 @@ const portal = usePortalStore();
 
 /** 当前激活的菜单项（hash 路由下 route.path 就是 /xxx） */
 const activeMenu = computed(() => {
-  // 老路径 /transfer 已重定向到 /class-transfer
-  if (route.path === '/transfer') return '/class-transfer';
   /* ★ 第 1 期「入口合并」：
    *   左侧菜单现在只有一个「教学管理」分组，重复业务域指向 /teaching/<域>。
    *   用户直连老路由（/exam、/class/exam、/class-jh/exam …）时，
@@ -100,6 +100,9 @@ const roleText = computed(() => {
 
 /** 登录页全屏显示，不套左侧菜单的壳 */
 const isLoginPage = computed(() => route.path === '/login');
+
+/* 催费/缴费红点 */
+const feeUrgeBadge = useFeeUrgeBadge();
 
 /** 退出登录 → 回统一登录页 */
 function doLogout(): void {
@@ -245,6 +248,13 @@ onMounted(() => {
   if (isLoginPage.value) return;
   if (!localStorage.getItem('sms_token')) return;
   if (!permissionLoaded.value) loadMyPermissions();
+  // 催费/缴费红点：登录后拉一次
+  feeUrgeBadge.refresh();
+});
+
+// 进入催费/缴费页时强刷（处理完回来红点随之更新）
+watch(() => route.fullPath, (p) => {
+  if (p.startsWith('/teaching/fee')) feeUrgeBadge.refresh(true);
 });
 </script>
 
@@ -429,6 +439,11 @@ onMounted(() => {
                   @click="router.push(goChild(child))"
                 >
                   <span class="child-title">{{ child.title }}</span>
+                  <span
+                    v-if="child.title === '催费 / 缴费' && feeUrgeBadge.count > 0"
+                    class="menu-red-dot"
+                    :title="feeUrgeBadge.tooltip"
+                  />
                   <el-tag
                     v-if="child.phase"
                     size="small"
@@ -477,6 +492,21 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* ★ 催费/缴费菜单红点（右上角） */
+:deep(.el-menu-item) {
+  position: relative;
+}
+.menu-red-dot {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-danger);
+  cursor: help;
+  z-index: 2;
+}
 /* ============================================================
  * 2026-10-05 修：让「左侧导航」与「右侧内容」各自独立滚动
  *

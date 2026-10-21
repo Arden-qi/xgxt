@@ -25,6 +25,7 @@ import { db, knexRaw } from '../utils/db';
 import { BizError } from '../middleware/errorHandler';
 import { nextBillNoForPay } from '../utils/orderNo';
 import { getStandard, isVoucherReusable, expectedSourceOf } from './fee-standard.service';
+import { findArchiveStudent } from './student-archive';
 
 export const FEE_TABLE = 't_finance_fee';
 export const BILL_TABLE = 't_finance_bill';
@@ -872,6 +873,26 @@ export async function addFee(
 ): Promise<string> {
   const id = randomUUID();
   const now = new Date();
+
+  /**
+   * ★ 2026-10-20：学生属性以学生档案为准（档案里能查到这个人时）
+   *
+   * 用户口径：「学生档案有的字段按学生档案的数据走」。
+   * 上游（咨询/教务）传过来的学号/姓名/班级可能是建单那一刻的快照，
+   * 学生后来换班或改名就会脱节。只要档案里能对上（先按 id、再按学号），
+   * 落库一律用档案当前值，不信任调用方传的那几个字段。
+   *
+   * ⚠️ 档案里查不到时**保持原样**：报名前的咨询收费单，学生还没进学籍档案，
+   *    这是正常业务状态，不能因此拒绝建单。
+   */
+  const archived = await findArchiveStudent(body.studentId, body.studentNo);
+  if (archived) {
+    if (archived.no) body.studentNo = archived.no;
+    if (archived.name) body.studentName = archived.name;
+    if (archived.classId) body.classId = archived.classId;
+    if (archived.className) body.className = archived.className;
+    if (archived.deptCode != null) body.deptCode = archived.deptCode;
+  }
 
   /* ---------- 规则2：金额没传就取财务标准 ---------- */
   let amount: number = body.amount;

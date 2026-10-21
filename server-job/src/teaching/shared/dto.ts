@@ -13,19 +13,44 @@
  *      **后端进出一律转成统一码**，前端不认识任何学段的原始码。
  */
 
-/** 三个学段 */
+/** 学段 */
 export type TeachingStage = 'jh' | 'class' | 'job';
 
 export const TEACHING_STAGES: TeachingStage[] = ['jh', 'class', 'job'];
 
 export const TEACHING_STAGE_NAME: Record<TeachingStage, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '实训',
 };
 
 export function isTeachingStage(x: unknown): x is TeachingStage {
   return x === 'jh' || x === 'class' || x === 'job';
+}
+
+/**
+ * ★ 2026-10-19 批注：班级域新增「就业部」学段
+ *
+ * 【为什么不直接扩 TeachingStage】
+ *   出勤/考试/成绩/宿舍/退费/审批等域都是按 TeachingStage 穷举仓储的，
+ *   一扩就会要求这些域也实现「就业部」，纯属误伤。
+ *   就业部目前只接「班级管理 + 学生档案」两个入口，所以只扩这两个域的联合类型。
+ *
+ * 【数据口径】复用 sms_job 的表，靠 dept_code=3 隔离（表里的 stage 列是阶段码，不能用来隔离）。
+ */
+export type ClassStage = TeachingStage | 'emp';
+
+export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job', 'emp'];
+
+export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
+  jh: '初高部',
+  class: '大学部',
+  job: '实训',
+  emp: '就业部',
+};
+
+export function isClassStage(x: unknown): x is ClassStage {
+  return x === 'jh' || x === 'class' || x === 'job' || x === 'emp';
 }
 
 /**
@@ -505,6 +530,10 @@ export const REFUND_CHAIN_NODES: Array<{ step: number; name: string; roles: stri
   { step: 2, name: '校长审批', roles: '校长' },
 ];
 
+/** 单项退费费用上限：10 万元（单位分，100000 元 × 100）。
+ *  前端费用项输入框的 max 与 service.create 的兜底校验共用这一口径，改这里两处同步。 */
+export const REFUND_ITEM_MAX_AMOUNT = 10000000;
+
 /** 费用项（统一结构：初高/实训只会有 1 项，大学可多项） */
 export interface RefundItem {
   feeType: number;
@@ -662,12 +691,15 @@ export const LEAVE_ACTIVE_STATUSES: number[] = [
 /**
  * ★ 各学段**支持**的审批类型
  *
- * ⚠️ 大学没有「复学」—— 这是**业务事实**（大学 `ApplyType` 里就没有这一项），
- *    不是合并遗漏。页面会据此隐藏该选项，而不是给个点不动的按钮。
+ * 【2026-10-16 调整】大学**开放「复学」**（用户要求：大学生休学后也可以复学）。
+ *   大学老表 `ApplyType` 原本只有 1休学 2退学 3退费 4升学，没有复学码 ——
+ *   本次新增**原码 5 = 复学**（见 shared/conf.ts 的 DEFAULT_LEAVE_BIZ_MAP.class），
+ *   并给 `t_class_suspend_apply` 补了 `new_class_id` / `new_class_name` 两列
+ *   （migrations-class/20261016_012）。
  */
 export const LEAVE_STAGE_BIZ: Record<TeachingStage, number[]> = {
   jh: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
-  class: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT],
+  class: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
   job: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
 };
 
@@ -849,19 +881,21 @@ export interface LeaveSummary {
  */
 
 /** 学生档案的四个学段来源 */
-export type StudentStage = 'jh' | 'class' | 'job' | 'edu';
+export type StudentStage = 'jh' | 'class' | 'job' | 'emp' | 'edu';
 
-export const STUDENT_STAGES: StudentStage[] = ['jh', 'class', 'job', 'edu'];
+export const STUDENT_STAGES: StudentStage[] = ['jh', 'class', 'job', 'emp', 'edu'];
 
 export const STUDENT_STAGE_NAME: Record<StudentStage, string> = {
-  jh: '初高',
-  class: '大学',
+  jh: '初高部',
+  class: '大学部',
   job: '就业',
+  /** ★ 2026-10-19 批注：就业部（与就业共用 sms_job，按 dept_code=3 隔离） */
+  emp: '就业部',
   edu: '教务',
 };
 
 export function isStudentStage(x: unknown): x is StudentStage {
-  return x === 'jh' || x === 'class' || x === 'job' || x === 'edu';
+  return x === 'jh' || x === 'class' || x === 'job' || x === 'emp' || x === 'edu';
 }
 
 /**
@@ -872,7 +906,7 @@ export function isStudentStage(x: unknown): x is StudentStage {
  *   规则：以**阶段更靠后**的那条为准 —— job > class > jh > edu。
  *   （edu 放最后：它是教务的同步副本，最陈旧。）
  */
-export const STUDENT_DEDUP_PRIORITY: StudentStage[] = ['job', 'class', 'jh', 'edu'];
+export const STUDENT_DEDUP_PRIORITY: StudentStage[] = ['emp', 'job', 'class', 'jh', 'edu'];
 
 /** 学生档案 · 列表行（统一结构，四个学段共用） */
 export interface StudentRow {
@@ -900,6 +934,8 @@ export interface StudentRow {
   studentStatus: number;
   studentStatusName: string;
   phone: string | null;
+  /** 家长姓名（2026-10-15 学生档案改版新增） */
+  parentName: string | null;
   parentPhone: string | null;
   education: string | null;
   enrollDate: string | null;
@@ -965,6 +1001,30 @@ export interface StudentDormSection {
   building: string | null;
 }
 
+/**
+ * 升云记录（2026-10-20 批注：初高部 → 大学部「开放」班级）
+ *
+ * 学生详情「基础信息」页签里展示：原班级 / 原班主任 / 升入班级 / 操作人 / 时间。
+ * ⚠️ 按**学号**关联：升云后大学那条是新学生 id，只有学号两边一致（批注要求学号不变）。
+ */
+export interface StudentUpgradeRow {
+  id: string;
+  studentNo: string;
+  studentName: string;
+  /** 原班级（初高部） */
+  fromClassName: string | null;
+  /** 原班主任 */
+  fromHeadTeacherName: string | null;
+  /** 升入班级（大学部） */
+  toClassName: string | null;
+  toHeadTeacherName: string | null;
+  operatorId: string | null;
+  /** 操作人 */
+  operatorName: string | null;
+  upgradeTime: string | null;
+  remark: string | null;
+}
+
 export interface StudentDetail {
   base: StudentRow;
   profile: StudentProfileSection;
@@ -980,6 +1040,8 @@ export interface StudentDetail {
   flows: Array<Record<string, unknown>>;
   /** 末班 / 留级记录 */
   repeats: Array<Record<string, unknown>>;
+  /** 升云记录（初高部 → 大学部，2026-10-20）—— 由 service 层按学号补齐，仓储不返回 */
+  upgrades?: StudentUpgradeRow[];
   /** 其余学段特有字段（原样透传，前端不渲染、留作排查） */
   extra: Record<string, unknown> | null;
 }
@@ -1004,6 +1066,8 @@ export interface StudentSaveBody {
   graduateSchool?: string | null;
   enrollDate?: string | null;
   phone?: string | null;
+  /** 家长姓名（2026-10-15 学生档案改版新增） */
+  parentName?: string | null;
   parentPhone?: string | null;
   homeAddress?: string | null;
   idCard?: string | null;
@@ -1014,6 +1078,9 @@ export interface StudentSaveBody {
   dormId?: string | null;
   dormNo?: string | null;
   bedNo?: string | null;
+  /** 校园网账号（初高表有列；留空时系统自动生成） */
+  netAccount?: string | null;
+  netInitPassword?: string | null;
   remark?: string | null;
   /** 学段特有字段（综合素质 / 校园网 / 简历…）原样透传 */
   extra?: Record<string, unknown> | null;
@@ -1030,12 +1097,50 @@ export interface StudentSaveResult {
   unfrozenCount?: number;
 }
 
+/**
+ * 学生档案详情「扩展区块」数据（2026-10-15 详情页分签改版）
+ *
+ * 【为什么单独一个接口】成绩 / 调宿记录分别来自成绩域、宿舍域，
+ * 每次打开详情才按需拉取，不塞进 /detail（老接口保持轻、老页面不受影响）。
+ */
+export interface StudentExtras {
+  /** 该生全部考试成绩（examType/examDate/examTypeName 由适配器按考试表回填） */
+  scores: Array<ScoreRow & { examType?: number | null; examTypeName?: string | null }>;
+  /** 该生调宿 / 退宿申请单（含审批状态） */
+  dormChanges: DormChangeRow[];
+  /** 所在宿舍的宿舍长 / 负责人（宿舍管理同步） */
+  dormOwnerName: string | null;
+  /** 所在宿舍的班级（宿舍管理同步，只有初高有） */
+  dormClassName: string | null;
+}
+
+/**
+ * ★ 2026-10-16 阶段方案（一个方案含多个阶段）
+ *
+ *   原「阶段字典」改版成「阶段方案」后，班级 / 学生表单里的「阶段」下拉
+ *   不再从写死的常量里取，而是：**先选方案 → 再选该方案下的阶段**。
+ *   数据源：sms_class_jh 的 t_class_stage_plan + t_class_stage
+ *   （初高部 / 大学部两个部门的方案都存在那里）。
+ */
+export interface StagePlanOption {
+  /** 方案 ID */
+  id: string;
+  /** 方案名称，如 初高部阶段方案 */
+  name: string;
+  /** 所属部门 1 初高部 / 2 大学部 */
+  deptCode: number;
+  /** 该方案下的阶段（value = 阶段编码，label = 阶段名称） */
+  phases: Array<{ value: number; label: string }>;
+}
+
 /** 元信息：某学段支持哪些筛选项 / 能不能写 / 有哪些特有区块 */
 export interface StudentStageMeta {
   stage: StudentStage;
   stageName: string;
   /** 该学段支持的学段内阶段码可选项 */
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案（前端「阶段方案」下拉的数据源） */
+  planOptions?: StagePlanOption[];
   /** 该学段特有区块的键（前端据此决定显示哪些页签） */
   sections: string[];
   /** 是否支持「只看未分配宿舍」筛选 */
@@ -1089,12 +1194,16 @@ export const CLASS_STATUS_NAME: Record<number, string> = {
 };
 
 /**
- * ★ 统一班级状态流转表（取初高那套，最完整）
+ * ★ 统一班级状态流转表
  *   已结业是终态，不可回退 —— 撤销结业属于「结业撤销」专用动作，不走这里。
+ *
+ * 2026-10-19 批注：「待结业」这个状态删除（页面下拉不再出现），
+ *   封班之后直接进「已结业」。为兼容历史数据，3→已结业 的流转仍保留，
+ *   但**不再作为任何状态的下一跳目标**（新数据不可能变成 3）。
  */
 export const CLASS_STATUS_TRANSITIONS: Record<number, number[]> = {
-  [CLASS_STATUS.OPEN]: [CLASS_STATUS.OPEN, CLASS_STATUS.CLOSED, CLASS_STATUS.GRADUATING],
-  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATING],
+  [CLASS_STATUS.OPEN]: [CLASS_STATUS.OPEN, CLASS_STATUS.CLOSED],
+  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
   [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATING, CLASS_STATUS.GRADUATED],
   [CLASS_STATUS.GRADUATED]: [CLASS_STATUS.GRADUATED],
 };
@@ -1105,15 +1214,15 @@ export function canTransitClassStatus(from: number, to: number): boolean {
   return allowed.includes(to);
 }
 
-/** 部门（数据字典固定：1 初高部 2 大学部）—— 三套都有 dept_code */
-export const CLASS_DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
+/** 部门（数据字典固定：1 初高部 2 大学部 3 就业部）—— 三套都有 dept_code */
+export const CLASS_DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部', 3: '就业部' };
 
 /** 出勤率口径 —— ★ 必须显式告诉前端，否则「今日 92%」和「累计 88%」会被误读成同一种 */
 export type AttendanceRateKind = 'today' | 'total' | null;
 
 /** 班级列表行（统一结构，三学段共用） */
 export interface ClassRow {
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   classId: string;
   className: string;
@@ -1176,7 +1285,7 @@ export interface ClassRow {
 }
 
 export interface ClassListQuery {
-  stage?: TeachingStage;
+  stage?: ClassStage;
   deptCode?: number;
   classStatus?: number;
   phaseCode?: number;
@@ -1188,7 +1297,7 @@ export interface ClassListQuery {
 }
 
 export interface ClassSaveBody {
-  stage: TeachingStage;
+  stage: ClassStage;
   /** 有值 = 修改，无值 = 新增 */
   id?: string;
   className: string;
@@ -1220,15 +1329,71 @@ export interface ClassSaveBody {
 
 /** 统计卡片（口径与列表完全一致） */
 export interface ClassSummary {
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   total: number;
   openCount: number;
   closedCount: number;
+  /** 2026-10-19 起「待结业」已下线，恒为 0（保留字段兼容前端旧代码） */
   graduatingCount: number;
   graduatedCount: number;
   /** 在班学生总数 */
   studentCount: number;
+}
+
+/* ============================================================
+ * 班级交接（2026-10-19 批注）
+ *   一次交接 = 一个班 5 个岗位同时换人：
+ *   班主任 / 教员 / 助教 / 项目经理 / 就业老师
+ *   初高没有后两个岗位（页面也不显示）。
+ * ============================================================ */
+
+/** 交接里的一个岗位（原/新） */
+export interface ClassHandoverRole {
+  oldId: string | null;
+  oldName: string | null;
+  newId: string | null;
+  newName: string | null;
+}
+
+/** 一条交接记录（详情抽屉里按时间倒序展示） */
+export interface ClassHandoverRow {
+  id: string;
+  stage: ClassStage;
+  stageName: string;
+  classId: string;
+  className: string;
+  deptCode: number | null;
+  headTeacher: ClassHandoverRole;
+  teacher: ClassHandoverRole;
+  assistant: ClassHandoverRole;
+  /** 初高恒为空 */
+  projectManager: ClassHandoverRole;
+  /** 初高恒为空 */
+  employmentTeacher: ClassHandoverRole;
+  handoverDate: string | null;
+  reason: string | null;
+  operatorId: string | null;
+  operatorName: string | null;
+  createTime: string | null;
+}
+
+/** 提交交接的入参：只带「要换的新人」，没带的岗位视为不变 */
+export interface ClassHandoverPayload {
+  stage: ClassStage;
+  classId: string;
+  handoverDate?: string | null;
+  reason?: string | null;
+  headTeacherId?: string | null;
+  headTeacherName?: string | null;
+  teacherId?: string | null;
+  teacherName?: string | null;
+  assistantId?: string | null;
+  assistantName?: string | null;
+  projectManagerId?: string | null;
+  projectManagerName?: string | null;
+  employmentTeacherId?: string | null;
+  employmentTeacherName?: string | null;
 }
 
 /** 花名册一行（统一结构；各学段「班级↔学生」的关联方式不同，见各仓储注释） */
@@ -1249,7 +1414,7 @@ export interface ClassRosterRow {
 
 /** 元信息：某学段支持哪些特性（前端据此隐藏不适用输入框） */
 export interface ClassStageMeta {
-  stage: TeachingStage;
+  stage: ClassStage;
   stageName: string;
   /** 该学段是否有班级编号（只有实训有） */
   hasClassCode: boolean;
@@ -1261,6 +1426,8 @@ export interface ClassStageMeta {
   classroomLabel: string;
   /** 学段内阶段码可选项 */
   phaseOptions: Array<{ value: number; label: string }>;
+  /** ★ 2026-10-16 阶段方案（前端「阶段方案」下拉的数据源） */
+  planOptions?: StagePlanOption[];
 }
 
 /** 统计卡片 */

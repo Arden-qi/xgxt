@@ -548,7 +548,7 @@ function tagStudentStatus(s?: number | null) {
   return 'info';
 }
 
-/** 某学段是否支持某类型（大学没有复学） */
+/** 某学段是否支持某类型（以 `/meta` 下发的矩阵为准） */
 function bizAllowed(stage: TeachingStage | undefined, biz: number) {
   if (!stage) return true;
   return (stageBiz.value[stage] || []).includes(biz);
@@ -627,7 +627,7 @@ async function loadMeta() {
 /**
  * 部门筛选变了：顺手把「与该部门不兼容的类型」清掉，再查
  *
- * 例：类型选了「复学」→ 学段切到「大学」（大学没有复学）。
+ * 例：类型选了某学段不支持的类型（矩阵由 `/meta` 下发，随业务放开/收窄）。
  * 不清的话会出现两种坏结果：
  *   · 前端：类型下拉显示「复学」，但选项被置灰、用户以为还在筛复学
  *   · 后端：不兼容的组合会被明确拒绝（40000），页面直接弹错
@@ -751,7 +751,7 @@ function openCreate() {
 
 /**
  * 换部门 = 换学段：候选学生整体换了一批，所以
- * ① 学段重算；② 类型收敛到该学段支持的（大学没有复学）；③ 清空已选并重搜
+ * ① 学段重算；② 类型收敛到该学段支持的（矩阵见 `/meta`）；③ 清空已选并重搜
  * 「就业」（stage = null）→ 不搜学生，页面提示「暂不办理学籍异动」并禁用保存。
  */
 function onDeptChange() {

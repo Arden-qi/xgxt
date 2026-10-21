@@ -26,7 +26,7 @@ import type {
   StudentSaveBody,
   StudentSaveResult,
 } from '../shared/dto';
-import { calcAge, fmtDate, fmtDateTime } from '../shared/format';
+import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 
@@ -54,13 +54,14 @@ function mapRow(r: Record<string, any>): StudentRow {
   const phase = readPhaseCode(r);
   return {
     stage: STAGE,
-    stageName: '初高',
+    stageName: '初高部',
     studentId: String(r.id),
     studentNo: String(r.student_no ?? ''),
     studentName: String(r.student_name ?? ''),
     gender,
     genderName: GENDER_NAME[gender] ?? '',
-    age: numOrNull(r.age) ?? calcAge(r.birth_date),
+    // ★ 年龄优先按出生日期实时计算（每年自动更新），库里 age 仅作无出生日期时的兜底
+    age: calcAge(r.birth_date) ?? numOrNull(r.age),
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     classId: str(r.class_id),
@@ -76,6 +77,7 @@ function mapRow(r: Record<string, any>): StudentRow {
     studentStatus: status,
     studentStatusName: STUDENT_STATUS_NAME[status] ?? '',
     phone: str(r.phone),
+    parentName: str(r.parent_name),
     parentPhone: str(r.parent_phone),
     education: str(r.education),
     enrollDate: str(fmtDate(r.enroll_date)) || null,
@@ -237,8 +239,10 @@ export const repo: StudentRepo = {
     const set = (k: string, v: unknown) => {
       if (v !== undefined) payload[k] = v;
     };
-    set('birth_date', body.birthDate ?? undefined);
-    if (body.birthDate !== undefined) payload.age = calcAge(body.birthDate);
+    // ★ 出生日期：前端传了用前端的；没传则从身份证号自动提取（2026-10-15 表单改版）
+    const birth = body.birthDate || birthFromIdCard(body.idCard);
+    set('birth_date', birth ?? undefined);
+    if (birth) payload.age = calcAge(birth);
     else if (body.age !== undefined) payload.age = body.age;
     set('native_place', body.nativePlace);
     set('dept_code', body.deptCode);
@@ -250,6 +254,7 @@ export const repo: StudentRepo = {
     set('graduate_school', body.graduateSchool);
     set('enroll_date', body.enrollDate);
     set('phone', body.phone);
+    set('parent_name', body.parentName);
     set('parent_phone', body.parentPhone);
     set('home_address', body.homeAddress);
     // ★ 初高写 id_card_no
@@ -261,10 +266,14 @@ export const repo: StudentRepo = {
     set('dorm_id', body.dormId);
     set('dorm_no', body.dormNo);
     set('bed_no', body.bedNo);
+    // ★ 校园网账号（可手填；留空时保存后由系统自动生成，见 ensureNetAccount）
+    set('net_account', body.netAccount);
+    set('net_init_password', body.netInitPassword);
     set('remark', body.remark);
 
     if (body.id) {
       await tbl(db, 'sms_class_jh', T, STAGE).where({ id: body.id }).update(payload);
+      await ensureNetAccount(String(body.id));
       return { id: body.id };
     }
 
@@ -291,6 +300,7 @@ export const repo: StudentRepo = {
       create_time: now,
       create_by: userId,
     });
+    await ensureNetAccount(id);
     return { id };
   },
 
@@ -309,8 +319,26 @@ export const repo: StudentRepo = {
 };
 
 
-/** 学号生成：S + 年份 + 4 位流水（初高口径） */
-async function generateStudentNo(): Promise<string> {
+/**
+ * 校园网账号自动生成（2026-10-15 详情分签改版）：
+ * 账号 = 学号；密码 = 8 位随机字母数字。只在「账号为空」时生成，
+ * 已有账号（含用户手填）一律不动。
+ */
+async function ensureNetAccount(studentId: string): Promise<void> {
+  const row = (await tbl(db, 'sms_class_jh', T, STAGE).where({ id: studentId }).first()) as
+    | Record<string, any>
+    | undefined;
+  if (!row || str(row.net_account)) return;
+  const account = str(row.student_no) || `NET${Date.now()}`;
+  const password = Math.random().toString(36).slice(2, 10).toUpperCase();
+  await tbl(db, 'sms_class_jh', T, STAGE).where({ id: studentId }).update({
+    net_account: account,
+    net_init_password: password,
+    update_time: new Date(),
+  });
+}
+
+/** 学号生成：S + 年份 + 4 位流水（初高口径） */async function generateStudentNo(): Promise<string> {
   const year = new Date().getFullYear();
   const prefix = `S${year}`;
   const rows = (await tbl(db, 'sms_class_jh', T, STAGE).where('student_no', 'like', `${prefix}%`).select('student_no')) as Array<{
