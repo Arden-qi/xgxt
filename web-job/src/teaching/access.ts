@@ -115,7 +115,9 @@ export const STAGE_ACCESS = {
   student: {
     jh: { code: 'classjh:student:view', path: null },
     class: { code: 'class:student:view', path: null },
-    job: { code: 'job:empArchive:view', path: '/archive/basic-info' },
+    // ★ 双码：就业老师（empArchive）/ 项目经理（classStudent，= 实训阶段班主任）
+    //   ⚠️ 只写 empArchive 的话，项目经理的「实训」学段页签恒隐藏 → 看不到学生档案
+    job: { code: ['job:empArchive:view', 'job:classStudent:view'], path: '/archive/basic-info' },
     // ★ 2026-10-19：就业部（独立学段，沿用就业模块的档案权限）
     emp: { code: 'job:empArchive:view', path: null },
     edu: { code: 'edu:student:view', path: '/edu/student' },
