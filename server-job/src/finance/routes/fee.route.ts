@@ -230,7 +230,7 @@ const addSchema = z.object({
   headTeacherId: z.string().optional(),
   headTeacherName: z.string().optional(),
   // ★ 2026-10-15：上限 5 → 7（押金 6 / 校服 7）
-  feeType: z.coerce.number().int().min(1).max(7, '缴费类型只能是 1~7'),
+  feeType: z.coerce.number().int().min(1).max(8, '缴费类型只能是 1~8'),
   /**
    * 金额（单位：分），正整数。
    * ⚠️ 不传时后端会自动从「费用标准」取该 类型+部门 的标准金额（规则2）。

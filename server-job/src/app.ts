@@ -102,6 +102,8 @@ import portalAccountRouter from './portal/routes/account.route';
 // ---- 市场咨询 ----
 import { authMiddleware as consultAuth, consultPermGate } from './consult/middleware/auth';
 import consultStudentRouter from './consult/routes/student.route';
+/** ★ 2026-10-20 试学闭环：咨询侧服务间内部接口（只认 x-internal-token） */
+import { consultInternalRouter } from './consult/routes/internal.route';
 import consultFeeRouter from './consult/routes/fee.route';
 /* ★ 2026-10-16 分期付款路由，挂在 /api/consult/fee/plan 下 */
 import consultInstallmentRouter from './consult/routes/installment.route';
@@ -442,6 +444,16 @@ app.use('/api/portal/account', portalAccountRouter);
  *   ⚠️ 它只对「权限树里被管理员显式撤销过的动作」生效，其余一律放行
  *      （差异存储，与班级 / 初高 / 财务三模块同一口径）。
  */
+/**
+ * ★ 2026-10-20 试学闭环：服务间内部接口（/api/consult/student/internal/*）
+ *
+ * 为什么必须挂在登录态路由【之前】：
+ *   班主任属于班级模块，他的 token 在咨询侧解不出咨询岗位，走 consultAuth 会 401。
+ *   而「试学结束由班主任发起补费」「退学通过后回写咨询状态」这两个动作必须跨模块调用。
+ *
+ * 鉴权由 internal.route.ts 自己校验 x-internal-token（见文件头注释）。
+ */
+app.use('/api/consult/student/internal', consultInternalRouter);
 app.use('/api/consult/student', consultAuth, consultPermGate, consultStudentRouter);
 app.use('/api/consult/fee', consultAuth, consultPermGate, consultFeeRouter);
 app.use('/api/consult/fee/plan', consultAuth, consultPermGate, consultInstallmentRouter);
