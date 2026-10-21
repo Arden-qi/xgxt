@@ -5,6 +5,7 @@ import {
   ensureModuleStores,
   moduleAllowed,
   moduleOfPageCode,
+  pageModuleAllowed,
   menuAllowed,
   portalLandingPath,
 } from '@/store/modules';
@@ -166,19 +167,19 @@ const routes: RouteRecordRaw[] = [
     path: '/perm/role',
     name: 'PermRole',
     component: () => import('@/perm/views/RoleManage.vue'),
-    meta: { title: '角色管理', module: 'perm', menuKey: 'role' },
+    meta: { title: '职位管理', module: 'perm', menuKey: 'role' },
   },
   {
     path: '/perm/user',
     name: 'PermUser',
     component: () => import('@/perm/views/UserManage.vue'),
-    meta: { title: '用户管理', module: 'perm', menuKey: 'user' },
+    meta: { title: '账号管理', module: 'perm', menuKey: 'user' },
   },
   {
     path: '/perm/assign',
     name: 'PermAssign',
     component: () => import('@/perm/views/PermAssign.vue'),
-    meta: { title: '角色-权限分配', module: 'perm', menuKey: 'assign' },
+    meta: { title: '职位权限分配', module: 'perm', menuKey: 'assign' },
   },
   /* ⚠️ 2026-10-06 用户指令：「权限管理板块里面删除规则配置页面」
    *    → 原 /perm/rule（规则配置，views/RuleConfig.vue）路由已删除。
@@ -215,15 +216,20 @@ const routes: RouteRecordRaw[] = [
     name: 'ClassStudentList',
     component: () => import('@/views/ClassStudentList.vue'),
     meta: { title: '班级花名册', pageCode: 'job:classStudent:view' },
-  },{
+  },
+
+  /*
+   * 2026-10-19 批注：删除独立「班级交接」页面（原 /class-transfer）。
+   * 交接入口在「班级管理」操作列的【交接】，这里只给老书签留一个跳转，
+   * 避免用户点到历史链接时白屏。
+   */
+  {
     path: '/class-transfer',
-    name: 'ClassTransfer',
-    component: () => import('@/views/ClassTransfer.vue'),
-    meta: { title: '班级管理', pageCode: 'job:classTransfer:view' },
+    redirect: '/teaching/class',
   },
   {
     path: '/transfer',
-    redirect: '/class-transfer',
+    redirect: '/teaching/class',
   },
 
   /* ============ 实训：未开发模块（占位页 + 权限受控） ============ */
@@ -432,9 +438,9 @@ router.beforeEach(async (to) => {
   //   根因同源 —— 门户 modules 是模块级权威，但这里只校了两套班级模块，
   //   于是「门户只授权 perm、权限库里却是系统管理员角色」的账号（linx）
   //   直连 /class、/edu/student 照样能进。
-  //   现在统一走 moduleOfPageCode()，一处映射、两处（App.vue 菜单 + 本守卫）共用。
-  const needModule = moduleOfPageCode(pageCode);
-  if (needModule && !moduleAllowed(needModule)) {
+  //   现在统一走 pageModuleAllowed()，一处映射、两处（App.vue 菜单 + 本守卫）共用。
+  //   ★ 2026-10-19：共用页（待接收学员）允许任一相关模块放行。
+  if (!pageModuleAllowed(pageCode)) {
     // 落到「当前账号有权限的任意一个页面」，避免把他甩进死循环
     const firstAllowed = myPages.value.find((p) => {
       if (p.path.includes('/:')) return false;

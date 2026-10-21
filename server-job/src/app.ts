@@ -48,7 +48,7 @@ import upgradeRouter from './routes/upgrade.route';
 // ---- ★ 班级管理模块（原 8003 · 学管主体）2026-10-04 并入 ----
 //    代码整棵搬在 src/class/ 下，路由统一前缀 /api/class/*
 import { buildRouters as buildClassRouters } from './class/modules/index';
-import { authAllowSync as classAuthAllowSync } from './class/middleware/auth';
+import { authAllowSync as classAuthAllowSync, authAllowSyncPlus as classAuthAllowSyncPlus } from './class/middleware/auth';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec as classSwaggerSpec } from './class/docs/swagger';
 import { dictRouter as classDictRouter } from './class/modules/meta/dict.route';
@@ -104,7 +104,11 @@ import portalAccountRouter from './portal/routes/account.route';
 // ---- 市场咨询 ----
 import { authMiddleware as consultAuth, consultPermGate } from './consult/middleware/auth';
 import consultStudentRouter from './consult/routes/student.route';
+/** ★ 2026-10-20 试学闭环：咨询侧服务间内部接口（只认 x-internal-token） */
+import { consultInternalRouter } from './consult/routes/internal.route';
 import consultFeeRouter from './consult/routes/fee.route';
+/* ★ 2026-10-16 分期付款路由，挂在 /api/consult/fee/plan 下 */
+import consultInstallmentRouter from './consult/routes/installment.route';
 import consultRefundRouter from './consult/routes/refund.route';
 import consultApproveRouter from './consult/routes/approve.route';
 import consultLossRouter from './consult/routes/loss.route';
@@ -145,8 +149,11 @@ const app = express();
 // ============================================================
 
 app.use(cors());
-app.use(express.json({ limit: '20mb' }));          // 支持 JSON 请求体
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// ★ 2026-10-16：复盘「上传录音」上限提到 50MB。
+//   音频以 base64 dataURL 走 JSON body 提交 → 50MB 文件 ≈ 66.7MB 请求体，
+//   原来 20mb 会被 body-parser 直接拒（PayloadTooLargeError）。
+app.use(express.json({ limit: '100mb' }));         // 支持 JSON 请求体
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 // 请求日志（开发阶段方便看请求有没有进来）
 app.use((req, _res, next) => {
@@ -390,11 +397,19 @@ app.use('/api/class/meta', classAuthAllowSync, classStaffRouter);
 // ---- 业务路由 ----
 // ★ 2026-10-06：中间叠一道【学管主任只读 + 仅审批可写】闸（见 middleware/approvalOnly.ts）
 for (const r of buildClassRouters()) {
-  app.use(r.path, classAuthAllowSync, denyApprovalOnlyWrite, r.router);
+  /**
+   * ★ 2026-10-19：待接收学员（/api/class/consult）改成「初高中 + 大学」共用页 ——
+   *   初高账号的门户 modules 只有 class-jh，默认会被模块准入挡住，
+   *   这一组接口单独放行 class-jh（其它 /api/class/* 仍然只认 class）。
+   */
+  const authMw = r.path === '/api/class/consult' ? classAuthAllowSyncPlus(['class-jh']) : classAuthAllowSync;
+  app.use(r.path, authMw, denyApprovalOnlyWrite, r.router);
 }
 
 // ---- 当前登录人（班级前端启动时拉一次，拿数据范围与可见班级）----
-app.get('/api/class/me', classAuthAllowSync, (req, res) => {
+// ★ 2026-10-19：待接收学员是初高/大学共用页，初高账号也要能拉这个上下文
+//   （否则页面一打开就弹「没有访问班级管理模块的权限」，且拿不到 classIds）
+app.get('/api/class/me', classAuthAllowSyncPlus(['class-jh']), (req, res) => {
   const u = (req as any).user;
   if (!u) return classOk(res, null, '未登录');
   return classOk(
@@ -426,13 +441,24 @@ app.use('/api/portal/account', portalAccountRouter);
 
 /* ---- ② 市场咨询（原 8001）---- */
 /**
- * ★ 2026-10-07：中间插入 `consultPermGate` —— 让「角色-权限分配」的改动
+ * ★ 2026-10-07：中间插入 `consultPermGate` —— 让「职位权限分配」的改动
  *   真正传导到咨询模块的写接口（原先这些接口只认岗位角色，不认权限树）。
  *   ⚠️ 它只对「权限树里被管理员显式撤销过的动作」生效，其余一律放行
  *      （差异存储，与班级 / 初高 / 财务三模块同一口径）。
  */
+/**
+ * ★ 2026-10-20 试学闭环：服务间内部接口（/api/consult/student/internal/*）
+ *
+ * 为什么必须挂在登录态路由【之前】：
+ *   班主任属于班级模块，他的 token 在咨询侧解不出咨询岗位，走 consultAuth 会 401。
+ *   而「试学结束由班主任发起补费」「退学通过后回写咨询状态」这两个动作必须跨模块调用。
+ *
+ * 鉴权由 internal.route.ts 自己校验 x-internal-token（见文件头注释）。
+ */
+app.use('/api/consult/student/internal', consultInternalRouter);
 app.use('/api/consult/student', consultAuth, consultPermGate, consultStudentRouter);
 app.use('/api/consult/fee', consultAuth, consultPermGate, consultFeeRouter);
+app.use('/api/consult/fee/plan', consultAuth, consultPermGate, consultInstallmentRouter);
 app.use('/api/consult/refund', consultAuth, consultPermGate, consultRefundRouter);
 app.use('/api/consult/approve', consultAuth, consultPermGate, consultApproveRouter);
 app.use('/api/consult/loss', consultAuth, consultPermGate, consultLossRouter);

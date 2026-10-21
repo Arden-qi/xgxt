@@ -4,7 +4,8 @@
  * ★ 审批链统一采用「实训那一套」：
  *    休学 1 步（学管）· 复学 1 步（学管）· 退学 2 步（学管 → 校长）
  * ★ 业务类型：1 休学 · 2 退学 · 3 复学
- * ⚠️ 大学**没有「复学」**（业务事实，见 `/meta` 的 stageBizTypes）
+ * ★ 2026-10-16 起三学段（初高/大学/实训）都支持复学（见 `/meta` 的 stageBizTypes）；
+ *   复学（bizType=3）时 `newClassId`（复学班）必填、学生下拉只列休学中的学生
  */
 
 import { http } from '@/api/request';
@@ -13,9 +14,10 @@ import type { TeachingStage } from './attendance';
 export type { TeachingStage };
 
 export const STAGE_NAME: Record<TeachingStage, string> = {
-  jh: '初高',
-  class: '大学',
-  job: '实训',
+  jh: '初高部',
+  class: '大学部',
+  // ★ 2026-10-21 用户要求：部门口径里「实训」改叫「就业」（同一个 sms_job 库）
+  job: '就业',
 };
 
 /** 统一业务类型 */
@@ -138,21 +140,26 @@ export interface StudentOption {
  * ★ 权威来源是后端 `/meta.departments`，下面这份只是**兜底默认值**
  *   （meta 请求失败时页面不至于空白）。改这里也要同步后端
  *   `server-job/src/teaching/shared/dto.ts` 的 `LEAVE_DEPARTMENTS`。
+ *
+ * ★ 2026-10-21 用户要求：部门「实训」改为「就业」。
+ *   原来这里是 4 项（初高中 / 大学 / 实训 / 就业），其中「就业」是个
+ *   `stage = null` 的占位（当时认为就业部没有异动库表）—— 但实训与就业本来
+ *   就共用 `sms_job` 一个库、同一套仓储，占位反而让用户选到「暂不办理」的空部门。
+ *   现在收成 3 项：初高中 / 大学 / 就业，就业 = 原实训（stage 仍是 job）。
  */
 export interface LeaveDepartment {
-  /** 部门码（jh/class/job 与学段同码，employ = 就业） */
+  /** 部门码（jh/class/job 与学段同码） */
   code: string;
   /** 部门中文名 */
   name: string;
-  /** 对应学段；null = 该部门暂不办理学籍异动（如「就业」） */
+  /** 对应学段；null = 该部门暂不办理学籍异动（当前没有这种部门） */
   stage: TeachingStage | null;
 }
 
 export const LEAVE_DEPARTMENTS_DEFAULT: LeaveDepartment[] = [
   { code: 'jh', name: '初高中', stage: 'jh' },
   { code: 'class', name: '大学', stage: 'class' },
-  { code: 'job', name: '实训', stage: 'job' },
-  { code: 'employ', name: '就业', stage: null },
+  { code: 'job', name: '就业', stage: 'job' },
 ];
 
 /**

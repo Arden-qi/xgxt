@@ -3,18 +3,17 @@
  * ============================================================
  *
  * 【背景 / 需求】
- *   用户口径：「把学段改为部门，下拉四个选项：初高中 / 大学 / 实训 / 就业」。
- *   技术上只有 3 个学段（jh / class / job，各一个库），且「实训」与「就业」
- *   共用同一个库（`sms_job` = 就业管理）。按业务确认：
- *   **四个选项都要展示**，但「就业」暂不办理学籍异动 → 选中时提示 + 置灰，
- *   它是 `stage = null`（不是给个假学段、让用户填完再报错）。
+ *   2026-10-16 用户口径：把学段改为部门，当时下拉四项：初高中 / 大学 / 实训 / 就业
+ *   （「就业」是 stage=null 的占位，暂不办理）。
+ *   ★ 2026-10-21 用户要求：部门「实训」改为「就业」，占位删掉 ——
+ *   现在是 **3 项：初高中 / 大学 / 就业**，就业 = 原实训（stage 仍是 job，
+ *   共用 `sms_job` 库），休学 / 退学 / 复学 三项功能一并可用。
  *
  * 【这条链上最容易坏的地方】
  *   ① 部门列表被抄成两份（后端一份、前端一份）→ 改一处漏一处，两边不一致
- *      → 本自检钉住「后端 /meta 是权威来源，且四项目的中文名/顺序稳定」；
- *   ② 「就业」被误当成一个真学段传下去 → 后端 mustStage 会 40000，
- *      但如果哪天有人给它补了个假学段，就会静默写进错误的库
- *      → 本自检钉住「employ 不是合法 stage 参数」；
+ *      → 本自检钉住「后端 /meta 是权威来源，且三项目的中文名/顺序稳定」；
+ *   ② 「就业占位」被误加回来 → 用户又会选到一个做不了单的空部门
+ *      → 本自检钉住「employ 不在下拉里、也不是合法 stage 参数」；
  *   ③ 三个可用部门的学段映射被改错（比如 初高中 指到 class）→ 学生搜不到 /
  *      单子落到别的库 → 本自检用真实数据清点各学段的候选学生数来钉住。
  *      ⚠️ 交叉核对必须用**同一口径**，且规则在测试里**独立重算**：
@@ -35,8 +34,7 @@ const { check, summary } = makeChecker();
 const EXPECT = [
   { code: 'jh', name: '初高中', stage: 'jh' },
   { code: 'class', name: '大学', stage: 'class' },
-  { code: 'job', name: '实训', stage: 'job' },
-  { code: 'employ', name: '就业', stage: null },
+  { code: 'job', name: '就业', stage: 'job' },
 ];
 
 (async () => {
@@ -53,28 +51,30 @@ const EXPECT = [
     const token = await login('qiansy'); // 三学段都可见
     check('登录成功', !!token);
 
-    /* ---------- B. /meta 下发四个部门 ---------- */
+    /* ---------- B. /meta 下发三个部门 ---------- */
     const meta = await req(`${API}/meta`, { token });
     const depts = meta.json?.data?.departments || [];
     check(
       '★ /meta 下发 departments（前端不另抄一份，改后端即可）',
-      meta.json?.code === 200 && Array.isArray(depts) && depts.length === 4,
+      meta.json?.code === 200 && Array.isArray(depts) && depts.length === 3,
       `共 ${depts.length} 项：${depts.map((d) => d.name).join('/')}`,
     );
     check(
-      '★ 四个部门的中文名与顺序 = 初高中 / 大学 / 实训 / 就业',
-      depts.map((d) => d.name).join(',') === '初高中,大学,实训,就业',
+      // ★ 2026-10-21：「实训」改叫「就业」，占位删掉 → 三项
+      '★ 三个部门的中文名与顺序 = 初高中 / 大学 / 就业（不再有「实训」与占位「就业」）',
+      depts.map((d) => d.name).join(',') === '初高中,大学,就业',
       depts.map((d) => d.name).join(','),
     );
     check(
-      '★ 部门 → 学段映射正确（初高中→jh、大学→class、实训→job、就业→null）',
+      '★ 部门 → 学段映射正确（初高中→jh、大学→class、就业→job）',
       EXPECT.every((e) => depts.find((d) => d.code === e.code)?.stage === e.stage),
       depts.map((d) => `${d.name}→${d.stage ?? 'null'}`).join(' '),
     );
     check(
-      '★ 「就业」是 stage=null（占位、暂不可用），不是假学段',
-      depts.find((d) => d.code === 'employ')?.stage === null,
-      `employ.stage=${JSON.stringify(depts.find((d) => d.code === 'employ')?.stage)}`,
+      // ★ 2026-10-21：占位「就业」删掉后，下拉里不允许再出现 employ
+      '★ 「就业」= 原实训（stage=job，可办单），占位 employ 不再下发',
+      depts.find((d) => d.code === 'job')?.stage === 'job' && !depts.some((d) => d.code === 'employ'),
+      `job.stage=${JSON.stringify(depts.find((d) => d.code === 'job')?.stage)}`,
     );
 
     /* ---------- C. 三个可用部门各自能搜到「该部门库里的学生」（映射没被改错） ---------- */

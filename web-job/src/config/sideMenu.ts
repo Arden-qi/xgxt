@@ -32,7 +32,7 @@ import {
 import type { ModuleDef } from 'shared-types/portal';
 import { myPages, hasPage } from '@/store/permission';
 import { useAuthStore as usePortalStore } from '@/portal/stores/auth';
-import { moduleAllowed, moduleOfPageCode } from '@/store/modules';
+import { pageModuleAllowed } from '@/store/modules';
 /* ★ 2026-10-06 新增：板块 → 页面 台账（权限管理 → 页面管理）
  *   被取消勾选的页面 = 该板块没有这个页面 → 不渲染。 */
 import { pageEnabled } from '@/store/pageConfig';
@@ -115,8 +115,9 @@ function mergedDomainMenuAllowed(domainKey?: string): boolean | null {
 function legacyMenuAllowed(pageCode?: string, hasPortalAccount = true): boolean {
   if (!pageCode) return true;
   if (!hasPortalAccount) return true;
-  const m = moduleOfPageCode(pageCode);
-  return !m || moduleAllowed(m);
+  // ★ 2026-10-19：改用 pageModuleAllowed —— 待接收学员是初高/大学共用页，
+  //   按 class: 前缀判模块会把初高班主任挡掉。
+  return pageModuleAllowed(pageCode);
 }
 
 export function useSideMenu() {

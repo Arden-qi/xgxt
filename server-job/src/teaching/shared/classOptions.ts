@@ -23,7 +23,21 @@ export interface ClassOption {
   stageName: string;
   id: string;
   name: string;
+  /**
+   * ★ 2026-10-16：带上班级的「部门」和「阶段」，供学生档案在选了班级后
+   *   自动带出「部门 / 阶段」（跟随学生所在班级）。
+   */
+  deptCode?: number;
+  phaseCode?: number;
 }
+
+/** 三张班级表都有 dept_code / stage 两列，统一取出来 */
+const pick = (r: any) => ({
+  id: String(r.id),
+  name: String(r.name ?? ''),
+  deptCode: r.dept_code === null || r.dept_code === undefined ? undefined : Number(r.dept_code),
+  phaseCode: r.stage === null || r.stage === undefined ? undefined : Number(r.stage),
+});
 
 /**
  * ★ 各学段的班级表位置 —— **只在这里定义一份**
@@ -50,13 +64,28 @@ const CLASS_TABLE: Record<
  *   所以它是切读的关键一环，不能漏。
  */
 export async function listClassesByStage(
-  stage: TeachingStage,
-): Promise<Array<{ id: string; name: string }>> {
-  const c = CLASS_TABLE[stage];
-  const rows = (await tbl(c.conn, c.dbName, c.table, stage)
-    .where('is_deleted', 0)
-    .select('id', 'class_name as name')) as Array<{ id: string; name: string }>;
-  return rows.map((r) => ({ id: String(r.id), name: String(r.name ?? '') }));
+  stage: TeachingStage | 'emp',
+): Promise<Array<{ id: string; name: string; deptCode?: number; phaseCode?: number }>> {
+  if (stage === 'jh') {
+    const rows = (await tbl(classJhDb, 'sms_class_jh', 't_class_info', stage)
+      .where('is_deleted', 0)
+      .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
+    return rows.map(pick);
+  }
+  if (stage === 'class') {
+    const rows = (await tbl(classDb, 'sms_class', 't_class_info', stage)
+      .where('is_deleted', 0)
+      .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
+    return rows.map(pick);
+  }
+  // ★ 2026-10-19：实训与就业部共用 t_job_class、dept 都是 3，靠 stage_key 区分
+  const qb = tbl(jobDb, 'sms_job', 't_job_class', stage).where('is_deleted', 0);
+  qb.andWhere('stage_key', stage === 'emp' ? 'emp' : 'job');
+  const rows = (await qb.select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{
+    id: string;
+    name: string;
+  }>;
+  return rows.map(pick);
 }
 
 /**
