@@ -30,6 +30,9 @@
     </div>
 
     <!-- 筛选 -->
+    <!-- ★ 2026-10-21 批注：「将教学管理的所有筛选选择完成后，点击查询才可以进行查询」
+         → 部门 / 阶段 / 状态 三个下拉只改条件、不自动发请求，
+           全部选完由用户点【查询】才查（之前选完即查，一改条件列表就跳）。 -->
     <el-form class="tcv-filter" inline>
       <!-- 2026-10-16 按批注：原「学段」筛选改名「部门」（选项 = 初高部 / 大学部 / 实训）。
            原来紧挨着的那个 deptCode「部门」下拉是**没接上接口的死筛选**
@@ -41,12 +44,12 @@
         </el-select>
       </el-form-item>
       <el-form-item v-if="phaseOptions.length" label="阶段">
-        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 140px" @change="load(1)">
+        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 140px">
           <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
-        <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px" @change="load(1)">
+        <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px">
           <!-- 2026-10-19 批注：删除「待结业」选项 -->
           <el-option v-for="s in CLASS_STATUS_SELECTABLE" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
@@ -135,7 +138,7 @@
           <el-tag :type="tagType(row.classStatus)" size="small">{{ row.classStatusName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="280" fixed="right" align="center">
+      <el-table-column label="操作" width="340" fixed="right" align="center">
         <template #default="{ row }">
           <!-- 2026-10-19 批注：按钮「花名册」改名「详情」（抽屉里不只有名单，还有班级信息与交接记录） -->
           <el-button link type="primary" @click="openDetail(row)">详情</el-button>
@@ -150,6 +153,17 @@
             @click="openTraining(row)"
           >
             升实训
+          </el-button>
+          <!-- ★ 2026-10-21 批注：升实训之后出现【升就业】（只在实训班上显示）——
+               点一下弹确认，把该班学生状态改为「待就业」。 -->
+          <el-button
+            v-if="!isReadOnlyUser && row.stage === 'job'"
+            link
+            type="warning"
+            :loading="employmentSaving === row.classId"
+            @click="doEmploymentUpgrade(row)"
+          >
+            升就业
           </el-button>
           <el-button v-if="!isReadOnlyUser" link type="danger" @click="doDelete(row)">删除</el-button>
         </template>
@@ -170,7 +184,9 @@
     <el-drawer v-model="detailVisible" :title="`${detail?.base.className || ''} · 详情`" size="560px">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="部门">{{ detail.base.stageName }}</el-descriptions-item>
+          <!-- ★ 2026-10-21 批注：「同步班级管理的部门」—— 列表「部门」列取的是 deptName（就业部），
+               详情原来取 stageName（实训），两边对不上；统一成 deptName 优先、无部门才退回学段名。 -->
+          <el-descriptions-item label="部门">{{ detail.base.deptName || detail.base.stageName }}</el-descriptions-item>
           <el-descriptions-item label="班级名称">{{ detail.base.className }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.base.classCode" label="班级编号">
             {{ detail.base.classCode }}
@@ -224,8 +240,13 @@
           <el-table-column label="入班日期" width="110" align="center">
             <template #default="{ row }">{{ row.joinDate || '—' }}</template>
           </el-table-column>
+          <!-- ★ 2026-10-21 批注：「更改同步学生档案的该学生的状态」
+               → 这一列显示**学生档案里的学生状态**（实训中 / 待就业 / 已就业…），
+                 不再固定显示花名册的「在班 / 已离班」。数据由后端 roster 回读学生主档下发。 -->
           <el-table-column label="状态" width="80" align="center">
-            <template #default="{ row }">{{ row.inClassStatusName || '—' }}</template>
+            <template #default="{ row }">
+              {{ row.studentStatusName || row.inClassStatusName || '—' }}
+            </template>
           </el-table-column>
         </el-table>
 
@@ -688,6 +709,7 @@ import {
   listClassHandovers,
   doClassHandover,
   upgradeClassToTraining,
+  upgradeClassToEmployment,
   CLASS_STATUS_TAG,
   CLASS_STATUS_SELECTABLE,
   classStatusOptions,
@@ -795,11 +817,11 @@ async function load(page?: number) {
   }
 }
 
-/** 切学段：阶段码和状态都是学段内的，必须清掉，否则会带着上一个学段的筛选去查 */
+/** 切学段：阶段码和状态都是学段内的，必须清掉，否则会带着上一个学段的筛选去查
+ *  ★ 2026-10-21 批注：这里**不再自动查询** —— 筛选选完由用户点【查询】才查（见筛选区注释）。 */
 function onStageChange() {
   query.phaseCode = undefined;
   query.classStatus = undefined;
-  load(1);
 }
 
 function reset() {
@@ -1287,6 +1309,50 @@ async function doTrainingUpgrade() {
   } finally {
     trainingSaving.value = false;
   }
+}
+
+/* ---------------- ★ 升就业（2026-10-21 批注：实训班 → 学生状态改「待就业」） ----------------
+ * 批注原文：「【升实训】操作之后出现【升就业】，点击【升就业】该操作弹出
+ *   是否将该班级学生状态改为（待就业）」
+ *
+ * 口径：只改**学生状态**（实训中 8 → 待就业 9），班级不搬、不改名、不换部门。
+ *   已经待就业/已就业的学生后端会跳过（已就业是终态，不能被一次误点降级）。
+ *   学生档案页与班级详情的花名册读的都是这份状态，改完两处自动一致。
+ */
+const employmentSaving = ref('');
+
+async function doEmploymentUpgrade(row: ClassRow) {
+  try {
+    await ElMessageBox.confirm(
+      `是否将该班级（${escText(row.className)}，${row.studentCount ?? 0} 人）的<b>学生状态改为「待就业」</b>？` +
+        '<br/><br/><span>班级本身不搬动、不改名；已是「已就业」的学生不会被改动。</span>',
+      '升就业确认',
+      {
+        type: 'warning',
+        confirmButtonText: '确认升就业',
+        cancelButtonText: '取消',
+        dangerouslyUseHTMLString: true,
+      },
+    );
+  } catch {
+    return;
+  }
+  employmentSaving.value = row.classId;
+  try {
+    const r = await upgradeClassToEmployment({ classId: row.classId });
+    if (r.updated) ElMessage.success(`已将 ${r.updated} 名学生状态改为「待就业」`);
+    else ElMessage.info('该班学生都已是待就业 / 已就业，无需修改');
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message || '升就业失败');
+  } finally {
+    employmentSaving.value = '';
+  }
+}
+
+/** 弹窗里拼班级名用的极小转义（班级名是用户输入，直接拼 HTML 有注入风险） */
+function escText(v: unknown): string {
+  return String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
 }
 
 onMounted(() => {

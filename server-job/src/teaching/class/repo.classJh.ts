@@ -20,6 +20,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { STUDENT_STATUS_NAME } from 'shared-types';
 import { db } from '../../class-jh/utils/db';
 import {
   CLASS_STATUS,
@@ -326,6 +327,8 @@ export const repo: ClassRepo = {
       .orderBy('student_no', 'asc')) as Array<Record<string, any>>;
     return rows.map((x): ClassRosterRow => {
       const gender = Number(x.gender ?? 0);
+      // ★ 2026-10-21：状态列回读学生档案里的学生状态（不再是写死的「在班」）
+      const sStatus = x.student_status === null || x.student_status === undefined ? null : Number(x.student_status);
       return {
         studentId: String(x.id),
         studentNo: str(x.student_no),
@@ -337,6 +340,8 @@ export const repo: ClassRepo = {
         joinDate: str(fmtDate(x.enroll_date)),
         inClassStatus: null,
         inClassStatusName: '在班',
+        studentStatus: sStatus,
+        studentStatusName: sStatus === null ? '在班' : STUDENT_STATUS_NAME[sStatus] ?? String(sStatus),
       };
     });
   },

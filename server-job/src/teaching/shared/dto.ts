@@ -1401,6 +1401,14 @@ export interface ClassRosterRow {
   /** 在班状态：1 在班 2 已离班（只有实训花名册有此概念） */
   inClassStatus: number | null;
   inClassStatusName: string;
+  /**
+   * ★ 2026-10-21 批注（班级详情 · 花名册状态列）：
+   *   「更改同步学生档案的该学生的状态」→ 花名册「状态」列不再只显示「在班 / 已离班」，
+   *   而是**回读学生档案里的学生状态**（实训中 / 待就业 / 已就业 …），
+   *   与「学生档案」页同一个来源，两处不会各说一套。
+   */
+  studentStatus: number | null;
+  studentStatusName: string;
 }
 
 /** 元信息：某学段支持哪些特性（前端据此隐藏不适用输入框） */

@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { STUDENT_STATUS_NAME } from 'shared-types';
 import { db } from '../../class/db';
 import { applyDataScope } from '../../class/middleware/dataScope';
 import { CLASS_STATUS, CLASS_STATUS_NAME, canTransitClassStatus } from '../shared/dto';
@@ -284,6 +285,8 @@ export const repo: ClassRepo = {
       .orderBy('student_no', 'asc')) as Array<Record<string, any>>;
     return rows.map((r): ClassRosterRow => {
       const gender = Number(r.gender ?? 0);
+      // ★ 2026-10-21：状态列回读学生档案里的学生状态（不再是写死的「在班」）
+      const sStatus = r.student_status === null || r.student_status === undefined ? null : Number(r.student_status);
       return {
         studentId: String(r.id),
         studentNo: str(r.student_no),
@@ -296,6 +299,8 @@ export const repo: ClassRepo = {
         joinDate: str(fmtDate(r.enroll_date)),
         inClassStatus: null,
         inClassStatusName: '在班',
+        studentStatus: sStatus,
+        studentStatusName: sStatus === null ? '在班' : STUDENT_STATUS_NAME[sStatus] ?? String(sStatus),
       };
     });
   },

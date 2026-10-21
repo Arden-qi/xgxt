@@ -24,7 +24,7 @@
 
 import { randomUUID } from 'crypto';
 import { db } from '../../utils/db';
-import { RoleCode, hasRole } from 'shared-types';
+import { RoleCode, hasRole, STUDENT_STATUS_NAME } from 'shared-types';
 import {
   CLASS_STATUS,
   CLASS_STATUS_NAME,
@@ -332,14 +332,18 @@ export const repo: ClassRepo = {
       .where({ class_id: id, is_deleted: false })
       .orderBy('create_time', 'asc')) as Array<Record<string, any>>;
 
-    // 补性别：花名册表只有快照姓名/学号，性别要回学生主档取
+    // 补性别 + 学生状态：花名册表只有快照姓名/学号，这两项要回学生主档取
     const ids = rows.map((r) => String(r.student_id)).filter(Boolean);
     const genderMap = new Map<string, number>();
+    const statusMap = new Map<string, number>();
     if (ids.length) {
       const stus = (await tbl(db, 'sms_job', STUDENT_T, STAGE)
         .whereIn('id', ids)
-        .select('id', 'gender')) as Array<Record<string, any>>;
-      for (const s of stus) genderMap.set(String(s.id), Number(s.gender ?? 0));
+        .select('id', 'gender', 'student_status')) as Array<Record<string, any>>;
+      for (const s of stus) {
+        genderMap.set(String(s.id), Number(s.gender ?? 0));
+        statusMap.set(String(s.id), Number(s.student_status ?? 0));
+      }
     }
 
     const GENDER: Record<number, string> = { 0: '未知', 1: '男', 2: '女' };
@@ -347,6 +351,8 @@ export const repo: ClassRepo = {
       const st = Number(r.status ?? 1);
       const joinType = numOrNull(r.join_type);
       const gender = genderMap.get(String(r.student_id)) ?? 0;
+      // ★ 2026-10-21：状态列回读学生档案（学生主档没有该生时退回花名册的在班状态）
+      const sStatus = statusMap.get(String(r.student_id)) ?? null;
       return {
         studentId: String(r.student_id),
         studentNo: str(r.student_no),
@@ -358,6 +364,8 @@ export const repo: ClassRepo = {
         joinDate: str(fmtDate(r.join_date)),
         inClassStatus: st,
         inClassStatusName: st === 1 ? '在班' : '已离班',
+        studentStatus: sStatus,
+        studentStatusName: sStatus === null ? (st === 1 ? '在班' : '已离班') : STUDENT_STATUS_NAME[sStatus] ?? String(sStatus),
       };
     });
   },

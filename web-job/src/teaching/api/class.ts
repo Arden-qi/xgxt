@@ -73,6 +73,9 @@ export interface ClassRosterRow {
   joinDate: string | null;
   inClassStatus: number | null;
   inClassStatusName: string;
+  /** ★ 2026-10-21：学生档案里的学生状态（实训中 / 待就业 / 已就业 …），详情花名册「状态」列用它 */
+  studentStatus: number | null;
+  studentStatusName: string;
 }
 
 export interface ClassDetail {
@@ -302,6 +305,24 @@ export interface TrainingUpgradeResult {
 /** 升实训：整班（含学生）从大学部转到就业部 */
 export function upgradeClassToTraining(payload: TrainingUpgradePayload) {
   return http.post<TrainingUpgradeResult>('/api/teaching/class/training-upgrade', payload);
+}
+
+/* ---------------- 升就业（2026-10-21 批注：实训班 → 学生状态待就业） ---------------- */
+
+export interface EmploymentUpgradeResult {
+  className: string;
+  /** 本次真正改成「待就业」的人数 */
+  updated: number;
+  /** 已是待就业 / 已就业而跳过的学生数 */
+  skipped: number;
+}
+
+/**
+ * 升就业：把该实训班学生的状态批量改成「待就业」
+ * ⚠️ 只改学生状态，不搬班、不改班级名（见后端 class/employment.ts 头部口径）
+ */
+export function upgradeClassToEmployment(payload: { classId: string }) {
+  return http.post<EmploymentUpgradeResult>('/api/teaching/class/employment-upgrade', payload);
 }
 
 /** 班级状态（★ 三套完全一致，无需映射） */

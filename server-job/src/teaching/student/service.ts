@@ -42,6 +42,7 @@ import { db as classDb } from '../../class/db';
 import { tbl, tblInsTrx, tblTrx, phaseCodeCol } from '../shared/uniTable';
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 import { insertUpgrade, listByStudentNo } from './upgrade.repo';
+import { markEmployed } from './employed.repo';
 import { ClassStatus, CLASS_STATUS_NAME, DeptCode } from 'shared-types';
 
 const REPOS: Record<StudentStage, StudentRepo> = {
@@ -439,6 +440,20 @@ function bedNoToInt(v: unknown): number | null {
   if (!m) return null;
   const n = Number(m[0]);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/* ============================================================
+ * ★ 2026-10-21 批注：学生档案操作列【已就业】（终态，不可回退）
+ *   学生必须属于当前账号可访问的学段；已是已就业的直接报错。
+ * ============================================================ */
+export async function confirmEmployed(
+  stage: StudentStage,
+  id: string,
+  user: any,
+): Promise<{ fromStatusName: string; toStatusName: string }> {
+  await assertStageView(user, stage);
+  const r = await markEmployed(stage, id, user);
+  return { fromStatusName: r.fromStatusName, toStatusName: r.toStatusName };
 }
 
 export async function upgradeToUniversity(

@@ -24,6 +24,8 @@ import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 // 升实训单独一个文件（跨库搬迁逻辑较重，且不参与班级仓储的适配器分发）
 import * as trainingSvc from './training';
+// 升就业（2026-10-21 批注：实训班学生状态 → 待就业）
+import * as employmentSvc from './employment';
 import type { ClassListQuery, ClassStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
 import { normalizeClassroom } from '../shared/format';
@@ -312,5 +314,22 @@ teachingClassRouter.post(
       req.user,
     );
     res.json(ok(r, `已升实训：${r.targetClassName}（${r.classCode}），转入 ${r.moved} 人`));
+  }),
+);
+
+/* ============================================================
+ * 12. 升就业（2026-10-21 批注）
+ *   实训班 → 「升就业」：把该班学生的状态批量改成「待就业」。
+ *   ⚠️ 只改学生状态，不搬班、不改班级名、不换部门（口径见 employment.ts 头部）。
+ * ============================================================ */
+teachingClassRouter.post(
+  '/employment-upgrade',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const r = await employmentSvc.upgradeClassToEmployment({ classId: requireId(b.classId) }, req.user);
+    const tip = r.updated
+      ? `已将「${r.className}」的 ${r.updated} 名学生状态改为「待就业」`
+      : `「${r.className}」的学生都已是待就业 / 已就业，无需修改`;
+    res.json(ok(r, tip));
   }),
 );
