@@ -530,6 +530,10 @@ export const REFUND_CHAIN_NODES: Array<{ step: number; name: string; roles: stri
   { step: 2, name: '校长审批', roles: '校长' },
 ];
 
+/** 单项退费费用上限：10 万元（单位分，100000 元 × 100）。
+ *  前端费用项输入框的 max 与 service.create 的兜底校验共用这一口径，改这里两处同步。 */
+export const REFUND_ITEM_MAX_AMOUNT = 10000000;
+
 /** 费用项（统一结构：初高/实训只会有 1 项，大学可多项） */
 export interface RefundItem {
   feeType: number;
@@ -687,12 +691,15 @@ export const LEAVE_ACTIVE_STATUSES: number[] = [
 /**
  * ★ 各学段**支持**的审批类型
  *
- * ⚠️ 大学没有「复学」—— 这是**业务事实**（大学 `ApplyType` 里就没有这一项），
- *    不是合并遗漏。页面会据此隐藏该选项，而不是给个点不动的按钮。
+ * 【2026-10-16 调整】大学**开放「复学」**（用户要求：大学生休学后也可以复学）。
+ *   大学老表 `ApplyType` 原本只有 1休学 2退学 3退费 4升学，没有复学码 ——
+ *   本次新增**原码 5 = 复学**（见 shared/conf.ts 的 DEFAULT_LEAVE_BIZ_MAP.class），
+ *   并给 `t_class_suspend_apply` 补了 `new_class_id` / `new_class_name` 两列
+ *   （migrations-class/20261016_012）。
  */
 export const LEAVE_STAGE_BIZ: Record<TeachingStage, number[]> = {
   jh: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
-  class: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT],
+  class: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
   job: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
 };
 

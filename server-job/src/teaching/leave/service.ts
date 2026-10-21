@@ -444,7 +444,7 @@ export async function create(body: LeaveSaveBody, user: any): Promise<{ id: stri
     throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有班主任 / 项目经理能发起');
   }
 
-  // ★ 学段是否支持该类型（大学没有复学）
+  // ★ 学段是否支持该类型（2026-10-16 起三学段均支持复学，矩阵兜底仍然保留）
   if (!LEAVE_STAGE_BIZ[stage].includes(body.bizType)) {
     throw new BizError(
       BizCode.PARAM_ERROR,
