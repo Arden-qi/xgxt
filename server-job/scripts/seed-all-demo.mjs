@@ -994,6 +994,7 @@ function seedClassJh(conn) {
     ['attendanceTargetRate', '出勤率目标（%）', '90', '低于该值告警'],
     ['attendanceScope', '出勤统计口径', JSON.stringify({ shouldStatuses: [3, 4, 5], presentStatuses: [1, 2] }), '分母=在读/试学/预读'],
     ['feeRemindDays', '催费提前提醒天数', '7', '剩余天数<=该值标红'],
+    ['feeUrgeWindowDays', '催费列表窗口天数', '20', '到期日距今<=该值才进催费列表（含已逾期）'],
     ['refundThresholdAmount', '退费审批阈值（分）', '500000', '超阈值走校长审批'],
     ['closedClassIntakeTypes', '封班可转入类型', JSON.stringify([1, 2]), '休学复学/末班'],
   ].map(([k, n, v, r]) => base(`JHSET-${k}`, { setting_key: k, setting_name: n, setting_value: v, remark: r }));

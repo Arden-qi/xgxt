@@ -16,7 +16,7 @@
  *   ③ 三个学段是**三份独立仓储**（repo.job / repo.classJh / repo.class），
  *      只改一处会漏（本项目已经反复踩过「三处同构改两处」）。
  *
- * 【断言】（jh 与 job 两个支持复学的学段各跑一遍）
+ * 【断言】（初高 / 实训 / 大学 三个学段各跑一遍；大学复学 2026-10-16 起开放）
  *   ① 服务就绪（后端 8004 / 前端 5173）
  *   ② ★ bizType=3：返回的每一行**去库里核对** student_status 都是 6，
  *      且休学夹具在、在读夹具不在
@@ -65,6 +65,7 @@ const reg = (dbName, table, id) => {
 (async () => {
   const dbJh = conn('sms_class_jh');
   const dbJob = conn('sms_job');
+  const dbCls = conn('sms_class');
   const uniDb = conn('sms_common');
 
   try {
@@ -83,7 +84,10 @@ const reg = (dbName, table, id) => {
 
     const tHead = await login('sunmin'); // 初高班主任（复学链的发起角色 TEACH_HEAD）
     const tPm = await login('sunjl'); // 实训项目经理（复学链的发起角色 PROJECT_MANAGER）
-    check('登录发起人账号（班主任 / 项目经理）', !!tHead && !!tPm);
+    // ⚠️ 大学部班主任（zhanght）没有这个审批页的权限（class:suspend:view）→ 40302，
+    //    与 _e2e-leave-check / _test-leave-status-sideeffect 一致用校长发起大学学段的单子。
+    const tCls = await login('qiansy'); // 校长（可发起任意学段）
+    check('登录发起人账号（班主任 / 项目经理 / 校长）', !!tHead && !!tPm && !!tCls);
 
     /* ============ B. 夹具：每个学段各造 1 休学 + 1 在读 ============ */
     const mkStudent = async (db, dbName, table, stage, name, status) => {
@@ -112,9 +116,16 @@ const reg = (dbName, table, id) => {
     const jobOn = await mkStudent(
       dbJob, 'sms_job', 't_student_base', 'job', '自检RSF-实训在读', STATUS.STUDYING,
     );
+    // ★ 2026-10-16 起大学开放复学 → 大学也要一套夹具
+    const clsSus = await mkStudent(
+      dbCls, 'sms_class', 't_class_student', 'class', '自检RSF-大学休学中', STATUS.SUSPENDED,
+    );
+    const clsOn = await mkStudent(
+      dbCls, 'sms_class', 't_class_student', 'class', '自检RSF-大学在读', STATUS.STUDYING,
+    );
     check(
-      '夹具就绪（初高/实训 各 1 休学 + 1 在读）',
-      !!(jhSus.id && jhOn.id && jobSus.id && jobOn.id),
+      '夹具就绪（初高/实训/大学 各 1 休学 + 1 在读）',
+      !!(jhSus.id && jhOn.id && jobSus.id && jobOn.id && clsSus.id && clsOn.id),
     );
 
     // ★ 2026-10-16 起「复学必须在发起申请时填复学班」→ 正例需要一个真实班级
@@ -128,7 +139,18 @@ const reg = (dbName, table, id) => {
       reg('sms_common', t, id),
     );
 
-    /** 关键字：4 个夹具的学号都带 RSF 前缀，用它把结果收窄到本脚本的数据 */
+    // ★ 大学复学班（大学复学建单必填复学班）
+    const clsClsRow = await buildRow(dbCls, 't_class_info', {
+      class_name: '自检RSF-大学复学班',
+      is_deleted: 0,
+    });
+    await dbCls('t_class_info').insert(clsClsRow);
+    reg('sms_class', 't_class_info', clsClsRow.id);
+    await mirrorRow(uniDb, 'sms_class', 't_class_info', clsClsRow, 'class', (_d, t, id) =>
+      reg('sms_common', t, id),
+    );
+
+    /** 关键字：夹具的学号都带 RSF 前缀，用它把结果收窄到本脚本的数据 */
     const KW = 'RSF';
 
     /**
@@ -273,42 +295,86 @@ const reg = (dbName, table, id) => {
       );
     }
 
-    /* ============ E. 大学：不支持复学（业务事实，不能被本次改动带坏） ============ */
+    /* ============ E. 大学（repo.class，2026-10-16 起开放复学） ============ */
     {
-      // ⚠️ 这条必须用**三学段都有权限**的账号（校长）：用初高班主任会先撞
-      //    学段权限（40302），那测的是权限、不是本改动。
-      const tPrincipal = await login('qiansy');
-      const r = await req(`${API}/student-options?stage=class&bizType=${BIZ.RESUME}&limit=5`, {
-        token: tPrincipal,
-      });
-      check(
-        '[class] 大学调 bizType=3 接口稳定（不 500；大学无复学，建单仍会被「学段不支持」拦）',
-        r.json?.code === 200,
-        `code=${r.json?.code} 返回 ${(r.json?.data || []).length} 行`,
+      const stage = 'class';
+      const opts3 = await req(
+        `${API}/student-options?stage=${stage}&bizType=${BIZ.RESUME}&keyword=${KW}&limit=200`,
+        { token: tCls },
       );
-      const c = await req(`${API}/create`, {
+      const ids3 = (opts3.json?.data || []).map((o) => o.id);
+      const dbRows = await rowsByStatus(dbCls, 't_class_student', ids3);
+      const notSuspended = dbRows.filter((r) => Number(r.student_status) !== STATUS.SUSPENDED);
+
+      check(
+        `★[${stage}] bizType=3 返回的行**去库里核对**全是休学(6)`,
+        dbRows.length > 0 && notSuspended.length === 0,
+        `共 ${dbRows.length} 行，非休学 ${notSuspended.length} 行`,
+      );
+      check(
+        `★[${stage}] bizType=3：休学夹具在名单里、在读夹具不在`,
+        ids3.includes(clsSus.id) && !ids3.includes(clsOn.id),
+        `休学夹具=${ids3.includes(clsSus.id) ? '在' : '不在'} 在读夹具=${ids3.includes(clsOn.id) ? '在(❌)' : '不在'}`,
+      );
+
+      /* ---- 绕过下拉直调 create：在读学生必须被拒 ---- */
+      const bad = await req(`${API}/create`, {
         method: 'POST',
-        token: tPrincipal,
+        token: tCls,
         body: {
-          stage: 'class',
-          studentId: jhOn.id,
+          stage,
+          studentId: clsOn.id, // ★ 在读生
           bizType: BIZ.RESUME,
-          leaveReason: '自检RSF-大学复学（学段不支持，应被拒）',
+          leaveDate: TODAY,
+          leaveReason: '自检RSF-大学给在读生办复学（应被拒）',
           submit: false,
         },
       });
       check(
-        '[class] 大学发起复学 → 被拒（“该学段不支持该类型”）',
-        c.json?.code !== 200 && String(c.json?.message || '').includes('不支持'),
-        `code=${c.json?.code} msg=${c.json?.message}`,
+        `★[${stage}] 绕过下拉：复学 + 在读学生 → 被拒且提示含「休学」`,
+        bad.json?.code !== 200 && String(bad.json?.message || '').includes('休学'),
+        `code=${bad.json?.code} msg=${bad.json?.message}`,
       );
+
+      /* ---- 正常路径必须通（校长发起；大学班主任无审批页权限，同 e2e 口径） ---- */
+      const good = await req(`${API}/create`, {
+        method: 'POST',
+        token: tCls,
+        body: {
+          stage,
+          studentId: clsSus.id, // ★ 休学生
+          bizType: BIZ.RESUME,
+          leaveDate: TODAY,
+          newClassId: clsClsRow.id, // ★ 复学建单必填复学班（2026-10-16）
+          leaveReason: '自检RSF-大学休学生复学（应放行）',
+          submit: false,
+        },
+      });
+      check(
+        `★[${stage}] 复学 + 休学学生 → 放行（防止「过滤过头」把正常流程也堵死）`,
+        good.json?.code === 200,
+        good.json?.message || '',
+      );
+      const applyId = good.json?.data?.id;
+      if (applyId) {
+        reg('sms_class', 't_class_suspend_apply', applyId);
+        const ap = await dbJob('t_job_approval')
+          .where({ biz_type: 'resume', biz_id: applyId, is_deleted: 0 })
+          .first();
+        if (ap) reg('sms_job', 't_job_approval', ap.id);
+      }
     }
   } catch (e) {
     check('脚本执行未抛异常', false, e?.message || String(e));
   } finally {
     /* ============ 清理夹具（自检数据，测完删干净；业务数据不受影响） ============ */
     // ★ 复用已有连接，不要每条再 conn() 一次（会漏连接、脚本不退出）
-    const conns = { sms_class_jh: dbJh, sms_job: dbJob, sms_common: uniDb, sms_class: uniDb };
+    const conns = {
+      sms_class_jh: dbJh,
+      sms_job: dbJob,
+      sms_class: dbCls,
+      sms_common: uniDb,
+    };
     for (const [dbName, table, id] of fixtures.reverse()) {
       try {
         await (conns[dbName] || dbJob)(table).where({ id }).del();
@@ -318,6 +384,7 @@ const reg = (dbName, table, id) => {
     }
     await dbJh.destroy();
     await dbJob.destroy();
+    await dbCls.destroy();
     await uniDb.destroy();
     const ok = summary();
     process.exit(ok ? 0 : 1);

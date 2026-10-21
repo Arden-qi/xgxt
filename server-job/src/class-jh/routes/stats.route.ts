@@ -59,10 +59,12 @@ statsRouter.get(
     const attendanceTargetRate = await getNumberSetting('attendanceTargetRate');
 
     // 4) 紧急催费数（未结清且剩余天数 <= 阈值）
+    //    ★ 2026-10-20：未结清补上「逾期(4)」—— 与催费列表的 UNPAID_STATUSES 同口径，
+    //      否则列表里标着紧急、首页这个数字却不含这些行。
     const remindDays = await getNumberSetting('feeRemindDays');
     const feeRows = await tbl(db, DB, FEE_TABLE, STAGE)
       .where('is_deleted', false)
-      .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.FROZEN])
+      .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.OVERDUE, PayStatus.FROZEN])
       .select('expire_date');
     const todayZero = new Date();
     todayZero.setHours(0, 0, 0, 0);

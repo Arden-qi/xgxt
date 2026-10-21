@@ -302,7 +302,7 @@ async function seedUniv(head) {
   const dist = students.reduce((m, s) => ((m[ST_NAME[s.status]] = (m[ST_NAME[s.status]] || 0) + 1), m), {});
   console.log(`  学生：${students.length} 名，状态分布 ${JSON.stringify(dist)}`);
 
-  // 5.3 学籍异动单（休学/退学；大学无复学）
+  // 5.3 学籍异动单（休学/退学；大学复学 2026-10-16 起开放，演示数据仍只造休学/退学）
   const plans = [
     { k: 1, biz: BIZ.SUSPEND, st: LST.APPROVED, idx: 26, reason: '因病休学' },
     { k: 2, biz: BIZ.QUIT, st: LST.APPROVED, idx: 28, reason: '家庭原因退学' },

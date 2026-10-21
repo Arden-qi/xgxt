@@ -33,6 +33,8 @@ import {
   /* ★ 2026-10-15 新增：登录人自助改密 */
   verifyOwnPassword,
   changeOwnPassword,
+  /* ★ 2026-10-19 新增：把当前密码策略给前端，改密弹窗按它提示 + 预校验 */
+  getPwdPolicy,
 } from '../services/account.service';
 
 const router = Router();
@@ -262,7 +264,28 @@ router.post(
 
 /* ============================================================
  * 6. ⭐ 2026-10-15 新增：登录人【自助修改密码】（所有角色可用）
+ *
+ * ★ 2026-10-19 修复：原先「改密规则」被写死在三处（本模块服务里一套、
+ *   权限模块一套、前端弹窗又一套），口径不一致 →
+ *   规则要求含大写字母，用户全小写照样改成功。
+ *   现在规则只由权限管理的 t_perm_rule 提供一份，
+ *   前端通过下面的 /pwd-policy 取，后端由 assertPwdStrength 把关。
  * ============================================================ */
+
+/**
+ * 当前生效的密码策略（只读）
+ *
+ * ⚠️ 不挂权限点：任何登录人都能改自己的密码，规则本身也不是秘密。
+ *    但必须过 authMiddleware —— 未登录不该知道系统内部策略。
+ */
+router.get(
+  '/pwd-policy',
+  authMiddleware,
+  wrap(async (_req, res) => {
+    const policy = await getPwdPolicy();
+    res.json(ok(policy, '密码策略已取回'));
+  }),
+);
 
 /** 第一步：校验原密码是否正确 —— 前端据此决定「新密码」输入框是否可填 */
 router.post(

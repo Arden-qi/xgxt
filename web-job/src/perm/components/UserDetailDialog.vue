@@ -16,6 +16,18 @@
  *
  * ⚠️ 「查看权限 / 编辑权限」不再跳「职位权限分配」页（跳过去还不知道要点哪个职位），
  *    直接在本弹窗之上叠一层权限树弹窗（PermTreeDialog），就地看 / 就地改。
+ *
+ * ★ 2026-10-19 起：底部「去编辑」按钮已**彻底删除**（用户最终要求：不要这个按钮）。
+ *   删之前它是可关的，三处入口按三轮要求逐个关掉 ——
+ *     · 账号管理：列表行操作里本来就有独立的「编辑」，底部再来一个是重复入口；
+ *     · 职位管理：「职位下人员」弹窗也一并去掉；
+ *     · 部门管理：最后一处，用户第三轮要求删除。
+ *   三处都关了之后开关本身成了死代码，遂连同 prop / emit 一起删掉，
+ *   底部只剩「关闭」。
+ *
+ *   ⚠️ 想改账号，走各页列表行操作的「编辑」：
+ *     · 账号管理、部门管理（部门下账号弹窗）都有行级「编辑」；
+ *     · 职位管理的「职位下人员」弹窗没有行级编辑，要改得回「账号管理」。
  */
 import { computed, ref, watch } from 'vue';
 import type { PermModule, PermRoleListItem, PermUserListItem, RolePermMap } from 'shared-types/perm';
@@ -38,8 +50,6 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void;
-  /** 点「去编辑」时抛出，由调用方决定怎么编辑（多数页面是跳账号管理） */
-  (e: 'edit', userId: string): void;
 }>();
 
 /* ============================================================
@@ -121,11 +131,10 @@ const detailTitle = computed(() => {
   return `账号详情 · <span class="em">${esc(d.userName)}</span> <span class="tag n">${esc(String(d.userStatus))}</span>`;
 });
 
-/** 所属职位：元数据优先取职位清单（含编码 / 权限数 / 状态） */
+/** 所属职位：元数据优先取职位清单（含权限数 / 状态） */
 interface DetailRole {
   id: string;
   roleName: string;
-  roleCode: string;
   permCount: number;
   roleStatus: string;
   icon: string;
@@ -140,7 +149,6 @@ const detailRoles = computed<DetailRole[]>(() => {
       return {
         id,
         roleName: r.roleName,
-        roleCode: r.roleCode,
         permCount: r.permCount,
         roleStatus: r.roleStatus,
         icon: roleIcon(r),
@@ -149,7 +157,6 @@ const detailRoles = computed<DetailRole[]>(() => {
     return {
       id,
       roleName: (d.roleNames || [])[i] || '—',
-      roleCode: '—',
       permCount: 0,
       roleStatus: '启用',
       icon: '👤',
@@ -381,7 +388,6 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
         <thead>
           <tr>
             <th>职位</th>
-            <th>编码</th>
             <th>权限数</th>
             <th>状态</th>
             <th>操作</th>
@@ -390,7 +396,6 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
         <tbody>
           <tr v-for="r in detailRoles" :key="r.id">
             <td><b>{{ r.icon }} {{ r.roleName }}</b></td>
-            <td><code style="font-size: 11.5px">{{ r.roleCode }}</code></td>
             <td class="num">{{ r.permCount }} 项</td>
             <td>
               <span v-if="r.roleStatus === '启用'" class="tag g">启用</span>
@@ -445,7 +450,8 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
 
     <template #footer>
       <div class="lft">账号 ID：{{ detail?.id || '—' }}</div>
-      <button class="btn" type="button" @click="emit('edit', props.userId)">去编辑</button>
+      <!-- ★ 2026-10-19：底部「去编辑」按钮已彻底删除（三处入口全部要求去掉），
+           只剩「关闭」。改账号请走列表行操作里的「编辑」。 -->
       <button class="btn pri" type="button" @click="visible = false">关闭</button>
     </template>
   </ProtoDialog>

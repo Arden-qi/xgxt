@@ -536,6 +536,10 @@ export const REFUND_CHAIN_NODES: Array<{ step: number; name: string; roles: stri
   { step: 2, name: '校长审批', roles: '校长' },
 ];
 
+/** 单项退费费用上限：10 万元（单位分，100000 元 × 100）。
+ *  前端费用项输入框的 max 与 service.create 的兜底校验共用这一口径，改这里两处同步。 */
+export const REFUND_ITEM_MAX_AMOUNT = 10000000;
+
 /** 费用项（统一结构：初高/实训只会有 1 项，大学可多项） */
 export interface RefundItem {
   feeType: number;
@@ -693,12 +697,15 @@ export const LEAVE_ACTIVE_STATUSES: number[] = [
 /**
  * ★ 各学段**支持**的审批类型
  *
- * ⚠️ 大学没有「复学」—— 这是**业务事实**（大学 `ApplyType` 里就没有这一项），
- *    不是合并遗漏。页面会据此隐藏该选项，而不是给个点不动的按钮。
+ * 【2026-10-16 调整】大学**开放「复学」**（用户要求：大学生休学后也可以复学）。
+ *   大学老表 `ApplyType` 原本只有 1休学 2退学 3退费 4升学，没有复学码 ——
+ *   本次新增**原码 5 = 复学**（见 shared/conf.ts 的 DEFAULT_LEAVE_BIZ_MAP.class），
+ *   并给 `t_class_suspend_apply` 补了 `new_class_id` / `new_class_name` 两列
+ *   （migrations-class/20261016_012）。
  */
 export const LEAVE_STAGE_BIZ: Record<TeachingStage, number[]> = {
   jh: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
-  class: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT],
+  class: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
   job: [LEAVE_BIZ_TYPE.SUSPEND, LEAVE_BIZ_TYPE.QUIT, LEAVE_BIZ_TYPE.RESUME],
 };
 
@@ -706,31 +713,31 @@ export const LEAVE_STAGE_BIZ: Record<TeachingStage, number[]> = {
  * ★ 部门（业务口径）—— 发起申请时那个下拉，**取代**原来的「学段」
  *
  * 【为什么要有这一层】
- *   用户口径里公司有 4 个部门：初高中 / 大学 / 实训 / 就业；
- *   而技术上只有 3 个学段（jh / class / job），且「实训」与「就业」共用同一个库
- *   （`sms_job`，就是启动日志里的「就业管理」）。
+ *   用户口径里公司有 3 个部门：初高中 / 大学 / 就业；
+ *   技术上也是 3 个学段（jh / class / job），其中「就业」就是 `sms_job` 那个库
+ *   （启动日志里显示的「就业管理」）。
  *
- * 【就业为什么没有 stage】
- *   学籍异动（休学/退学/复学）只在 3 个学段有库表与仓储实现，**就业部门暂无**。
- *   按业务确认：选项仍然展示（用户能看到完整部门列表），但选它就提示
- *   「该部门暂不办理学籍异动」，学生下拉置空 —— 而不是给它一个假学段、
- *   让用户填完表单再在提交时报错。
- *   → `stage = null` 就是这个「占位、不可用」的机器可读表示。
+ * 【★ 2026-10-21 用户要求：部门「实训」改为「就业」】
+ *   原来这里是 4 项（初高中 / 大学 / 实训 / 就业），第 4 项「就业」是个
+ *   `stage = null` 的占位（当时认为就业部没有异动库表，选它只提示"暂不办理"）。
+ *   实际上实训与就业共用 `sms_job`、同一套仓储 —— 占位没有意义，还给用户一个
+ *   选不了学生的空部门。现在收成 3 项：初高中 / 大学 / 就业，
+ *   就业 = 原实训（stage 仍是 `job`），休学 / 退学 / 复学 三项功能一并可用。
  *
- * ⚠️ 前端**不要在页面里另抄一份**：本数组由 `/meta` 下发，改这里就够了。
+ * ⚠️ 前端**不要在页面里另抄一份**：本数组由 `/meta` 下发，改这里就够了
+ *   （前端兜底值 `LEAVE_DEPARTMENTS_DEFAULT` 只在 meta 请求失败时用）。
  */
 export const LEAVE_DEPARTMENTS: Array<{
-  /** 部门码（jh/class/job 与学段同码，employ 是就业） */
+  /** 部门码（jh/class/job 与学段同码） */
   code: string;
-  /** 部门中文名（页面显示，与用户口径一致：初高中 / 大学 / 实训 / 就业） */
+  /** 部门中文名（页面显示，与用户口径一致：初高中 / 大学 / 就业） */
   name: string;
-  /** 对应学段；null = 该部门暂不办理学籍异动（选它就禁用） */
+  /** 对应学段；null = 该部门暂不办理学籍异动（当前没有这种部门，字段保留以备将来） */
   stage: TeachingStage | null;
 }> = [
   { code: 'jh', name: '初高中', stage: 'jh' },
   { code: 'class', name: '大学', stage: 'class' },
-  { code: 'job', name: '实训', stage: 'job' },
-  { code: 'employ', name: '就业', stage: null },
+  { code: 'job', name: '就业', stage: 'job' },
 ];
 
 /** 审批链步数（供前端展示"本次走几步"） */

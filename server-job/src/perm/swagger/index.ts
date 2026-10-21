@@ -237,11 +237,25 @@ const definition: swaggerJsdoc.Options['definition'] = {
       },
       RoleSavePayload: {
         type: 'object',
-        required: ['roleName', 'roleCode', 'roleType'],
+        required: ['roleName'],
         properties: {
           roleName: { type: 'string', example: '助教组长' },
-          roleCode: { type: 'string', example: 'TEACH_ASSIST_LEAD' },
-          roleType: { type: 'string', example: '管理职位' },
+          roleCode: {
+            type: 'string',
+            nullable: true,
+            description:
+              '★ 2026-10-19 起界面不再维护（用户要求全系统去掉「职位编码」）：' +
+              '不传由后端自动生成（如 ROLE_0001）。该字段是跨模块鉴权连接键，响应里仍会返回。',
+            example: 'ROLE_0001',
+          },
+          roleType: {
+            type: 'string',
+            nullable: true,
+            description:
+              '★ 2026-10-20 起界面不再维护（用户要求去掉「职位类型」）：不传按默认「业务职位」落库；' +
+              '字段与接口保留，编辑时不传则保持原值。',
+            example: '管理职位',
+          },
           roleStatus: { type: 'string', enum: ['启用', '停用'], default: '启用' },
           deptId: { type: 'string', nullable: true, example: 'D01' },
           sortNo: { type: 'integer', example: 99 },
@@ -264,7 +278,7 @@ const definition: swaggerJsdoc.Options['definition'] = {
           phone: { type: 'string', example: '13800000013', description: '11 位、以 1 开头，全局唯一' },
           gender: { type: 'integer', enum: [1, 2], example: 1, description: '1 男 / 2 女' },
           genderName: { type: 'string', example: '男' },
-          age: { type: 'integer', example: 30, description: '16-70' },
+          age: { type: 'integer', example: 30, description: '20-65' },
           deptId: { type: 'string', example: 'D_ADM' },
           deptName: { type: 'string', example: '行政' },
           roleIds: { type: 'array', items: { type: 'string' }, example: ['R13'], description: '至少 1 个' },
@@ -336,10 +350,43 @@ const definition: swaggerJsdoc.Options['definition'] = {
           parentItemName: { type: 'string', nullable: true, example: '教质/学术审批', description: '二级功能点的父功能点名' },
           actions: { type: 'array', items: { $ref: '#/components/schemas/PermActionItem' } },
           remark: { type: 'string', nullable: true },
+          isCustom: {
+            type: 'boolean',
+            example: false,
+            description: 'true = 管理员自建（可改可删）；false / 缺省 = 系统预置，只读',
+          },
           checked: {
             type: 'array',
             items: { type: 'string' },
             description: '该职位在此功能点下已勾选的动作名（职位权限详情接口返回）',
+          },
+        },
+      },
+      PermItemSavePayload: {
+        type: 'object',
+        description: '新增 / 修改自建权限点的入参（模块 → 功能点 → 动作，与预置格式一致）',
+        required: ['itemName', 'actions'],
+        properties: {
+          moduleKey: { type: 'string', example: 'market', description: '已有板块标识；新建板块传 __new__' },
+          moduleName: { type: 'string', example: '招生管理', description: '新建板块时的名称' },
+          moduleIcon: { type: 'string', example: '🎓' },
+          moduleSort: { type: 'integer', example: 9 },
+          itemName: { type: 'string', example: '招生报名登记' },
+          parentItemName: { type: 'string', nullable: true },
+          remark: { type: 'string', nullable: true },
+          actions: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              required: ['actionName'],
+              properties: {
+                actionCode: { type: 'string', example: 'view', description: '留空时后端按 baseAction 自动补' },
+                actionName: { type: 'string', example: '查看' },
+                baseAction: { type: 'integer', enum: [1, 2, 3, 4, 5, 6], example: 1 },
+                remark: { type: 'string', nullable: true },
+              },
+            },
           },
         },
       },

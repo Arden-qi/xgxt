@@ -119,7 +119,18 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
       reg('sms_common', t, id),
     );
 
-    check('夹具就绪（3 学生 + 1 实训班）', !!jobStu.id && !!jhStu.id && !!clsStu.id && !!jobCls.id);
+    // ★ 2026-10-16 起大学开放复学 → 大学也要一个复学班夹具
+    const clsCls = await buildRow(dbCls, 't_class_info', { class_name: '自检-大学复学班', is_deleted: 0 });
+    await dbCls('t_class_info').insert(clsCls);
+    reg('sms_class', 't_class_info', clsCls.id);
+    await mirrorRow(uniDb, 'sms_class', 't_class_info', clsCls, 'class', (_d, t, id) =>
+      reg('sms_common', t, id),
+    );
+
+    check(
+      '夹具就绪（3 学生 + 1 实训班 + 1 大学班）',
+      !!jobStu.id && !!jhStu.id && !!clsStu.id && !!jobCls.id && !!clsCls.id,
+    );
 
     /* ============ C. ★ 读路径：类型与状态映射 ============ */
     /**
@@ -459,7 +470,8 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
       `code=${apR2.json?.code} ${apR2.json?.message || ''}`,
     );
 
-    /* ============ H. 大学不支持复学 ============ */
+    /* ============ H. ★ 大学复学全链路（2026-10-16 起开放） ============ */
+    // F 段走完时 clsStu 已被置为「休学(6)」—— 正好是复学的合法前置状态
     const cClsResume = await req(`${API}/create`, {
       method: 'POST',
       token: tPrincipal,
@@ -467,13 +479,49 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
         stage: 'class',
         studentId: clsStu.id,
         bizType: BIZ.RESUME,
-        leaveReason: '自检-大学复学（应被拒）',
+        leaveDate: TODAY,
+        newClassId: clsCls.id,
+        leaveReason: '自检-大学复学（应放行）',
+        submit: true,
       },
     });
     check(
-      '★ 大学不支持复学：显式拒绝（业务事实，不是静默忽略）',
-      cClsResume.json?.code !== 200,
-      `code=${cClsResume.json?.code} ${cClsResume.json?.message || ''}`,
+      '★ 大学：发起复学（2026-10-16 起开放；发起时填复学班）',
+      cClsResume.json?.code === 200,
+      cClsResume.json?.message || '',
+    );
+    const clsResId = cClsResume.json?.data?.id;
+    if (clsResId) reg('sms_class', 't_class_suspend_apply', clsResId);
+
+    const clsResRow = await probe(dbCls, 'sms_class', 't_class_suspend_apply')
+      .where({ id: clsResId })
+      .first()
+      .catch(() => null);
+    check(
+      '★ 大学：复学单 apply_type 落库 = 5（大学新增的复学原码，不是 3=退费）',
+      Number(clsResRow?.apply_type) === 5 && String(clsResRow?.new_class_id || '') === String(clsCls.id),
+      `apply_type=${clsResRow?.apply_type} new_class_id=${clsResRow?.new_class_id}`,
+    );
+
+    const apClsRes = await req(`${API}/approve`, {
+      method: 'POST',
+      token: tDean,
+      body: { stage: 'class', id: clsResId, comment: '学管同意（大学复学）' },
+    });
+    check(
+      '★ 大学：复学 1 步链 → 学管审完即 finished',
+      apClsRes.json?.code === 200 && apClsRes.json?.data?.finished === true,
+      JSON.stringify(apClsRes.json?.data || apClsRes.json?.message),
+    );
+    const clsStuAfterResume = await probe(dbCls, 'sms_class', 't_class_student')
+      .where({ id: clsStu.id })
+      .first()
+      .catch(() => null);
+    check(
+      '★ 大学：复学副作用 → 学生状态 = 5（正式在读，不是 8 实训中）且回到复学班',
+      Number(clsStuAfterResume?.student_status) === 5 &&
+        String(clsStuAfterResume?.class_id) === String(clsCls.id),
+      `status=${clsStuAfterResume?.student_status} class_id=${clsStuAfterResume?.class_id}`,
     );
 
     /* ============ I. 权限 ============ */
@@ -505,8 +553,9 @@ const reg = (dbName, table, id) => { const [d, t] = regTarget(dbName, table); fi
 
     const meta = await req(`${API}/meta`, { token: tPrincipal });
     check(
-      '★ meta：明确告知"大学不支持复学"（前端据此隐藏选项）',
-      !(meta.json?.data?.stageBizTypes?.class || []).includes(3) &&
+      '★ meta：三学段都支持复学（2026-10-16 起大学开放，前端据此出选项）',
+      (meta.json?.data?.stageBizTypes?.class || []).includes(3) &&
+        (meta.json?.data?.stageBizTypes?.jh || []).includes(3) &&
         (meta.json?.data?.stageBizTypes?.job || []).includes(3),
       JSON.stringify(meta.json?.data?.stageBizTypes || {}),
     );

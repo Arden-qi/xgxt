@@ -60,6 +60,9 @@ export enum BizCode {
   PWD_WEAK = 40023,             // 密码强度不符合当前策略
   RULE_VALUE_INVALID = 40024,   // 规则取值不合法
   PERM_SAVE_EMPTY = 40025,      // 权限全量覆盖内容为空
+  PERM_ITEM_NAME_EXISTS = 40026, // 同一板块下功能点重名
+  PERM_ITEM_PROTECTED = 40027,   // 系统预置权限点不可改/删
+  PERM_ITEM_ACTIONS_EMPTY = 40028, // 自建权限点至少要有一个动作
 
   // ---- 401xx 未登录 ----
   UNAUTHORIZED = 40101,

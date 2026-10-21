@@ -18,7 +18,7 @@
  *   菜单分组计算整体抽到 config/sideMenu.ts，与首页快捷入口共用同一份口径。
  */
 import { RouterView, useRoute, useRouter } from 'vue-router';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 /* ★ 第 1 期「入口合并」：matchTeachingPath —— 直连老路由时，左侧菜单要亮在合并后的菜单项上 */
 import { matchTeachingPath } from '@/teaching/domainConfig';
 import { ROLE_CODE_NAME } from 'shared-types';
@@ -37,13 +37,16 @@ import BreadcrumbBar from '@/components/BreadcrumbBar.vue';
  *     （管理员代忘记密码的人重置）撞名，改成「修改密码」以示区分。 */
 import { ElMessage } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { changeMyPassword, verifyMyPassword } from '@/portal/api/portal';
+import { changeMyPassword, fetchPwdPolicy, verifyMyPassword } from '@/portal/api/portal';
+import type { PwdPolicy } from '@/portal/api/portal';
 /* ★ 2026-10-16 侧栏菜单计算抽到 config/sideMenu.ts：
  *   工作台首页（views/Workbench.vue）的「快捷入口」要和侧栏用同一套显隐口径，
  *   两处共用一份，避免口径漂移。
  *   注：原先在本文件 import 的 moduleAllowed / moduleOfPageCode / pageEnabled
  *   已随菜单计算一并搬去 sideMenu.ts，本文件不再直接使用，故不再重复引入。 */
 import { useSideMenu, type ViewChild } from '@/config/sideMenu';
+/* ★ 催费/缴费菜单红点：有待催办事项（初高待缴/大学逾期/就业待催缴）时菜单项亮红点 */
+import { useFeeUrgeBadge } from '@/store/feeUrgeBadge';
 
 const route = useRoute();
 const router = useRouter();
@@ -99,6 +102,9 @@ const roleText = computed(() => {
 /** 登录页全屏显示，不套左侧菜单的壳 */
 const isLoginPage = computed(() => route.path === '/login');
 
+/* 催费/缴费红点 */
+const feeUrgeBadge = useFeeUrgeBadge();
+
 /** 退出登录 → 回统一登录页 */
 function doLogout(): void {
   portalLogout();
@@ -133,13 +139,51 @@ const pwdForm = ref({
   confirmPassword: '',
 });
 
-/** 密码强度 0~3 —— 只做提示，不拦截（演示环境别把用户卡住） */
+/* ============================================================
+ * ★ 2026-10-19 修复：改密规则与后端对齐
+ *
+ * 【问题】规则要求含大写字母，但测试时全小写也能改成功。
+ * 【根因】规则被写死在三个地方且口径不一：
+ *     · 后端 perm 的 assertPwdStrength（账号管理用）＝ ≥8 位 + 大写 + 数字
+ *     · 后端 portal 的 assertNewPassword（自助改密用）＝ 6~20 位 + 无空格 + 不等于原密码
+ *     · 本弹窗的提示文案与校验＝照着后者写
+ * 【做法】后端两个入口共用 perm/services/pwdPolicy.ts 一份策略；
+ *        前端打开弹窗时向 /api/portal/account/pwd-policy 取当前策略，
+ *        按它渲染提示并做预校验。
+ *   ⚠️ 前端校验只是「少跑一趟请求」的体验优化，后端仍是最终把关。
+ * ============================================================ */
+
+/** 取回来的当前策略；接口失败就退回这份默认值，别让弹窗打不开 */
+const pwdPolicy = ref<PwdPolicy>({
+  min: 8,
+  upper: true,
+  digit: true,
+  symbol: false,
+  tip: '不少于 8 位，且需包含大写字母、数字',
+});
+
+/** 规则最小长度（策略里没给就按 8 位兜底） */
+const pwdMinLen = computed(() => Number(pwdPolicy.value.min) || 8);
+
+/** 规则说明文案（提交按钮上方那条） */
+const pwdRuleTip = computed(() => {
+  const p = pwdPolicy.value;
+  if (p.tip) return p.tip;
+  const need: string[] = [];
+  if (p.upper) need.push('大写字母');
+  if (p.digit) need.push('数字');
+  if (p.symbol) need.push('特殊符号');
+  return need.length ? `不少于 ${p.min} 位，且需包含${need.join('、')}` : `不少于 ${p.min} 位`;
+});
+
+/** 密码强度 0~3 —— 只是观感反馈；能不能提交由 pwdRules 判、最终由后端判 */
 const pwdScore = computed(() => {
   const p = pwdForm.value.newPassword;
   if (!p) return 0;
   let s = 0;
-  if (p.length >= 8) s += 1;
-  if (/[A-Za-z]/.test(p) && /\d/.test(p)) s += 1;
+  if (p.length >= pwdMinLen.value) s += 1;
+  // ★ 2026-10-19：由 [A-Za-z] 收紧为「必须有大写字母」，与密码策略口径一致
+  if (/[A-Z]/.test(p) && /\d/.test(p)) s += 1;
   if (/[^A-Za-z0-9]/.test(p) || p.length >= 12) s += 1;
   return s;
 });
@@ -150,9 +194,20 @@ const pwdRules: FormRules = {
   newPassword: [
     { required: true, message: '请输入新密码', trigger: 'blur' },
     {
+      /**
+       * ★ 2026-10-19：逐条对齐后端策略 —— 少一条就会出现「前端放过、后端才拒」。
+       *   顺序按用户最常踩的坑排：长度 → 大写字母 → 数字 → 特殊符号 → 空格 → 与原密码相同。
+       */
       validator: (_rule, value, callback) => {
         const s = String(value || '');
-        if (s.length < 6 || s.length > 20) return callback(new Error('新密码长度需为 6~20 位'));
+        const p = pwdPolicy.value;
+        if (s.length < pwdMinLen.value) {
+          return callback(new Error(`新密码不少于 ${pwdMinLen.value} 位`));
+        }
+        if (s.length > 20) return callback(new Error('新密码不超过 20 位'));
+        if (p.upper && !/[A-Z]/.test(s)) return callback(new Error('新密码需包含大写字母'));
+        if (p.digit && !/\d/.test(s)) return callback(new Error('新密码需包含数字'));
+        if (p.symbol && !/[^A-Za-z0-9]/.test(s)) return callback(new Error('新密码需包含特殊符号'));
         if (/\s/.test(s)) return callback(new Error('新密码不能包含空格'));
         if (s === pwdForm.value.oldPassword) return callback(new Error('新密码不能与原密码相同'));
         callback();
@@ -174,6 +229,13 @@ const pwdRules: FormRules = {
 
 function openPwdDialog(): void {
   pwdOpen.value = true;
+  // ★ 2026-10-19：拉一次「当前生效的密码策略」——提示与预校验都照着它来。
+  //   失败就沿用 pwdPolicy 的默认值，绝不因为取不到策略而打不开弹窗。
+  fetchPwdPolicy()
+    .then((p) => {
+      if (p && p.min) pwdPolicy.value = p;
+    })
+    .catch(() => undefined);
 }
 
 /** 关闭后必须把「已验证」的闸门复位，否则下次打开能跳过第一步直接填新密码 */
@@ -243,6 +305,13 @@ onMounted(() => {
   if (isLoginPage.value) return;
   if (!localStorage.getItem('sms_token')) return;
   if (!permissionLoaded.value) loadMyPermissions();
+  // 催费/缴费红点：登录后拉一次
+  feeUrgeBadge.refresh();
+});
+
+// 进入催费/缴费页时强刷（处理完回来红点随之更新）
+watch(() => route.fullPath, (p) => {
+  if (p.startsWith('/teaching/fee')) feeUrgeBadge.refresh(true);
 });
 </script>
 
@@ -344,10 +413,15 @@ onMounted(() => {
             type="password"
             show-password
             :disabled="!pwdVerified"
-            placeholder="6~20 位，建议字母 + 数字组合"
+            :placeholder="`${pwdMinLen} 位以上，需包含大写字母和数字`"
             @input="onNewPwdInput"
           />
         </el-form-item>
+
+        <!-- ★ 2026-10-19：把当前生效的密码规则如实写在输入框下方 ——
+             原来只有 placeholder 里一句「建议字母 + 数字组合」，
+             用户以为是建议、不照做也被放过；现在按后端策略说明。 -->
+        <div v-if="pwdVerified" class="pwd-rule">密码须{{ pwdRuleTip }}，且不能包含空格。</div>
 
         <!-- ③ 再输一遍新密码 -->
         <el-form-item label="确认密码" prop="confirmPassword" class="pwd-item-last">
@@ -427,6 +501,11 @@ onMounted(() => {
                   @click="router.push(goChild(child))"
                 >
                   <span class="child-title">{{ child.title }}</span>
+                  <span
+                    v-if="child.title === '催费' && feeUrgeBadge.count > 0"
+                    class="menu-red-dot"
+                    :title="feeUrgeBadge.tooltip"
+                  />
                   <el-tag
                     v-if="child.phase"
                     size="small"
@@ -475,6 +554,21 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* ★ 催费/缴费菜单红点（右上角） */
+:deep(.el-menu-item) {
+  position: relative;
+}
+.menu-red-dot {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-danger);
+  cursor: help;
+  z-index: 2;
+}
 /* ============================================================
  * 2026-10-05 修：让「左侧导航」与「右侧内容」各自独立滚动
  *
@@ -824,6 +918,14 @@ onMounted(() => {
 
 /* 底部提示 / 错误 */
 .pwd-tip {
+  font-size: 11.5px;
+  color: #9c8d88;
+  line-height: 1.6;
+}
+
+/* ★ 2026-10-19：改密弹窗的密码规则说明 —— 与 .pwd-score 同缩进，对齐输入框左边缘 */
+.pwd-rule {
+  margin: 0 0 10px 82px;
   font-size: 11.5px;
   color: #9c8d88;
   line-height: 1.6;

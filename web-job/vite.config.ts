@@ -71,10 +71,11 @@ export default defineConfig({
       //       （这正是本期端到端自检脚本抓出来的第一个真 bug。）
       '/api/teaching': { target: 'http://localhost:8004', changeOrigin: true }, // 统一教学接口（出勤等）
 
-      // ---- ★ 2026-10-15 缴费凭证图片 ----
-      //    后端存的是相对路径 /uploads/voucher/xxx.png，由 8004 的 express.static 提供。
-      //    ⚠️ 漏了这条，浏览器会向 Vite(5173) 要图，Vite 按 SPA 兜底返回 index.html
-      //       （HTTP 200 + text/html），<img> 解码失败 → 现象就是「凭证看不到」。
+      // ---- ★ 2026-10-20：缴费凭证等上传文件的静态托管 ----
+      //   后端 app.ts 把 /uploads 挂在 server-job/uploads（咨询/财务/初高的凭证都在这里）。
+      //   漏了这条，<img src="/uploads/..."> 会被 Vite 当**前端路由**返回 index.html，
+      //   现象是「凭证图片打不开、也没有 404 报错」，极难排查。
+      //   （2026-10-15 版本只提到 /uploads/voucher/，这里补全为整个 /uploads。）
       '/uploads': { target: 'http://localhost:8004', changeOrigin: true },
     },
   },

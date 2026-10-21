@@ -40,6 +40,8 @@ import {
 // ★ 2026-10-05：缴费单新增/变更后推送到班级管理（只读副本），失败不影响主流程
 // ★ 2026-10-06：收方扩到「大学部 + 初高」，故改调 syncFeeToAll / syncFeesToAll
 import { syncFeeToAll, syncFeesToAll } from '../services/class-sync';
+// ★ 2026-10-20：财务缴费单的学生姓名/班级以学生档案为准（能对上就对，对不上保持原样）
+import { lookupArchive, applyArchiveToFeeRows } from '../services/student-archive';
 
 export const feeRouter = Router();
 
@@ -111,18 +113,34 @@ feeRouter.get(
       .offset((q.page - 1) * q.size);
 
     /**
-     * ★ 2026-10-19 把「这张凭证覆盖了几笔、合计多少」带给前端
+     * ★ 2026-10-20 合并 main 时两段逻辑合到一处（先档案对齐 → 再按凭证聚合）：
      *
-     * 用户反馈「缴费凭证和实缴金额对不上」的根因：
-     *   一次缴清多项费用时，一张转账截图挂在多张单据上，
-     *   本单 amount 只是其中一项（学费 28000），凭证截图却是合计（32400）。
-     *   列表里不标出来，财务只会以为数据错了。
+     * ① 学生姓名 / 班级 / 部门以学生档案最新值为准（meng 侧）：
+     *    财务的单有两个来源：报名前的咨询收费单（此时学生还没进学籍档案）、
+     *    报名后的补单（档案里已有）。所以口径是「能对上就对齐，对不上保持原样」——
+     *    对不上的不删不改（那是「尚未建档」的真实状态，不是脏数据）。
      *
-     * 这里只做一次聚合（本页凭证去重后 IN 查询），不产生 N+1。
+     * ② 把「这张凭证覆盖了几笔、合计多少」带给前端（main 侧）：
+     *    用户反馈「缴费凭证和实缴金额对不上」的根因：一次缴清多项费用时，
+     *    一张转账截图挂在多张单据上，本单 amount 只是其中一项（学费 28000），
+     *    凭证截图却是合计（32400）。列表里不标出来，财务只会以为数据错了。
+     *    这里只做一次聚合（本页凭证去重后 IN 查询），不产生 N+1。
+     *
+     * ⚠️ 顺序不能反：档案对齐只改姓名/班级/部门，不动 voucher_url，
+     *    所以先对齐再聚合，与「先聚合再对齐」结果一致；但先对齐能保证
+     *    聚合用的就是最终返回给前端的那批行，避免以后加字段时踩坑。
      */
-    const groupMap = await voucherGroupMap(rows.map((r: any) => r.voucher_url));
+    const { rows: rowsWithArchive } = applyArchiveToFeeRows(
+      rows,
+      await lookupArchive(
+        rows.map((r: any) => r.student_id),
+        rows.map((r: any) => r.student_no),
+      ),
+    );
 
-    const list = rows.map((r: any) => {
+    const groupMap = await voucherGroupMap(rowsWithArchive.map((r: any) => r.voucher_url));
+
+    const list = rowsWithArchive.map((r: any) => {
       const item = toFeeListItem(r);
       const g = r.voucher_url ? groupMap.get(String(r.voucher_url)) : undefined;
       return {
@@ -184,6 +202,11 @@ feeRouter.get(
     if (!row) {
       throw new BizError(BizCode.FEE_NOT_FOUND, '缴费单不存在');
     }
+    // ★ 2026-10-20：详情与列表同口径（档案能对上就用档案最新值）
+    applyArchiveToFeeRows(
+      [row],
+      await lookupArchive([row.student_id], [row.student_no]),
+    );
     // 餐费场景：把「同一张凭证还被谁共用」一并返回，方便财务判断
     const shared = await findVoucherSharers(row.voucher_url, id);
     // ★ 2026-10-19 这张凭证一共覆盖几笔、合计多少（详情弹窗要讲清「本单 ≠ 凭证总额」）
@@ -207,7 +230,7 @@ const addSchema = z.object({
   headTeacherId: z.string().optional(),
   headTeacherName: z.string().optional(),
   // ★ 2026-10-15：上限 5 → 7（押金 6 / 校服 7）
-  feeType: z.coerce.number().int().min(1).max(7, '缴费类型只能是 1~7'),
+  feeType: z.coerce.number().int().min(1).max(8, '缴费类型只能是 1~8'),
   /**
    * 金额（单位：分），正整数。
    * ⚠️ 不传时后端会自动从「费用标准」取该 类型+部门 的标准金额（规则2）。

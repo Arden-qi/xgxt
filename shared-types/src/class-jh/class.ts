@@ -386,6 +386,10 @@ export interface FeeRecord extends BaseEntity {
   classId?: string;
   className?: string;
   deptCode?: number;
+  /** ★ 2026-10-20 用户要求：学生手机号（来自 t_class_student.phone，左连取） */
+  phone?: string | null;
+  /** ★ 2026-10-20 用户要求：家长手机号（催费主要打这个；t_class_student.parent_phone） */
+  parentPhone?: string | null;
   feeType: FeeType;
   /** 双返回 */
   feeTypeName: string;
@@ -403,6 +407,21 @@ export interface FeeRecord extends BaseEntity {
   /** 是否紧急（派生，按配置阈值） */
   isUrgent?: boolean;
   voucherUrl?: string;
+  /** 缴费方式 1微信支付 2支付宝 3现金（★ 2026-10-20 登记缴费；未登记为 null） */
+  payMethod?: number | null;
+  /** 双返回 */
+  payMethodName?: string | null;
+  /** 实缴金额（分）；与 feeAmount（应缴）分开存，允许部分缴 */
+  paidAmount?: number | null;
+  /** 缴费备注（转账单号/说明） */
+  payRemark?: string | null;
+  /**
+   * 是否已转交财务（★ 2026-10-20）
+   *
+   * 判据：source_system='finance' 且有 source_id —— 说明这张单已经有对应的财务缴费单。
+   * 批量转交时「只选未上传过」就是按这个标记过滤。
+   */
+  transferred?: boolean;
 }
 
 /** 催费记录 */
@@ -425,6 +444,7 @@ export interface FeeNotify extends BaseEntity {
   notifyUserName?: string;
   /** YYYY-MM-DD HH:mm:ss */
   notifyTime: string;
+  /** 发送内容（表列沿用了 remark 这个旧名） */
   remark?: string;
 }
 
