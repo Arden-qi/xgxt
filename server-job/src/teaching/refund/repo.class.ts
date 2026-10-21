@@ -85,8 +85,12 @@ async function decorate(
     approvalStatus: unified,
     approvalStatusName: REFUND_STATUS_NAME[unified] || '',
     currentHandlerHint: null,
-    financeRemark: null,
-    refundTime: null, // 大学表没有出款时间列
+    financeRemark: row.finance_remark || null,
+    /**
+     * ★ 2026-10-21：大学部补上出款时间（迁移 migrations-class/20261021_001）。
+     *   原来这一列不存在 → 列表「结束日期」只能显示「—」，与初高/就业不对齐。
+     */
+    refundTime: fmtDateTime(row.pay_out_time),
     createTime: fmtDateTime(row.create_time),
     canApprove: false,
     canCancel: false,
@@ -303,9 +307,27 @@ export async function setStatus(
     });
 }
 
-/** 写入：财务确认出款（大学表没有出款列 → 只留痕在审批备注，这里空实现） */
-export async function setFinance(): Promise<void> {
-  /* 大学表无对应列；出款信息记在审批单备注里 */
+/**
+ * 写入：财务确认出款
+ *
+ * ★ 2026-10-21：原来这里是**空实现**（大学表没有出款列，只能把备注塞进审批备注），
+ *   导致「登记出款」对大学部等于什么都没记 —— 与初高/就业不对齐。
+ *   迁移 `migrations-class/20261021_001` 加了 `pay_out_time` / `finance_remark` 两列，
+ *   这里按就业那套写法落库（没传时间就取当前时间）。
+ */
+export async function setFinance(
+  conn: any,
+  id: string,
+  financeRemark: string | null,
+  refundTime: string | null,
+): Promise<void> {
+  await conn(WT)
+    .where({ id })
+    .update({
+      finance_remark: financeRemark,
+      pay_out_time: refundTime ? new Date(refundTime) : new Date(),
+      update_time: new Date(),
+    });
 }
 
 /** 该学生是否有进行中的退费单 */

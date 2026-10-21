@@ -1,15 +1,17 @@
 /**
  * 自检：催费/缴费域四页筛选「选完即查」（2026-10-19 用户要求）
  * ============================================================
- * 【背景】催费/缴费（教学域 fee，页签式：初高 FeeList / 大学 Urge /
- *   实训 FeeCallList / 教务 PaymentList）原来选完筛选要点「查询/筛选」才生效，
- *   用户视角就是「筛选没生效」。本批把四页筛选全部改成「选完即查」。
+ * 【背景】催费（教学域 fee）原来有多个页面：初高 FeeList / 大学 Urge /
+ *   实训 FeeCallList / 教务 PaymentList。原来选完筛选要点「查询/筛选」才生效，
+ *   用户视角就是「筛选没生效」。本批把各页筛选全部改成「选完即查」。
+ *   ★ 2026-10-20：教学域的「缴费」页签（教务 PaymentList）已删除，只剩「催费」一页。
  *
  * 【钉住什么】
  *   ① 筛选区里每个 el-select / el-switch / el-checkbox / el-date-picker
  *      都必须带 @change（关键字 input 用 @keyup.enter + @clear）——
  *      以后新增筛选项忘了接 @change，这里直接红；
- *   ② 四页都要过 Vite 编译（改动是纯模板属性，编译失败立刻暴露）。
+ *   ② 各页都要过 Vite 编译（改动是纯模板属性，编译失败立刻暴露）；
+ *   ③ 教学域只剩「催费」一页，菜单名与侧栏红点判据同步（改名不同步 → 红点不亮）。
  *
  * 【跑法】在 server-job 目录下（前端 5173 运行中）：
  *     node scripts/_test-fee-filter-autoapply.mjs
@@ -26,6 +28,8 @@ const PAGES = [
   { name: '初高 FeeList', rel: 'web-job/src/class-jh/views/FeeList.vue', form: '<el-form :model="query" inline>' },
   { name: '大学 Urge', rel: 'web-job/src/class/views/Urge.vue', form: null },
   { name: '实训 FeeCallList', rel: 'web-job/src/views/FeeCallList.vue', form: '<el-form :model="query" inline>' },
+  // ★ 2026-10-20：教务缴费总记录页（PaymentList）已从教学域删除，不再检查它的筛选控件，
+  //   只保留「文件仍能编译」这一条兜底（老路由 /edu/fee 未删，可回退）。
   { name: '教务 PaymentList·总记录', rel: 'web-job/src/views/edu/PaymentList.vue', form: '<el-form :model="totalQuery" inline>' },
   { name: '教务 PaymentList·即将到期', rel: 'web-job/src/views/edu/PaymentList.vue', form: '<el-form :model="expQuery" inline>' },
   { name: '费用中转 TeachingFeeHub', rel: 'web-job/src/teaching/views/TeachingFeeHub.vue', form: null },
@@ -94,6 +98,32 @@ function unwired(section) {
     check(
       '★ 后端 fee.list 按学生聚合催费次数（本页行一次 groupBy，接口绕不过）',
       feeRouteSrc.includes('urgeCount') && feeRouteSrc.includes("groupBy('student_id')"),
+    );
+
+    /* ---------- A4. 「缴费」页签已删除（2026-10-20 用户要求，截图里右边那个标签） ---------- */
+    const hubSrc = readFileSync(
+      path.join(ROOT, 'web-job', 'src', 'teaching', 'views', 'TeachingFeeHub.vue'),
+      'utf8',
+    );
+    check(
+      '★ 教学域催费页只剩「催费」一页：不再有缴费页签、不再引用教务缴费总记录页',
+      !hubSrc.includes('label="缴费"') &&
+        !hubSrc.includes('el-tab-pane') &&
+        !hubSrc.includes('PaymentList') &&
+        hubSrc.includes("import('@/class-jh/views/FeeList.vue')"),
+      '检查 TeachingFeeHub.vue',
+    );
+    const domCfgSrc = readFileSync(path.join(ROOT, 'web-job', 'src', 'teaching', 'domainConfig.ts'), 'utf8');
+    check(
+      '★ 菜单名同步改成「催费」（不再叫「催费 / 缴费」）',
+      domCfgSrc.includes("title: '催费',") && !domCfgSrc.includes("title: '催费 / 缴费',"),
+    );
+    const appSrc = readFileSync(path.join(ROOT, 'web-job', 'src', 'App.vue'), 'utf8');
+    check(
+      // 菜单名被红点按精确标题匹配，改名不同步这里 = 红点永远不亮
+      '★ 侧栏催费红点按新菜单名匹配（改名后红点仍会亮）',
+      appSrc.includes("child.title === '催费' && feeUrgeBadge.count > 0") &&
+        !appSrc.includes("child.title === '催费 / 缴费'"),
     );
 
     /* ---------- B. live：Vite 编译通过 ---------- */
