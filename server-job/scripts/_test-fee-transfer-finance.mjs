@@ -227,7 +227,8 @@ function baseRow(over = {}) {
     check(
       '★ 转交：A/B 成功、C 被跳过（未登记缴费）',
       res.json?.code === 200 && r1.success === 2 && r1.failed?.length === 0 && r1.skipped?.some((x) => x.feeId === FIX_C),
-      `success=${r1.success} skipped=${r1.skipped?.length} failed=${r1.failed?.length}`,
+      `success=${r1.success} skipped=${r1.skipped?.length} failed=${r1.failed?.length}` +
+        (r1.failed?.length ? ` 原因：${r1.failed.map((x) => `${x.feeId.slice(-8)}=${x.reason}`).join('；')}` : ''),
     );
 
     const aRow = await dbJh('t_class_fee').where({ id: FIX_A }).first();
