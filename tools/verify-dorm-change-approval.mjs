@@ -88,6 +88,10 @@ check('审批组件有通过 / 驳回', comp.includes('approveDormChange') && co
 check('后端有 approve / reject 路由', route.includes("'/change/approve'") && route.includes("'/change/reject'"));
 check('只有教务/校长/学管主任可批', svc.includes('assertDormApprover') && svc.includes('RoleCode.ACAD_STAFF'));
 check('通过时落库改床位与学生宿舍', repo.includes('async changeApprove') && repo.includes('applyChangeOnApproved'));
+check('列表按 changeId 去重（老表三学段同表）', svc.includes('seen.has(r.changeId)'));
+check('床位号按 bed_id 兜底回填', repo.includes('bedMap.get(str(a.new_bed_id)') && repo.includes('bedMap.get(str(a.old_bed_id)'));
+check('重复提交被拦', repo.includes('该学生已有相同的待审批申请'));
+check('审批表不再横向溢出（doLayout）', comp.includes('doLayout()') && comp.includes('ResizeObserver'));
 
 console.log('\n▶ 运行时检查');
 const sunToken = await login('sunmin');
@@ -100,6 +104,44 @@ const sunApprove = await req('POST', '/api/teaching/dorm/change/approve', {
   body: { stage: 'jh', id: '00000000-0000-0000-0000-000000000000' },
 });
 check('班主任不能审批', sunApprove.body?.code === 40302, `code=${sunApprove.body?.code}`);
+
+// ①.5 列表不重复 + 床位号可见
+const chgList = await req('GET', '/api/teaching/dorm/change/list', { token: acadToken });
+const chgRows = chgList.body?.data || [];
+const ids = chgRows.map((r) => r.changeId);
+check('列表无重复单号', new Set(ids).size === ids.length, `${ids.length} 条`);
+const withTarget = chgRows.find((r) => r.bizType === 1 && r.newDormNo);
+check(
+  '选了床位就能显示床位号',
+  !!withTarget && !!withTarget.newBedNo,
+  withTarget ? `${withTarget.newDormNo} · ${withTarget.newBedNo || '（缺）'}` : '无调宿单',
+);
+
+// ①.6 重复提交被拦（用已有待审批单的学生 + 同一目标床位）
+const pending = chgRows.find((r) => r.approvalStatus === 2 && r.bizType === 1 && r.newBedNo);
+if (pending) {
+  // change/list 不带 bedId，按 目标宿舍 + 床位号 反查
+  const pbeds = await req('GET', `/api/teaching/dorm/beds?stage=${pending.stage}&dormId=${pending.newDormId}`, {
+    token: acadToken,
+  });
+  const pbed = (pbeds.body?.data?.beds || []).find((b) => b.bedLabel === pending.newBedNo);
+  const dup = await req('POST', '/api/teaching/dorm/change/create', {
+    token: sunToken,
+    body: {
+      stage: pending.stage,
+      bizType: 1,
+      studentId: pending.studentId,
+      oldDormId: pending.oldDormId || undefined,
+      newDormId: pending.newDormId,
+      newBedId: pbed?.bedId,
+      changeDate: new Date().toISOString().slice(0, 10),
+      changeReason: '重复提交校验',
+    },
+  });
+  check('重复提交被拦', dup.body?.code === 40000, dup.body?.message || `code=${dup.body?.code}`);
+} else {
+  check('重复提交被拦', false, '没有可用于校验的待审批调宿单');
+}
 
 // ② 不存在的申请不能静默通过
 const badApprove = await req('POST', '/api/teaching/dorm/change/approve', {

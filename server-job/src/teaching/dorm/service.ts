@@ -543,8 +543,26 @@ export async function listDormChanges(
   const stages: TeachingStage[] = q.stage ? [q.stage] : await visibleStages(user);
   if (!stages.length) return [];
   if (q.stage) await assertStageView(user, q.stage);
-  const parts = await Promise.all(stages.map((s) => REPOS[s].changeList(q, user)));
-  const rows = parts.flat();
+
+  /**
+   * ★ 2026-10-21 修「同一条申请显示 3 遍」：
+   *   老表模式下三学段读的是**同一张** t_job_dorm_change，
+   *   按 stages 逐个查就会把同一行返回三次（和当初 listResidents 的问题一模一样）。
+   *   → 未开统一表时只扫一个学段；开了统一表才按学段分开查。
+   */
+  const scanStages =
+    !q.stage && !USE_UNI_TABLE && stages.length > 1
+      ? [STAGE_KEEP_PRIORITY.find((s) => stages.includes(s)) ?? stages[0]]
+      : stages;
+
+  const parts = await Promise.all(scanStages.map((s) => REPOS[s].changeList(q, user)));
+  const seen = new Set<string>();
+  const rows: DormChangeRow[] = [];
+  for (const r of parts.flat()) {
+    if (seen.has(r.changeId)) continue;
+    seen.add(r.changeId);
+    rows.push(r);
+  }
   rows.sort((a, b) => {
     const sa = TEACHING_STAGES.indexOf(a.stage);
     const sb = TEACHING_STAGES.indexOf(b.stage);
@@ -590,7 +608,13 @@ export async function createDormChange(
     throw new BizError(BizCode.PARAM_ERROR, '日期必填');
   }
   // 换宿/退宿申请三学段都可提交（ rooms 可写，申请当然也可写）
-  return pick(stage).changeCreate(body, user?.userId || '');
+  try {
+    return await pick(stage).changeCreate(body, user?.userId || '');
+  } catch (e) {
+    // 仓储抛的业务错误（重复提交 / 床位被占 / 学生不存在）转成可读 40000
+    if (e instanceof BizError) throw e;
+    throw new BizError(BizCode.PARAM_ERROR, (e as Error).message || '提交失败');
+  }
 }
 
 /**

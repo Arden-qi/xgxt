@@ -1,5 +1,5 @@
 <template>
-  <div class="dca">
+  <div ref="wrapRef" class="dca">
     <el-alert class="dca-tip" type="info" :closable="false" show-icon>
       <template #title>
         班主任提交的<b>换宿 / 退宿</b>申请在这里审批。
@@ -32,53 +32,53 @@
       </el-form-item>
     </el-form>
 
-    <el-table v-loading="loading" :data="pageRows" border stripe empty-text="暂无申请">
-      <el-table-column label="类型" width="96" align="center">
+    <el-table ref="tableRef" v-loading="loading" :data="pageRows" border stripe empty-text="暂无申请">
+      <!-- ★ 2026-10-21：列收成 7 列（学生、换宿各占两行），1080 宽也不用横向拖 -->
+      <el-table-column label="类型" width="78" align="center">
         <template #default="{ row }">
           <el-tag :type="row.bizType === 2 ? 'warning' : 'primary'" size="small" effect="plain">
             {{ row.bizTypeName }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="学生" min-width="150">
+      <el-table-column label="学生" min-width="140">
         <template #default="{ row }">
           <div class="dca-cell">
             <b>{{ row.studentName || '—' }}</b>
             <span class="muted">{{ row.studentNo || '' }}</span>
           </div>
+          <div class="muted">{{ row.className || '—' }}</div>
         </template>
       </el-table-column>
-      <el-table-column label="班级" width="110">
-        <template #default="{ row }">{{ row.className || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="原宿舍" min-width="150">
+      <el-table-column label="换宿（原 → 目标）" min-width="200">
         <template #default="{ row }">
-          <span v-if="row.oldDormNo">{{ row.oldDormNo }}<span v-if="row.oldBedNo" class="muted"> · {{ row.oldBedNo }}</span></span>
-          <span v-else class="muted">未入住</span>
+          <div class="dca-move">
+            <span class="dca-move__from">
+              {{ row.oldDormNo || '未入住' }}<span v-if="row.oldBedNo" class="muted"> · {{ row.oldBedNo }}</span>
+            </span>
+            <span class="dca-move__arrow">→</span>
+            <span v-if="row.bizType === 2" class="muted">退宿</span>
+            <span v-else class="dca-move__to">
+              {{ row.newDormNo || '—' }}<span v-if="row.newBedNo" class="muted"> · {{ row.newBedNo }}</span>
+            </span>
+          </div>
         </template>
       </el-table-column>
-      <el-table-column label="目标宿舍" min-width="150">
+      <el-table-column label="日期" width="104" align="center">
         <template #default="{ row }">
-          <span v-if="row.bizType === 2" class="muted">—（退宿）</span>
-          <span v-else-if="row.newDormNo">{{ row.newDormNo }}<span v-if="row.newBedNo" class="muted"> · {{ row.newBedNo }}</span></span>
-          <span v-else class="muted">—</span>
+          <div>{{ row.changeDate || '—' }}</div>
+          <div class="muted">{{ (row.createTime || '').slice(11) }}</div>
         </template>
       </el-table-column>
-      <el-table-column label="日期" width="110" align="center">
-        <template #default="{ row }">{{ row.changeDate || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="原因" min-width="160" show-overflow-tooltip>
+      <el-table-column label="原因" min-width="110" show-overflow-tooltip>
         <template #default="{ row }">{{ row.changeReason || '—' }}</template>
       </el-table-column>
-      <el-table-column label="提交时间" width="150" align="center">
-        <template #default="{ row }">{{ row.createTime || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="状态" width="90" align="center">
+      <el-table-column label="状态" width="84" align="center">
         <template #default="{ row }">
           <el-tag :type="STATUS_TAG[row.approvalStatus] || 'info'" size="small">{{ row.approvalStatusName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="130" align="center" fixed="right">
+      <el-table-column label="操作" width="100" align="center" fixed="right">
         <template #default="{ row }">
           <template v-if="row.approvalStatus === 2 || row.approvalStatus === 3">
             <el-button link type="success" :disabled="isReadOnlyUser" @click="doApprove(row)">通过</el-button>
@@ -113,8 +113,9 @@
  * 只读账号（系统管理员）能看但不能点（后端也会拦）。
  */
 
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import type { TableInstance } from 'element-plus';
 import { isReadOnlyUser } from '@/store/permission';
 import {
   approveDormChange,
@@ -171,6 +172,9 @@ async function load() {
     rows.value = [];
   } finally {
     loading.value = false;
+    // ★ 表格在隐藏页签里挂载时算不出宽度 → 渲染完立刻重算一次列宽/横向滚动
+    await nextTick();
+    tableRef.value?.doLayout();
   }
 }
 
@@ -227,7 +231,30 @@ async function doReject(row: DormChangeRow) {
   }
 }
 
-onMounted(load);
+/**
+ * ★ 2026-10-21 修「左右拖动时表头不动」：
+ *   本页是 lazy 页签，首次渲染时容器可能还没最终宽度，
+ *   Element 会误判「不需要横向滚动」→ 内表比容器宽、溢出的部分靠页面滚动，
+ *   表头不会跟着动。挂载后 + 容器尺寸变化时主动 doLayout() 重算即可。
+ */
+const tableRef = ref<TableInstance>();
+const wrapRef = ref<HTMLElement | null>(null);
+let ro: ResizeObserver | null = null;
+
+onMounted(async () => {
+  await load();
+  await nextTick();
+  tableRef.value?.doLayout();
+  if (typeof ResizeObserver !== 'undefined') {
+    ro = new ResizeObserver(() => tableRef.value?.doLayout());
+    if (wrapRef.value) ro.observe(wrapRef.value);
+  }
+});
+
+onBeforeUnmount(() => {
+  ro?.disconnect();
+  ro = null;
+});
 </script>
 
 <style scoped>
@@ -244,6 +271,25 @@ onMounted(load);
   display: flex;
   gap: 8px;
   align-items: baseline;
+}
+/* 原宿舍 → 目标宿舍：一行显示，窄屏也不撑破表格 */
+.dca-move {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  line-height: 1.4;
+}
+.dca-move__from {
+  color: #6b5b55;
+}
+.dca-move__arrow {
+  color: #b22a23;
+  font-weight: 600;
+}
+.dca-move__to {
+  color: #443432;
+  font-weight: 600;
 }
 .dca-page {
   margin-top: 12px;

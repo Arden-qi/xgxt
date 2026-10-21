@@ -895,7 +895,27 @@ export function makeRepo(stage: TeachingStage): DormRepo {
       const list = await qb.orderBy('create_time', 'desc');
       const uid = String(user?.userId ?? user?.id ?? '');
       const roles: string[] = user?.roles ?? [];
-  
+
+      /**
+       * ★ 2026-10-21：床位号兜底
+       *
+       * 早期单据只存了 old_bed_id / new_bed_id，*_bed_no 是 NULL ——
+       * 审批表就会显示「1号楼-303」却看不到床位。这里按 id 回查床位表补上，
+       * 老数据也不用洗。
+       */
+      const bedIds = [
+        ...new Set(
+          list
+            .flatMap((a: any) => [str(a.old_bed_id), str(a.new_bed_id)])
+            .filter(Boolean) as string[],
+        ),
+      ];
+      const bedMap = new Map<string, string>();
+      if (bedIds.length) {
+        const beds = (await T_BED().whereIn('id', bedIds).select('id', 'bed_no')) as any[];
+        for (const b of beds) bedMap.set(String(b.id), bedNoText(b.bed_no));
+      }
+
       return list.map((a: any) => {
         const st = Number(a.approval_status ?? 1);
         const isPending = st === 2 || st === 3;
@@ -923,10 +943,10 @@ export function makeRepo(stage: TeachingStage): DormRepo {
           headTeacherName: str(a.head_teacher_name),
           oldDormId: str(a.old_dorm_id),
           oldDormNo: str(a.old_dorm_no),
-          oldBedNo: str(a.old_bed_no),
+          oldBedNo: str(a.old_bed_no) || bedMap.get(str(a.old_bed_id) || '') || null,
           newDormId: str(a.new_dorm_id),
           newDormNo: str(a.new_dorm_no),
-          newBedNo: str(a.new_bed_no),
+          newBedNo: str(a.new_bed_no) || bedMap.get(str(a.new_bed_id) || '') || null,
           changeDate: fmtDate(a.change_date) ?? '',
           changeReason: String(a.change_reason ?? ''),
           approvalStatus: st,
@@ -1000,7 +1020,19 @@ export function makeRepo(stage: TeachingStage): DormRepo {
         const nb = await T_BED().where({ id: String(body.newBedId) }).first();
         if (nb) newBedNo = bedNoText(nb.bed_no);
       }
-  
+
+      /**
+       * ★ 2026-10-21：防重复提交
+       *   同一学生、同一类型、同一目标床位已有一条「待审批」时直接拦下 ——
+       *   否则审批表会出现多条一模一样的单子，批一条还留两条。
+       */
+      const dupQb = T_CHANGE()
+        .where({ is_deleted: false, student_id: String(body.studentId), approval_status: 2 })
+        .andWhere('biz_type', isCheckout ? 2 : 1);
+      if (!isCheckout && body.newBedId) dupQb.andWhere('new_bed_id', String(body.newBedId));
+      const dupRow = await dupQb.first();
+      if (dupRow) throw new Error('该学生已有相同的待审批申请，请勿重复提交');
+
       const id = randomUUID();
       await tblIns(db, SRC_DB, CHANGE_T, stage, {
         id,
