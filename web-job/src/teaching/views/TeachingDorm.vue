@@ -74,7 +74,8 @@
       <el-form-item>
         <el-button type="primary" @click="load(1)">查询</el-button>
         <el-button @click="reset">重置</el-button>
-        <el-button v-if="canCreate" type="success" @click="openCreate">新增房间</el-button>
+        <!-- ★ 班主任不建房间（房间由教务/学管统一建） -->
+        <el-button v-if="canCreate && !isOnlyHeadTeacher" type="success" @click="openCreate">新增房间</el-button>
         <el-button type="warning" @click="openChange">调宿/退宿申请</el-button>
       </el-form-item>
     </el-form>
@@ -549,8 +550,9 @@
     </el-dialog>
       </el-tab-pane>
 
-      <!-- ★ 2026-10-20 新增：教务给各班分派宿舍（左右两栏男寝 / 女寝） -->
-      <el-tab-pane label="班级分派" name="allocate" lazy>
+      <!-- ★ 2026-10-20 新增：教务给各班分派宿舍（左右两栏男寝 / 女寝）
+           ★ 2026-10-21：班主任不显示该子页面（班级层面的分派归教务） -->
+      <el-tab-pane v-if="!isOnlyHeadTeacher" label="班级分派" name="allocate" lazy>
         <DormAllocate />
       </el-tab-pane>
     </el-tabs>
@@ -628,7 +630,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { isReadOnlyUser } from '@/store/permission';
+import { RoleCode } from 'shared-types';
+import { isReadOnlyUser, isSuperTest, myRoles } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
 /** ★ 2026-10-20 宿舍管理的第二个子页面：班级分派 */
 import DormAllocate from './DormAllocate.vue';
@@ -680,6 +683,39 @@ import {
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
 /** ★ 2026-10-20 子页面页签：宿舍房间（原页面） / 班级分派（教务给各班分宿舍） */
 const mainTab = ref<'rooms' | 'allocate'>('rooms');
+
+/**
+ * ★ 2026-10-21：班主任（且没有更高业务角色）不参与「建房间」和「班级分派」
+ *
+ * 业务口径：班主任在宿舍域只做「查看本班住宿 + 发起调宿/退宿申请」，
+ * 房间由教务/学管统一建，班级层面的分派也归教务。
+ *
+ * 【为什么要排除更高角色】
+ *   一个人可能同时是班主任 + 教务老师 / 校长 / 管理员（演示库就有这种复合角色）。
+ *   只要他还有这些角色，就不该被当成"纯班主任"降权。
+ *   SUPER_TEST（万能测试号）永远按全功能展示。
+ */
+const HEAD_TEACHER_SUPERIOR_ROLES: string[] = [
+  RoleCode.ACAD_STAFF,
+  RoleCode.RM_PRINCIPAL,
+  RoleCode.SYS_ADMIN,
+  RoleCode.TEACH_DEAN,
+];
+const isOnlyHeadTeacher = computed(() => {
+  if (isSuperTest.value) return false;
+  const roles = myRoles.value;
+  if (!roles.includes(RoleCode.TEACH_HEAD)) return false;
+  return !roles.some((r) => HEAD_TEACHER_SUPERIOR_ROLES.includes(r));
+});
+
+/** 班主任若停留在「班级分派」页签，角色判定生效后强制回到「宿舍房间」 */
+watch(
+  isOnlyHeadTeacher,
+  (v) => {
+    if (v && mainTab.value === 'allocate') mainTab.value = 'rooms';
+  },
+  { immediate: true },
+);
 
 const STAGE_LABEL: Record<DormStage, string> = { jh: '初高', class: '大学', job: '实训' };
 
