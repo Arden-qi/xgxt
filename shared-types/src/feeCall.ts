@@ -40,6 +40,23 @@ export interface FeeCallListItem {
   handleTime: string | null;
   handleRemark: string | null;
 
+  /* ★ 2026-10-21 登记缴费五列（与初高 t_class_fee 同口径）
+     —— 催费页里就业的行也要能看到 实缴金额 / 缴费方式 / 缴费日期 / 凭证 */
+  /** 缴费方式 1微信支付 2支付宝 3现金；未登记为 null */
+  payMethod: number | null;
+  /** 枚举双返回 */
+  payMethodName: string;
+  /** 实缴金额（分）；与 feeAmount（应缴）分开存，允许部分缴 */
+  paidAmount: number | null;
+  /** 实缴金额展示文本，如 "1,200.00" */
+  paidAmountText: string | null;
+  /** 缴费日期 YYYY-MM-DD */
+  payDate: string | null;
+  /** 缴费凭证地址（/uploads/voucher/xxx.png） */
+  voucherUrl: string | null;
+  /** 缴费备注（转账单号/说明） */
+  payRemark: string | null;
+
   applicantId: string | null;
   applicantName: string | null;
 

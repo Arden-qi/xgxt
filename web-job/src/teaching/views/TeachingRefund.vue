@@ -144,7 +144,8 @@
       </el-table-column>
       <!--
         ★ 结束日期（2026-10-19 用户要求新增）＝ 出款时间（退款流程完结）：
-          初高/实训财务登记出款后有值；大学部表没有出款时间列，显示 —。
+          2026-10-21 起三个部门都有出款时间了（大学部补列，见迁移 migrations-class/20261021_001，
+          且「登记出款」按钮原来焊死不显示的 bug 一并修了），没登记过的显示 —。
       -->
       <el-table-column label="结束日期" width="105" align="center">
         <template #default="{ row }">{{ row.refundTime ? row.refundTime.slice(0, 10) : '—' }}</template>
@@ -341,7 +342,7 @@
  * ★ 金额：接口一律传「分」，页面用「元」输入/展示。
  * ★ 2026-10-16：全页面统一叫「部门」，不再出现「学段」（内部技术词）——
  *   汇总卡片 / 部门筛选 / 列表「部门」列 / 详情全走 deptNameOf() 翻成部门名
- *   （初高中 / 大学 / 实训），与 TeachingLeave.vue 同一份口径（REFUND_DEPARTMENTS）。
+ *   （初高中 / 大学 / 就业，2026-10-21 起「实训」叫「就业」），与 TeachingLeave.vue 同一份口径。
  *   ⚠️ 列表「部门」列始终显示（原来 v-if="!query.stage"，筛完这列就消失）。
  * ★ 筛选/搜索：部门 / 班级 / 状态 / 申请日期（开始/结束）/ 关键字 / 只看待我审批，
  *   全部「选完即查」（@change → load(1)，与 TeachingLeave 同一纪律）。
@@ -350,11 +351,15 @@
  *   日期选择器——EP 区间面板重开后第一次点击会被当作「新的开始」，想只改
  *   结束日期时高亮塌缩成单日，再点一下确认后输入框变成「D 至 D」（用户报的
  *   「开始日期同步成结束日期」）。拆开后结构上不再可能互相污染。
- * ★ 2026-10-19 列表：新增「结束日期」列（＝ 出款时间，大学部暂无显 —）；
+ * ★ 2026-10-19 列表：新增「结束日期」列（＝ 出款时间，大学部 2026-10-21 补列后三部门都有）；
  *   按用户要求去掉「当前处理」列与详情里的当前处理项。
+ * ★ 2026-10-21 用户要求：部门「实训」改叫「就业」（REFUND_DEPARTMENTS 的 job 项）；
+ *   大学部补出款时间列并真正落库（原来 setFinance 是空实现）；「登记出款」按钮原来
+ *   因 canFinanceConfirm 永远 false 谁都看不见，改按门户可见模块（finance）判。
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
+import { useAuthStore as usePortalStore } from '@/portal/stores/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   FEE_TYPE_OPTIONS,
@@ -383,6 +388,7 @@ import {
 
 const loading = ref(false);
 const saving = ref(false);
+const portal = usePortalStore();
 const rows = ref<RefundRow[]>([]);
 const total = ref(0);
 const summaries = ref<RefundSummary[]>([]);
@@ -406,8 +412,19 @@ const query = reactive({
 /* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
 useBreadcrumbStageKey(() => query.stage || '');
 
-/** 财务登记出款按钮：仅财务 / 管理员看到（后端有二次校验） */
-const canFinanceConfirm = ref(false);
+/**
+ * 财务登记出款按钮：仅能看到「财务」模块的账号显示（后端有二次校验）。
+ *
+ * ★ 2026-10-21 修复：这个 ref 原来**永远是 false**，「登记出款」按钮对谁都不出现 ——
+ *   后端 `/finance-confirm` 只要求"该部门可见 + 单据已审批通过"，并不要求财务角色，
+ *   前端却把它焊死。这直接导致三件事串不起来：
+ *   审批通过 → 通知财务 → **没人能登记出款** → 「结束日期（出款时间）」永远是空的
+ *   （大学部连出款时间列都还没有，本次一并补了，见迁移 migrations-class/20261021_001）。
+ *   现在按「门户下发的可见模块里有没有 finance」判（与财务侧 auth store 的菜单口径同源）。
+ */
+const canFinanceConfirm = computed(() =>
+  (portal.visibleModules || []).some((m) => String(m.key) === 'finance'),
+);
 
 /**
  * ★ 学段码 → 部门名（界面上不再出现「学段」；与 TeachingLeave.deptNameOf 同一份口径）

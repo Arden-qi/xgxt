@@ -13,15 +13,17 @@ export type { TeachingStage };
 export const STAGE_NAME: Record<TeachingStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  // ★ 2026-10-21 用户要求：部门口径里「实训」改叫「就业」（同一个 sms_job 库）
+  job: '就业',
 };
 
 /**
  * 部门（界面口径，取代原来的「学段」）
  *
- * ★ 与 `api/leave.ts` 的 LEAVE_DEPARTMENTS / 后端 dto.ts 的 LEAVE_DEPARTMENTS
- *   同一份口径：初高中 / 大学 / 实训。退费三个学段都有库表与仓储，
- *   无「就业」占位（就业部没有退费业务）。
+ * ★ 2026-10-21 用户要求：部门「实训」改为「就业」。
+ *   退费的三个库（初高 / 大学 / 就业）本来就都有表与仓储，
+ *   `job` 这条就是「就业部」（`sms_job`），只是显示名以前写的是「实训」。
+ *   与 `api/leave.ts` 的 LEAVE_DEPARTMENTS 同一份口径：初高中 / 大学 / 就业。
  * ★ 界面上不再出现「学段」这个词（那是内部技术词）；页面统一用 deptNameOf() 翻译。
  */
 export interface RefundDepartment {
@@ -29,14 +31,14 @@ export interface RefundDepartment {
   code: string;
   /** 部门中文名 */
   name: string;
-  /** 对应学段；null = 该部门暂无退费业务 */
+  /** 对应学段；null = 该部门暂无退费业务（当前没有这种部门） */
   stage: TeachingStage | null;
 }
 
 export const REFUND_DEPARTMENTS: RefundDepartment[] = [
   { code: 'jh', name: '初高中', stage: 'jh' },
   { code: 'class', name: '大学', stage: 'class' },
-  { code: 'job', name: '实训', stage: 'job' },
+  { code: 'job', name: '就业', stage: 'job' },
 ];
 
 /** 统一状态码（= 实训那套 ApprovalStatus） */

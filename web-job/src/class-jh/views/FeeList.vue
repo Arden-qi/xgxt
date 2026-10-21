@@ -1,12 +1,24 @@
 <script setup lang="ts">
 /**
- * 催费管理页（缴费台账 / 登记缴费·上传缴费凭证 / 导出）
+ * 催费管理页（缴费台账 / 登记缴费·上传缴费凭证 / 导出 / 批量上传到财务）
  *
  * ★ 2026-10-20 用户要求（两轮）：
  *   ① 催费推送 / 催费记录下线 → 操作列整列移除；
  *   ② 操作列**恢复**，只放「上传缴费凭证」= 登记缴费（缴费方式 / 金额 / 时间 / 备注 / 截图）。
  *   后端 /fee/share、/fee/notify/list 接口**保留但页面不再有入口**（将来接真实短信发送时复用；
  *   数据表 t_class_fee_notify 也照旧保留，「催费次数」列仍按它统计）。
+ *
+ * ★ 2026-10-21 用户要求：**大学 / 就业两个部门的功能与初高对齐**。
+ *   对齐前：大学、就业的行在操作列只有一个「—」，导出按钮也只对初高显示，
+ *   实缴金额 / 缴费方式 / 缴费日期 永远空白（那两张表压根没有这几列）。
+ *   对齐后：
+ *     · 三张表都补了 pay_method / paid_amount / pay_date / voucher_url / pay_remark
+ *       （迁移：migrations/20261021_001、migrations-class-common/20261021_001）；
+ *     · 操作列「上传缴费凭证 / 重新登记 / 查看」对三个部门都出现，
+ *       submitPayment() 按行上的部门分发到各自的接口；
+ *     · 导出对三个部门都放开（初高走服务端 exportFee，另两个按列表接口取全量后前端拼 CSV）。
+ *   ⚠️ 「批量上传到财务」仍然只对初高（+全部部门）：大学催缴副本本身就是**财务推来的**
+ *      （source_system='finance'），再转交一次会在财务里重复建单。
  */
 
 import { computed, ref, reactive, onMounted } from 'vue';
@@ -15,8 +27,8 @@ import { Search, Refresh, Download, Plus, Upload } from '@element-plus/icons-vue
 import { FEE_TYPE_NAME, PAY_METHOD_NAME, PAY_STATUS_NAME, PayMethod, PayStatus } from 'shared-types/class-jh';
 import type { FeeRecord, FeeListQuery, ClassInfo } from 'shared-types/class-jh';
 import { fetchFeeList, exportFee, submitFeePayment, fetchTransferCandidates, transferFees } from '@/class-jh/api/fee';
-import { urgeList } from '@/class/api/student';
-import { fetchFeeCallList } from '@/api/feeCall';
+import { urgeList, submitUrgePayment } from '@/class/api/student';
+import { fetchFeeCallList, submitFeeCallPayment } from '@/api/feeCall';
 import { fetchClassOptions } from '@/class-jh/api/classInfo';
 import { exportCsv } from '@/class-jh/utils/exportCsv';
 import { dash, formatAmount, formatDate, payStatusTagType } from '@/class-jh/utils/format';
@@ -130,6 +142,14 @@ function urgeToRow(r: any): FeeRow {
     remainDays: r.overdueDays ? -r.overdueDays : undefined,
     isUrgent: !!r.isOverdue,
     urgeCount: Number(r.urgeCount || 0),
+    // ★ 2026-10-21：大学也能登记缴费了（与初高同款五列），这里把登记信息搬上游标
+    payMethod: r.payMethod ?? null,
+    payMethodName: r.payMethodName || null,
+    paidAmount: r.paidAmount ?? null,
+    payDate: r.payDate || undefined,
+    voucherUrl: r.voucherUrl || undefined,
+    payRemark: r.payRemark || null,
+    raw: r,
     dept: '大学',
   } as unknown as FeeRow;
 }
@@ -156,6 +176,13 @@ function callToRow(r: any): FeeRow {
     callStatusName: r.callStatusName || '',
     expireDate: r.dueDate || undefined,
     isUrgent: !!r.overdue,
+    // ★ 2026-10-21：就业也能登记缴费了（与初高同款五列）
+    payMethod: r.payMethod ?? null,
+    payMethodName: r.payMethodName || null,
+    paidAmount: r.paidAmount ?? null,
+    payDate: r.payDate || undefined,
+    voucherUrl: r.voucherUrl || undefined,
+    payRemark: r.payRemark || null,
     raw: r,
     dept: '就业',
   } as unknown as FeeRow;
@@ -363,6 +390,16 @@ function readAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/**
+ * 提交登记缴费 —— **按部门分发到三个后端接口**
+ *
+ * ★ 2026-10-21 用户要求：催费页里 大学 / 就业 要和初高功能对齐，操作列不再只有初高能点。
+ *   三个部门各有各的表，不能一个接口通吃：
+ *     · 初高 → POST /api/class-jh/fee/voucher（t_class_fee，另会反写财务）
+ *     · 大学 → POST /api/class/urge/voucher   （sms_common.t_class_urge_sync）
+ *     · 就业 → POST /api/job/fee-call/voucher （sms_job.t_job_fee_call）
+ *   行的 id 前缀（`urge:` / `call:`）是列表聚合时拼的，提交前必须剥掉，否则后端查不到单。
+ */
 async function submitPayment() {
   if (!paymentRow.value) return;
   if (!paymentForm.payDate) {
@@ -383,14 +420,38 @@ async function submitPayment() {
   paymentSubmitting.value = true;
   try {
     const dataUrl = voucherFile.value ? await readAsDataUrl(voucherFile.value) : undefined;
-    await submitFeePayment({
-      feeId: paymentRow.value.feeId,
-      payMethod: paymentForm.payMethod,
-      paidAmount: Math.round(paymentForm.amountYuan * 100),
-      payDate: paymentForm.payDate,
-      remark: paymentForm.remark.trim() || undefined,
-      dataUrl,
-    });
+    const paidAmount = Math.round(paymentForm.amountYuan * 100);
+    const remark = paymentForm.remark.trim() || undefined;
+    const dept = paymentRow.value.dept || '初高';
+
+    if (dept === '大学') {
+      await submitUrgePayment({
+        urgeId: String(paymentRow.value.feeId).replace(/^urge:/, ''),
+        payMethod: paymentForm.payMethod,
+        paidAmount,
+        payDate: paymentForm.payDate,
+        remark,
+        dataUrl,
+      });
+    } else if (dept === '就业') {
+      await submitFeeCallPayment({
+        id: String(paymentRow.value.feeId).replace(/^call:/, ''),
+        payMethod: paymentForm.payMethod,
+        paidAmount,
+        payDate: paymentForm.payDate,
+        remark,
+        dataUrl,
+      });
+    } else {
+      await submitFeePayment({
+        feeId: paymentRow.value.feeId,
+        payMethod: paymentForm.payMethod,
+        paidAmount,
+        payDate: paymentForm.payDate,
+        remark,
+        dataUrl,
+      });
+    }
     ElMessage.success('缴费登记成功');
     paymentVisible.value = false;
     loadData();
@@ -508,46 +569,110 @@ async function submitTransfer() {
 }
 
 /* ============ 导出 ============ */
+
+/**
+ * ★ 2026-10-21 用户要求：导出也要对大学 / 就业放开（原来按钮只在初高出现）。
+ *
+ * 【为什么初高仍然走服务端、另两个部门走列表接口】
+ *   · 初高 `exportFee` 会补齐手机号/家长手机号并带出财务来源字段，口径已稳定，不动它；
+ *   · 大学（催缴副本）/ 就业（催费单）没有导出接口，但数据量级很小，
+ *     直接按列表接口翻页取全量、在前端拼 CSV —— 与页面看到的行完全一致，不会二次失真。
+ */
+const EXPORT_HEADERS = [
+  '部门',
+  '学号',
+  '姓名',
+  '手机号',
+  '家长手机号',
+  '班级',
+  '缴费类型',
+  '应缴金额',
+  '实缴金额',
+  '缴费方式',
+  '缴费状态',
+  '应缴日期',
+  '缴费日期',
+  '备注',
+  '剩余天数',
+  '是否紧急',
+];
+
+function toExportRow(r: FeeRow) {
+  return [
+    r.dept || '初高',
+    r.studentNo,
+    r.studentName,
+    r.phone || '',
+    r.parentPhone || '',
+    r.className,
+    r.feeTypeName,
+    formatAmount(r.feeAmount),
+    r.paidAmount == null ? '' : formatAmount(r.paidAmount),
+    r.payMethodName || '',
+    r.payStatusName,
+    formatDate(r.expireDate),
+    formatDate(r.payDate),
+    r.payRemark || '',
+    r.remainDays ?? '',
+    r.isUrgent ? '是' : '否',
+  ];
+}
+
+/** 导出用的公共筛选（三个源同一套参数，与 loadData 同口径） */
+function deptQuery() {
+  return {
+    classId: query.classId,
+    feeType: query.feeType,
+    payStatus: query.payStatus,
+    onlyOverdue: query.isUrgent,
+    startDate: query.startDate,
+    endDate: query.endDate,
+    keyword: query.keyword || undefined,
+  };
+}
+
+/** 翻页取全量（size 200 = 后端上限；最多 50 页，防止异常数据把页面拖死） */
+async function collectAllPages<T>(
+  fetcher: (page: number, size: number) => Promise<{ list: T[]; total: number }>,
+): Promise<T[]> {
+  const size = 200;
+  const out: T[] = [];
+  for (let page = 1; page <= 50; page += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const data = await fetcher(page, size);
+    const list = data?.list || [];
+    out.push(...list);
+    const total = Number(data?.total || 0);
+    if (!list.length || out.length >= total) break;
+  }
+  return out;
+}
+
+/** 按当前部门（含「全部部门」）收集要导出的行 */
+async function collectRowsForExport(): Promise<FeeRow[]> {
+  const dept = query.dept;
+  const out: FeeRow[] = [];
+  if (dept === 'jh' || dept === 'all') {
+    const list = await exportFee(query);
+    out.push(...list.map((r) => ({ ...r, dept: '初高' } as FeeRow)));
+  }
+  if (dept === 'class' || dept === 'all') {
+    const list = await collectAllPages((page, size) => urgeList({ ...deptQuery(), page, size }));
+    out.push(...list.map((r) => urgeToRow(r)));
+  }
+  if (dept === 'employ' || dept === 'all') {
+    const list = await collectAllPages((page, size) => fetchFeeCallList({ ...deptQuery(), page, size }));
+    out.push(...list.map((r) => callToRow(r)));
+  }
+  // 「全部部门」按应缴日期倒序，与页面合并视图一致
+  out.sort((a, b) => (b.expireDate || '0000').localeCompare(a.expireDate || '0000'));
+  return out;
+}
+
 async function handleExport() {
   try {
-    const list = await exportFee(query);
-    exportCsv(
-      '催费台账',
-      [
-        '学号',
-        '姓名',
-        '手机号',
-        '家长手机号',
-        '班级',
-        '缴费类型',
-        '应缴金额',
-        '实缴金额',
-        '缴费方式',
-        '缴费状态',
-        '应缴日期',
-        '缴费日期',
-        '备注',
-        '剩余天数',
-        '是否紧急',
-      ],
-      list.map((r) => [
-        r.studentNo,
-        r.studentName,
-        r.phone || '',
-        r.parentPhone || '',
-        r.className,
-        r.feeTypeName,
-        formatAmount(r.feeAmount),
-        r.paidAmount == null ? '' : formatAmount(r.paidAmount),
-        r.payMethodName || '',
-        r.payStatusName,
-        formatDate(r.expireDate),
-        formatDate(r.payDate),
-        r.payRemark || '',
-        r.remainDays ?? '',
-        r.isUrgent ? '是' : '否',
-      ]),
-    );
+    const rows = await collectRowsForExport();
+    exportCsv('催费台账', EXPORT_HEADERS, rows.map(toExportRow));
     ElMessage.success('导出成功');
   } catch {
     /* 错误已统一处理 */
@@ -619,7 +744,8 @@ onMounted(() => {
 
     <el-card shadow="never" class="table-card">
       <div class="toolbar">
-        <el-button v-if="query.dept === 'jh'" :icon="Download" @click="handleExport">导出</el-button>
+        <!-- ★ 2026-10-21 用户要求：导出对三个部门都放开（原来是 v-if="query.dept === 'jh'"） -->
+        <el-button :icon="Download" @click="handleExport">导出</el-button>
         <!-- ★ 2026-10-20 用户要求：催费列表来自财务管理 · 缴费管理，到期日到 20 天才进列表 -->
         <span v-if="urgeWindowDays && query.dept !== 'class' && query.dept !== 'employ'" class="window-hint">
           初高数据来自「财务管理 · 缴费管理」，只列到期日距今 ≤ {{ urgeWindowDays }} 天的缴费单（含已逾期；未设到期日的不显示）
@@ -686,18 +812,17 @@ onMounted(() => {
           <template #default="{ row }">{{ row.urgeCount ?? '—' }}</template>
         </el-table-column>
         <!-- ★ 2026-10-20 用户要求：操作列恢复，只放「上传缴费凭证」（= 登记缴费）；
-             催费推送 / 催费记录 / 催缴记录已下线，不要再加回来 -->
+             催费推送 / 催费记录 / 催缴记录已下线，不要再加回来。
+             ★ 2026-10-21 用户要求：大学 / 就业与初高对齐 —— 这三个按钮对三个部门都出现
+             （原来只有初高行有，另外两个部门显示「—」）。提交时按部门分发到各自的接口。 -->
         <el-table-column label="操作" width="160" align="center" fixed="right">
           <template #default="{ row }">
-            <template v-if="!row.dept || row.dept === '初高'">
-              <el-button link type="primary" size="small" @click="openPayment(row)">
-                {{ hasPayment(row) ? '重新登记' : '上传缴费凭证' }}
-              </el-button>
-              <el-button v-if="hasPayment(row)" link type="success" size="small" @click="viewVoucher(row)">
-                查看
-              </el-button>
-            </template>
-            <span v-else>—</span>
+            <el-button link type="primary" size="small" @click="openPayment(row)">
+              {{ hasPayment(row) ? '重新登记' : '上传缴费凭证' }}
+            </el-button>
+            <el-button v-if="hasPayment(row)" link type="success" size="small" @click="viewVoucher(row)">
+              查看
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -776,6 +901,10 @@ onMounted(() => {
     <!-- 登记缴费（上传缴费凭证） -->
     <el-dialog v-model="paymentVisible" title="上传缴费凭证" width="560px">
       <el-form :model="paymentForm" label-width="96px">
+        <!-- ★ 2026-10-21：三个部门共用这一套弹窗，先把「哪个部门」写清楚，避免登错单 -->
+        <el-form-item label="部门">
+          <el-input :model-value="paymentRow?.dept || '初高'" disabled />
+        </el-form-item>
         <el-form-item label="学生">
           <el-input :model-value="paymentRow ? `${paymentRow.studentNo} ${paymentRow.studentName}` : ''" disabled />
         </el-form-item>
