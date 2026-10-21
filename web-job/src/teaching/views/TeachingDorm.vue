@@ -760,7 +760,13 @@ function categoryName(row: DormRow): string {
 /** ★ 只有可写学段（大学 hasCreate=false）才给新增按钮 */
 const canCreate = computed(() => {
   if (isReadOnlyUser.value) return false;
-  if (query.stage) return !!curMeta.value?.hasCreate;
+  /**
+   * ★ 2026-10-21：meta 没拉到（网络抖动 / 接口异常 / 首屏还没返回）时**不要隐藏按钮**。
+   *   之前 `metaList` 为空 → `some()` 恒 false → 班主任偶尔看到「没有新增房间」，
+   *   刷新一下又有了。写权限真正的闸在后端（40302），前端不该用空数组当"无权限"。
+   */
+  if (!metaList.value.length) return true;
+  if (query.stage) return curMeta.value ? !!curMeta.value.hasCreate : true;
   return metaList.value.some((m) => m.hasCreate);
 });
 /** 行级：这一行所属学段能不能编辑 */
