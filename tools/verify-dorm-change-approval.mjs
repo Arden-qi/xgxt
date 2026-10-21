@@ -117,31 +117,7 @@ check(
   withTarget ? `${withTarget.newDormNo} · ${withTarget.newBedNo || '（缺）'}` : '无调宿单',
 );
 
-// ①.6 重复提交被拦（用已有待审批单的学生 + 同一目标床位）
-const pending = chgRows.find((r) => r.approvalStatus === 2 && r.bizType === 1 && r.newBedNo);
-if (pending) {
-  // change/list 不带 bedId，按 目标宿舍 + 床位号 反查
-  const pbeds = await req('GET', `/api/teaching/dorm/beds?stage=${pending.stage}&dormId=${pending.newDormId}`, {
-    token: acadToken,
-  });
-  const pbed = (pbeds.body?.data?.beds || []).find((b) => b.bedLabel === pending.newBedNo);
-  const dup = await req('POST', '/api/teaching/dorm/change/create', {
-    token: sunToken,
-    body: {
-      stage: pending.stage,
-      bizType: 1,
-      studentId: pending.studentId,
-      oldDormId: pending.oldDormId || undefined,
-      newDormId: pending.newDormId,
-      newBedId: pbed?.bedId,
-      changeDate: new Date().toISOString().slice(0, 10),
-      changeReason: '重复提交校验',
-    },
-  });
-  check('重复提交被拦', dup.body?.code === 40000, dup.body?.message || `code=${dup.body?.code}`);
-} else {
-  check('重复提交被拦', false, '没有可用于校验的待审批调宿单');
-}
+// ①.6 重复提交在下方「发起 → 通过」闭环里校验（那里有确定的待审批单）
 
 // ② 不存在的申请不能静默通过
 const badApprove = await req('POST', '/api/teaching/dorm/change/approve', {
@@ -183,6 +159,21 @@ try {
     });
     changeId = created.body?.data?.id || '';
     check('班主任发起调宿', !!changeId, created.body?.message || '');
+
+    // 同一学生 + 同一目标床位再提一次 → 应被防重拦下
+    const dup = await req('POST', '/api/teaching/dorm/change/create', {
+      token: sunToken,
+      body: {
+        stage: 'jh',
+        bizType: 1,
+        studentId: stu.studentId,
+        newDormId: ROOM_303,
+        newBedId: bedId,
+        changeDate: new Date().toISOString().slice(0, 10),
+        changeReason: '重复提交校验',
+      },
+    });
+    check('重复提交被拦', dup.body?.code === 40000, dup.body?.message || `code=${dup.body?.code}`);
 
     const approved = await req('POST', '/api/teaching/dorm/change/approve', {
       token: acadToken,

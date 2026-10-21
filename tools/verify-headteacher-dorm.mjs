@@ -145,9 +145,15 @@ if (acadToken && sunToken) {
     const list = await req('GET', '/api/teaching/dorm/list?stage=jh&page=1&size=100', { token: sunToken });
     const rows = list.body?.data?.list || [];
     const ids = new Set(rows.map((r) => r.dormId));
-    const allowed = new Set([male.roomId, female.roomId]);
+    // 可见范围 = 分派给本班的房间 ∪ 本班学生已住的房间
+    const s1 = await req('GET', `/api/teaching/dorm/allocate/students?className=${encodeURIComponent('G2601')}`, { token: acadToken });
+    const s2 = await req('GET', `/api/teaching/dorm/allocate/students?className=${encodeURIComponent('J2602')}`, { token: acadToken });
+    const own = [...(s1.body?.data || []), ...(s2.body?.data || [])]
+      .map((s) => s.dormId)
+      .filter(Boolean);
+    const allowed = new Set([male.roomId, female.roomId, ...own]);
     check(
-      '班主任只看到分给本班的房间',
+      '班主任只看到本班相关房间',
       ids.has(male.roomId) && ids.has(female.roomId) && rows.every((r) => allowed.has(r.dormId)),
       `${rows.map((r) => `${r.buildingName}${r.roomNo}`).join('、') || '空'}`,
     );
@@ -159,6 +165,30 @@ if (acadToken && sunToken) {
       cand.status === 200 && candRows.length > 0 && candRows.every((c) => ['G2601', 'J2602'].includes(c.className)),
       `${candRows.length} 人（${[...new Set(candRows.map((c) => c.className))].join('/')}）`,
     );
+
+    /**
+     * ★ 2026-10-21 跨学段：Q30 是初高班，班主任却是大学部的张海涛（zhanght）。
+     *   分派后 zhanght 必须能看到 1号楼 405 —— 验证「我的班」是跨学段查的。
+     */
+    const room405 = (m.body?.data || []).find((r) => r.room === '405');
+    if (!room405) {
+      check('找到 1号楼 405', false);
+    } else {
+      const saveQ30 = await req('POST', '/api/teaching/dorm/allocate/save', {
+        token: acadToken,
+        body: { className: 'Q30', headTeacherName: '张海涛', maleRoomIds: [room405.roomId], femaleRoomIds: [] },
+      });
+      check('教务把 Q30 分到 1号楼405', saveQ30.body?.code === 200, saveQ30.body?.message || '');
+      const zhLogin = await req('POST', '/api/portal/account/login', { body: { account: 'zhanght', password: PWD } });
+      const zhToken = zhLogin.body?.data?.token;
+      const zlist = await req('GET', '/api/teaching/dorm/list?stage=class&page=1&size=100', { token: zhToken });
+      const zrows = zlist.body?.data?.list || [];
+      check(
+        '跨学段班主任能看到本班分派的房间',
+        zrows.some((r) => r.dormId === room405.roomId),
+        zrows.map((r) => `${r.buildingName}${r.roomNo}`).join('、') || '空',
+      );
+    }
   }
 } else {
   check('取教务/班主任 token', false);
