@@ -363,13 +363,25 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       `code=${dupName.json?.code} ${dupName.json?.message || ''}`,
     );
 
-    // 初高：班主任必填（NOT NULL）
+    // ★ 2026-10-15 需求：初高「班主任 / 教员 / 助教」改为下拉选人、**允许不选**
+    //   （迁移 20261015_002_class_info_relax_required 已把这几列放宽为可空）
+    //   ⚠️ 这条以前是"缺班主任必须被拦"，长期靠残留的同名班撞「已有班级叫…」才
+    //      侥幸通过 —— 清掉夹具后就露馅了，所以改成按新口径断言。
     const jhNoTeacher = await req(`${API}/save`, {
       method: 'POST',
-      body: { stage: 'jh', className: '自检无班主任班', deptCode: 1 },
+      // 名字带随机后缀：这个用例以前会撞上一次运行留下的同名班
+      body: { stage: 'jh', className: '自检无班主任-' + Math.random().toString(36).slice(2, 6), deptCode: 1 },
       token: tQiansy,
     });
-    check('★ 初高新增：缺班主任被拦（那张表里 NOT NULL）', isBlocked(jhNoTeacher), `code=${jhNoTeacher.json?.code} ${jhNoTeacher.json?.message || ''}`);
+    check(
+      '★ 初高新增：班主任/教员全留空也能建（2026-10-15 放宽）',
+      isOk(jhNoTeacher) && !!jhNoTeacher.json?.data?.id,
+      `code=${jhNoTeacher.json?.code} ${jhNoTeacher.json?.message || ''}`,
+    );
+    const jhNoTeacherId = jhNoTeacher.json?.data?.id;
+    if (jhNoTeacherId) {
+      await req(`${API}/delete?stage=jh&id=${jhNoTeacherId}`, { method: 'DELETE', token: tQiansy });
+    }
 
     // 班级名必填
     const noName = await req(`${API}/save`, {
@@ -379,35 +391,21 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     });
     check('★ 班级名必填被拦', isBlocked(noName), `code=${noName.json?.code}`);
 
-    /* ----★ NOT NULL 防御（三张表必填列各不相同，必须各自提前拦，
+    /* ----★ 必填列防御（各表不同，必须各自提前拦，
        否则会漏到 DB 层报 ER_BAD_NULL_ERROR，错误信息很难定位）---- */
-    // 实训：head_teacher_id + open_date 必填
-    const jobNoTeacher = await req(`${API}/save`, {
-      method: 'POST',
-      body: { stage: 'job', className: '自检实训缺班主任', classCode: 'E2E' + Math.random().toString(36).slice(2, 8).toUpperCase() },
-      token: tQiansy,
-    });
-    check('★ 实训新增：缺班主任被拦（该表 head_teacher_id NOT NULL）', isBlocked(jobNoTeacher), `code=${jobNoTeacher.json?.code} ${jobNoTeacher.json?.message || ''}`);
+    // 实训：open_date 仍是必填（head_teacher 已放宽，不再要求）
     const jobNoDate = await req(`${API}/save`, {
       method: 'POST',
-      body: { stage: 'job', className: '自检实训缺日期', classCode: 'E2E' + Math.random().toString(36).slice(2, 8).toUpperCase(), headTeacherId: 'T-X', headTeacherName: '某' },
+      body: {
+        stage: 'job',
+        className: '自检实训缺日期',
+        classCode: 'E2E' + Math.random().toString(36).slice(2, 8).toUpperCase(),
+        headTeacherId: 'T-X',
+        headTeacherName: '某',
+      },
       token: tQiansy,
     });
-    check('★ 实训新增：缺开班日期被拦（该表 open_date NOT NULL）', isBlocked(jobNoDate), `code=${jobNoDate.json?.code} ${jobNoDate.json?.message || ''}`);
-
-    // 初高：head_teacher_name / teacher_id / teacher_name 也必填（实测！）
-    const jhNoTeacherName = await req(`${API}/save`, {
-      method: 'POST',
-      body: { stage: 'jh', className: '自检初高缺师称', deptCode: 1, headTeacherId: 'T-X' },
-      token: tQiansy,
-    });
-    check('★ 初高新增：缺班主任姓名被拦（该表 head_teacher_name NOT NULL）', isBlocked(jhNoTeacherName), `code=${jhNoTeacherName.json?.code} ${jhNoTeacherName.json?.message || ''}`);
-    const jhNoTeacherField = await req(`${API}/save`, {
-      method: 'POST',
-      body: { stage: 'jh', className: '自检初高缺教员', deptCode: 1, headTeacherId: 'T-X', headTeacherName: '某' },
-      token: tQiansy,
-    });
-    check('★ 初高新增：缺教员工号被拦（该表 teacher_id NOT NULL）', isBlocked(jhNoTeacherField), `code=${jhNoTeacherField.json?.code} ${jhNoTeacherField.json?.message || ''}`);
+    check('★ 实训新增：缺开班日期被拦（业务必填）', isBlocked(jobNoDate), `code=${jobNoDate.json?.code} ${jobNoDate.json?.message || ''}`);
 
     // 大学：class_name 之外只有 dept_code/stage 必填，缺阶段码要有兜底而不是炸库
     const clsNoPhase = await req(`${API}/save`, {

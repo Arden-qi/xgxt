@@ -29,6 +29,8 @@ for (const a of ['zhanght', 'sunjl', 'qiansy', 'lilx']) tokens[a] = await login(
 
 const db = conn('sms_common');
 const sid = 'TEST-XFER-' + Date.now();
+const empClasses = [];
+let empSid = null;
 const cleanup = async () => {
   await db('t_uni_repeat').where({ student_id: sid }).del().catch(() => {});
   await db('t_uni_class_transfer').where({ student_id: sid }).del().catch(() => {});
@@ -111,7 +113,76 @@ try {
     body: { stage: 'class', studentId: sid, fromClassId: FROM, toClassId: TO, mode: 'repeat' },
   });
   check('★ 无关角色写入被拦', lilxWrite.json?.code === 40302, `code=${lilxWrite.json?.code}`);
+  /* ---------- 6. 就业部（emp）同链路 ---------- */
+  const mkEmp = async (name, code, phase) => {
+    const r = await req(`${BASE}/api/teaching/class/save`, {
+      method: 'POST',
+      token: tokens.qiansy,
+      body: { stage: 'emp', className: name, classCode: code, deptCode: 3, phaseCode: phase, openDate: '2026-10-21' },
+    });
+    if (r.json?.data?.id) empClasses.push(r.json.data.id);
+    return r.json?.data?.id;
+  };
+  const em1 = await mkEmp('自检就业一阶段班', 'QE01', 301);
+  const em2 = await mkEmp('自检就业二阶段班', 'QE02', 302);
+  const em3 = await mkEmp('自检就业三阶段班', 'QE03', 303);
+  check('就业部：建 3 个班（301/302/303）', !!(em1 && em2 && em3));
+
+  empSid = 'TEST-EMP-' + Date.now();
+  await db('t_uni_student').insert({
+    id: empSid,
+    edu_stage: 'emp',
+    stage_key: 'emp',
+    student_no: 'E' + Date.now(),
+    student_name: '自检-就业换班生',
+    gender: 1,
+    class_id: em2,
+    class_name: '自检就业二阶段班',
+    student_status: 9,
+    repeat_count: 0,
+    is_deleted: 0,
+    create_time: new Date(),
+  });
+
+  const empRep = await req(`${BASE}/api/teaching/class-transfer/targets?stage=emp&fromClassId=${em2}&mode=repeat`, { token: tokens.qiansy });
+  check(
+    '就业部：末班只给进度≤当前的班（301）',
+    (empRep.json?.data || []).length === 1 && empRep.json?.data?.[0]?.name === '自检就业一阶段班',
+    (empRep.json?.data || []).map((x) => x.name).join(','),
+  );
+  const empPro = await req(`${BASE}/api/teaching/class-transfer/targets?stage=emp&fromClassId=${em2}&mode=promote`, { token: tokens.qiansy });
+  check(
+    '就业部：升班只给进度更快的班（303）',
+    (empPro.json?.data || []).length === 1 && empPro.json?.data?.[0]?.name === '自检就业三阶段班',
+    (empPro.json?.data || []).map((x) => x.name).join(','),
+  );
+
+  const empDo1 = await req(`${BASE}/api/teaching/class-transfer/do`, {
+    method: 'POST',
+    token: tokens.qiansy,
+    body: { stage: 'emp', studentId: empSid, fromClassId: em2, toClassId: em1, mode: 'repeat', reason: '自检' },
+  });
+  check('就业部：末班执行成功', empDo1.json?.code === 200, `${empDo1.json?.code} ${empDo1.json?.message || ''}`);
+  const empS1 = await db('t_uni_student').where({ id: empSid }).first();
+  check('就业部：班籍改为 301 班 + repeat_count+1', empS1?.class_name === '自检就业一阶段班' && Number(empS1?.repeat_count) === 1, `${empS1?.class_name} / ${empS1?.repeat_count}`);
+
+  const empDo2 = await req(`${BASE}/api/teaching/class-transfer/do`, {
+    method: 'POST',
+    token: tokens.qiansy,
+    body: { stage: 'emp', studentId: empSid, fromClassId: em1, toClassId: em3, mode: 'promote', reason: '自检' },
+  });
+  check('就业部：升班执行成功', empDo2.json?.code === 200, `${empDo2.json?.code} ${empDo2.json?.message || ''}`);
+  const empS2 = await db('t_uni_student').where({ id: empSid }).first();
+  check('就业部：班籍改为 303 班', empS2?.class_name === '自检就业三阶段班', empS2?.class_name);
+
 } finally {
+  for (const id of empClasses) await db('t_uni_class').where({ id }).del().catch(() => {});
+  if (empSid) {
+    await db('t_uni_repeat').where({ student_id: empSid }).del().catch(() => {});
+    await db('t_uni_class_transfer').where({ student_id: empSid }).del().catch(() => {});
+    await db('t_uni_class_student').where({ student_id: empSid }).del().catch(() => {});
+    await db('t_uni_student').where({ id: empSid }).del().catch(() => {});
+  }
   await cleanup();
   killAll();
 }
