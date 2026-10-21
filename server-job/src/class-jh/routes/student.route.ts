@@ -39,6 +39,8 @@ import { BizError } from '../middleware/errorHandler';
 import { buildClassScope, getScopedClassIds } from '../middleware/dataScope';
 import { mobile, idCard, dateOnly, dateOnlyRequired } from '../utils/zodRules';
 import { classSync } from '../../utils/classSync';
+// ★ 2026-10-21 学号新规：LZ + J/T(初/高) + 班号(3位) + 班内序号(3位, 每班从001独立)
+import { buildStudentNoForClass, legacyStudentNo } from '../utils/classNo';
 // ★ 2026-10-06：缴费记录统一取数（实时财务管理 + 初高台账兜底）
 import { fetchStudentFeeRecords, summarizeFees } from '../../utils/financeFeeRef';
 
@@ -68,22 +70,13 @@ function calcAge(birthDate?: string | Date | null): number | null {
   return age >= 0 ? age : null;
 }
 
-/** 生成学号：S + yyyy + 4 位序号（Q8 裁决） */
-async function generateStudentNo(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `S${year}`;
-  const rows = await db(TABLE)
-    .where('student_no', 'like', `${prefix}%`)
-    .orderBy('student_no', 'desc')
-    .limit(1)
-    .select('student_no');
-  let seq = 1;
-  if (rows.length && rows[0].student_no) {
-    const tail = String(rows[0].student_no).slice(prefix.length);
-    const n = parseInt(tail, 10);
-    if (!Number.isNaN(n)) seq = n + 1;
-  }
-  return `${prefix}${String(seq).padStart(4, '0')}`;
+/**
+ * 生成学号（2026-10-21 新规，用户口径）：
+ *   有班级 → LZ + J/T(初/高) + 班号(3位) + 班内序号(3位, 每班从001独立)
+ *   无班级 / 班级没有班号（老数据未回填）→ 旧口径 S + 年份 + 4 位全校流水
+ */
+async function generateStudentNo(classId?: string | null): Promise<string> {
+  return (await buildStudentNoForClass(db, classId)) ?? (await legacyStudentNo(db));
 }
 
 /** 当前时间 → 'yyyy-MM-dd HH:mm:ss'（推送时间戳用） */
@@ -404,7 +397,7 @@ studentRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
 
-    const studentNo = body.studentNo?.trim() || (await generateStudentNo());
+    const studentNo = body.studentNo?.trim() || (await generateStudentNo(body.classId ?? null));
     // ⚠️ 唯一性预检必须按「物理范围」查（不带 is_deleted 过滤）：
     //    t_class_student.uk_student_no 是物理唯一索引，被逻辑删除的历史行仍占用学号。
     //    若这里带 is_deleted=false，删除后重建同号会绕过预检、直撞索引 → 返回 50002。
@@ -1182,7 +1175,8 @@ studentRouter.post(
         throw new BizError(BizCode.DATA_DUPLICATE, `学号 ${studentNo} 已存在，请换一个或留空由系统生成`);
       }
     } else {
-      studentNo = await generateStudentNo();
+      // 分班入档必有班级（上面 assertClassAcceptsIntake 已校验）→ 走新规学号
+      studentNo = await generateStudentNo(cls.id);
     }
     const id = randomUUID();
     const now = new Date();
