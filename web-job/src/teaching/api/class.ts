@@ -159,6 +159,10 @@ export interface ClassSummary {
   closedCount: number;
   graduatingCount: number;
   graduatedCount: number;
+  /** ★ 2026-10-21：系统态计数（实训 / 待就业 / 已就业），只有实训 / 就业部会有 */
+  trainingCount?: number;
+  waitEmployCount?: number;
+  employedCount?: number;
   studentCount: number;
 }
 
@@ -315,14 +319,62 @@ export interface EmploymentUpgradeResult {
   updated: number;
   /** 已是待就业 / 已就业而跳过的学生数 */
   skipped: number;
+  /** ★ 2026-10-21：改完之后的班级状态（6 待就业） */
+  classStatus: number;
+  classStatusName: string;
 }
 
 /**
- * 升就业：把该实训班学生的状态批量改成「待就业」
- * ⚠️ 只改学生状态，不搬班、不改班级名（见后端 class/employment.ts 头部口径）
+ * 升就业：把该实训班学生的状态批量改成「待就业」，班级状态改「待就业」
+ * ⚠️ 不搬班、不改班级名（见后端 class/employment.ts 头部口径）
  */
 export function upgradeClassToEmployment(payload: { classId: string }) {
   return http.post<EmploymentUpgradeResult>('/api/teaching/class/employment-upgrade', payload);
+}
+
+/* ---------------- 已就业（2026-10-21 批注第 3 条） ---------------- */
+
+/** 一种学生状态 + 人数 */
+export interface EmploymentProgressItem {
+  status: number;
+  statusName: string;
+  count: number;
+}
+
+export interface EmploymentProgress {
+  className: string;
+  classStatus: number;
+  classStatusName: string;
+  total: number;
+  /** 已就业人数 */
+  employed: number;
+  /** 退学人数 */
+  quit: number;
+  /** 还没结清（既不是已就业也不是退学）的人数 */
+  pending: number;
+  /** 全班都已是「已就业 / 退学」→ 一次确认即可；false → 强制改需要二次确认 */
+  settled: boolean;
+  items: EmploymentProgressItem[];
+}
+
+/**
+ * 识别整班学生状态（点【已就业】的第一步）
+ *   前端拿 settled / items 决定弹窗文案与要不要二次确认。
+ */
+export function getEmploymentProgress(classId: string) {
+  return http.get<EmploymentProgress>('/api/teaching/class/employment-progress', { classId });
+}
+
+export interface EmployedConfirmResult {
+  className: string;
+  classStatus: number;
+  classStatusName: string;
+  changed: boolean;
+}
+
+/** 确认把班级状态改为「已就业」（只改班级状态，学生状态不动） */
+export function confirmClassEmployed(payload: { classId: string }) {
+  return http.post<EmployedConfirmResult>('/api/teaching/class/employment-confirm', payload);
 }
 
 /** 班级状态（★ 三套完全一致，无需映射） */
@@ -331,32 +383,51 @@ export const CLASS_STATUS_NAME: Record<number, string> = {
   2: '封班',
   3: '待结业',
   4: '已结业',
+  // ★ 2026-10-21 批注：系统态（升实训 / 升就业 / 已就业 三个动作写入）
+  5: '实训',
+  6: '待就业',
+  7: '已就业',
 };
 
+/** 系统态：不能手工在编辑弹窗里选，只能由操作列三个按钮写入 */
+export const CLASS_SYSTEM_STATUSES = [5, 6, 7];
+
+/** 是否系统态（实训 / 待就业 / 已就业） */
+export function isSystemClassStatus(s: number | null | undefined): boolean {
+  return CLASS_SYSTEM_STATUSES.includes(Number(s));
+}
+
 /**
- * 可供选择的班级状态
- *   2026-10-19 批注：「待结业」删除（筛选下拉、编辑班级的状态下拉、统计卡片都不再出现）。
- *   CLASS_STATUS_NAME 里仍保留 3 的中文名 —— 历史数据万一是 3，标签还能正常显示。
+ * 可供选择的班级状态（筛选下拉）
+ *   2026-10-19 批注：「待结业」删除。
+ *   2026-10-21 批注：补上「实训 / 待就业 / 已就业」—— 不补就筛不到这三类班。
  */
 export const CLASS_STATUS_SELECTABLE = [
   { value: 1, label: '开放' },
   { value: 2, label: '封班' },
   { value: 4, label: '已结业' },
+  { value: 5, label: '实训' },
+  { value: 6, label: '待就业' },
+  { value: 7, label: '已就业' },
 ];
 
 /**
  * 编辑班级时「班级状态」可选项：当前状态 + 允许流转到的状态（与后端同一张表）
  *   1 开放 → 1/2；2 封班 → 2/1/4；4 已结业 → 终态（只读）
  *   （3 待结业 只为兼容历史数据保留 3→4，不作为任何状态的下一跳）
+ *   ★ 2026-10-21：实训 / 待就业 / 已就业 是系统态 → 只回显自己，不给别的选项；
+ *     弹窗里同时整条下拉禁用（见 TeachingClass.vue 的 editStatusLocked）。
  */
 export function classStatusOptions(cur: number | null | undefined): Array<{ value: number; label: string }> {
+  const c = Number(cur) || 1;
+  if (isSystemClassStatus(c)) return [{ value: c, label: CLASS_STATUS_NAME[c] ?? '' }];
   const map: Record<number, number[]> = {
     1: [1, 2],
     2: [2, 1, 4],
     3: [3, 4],
     4: [4],
   };
-  const list = map[Number(cur) || 1] || [Number(cur) || 1];
+  const list = map[c] || [c];
   return list.map((v) => ({ value: v, label: CLASS_STATUS_NAME[v] }));
 }
 
@@ -366,6 +437,9 @@ export const CLASS_STATUS_TAG: Record<number, string> = {
   2: 'info',
   3: 'warning',
   4: 'danger',
+  5: 'warning', // 实训
+  6: 'primary', // 待就业
+  7: 'success', // 已就业
 };
 
 export const CLASS_STAGE_NAME: Record<ClassStage, string> = {

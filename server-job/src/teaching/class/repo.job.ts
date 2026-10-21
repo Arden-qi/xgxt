@@ -29,6 +29,7 @@ import {
   CLASS_STATUS,
   CLASS_STATUS_NAME,
   canTransitClassStatus,
+  isSystemClassStatus,
 } from '../shared/dto';
 import type {
   ClassListQuery,
@@ -258,6 +259,12 @@ export const repo: ClassRepo = {
           | undefined;
         if (!cur) throw new Error('班级不存在');
         const from = Number(cur.class_status);
+        // ★ 2026-10-21：实训 / 待就业 / 已就业 是系统态，只能由操作列的三个按钮写入
+        if (from !== body.classStatus && isSystemClassStatus(body.classStatus)) {
+          throw new Error(
+            `「${CLASS_STATUS_NAME[body.classStatus]}」是系统自动标记的状态，不能手工修改`,
+          );
+        }
         if (from !== body.classStatus && !canTransitClassStatus(from, body.classStatus)) {
           throw new Error(
             `班级状态不可从「${CLASS_STATUS_NAME[from]}」流转为「${CLASS_STATUS_NAME[body.classStatus]}」`,
@@ -377,6 +384,10 @@ export const repo: ClassRepo = {
     if (!cur) throw new Error('班级不存在');
     const from = Number(cur.class_status);
     if (from === to) return;
+    // ★ 2026-10-21：系统态不接受手工流转（升实训 / 升就业 / 已就业各有专用动作）
+    if (isSystemClassStatus(to)) {
+      throw new Error(`「${CLASS_STATUS_NAME[to]}」是系统自动标记的状态，不能手工修改`);
+    }
     if (!canTransitClassStatus(from, to)) {
       throw new Error(
         `班级状态不可从「${CLASS_STATUS_NAME[from]}」流转为「${CLASS_STATUS_NAME[to]}」`,
@@ -405,6 +416,10 @@ export const repo: ClassRepo = {
     let closedCount = 0;
     let graduatingCount = 0;
     let graduatedCount = 0;
+    // ★ 2026-10-21：系统态计数（实训 / 待就业 / 已就业）—— 卡片里要和总数对得上
+    let trainingCount = 0;
+    let waitEmployCount = 0;
+    let employedCount = 0;
     for (const r of rows) {
       studentCount += counts.get(String(r.id)) ?? 0;
       const s = Number(r.class_status);
@@ -412,6 +427,9 @@ export const repo: ClassRepo = {
       else if (s === CLASS_STATUS.CLOSED) closedCount++;
       else if (s === CLASS_STATUS.GRADUATING) graduatingCount++;
       else if (s === CLASS_STATUS.GRADUATED) graduatedCount++;
+      else if (s === CLASS_STATUS.TRAINING) trainingCount++;
+      else if (s === CLASS_STATUS.WAIT_EMPLOY) waitEmployCount++;
+      else if (s === CLASS_STATUS.EMPLOYED) employedCount++;
     }
     return {
       stage: STAGE,
@@ -421,6 +439,9 @@ export const repo: ClassRepo = {
       closedCount,
       graduatingCount,
       graduatedCount,
+      trainingCount,
+      waitEmployCount,
+      employedCount,
       studentCount,
     };
   },
@@ -433,6 +454,10 @@ function transitionsFrom(from: number): number[] {
     [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
     [CLASS_STATUS.GRADUATED]: [],
+    // ★ 2026-10-21 系统态：实训 → 待就业 → 已就业（只给详情页展示用，编辑弹窗禁选）
+    [CLASS_STATUS.TRAINING]: [CLASS_STATUS.WAIT_EMPLOY],
+    [CLASS_STATUS.WAIT_EMPLOY]: [CLASS_STATUS.EMPLOYED],
+    [CLASS_STATUS.EMPLOYED]: [],
   };
   return map[from] ?? [];
 }

@@ -1,26 +1,35 @@
 /**
- * 升就业（2026-10-21 批注）
+ * 升就业 / 已就业（2026-10-21 批注）
  * ============================================================
- * 批注原文（班级管理页，红框在操作列的「升实训」）：
- *   「【升实训】操作之后出现【升就业】，点击【升就业】该操作弹出
- *     是否将该班级学生状态改为（待就业）」
+ * 批注原文（班级管理页，红字 1/2/3 条）：
+ *   「1. 点击【升实训】，并且升实训成功后，则班级状态改为【实训】」
+ *   「2. 点击【升就业】，并且升就业成功之后，则班级状态改为【待就业】，
+ *     【升就业】按钮改为已就业」
+ *   「3. 点击【已就业】系统识别整个班级的学生状态，若状态都已经变为已就业、退学，
+ *     则提示整班都已就业并显示班级人数和就业人数，确认要将班级状态改为已就业吗，
+ *     确认之后，班级的状态该为【已就业】；若识别班级内仍存在其他状态的学生，
+ *     则进行提示班级各个状态的人数，并且提示确认要强制将本班状态改为【已就业】，
+ *     确认之后需要再次确认，再次确认之后状态改为已就业」
  *
  * 【口径】
  *   ① 入口只在**实训班**（`t_job_class` 里 `stage_key='job'`）上出现 ——
  *      这些班就是「升实训」造出来的，所以「升实训之后才有升就业」天然成立。
- *   ② 只改**学生状态**：班里每个学生 `t_student_base.student_status`
- *      实训中(8) → 待就业(9)；班级本身不搬、不改名、不换部门。
- *      （学生档案页 / 班级详情花名册读的都是这份状态，三处自动一致。）
- *   ③ 已经是「待就业(9)」的跳过（重复点不重复写），
- *      已经是「已就业(10)」的**不降级** —— 已就业是终态，不能被一次误点拉回待就业。
+ *   ② 升就业：改**学生状态**（实训中 8 → 待就业 9）+ 班级状态（实训 5 → 待就业 6）。
+ *      班级本身不搬、不改名、不换部门。
+ *      已是「待就业(9)」的学生跳过；已是「已就业(10)」的**不降级**（终态）。
+ *   ③ 已就业：先查整班学生状态分布（employment-progress），
+ *      全部为「已就业 / 退学」→ 一次确认；还有其它状态 → 提示各状态人数 + 二次确认，
+ *      确认后把**班级状态**置为「已就业(7)」。**不改学生状态**
+ *      （学生是不是已就业，由「学生档案 → 已就业」按钮逐个确认）。
  *
  * ⚠️ 与「升实训」不同：这里不跨库、不建班、不写花名册，只是批量改状态，
  *    所以不放进 training.ts，单独一个文件更不容易误改到搬迁逻辑。
  */
 
-import { BizCode, StudentStatus } from 'shared-types';
+import { BizCode, STUDENT_STATUS_NAME, StudentStatus } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { db } from '../../utils/db';
+import { CLASS_STATUS, CLASS_STATUS_NAME } from '../shared/dto';
 import { tbl } from '../shared/uniTable';
 import { assertStageView } from './service';
 
@@ -39,6 +48,64 @@ export interface EmploymentUpgradeResult {
   updated: number;
   /** 已经是待就业 / 已就业，跳过的学生数 */
   skipped: number;
+  /** 改完之后的班级状态（应为 6 待就业） */
+  classStatus: number;
+  classStatusName: string;
+}
+
+/** 一个「学生状态 → 人数」条目 */
+export interface EmploymentProgressItem {
+  status: number;
+  statusName: string;
+  count: number;
+}
+
+export interface EmploymentProgressResult {
+  className: string;
+  /** 班级当前状态（5 实训 / 6 待就业 / 7 已就业 …） */
+  classStatus: number;
+  classStatusName: string;
+  /** 班级人数（花名册在册人数） */
+  total: number;
+  /** 已就业人数 */
+  employed: number;
+  /** 退学人数 */
+  quit: number;
+  /** 还没结清的人数（既不是已就业也不是退学） */
+  pending: number;
+  /** 全班都已是「已就业 / 退学」→ true */
+  settled: boolean;
+  /** 各状态人数（按人数降序，人数相同按状态码升序） */
+  items: EmploymentProgressItem[];
+}
+
+export interface EmployedConfirmResult {
+  className: string;
+  /** 确认之后的班级状态（7 已就业） */
+  classStatus: number;
+  classStatusName: string;
+  /** 本次是否真的改动了（本来就是已就业 → false） */
+  changed: boolean;
+}
+
+/** 取实训班（只认 stage_key='job'，越权与不存在都按同一句话回） */
+async function loadJobClass(classId: string): Promise<Record<string, any>> {
+  const cls = (await tbl(db, 'sms_job', T, STAGE)
+    .where({ id: classId, is_deleted: 0 })
+    .first()) as Record<string, any> | undefined;
+  if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在或已删除');
+  if (String(cls.stage_key ?? '') !== 'job') {
+    throw new BizError(BizCode.PARAM_ERROR, '该操作只能用于实训班级');
+  }
+  return cls;
+}
+
+/** 花名册里的学生 id 列表 */
+async function rosterStudentIds(classId: string): Promise<string[]> {
+  const roster = (await tbl(db, 'sms_job', ROSTER_T, STAGE)
+    .where({ class_id: classId, is_deleted: 0 })
+    .select('student_id')) as Array<Record<string, any>>;
+  return roster.map((r) => String(r.student_id)).filter(Boolean);
 }
 
 export async function upgradeClassToEmployment(
@@ -51,18 +118,10 @@ export async function upgradeClassToEmployment(
   const classId = String(input.classId ?? '').trim();
   if (!classId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
 
-  const cls = (await tbl(db, 'sms_job', T, STAGE)
-    .where({ id: classId, is_deleted: 0 })
-    .first()) as Record<string, any> | undefined;
-  if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在或已删除');
-  if (String(cls.stage_key ?? '') !== 'job') {
-    throw new BizError(BizCode.PARAM_ERROR, '「升就业」只能用于实训班级');
-  }
+  const cls = await loadJobClass(classId);
+  const className = String(cls.class_name ?? '');
 
-  const roster = (await tbl(db, 'sms_job', ROSTER_T, STAGE)
-    .where({ class_id: classId, is_deleted: 0 })
-    .select('student_id')) as Array<Record<string, any>>;
-  const ids = roster.map((r) => String(r.student_id)).filter(Boolean);
+  const ids = await rosterStudentIds(classId);
   if (!ids.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生');
 
   // 只动「还没到待就业/已就业」的学生
@@ -75,9 +134,123 @@ export async function upgradeClassToEmployment(
       update_by: user?.userId || 'system',
     });
 
+  /* ★ 2026-10-21 批注第 2 条：升就业成功 → 班级状态改为「待就业」
+   *   已经是「已就业(7)」的班不动（终态，不能被再次升就业拉回来）。 */
+  const from = Number(cls.class_status);
+  let classStatus = from;
+  if (from !== CLASS_STATUS.EMPLOYED && from !== CLASS_STATUS.WAIT_EMPLOY) {
+    classStatus = CLASS_STATUS.WAIT_EMPLOY;
+    await tbl(db, 'sms_job', T, STAGE).where({ id: classId }).update({
+      class_status: classStatus,
+      prev_class_status: from,
+      update_time: new Date(),
+      update_by: user?.userId || 'system',
+    });
+  }
+
   return {
-    className: String(cls.class_name ?? ''),
+    className,
     updated: Number(updated) || 0,
     skipped: Math.max(ids.length - (Number(updated) || 0), 0),
+    classStatus,
+    classStatusName: CLASS_STATUS_NAME[classStatus] ?? '',
+  };
+}
+
+/**
+ * 【已就业】第一步：识别整班学生状态
+ *   前端拿 settled 决定是「一次确认」还是「强制 + 二次确认」，
+ *   items 用来在弹窗里逐条列出「已就业 12 人 / 退学 2 人 / 待就业 3 人」。
+ */
+export async function getEmploymentProgress(
+  input: EmploymentUpgradeInput,
+  user: any,
+): Promise<EmploymentProgressResult> {
+  await assertStageView(user, 'job');
+
+  const classId = String(input.classId ?? '').trim();
+  if (!classId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
+
+  const cls = await loadJobClass(classId);
+  const ids = await rosterStudentIds(classId);
+  if (!ids.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生');
+
+  const rows = (await tbl(db, 'sms_job', STUDENT_T, STAGE)
+    .whereIn('id', ids)
+    .select('id', 'student_status')) as Array<Record<string, any>>;
+
+  const counter = new Map<number, number>();
+  for (const r of rows) {
+    const s = Number(r.student_status ?? 0);
+    counter.set(s, (counter.get(s) ?? 0) + 1);
+  }
+  // 花名册有、主档查不到的学生也要算进总人数，否则「人数」对不上
+  const missing = Math.max(ids.length - rows.length, 0);
+  if (missing) counter.set(0, (counter.get(0) ?? 0) + missing);
+
+  const items: EmploymentProgressItem[] = [...counter.entries()]
+    .map(([status, count]) => ({
+      status,
+      statusName: status ? (STUDENT_STATUS_NAME[status] ?? String(status)) : '状态未知',
+      count,
+    }))
+    .sort((a, b) => b.count - a.count || a.status - b.status);
+
+  const employed = counter.get(StudentStatus.EMPLOYED) ?? 0;
+  const quit = counter.get(StudentStatus.QUIT) ?? 0;
+  // 既不是已就业也不是退学（含状态未知）→ 都算「未结清」
+  const pending = ids.length - employed - quit;
+
+  return {
+    className: String(cls.class_name ?? ''),
+    classStatus: Number(cls.class_status),
+    classStatusName: CLASS_STATUS_NAME[Number(cls.class_status)] ?? '',
+    total: ids.length,
+    employed,
+    quit,
+    pending: Math.max(pending, 0),
+    settled: pending <= 0,
+    items,
+  };
+}
+
+/**
+ * 【已就业】第二步：把班级状态改成「已就业」
+ *   ⚠️ 只改班级状态，学生状态一个不动（学生档案里逐个点【已就业】才是写 10）。
+ */
+export async function confirmClassEmployed(
+  input: EmploymentUpgradeInput,
+  user: any,
+): Promise<EmployedConfirmResult> {
+  await assertStageView(user, 'job');
+
+  const classId = String(input.classId ?? '').trim();
+  if (!classId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
+
+  const cls = await loadJobClass(classId);
+  const className = String(cls.class_name ?? '');
+  const from = Number(cls.class_status);
+
+  if (from === CLASS_STATUS.EMPLOYED) {
+    return {
+      className,
+      classStatus: CLASS_STATUS.EMPLOYED,
+      classStatusName: CLASS_STATUS_NAME[CLASS_STATUS.EMPLOYED],
+      changed: false,
+    };
+  }
+
+  await tbl(db, 'sms_job', T, STAGE).where({ id: classId }).update({
+    class_status: CLASS_STATUS.EMPLOYED,
+    prev_class_status: from,
+    update_time: new Date(),
+    update_by: user?.userId || 'system',
+  });
+
+  return {
+    className,
+    classStatus: CLASS_STATUS.EMPLOYED,
+    classStatusName: CLASS_STATUS_NAME[CLASS_STATUS.EMPLOYED],
+    changed: true,
   };
 }

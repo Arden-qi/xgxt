@@ -319,8 +319,9 @@ teachingClassRouter.post(
 
 /* ============================================================
  * 12. 升就业（2026-10-21 批注）
- *   实训班 → 「升就业」：把该班学生的状态批量改成「待就业」。
- *   ⚠️ 只改学生状态，不搬班、不改班级名、不换部门（口径见 employment.ts 头部）。
+ *   实训班 → 「升就业」：把该班学生的状态批量改成「待就业」，
+ *   同时把**班级状态**改成「待就业」（批注第 2 条）。
+ *   ⚠️ 不搬班、不改班级名、不换部门（口径见 employment.ts 头部）。
  * ============================================================ */
 teachingClassRouter.post(
   '/employment-upgrade',
@@ -328,8 +329,41 @@ teachingClassRouter.post(
     const b = req.body || {};
     const r = await employmentSvc.upgradeClassToEmployment({ classId: requireId(b.classId) }, req.user);
     const tip = r.updated
-      ? `已将「${r.className}」的 ${r.updated} 名学生状态改为「待就业」`
-      : `「${r.className}」的学生都已是待就业 / 已就业，无需修改`;
+      ? `已将「${r.className}」的 ${r.updated} 名学生状态改为「待就业」，班级状态：${r.classStatusName}`
+      : `「${r.className}」的学生都已是待就业 / 已就业，班级状态：${r.classStatusName}`;
+    res.json(ok(r, tip));
+  }),
+);
+
+/* ============================================================
+ * 13. 已就业 · 识别整班学生状态（2026-10-21 批注第 3 条）
+ *   返回各学生状态人数 + settled（全班是否都已是「已就业 / 退学」）。
+ *   前端据此决定：一次确认，还是「提示人数 → 强制确认 → 再次确认」。
+ * ============================================================ */
+teachingClassRouter.get(
+  '/employment-progress',
+  wrap(async (req, res) => {
+    const r = await employmentSvc.getEmploymentProgress(
+      { classId: requireId(req.query.classId) },
+      req.user,
+    );
+    res.json(ok(r, '查询成功'));
+  }),
+);
+
+/* ============================================================
+ * 14. 已就业 · 确认写班级状态（2026-10-21 批注第 3 条）
+ *   只把班级状态改成「已就业(7)」，学生状态不动
+ *   （学生是不是已就业，由学生档案里逐个点【已就业】）。
+ * ============================================================ */
+teachingClassRouter.post(
+  '/employment-confirm',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const r = await employmentSvc.confirmClassEmployed({ classId: requireId(b.classId) }, req.user);
+    const tip = r.changed
+      ? `「${r.className}」的班级状态已改为「已就业」`
+      : `「${r.className}」已经是「已就业」状态，无需修改`;
     res.json(ok(r, tip));
   }),
 );

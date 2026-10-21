@@ -5,7 +5,8 @@
       <template #title>
         本页合并了 <b>4 个部门</b>的班级信息（初高部 / 大学部 / 实训 / 就业部）。
         <span class="muted">
-          班级状态码三套一致（1 开放 / 2 封班 / 4 已结业）；
+          班级状态码三套一致（1 开放 / 2 封班 / 4 已结业；升实训后自动为 5 实训、
+          升就业后为 6 待就业、【已就业】确认后为 7 已就业）；
           但「班级编号」「结业日期」只有实训有，「今日出勤率」只有初高有 —— 表单会按部门自动隐藏不适用的字段。
         </span>
       </template>
@@ -20,6 +21,13 @@
           <span class="ok">开放 {{ s.openCount }}</span>
           <span>封班 {{ s.closedCount }}</span>
           <span class="danger">已结业 {{ s.graduatedCount }}</span>
+        </div>
+        <!-- ★ 2026-10-21 批注：升实训 / 升就业 / 已就业 会写入三个系统态，
+             卡片不加这三项，数字就和「班级总数」对不上。没有时才不显示。 -->
+        <div v-if="s.trainingCount || s.waitEmployCount || s.employedCount" class="tcv-card__x">
+          <span class="warn">实训 {{ s.trainingCount || 0 }}</span>
+          <span>待就业 {{ s.waitEmployCount || 0 }}</span>
+          <span class="ok">已就业 {{ s.employedCount || 0 }}</span>
         </div>
         <div class="tcv-card__x">在班学生 {{ s.studentCount }} 人</div>
       </div>
@@ -133,7 +141,10 @@
       <el-table-column v-if="hasCloseDateCol" label="结业日期" min-width="100" align="center">
         <template #default="{ row }">{{ row.closeDate || '—' }}</template>
       </el-table-column>
-      <el-table-column label="状态" width="70" align="center">
+      <!-- ★ 2026-10-21 批注：状态列要能看见「实训 / 待就业 / 已就业」——
+           列多表宽，不固定的话会被挤到可视区外（截图里只剩半个字）。
+           固定在右侧、紧挨操作列，滚动时始终可见。 -->
+      <el-table-column label="状态" width="82" align="center" fixed="right">
         <template #default="{ row }">
           <el-tag :type="tagType(row.classStatus)" size="small">{{ row.classStatusName }}</el-tag>
         </template>
@@ -154,16 +165,29 @@
           >
             升实训
           </el-button>
-          <!-- ★ 2026-10-21 批注：升实训之后出现【升就业】（只在实训班上显示）——
-               点一下弹确认，把该班学生状态改为「待就业」。 -->
+          <!-- ★ 2026-10-21 批注：升实训之后出现【升就业】——
+               点一下弹确认，把该班学生状态改为「待就业」，班级状态也改「待就业」
+               （改完按钮自动变成【已就业】）。已经是待就业 / 已就业的班不再显示。 -->
           <el-button
-            v-if="!isReadOnlyUser && row.stage === 'job'"
+            v-if="!isReadOnlyUser && row.stage === 'job' && canUpgradeEmployment(row)"
             link
             type="warning"
             :loading="employmentSaving === row.classId"
             @click="doEmploymentUpgrade(row)"
           >
             升就业
+          </el-button>
+          <!-- ★ 2026-10-21 批注第 3 条：【升就业】成功后该位置变成【已就业】。
+               点击 → 先识别整班学生状态 → 一次确认（全班已就业/退学）
+               或「提示各状态人数 + 强制确认 + 再次确认」→ 班级状态改「已就业」。 -->
+          <el-button
+            v-if="!isReadOnlyUser && row.stage === 'job' && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
+            link
+            type="success"
+            :loading="employedSaving === row.classId"
+            @click="doConfirmEmployed(row)"
+          >
+            已就业
           </el-button>
           <el-button v-if="!isReadOnlyUser" link type="danger" @click="doDelete(row)">删除</el-button>
         </template>
@@ -337,14 +361,12 @@
             </el-form-item>
           </el-col>
           <!-- 2026-10-19 批注：原来的操作列【改状态】移到编辑弹窗里；
-               「待结业」已删除，封班后直接选「已结业」。已结业是终态，下拉禁用。 -->
+               「待结业」已删除，封班后直接选「已结业」。已结业是终态，下拉禁用。
+               ★ 2026-10-21：实训 / 待就业 / 已就业 是系统态，同样只读
+                 （只能由操作列的【升实训】【升就业】【已就业】写入）。 -->
           <el-col v-if="form.id" :span="8">
             <el-form-item label="班级状态">
-              <el-select
-                v-model="form.classStatus"
-                style="width: 100%"
-                :disabled="editStatusFrom === 4"
-              >
+              <el-select v-model="form.classStatus" style="width: 100%" :disabled="editStatusLocked">
                 <el-option v-for="s in editStatusOptions" :key="s.value" :label="s.label" :value="s.value" />
               </el-select>
             </el-form-item>
@@ -710,6 +732,9 @@ import {
   doClassHandover,
   upgradeClassToTraining,
   upgradeClassToEmployment,
+  getEmploymentProgress,
+  confirmClassEmployed,
+  isSystemClassStatus,
   CLASS_STATUS_TAG,
   CLASS_STATUS_SELECTABLE,
   classStatusOptions,
@@ -947,6 +972,14 @@ const formPlanId = ref('');
 /** 打开编辑弹窗时的原始状态 —— 状态下拉的可选项按它算，选完不会越点越多 */
 const editStatusFrom = ref<number | null>(null);
 const editStatusOptions = computed(() => classStatusOptions(editStatusFrom.value));
+/**
+ * 状态是否只读：
+ *   已结业(4) 是终态；实训(5) / 待就业(6) / 已就业(7) 是系统态 ——
+ *   都不能在编辑弹窗里手工改（只能由操作列三个按钮写入）。
+ */
+const editStatusLocked = computed(
+  () => Number(editStatusFrom.value) === 4 || isSystemClassStatus(editStatusFrom.value),
+);
 
 const formPhaseOptions = computed(() => {
   const plan = planOptionsAll.value.find((p) => p.id === formPlanId.value);
@@ -1311,21 +1344,41 @@ async function doTrainingUpgrade() {
   }
 }
 
-/* ---------------- ★ 升就业（2026-10-21 批注：实训班 → 学生状态改「待就业」） ----------------
- * 批注原文：「【升实训】操作之后出现【升就业】，点击【升就业】该操作弹出
- *   是否将该班级学生状态改为（待就业）」
+/* ---------------- ★ 升就业 / 已就业（2026-10-21 批注第 2、3 条） ----------------
+ * 批注原文：
+ *   「2. 点击【升就业】，并且升就业成功之后，则班级状态改为【待就业】，
+ *     【升就业】按钮改为已就业」
+ *   「3. 点击【已就业】系统识别整个班级的学生状态，若状态都已经变为已就业、退学，
+ *     则提示整班都已就业并显示班级人数和就业人数，确认要将班级状态改为已就业吗，
+ *     确认之后，班级的状态该为【已就业】；若识别班级内仍存在其他状态的学生，
+ *     则进行提示班级各个状态的人数，并且提示确认要强制将本班状态改为【已就业】，
+ *     确认之后需要再次确认，再次确认之后状态改为已就业」
  *
- * 口径：只改**学生状态**（实训中 8 → 待就业 9），班级不搬、不改名、不换部门。
- *   已经待就业/已就业的学生后端会跳过（已就业是终态，不能被一次误点降级）。
- *   学生档案页与班级详情的花名册读的都是这份状态，改完两处自动一致。
+ * 落地：
+ *   · 升就业 → 学生状态 实训中(8) → 待就业(9)，班级状态 实训(5) → 待就业(6)；
+ *     按钮自动换成【已就业】（v-if 看 classStatus === 6）。
+ *   · 已就业 → 先查整班学生状态分布：
+ *       settled（全班都是已就业/退学）→ 一次确认 → 班级状态改 已就业(7)；
+ *       否则 → 列出各状态人数 + 强制确认 + **再次确认** → 改 已就业(7)。
+ *   · 已就业只改**班级状态**，学生状态一个不动（学生档案里逐个点【已就业】才写 10）。
  */
+const CLASS_STATUS_CODE = { TRAINING: 5, WAIT_EMPLOY: 6, EMPLOYED: 7 } as const;
+
 const employmentSaving = ref('');
+const employedSaving = ref('');
+
+/** 实训班还没到「待就业 / 已就业」→ 才显示【升就业】 */
+function canUpgradeEmployment(row: ClassRow): boolean {
+  const s = Number(row.classStatus);
+  return s !== CLASS_STATUS_CODE.WAIT_EMPLOY && s !== CLASS_STATUS_CODE.EMPLOYED;
+}
 
 async function doEmploymentUpgrade(row: ClassRow) {
   try {
     await ElMessageBox.confirm(
       `是否将该班级（${escText(row.className)}，${row.studentCount ?? 0} 人）的<b>学生状态改为「待就业」</b>？` +
-        '<br/><br/><span>班级本身不搬动、不改名；已是「已就业」的学生不会被改动。</span>',
+        '<br/><br/><span>班级本身不搬动、不改名；已是「已就业」的学生不会被改动。<br/>' +
+        '确认后班级状态也会变为「待就业」，按钮变为【已就业】。</span>',
       '升就业确认',
       {
         type: 'warning',
@@ -1340,13 +1393,82 @@ async function doEmploymentUpgrade(row: ClassRow) {
   employmentSaving.value = row.classId;
   try {
     const r = await upgradeClassToEmployment({ classId: row.classId });
-    if (r.updated) ElMessage.success(`已将 ${r.updated} 名学生状态改为「待就业」`);
-    else ElMessage.info('该班学生都已是待就业 / 已就业，无需修改');
+    if (r.updated) ElMessage.success(`已将 ${r.updated} 名学生状态改为「待就业」，班级状态：${r.classStatusName}`);
+    else ElMessage.info(`该班学生都已是待就业 / 已就业，班级状态：${r.classStatusName}`);
     load();
   } catch (e) {
     ElMessage.error((e as Error).message || '升就业失败');
   } finally {
     employmentSaving.value = '';
+  }
+}
+
+/** 【已就业】：识别整班学生状态 → 确认（不满足时二次确认）→ 班级状态改「已就业」 */
+async function doConfirmEmployed(row: ClassRow) {
+  let p;
+  try {
+    p = await getEmploymentProgress(row.classId);
+  } catch (e) {
+    ElMessage.error((e as Error).message || '识别班级学生状态失败');
+    return;
+  }
+  // 「已就业 12 人　退学 2 人　待就业 3 人」
+  const lines = p.items.map((i) => `${escText(i.statusName)} ${i.count} 人`).join('　');
+  try {
+    if (p.settled) {
+      // 全班都已是「已就业 / 退学」→ 一次确认即可
+      await ElMessageBox.confirm(
+        `已识别整班 <b>${p.total}</b> 人：已就业 <b>${p.employed}</b> 人、退学 <b>${p.quit}</b> 人。` +
+          `<br/><br/>确认要将班级状态改为「已就业」吗？`,
+        '已就业确认',
+        {
+          type: 'success',
+          confirmButtonText: '确认改为已就业',
+          cancelButtonText: '取消',
+          dangerouslyUseHTMLString: true,
+        },
+      );
+    } else {
+      // 还有其它状态的学生 → 先提示各状态人数，再强制确认 + 再次确认
+      await ElMessageBox.confirm(
+        `本班共 <b>${p.total}</b> 人，当前学生状态：<br/><b>${lines}</b><br/><br/>` +
+          `其中还有 <b>${p.pending}</b> 人未到「已就业 / 退学」。<br/>` +
+          `确认要<b>强制</b>将本班状态改为「已就业」吗？`,
+        '已就业确认',
+        {
+          type: 'warning',
+          confirmButtonText: '确认强制改为已就业',
+          cancelButtonText: '取消',
+          dangerouslyUseHTMLString: true,
+        },
+      );
+      // 批注原文：「确认之后需要再次确认，再次确认之后状态改为已就业」
+      await ElMessageBox.confirm(
+        `再次确认：把「${escText(row.className)}」的班级状态改为「已就业」？<br/>` +
+          `<span>（学生档案里的学生状态不会被改动）</span>`,
+        '再次确认',
+        {
+          type: 'warning',
+          confirmButtonText: '再次确认',
+          cancelButtonText: '取消',
+          dangerouslyUseHTMLString: true,
+        },
+      );
+    }
+  } catch {
+    return;
+  }
+  employedSaving.value = row.classId;
+  try {
+    const r = await confirmClassEmployed({ classId: row.classId });
+    ElMessage.success(
+      r.changed ? `「${r.className}」的班级状态已改为「已就业」` : `「${r.className}」已经是「已就业」状态`,
+    );
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message || '改为已就业失败');
+  } finally {
+    employedSaving.value = '';
   }
 }
 

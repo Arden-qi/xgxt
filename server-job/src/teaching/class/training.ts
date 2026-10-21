@@ -8,7 +8,8 @@
  *
  * 【口径 —— 这不是"新建一个实训班再把学生挪过去"，而是"这个班换部门"】
  *   ① 在 `sms_job.t_job_class` 建一个实训班（dept_code=3、stage_key='job'）：
- *      班级名称默认沿用原班名（可改）、阶段取「就业部阶段方案」、班级状态=开放；
+ *      班级名称默认沿用原班名（可改）、阶段取「就业部阶段方案」、
+ *      班级状态 = **实训(5)**（2026-10-21 批注：升实训成功后班级状态改为【实训】）；
  *      班主任 / 教员 / 助教 **全部为空**（批注要求），只填项目经理 + 就业老师。
  *   ② 原班学生整套搬到 `sms_job.t_student_base`（状态 → 实训中 8），
  *      同时写实训花名册 `t_job_class_student`（不写花名册，班级详情里就没人）。
@@ -24,9 +25,10 @@
  */
 
 import { randomUUID } from 'crypto';
-import { BizCode, ClassStatus, DeptCode, StudentStatus } from 'shared-types';
+import { BizCode, DeptCode, StudentStatus } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { db as classDb } from '../../class/db';
+import { CLASS_STATUS } from '../shared/dto';
 import { phaseCodeCol, tbl, tblInsTrx, tblTrx } from '../shared/uniTable';
 import { loadStagePlanOptions } from '../shared/stagePlans';
 import { assertStageView } from './service';
@@ -142,7 +144,9 @@ export async function upgradeClassToTraining(
       open_date: today,
       close_date: null,
       student_count: students.length,
-      class_status: ClassStatus.OPEN,
+      // ★ 2026-10-21 批注：「升实训成功后，班级状态改为【实训】」
+      //   新班一出生就是「实训」态（不是「开放」）—— 实训班本来就收不了新生。
+      class_status: CLASS_STATUS.TRAINING,
       attendance_rate: null,
       remark,
       is_deleted: 0,
