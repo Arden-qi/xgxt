@@ -20,14 +20,14 @@ import {
   DEPT_LEVEL_NAME,
   PermBaseAction,
   PERM_BASE_ACTION_NAME,
-  RuleGroup,
   RoleStatus,
   UserStatus,
   ExportScope,
 } from 'shared-types/perm';
 import { ok } from '../utils/response';
 import { wrap } from '../utils/wrap';
-import { getRuleRaw } from '../services/perm.service';
+/* ★ 2026-10-19：密码策略统一从 pwdPolicy 取（与校验逻辑同一份，避免文案与判定漂移） */
+import { loadPwdRule } from '../services/pwdPolicy';
 
 export const optionRouter = Router();
 
@@ -37,17 +37,16 @@ export const optionRouter = Router();
  * ============================================================ */
 
 async function buildPwdTip(): Promise<string> {
-  const pwd = await getRuleRaw(RuleGroup.PWD);
+  const pwd = await loadPwdRule();
   const parts: string[] = [];
-  if (pwd.min) parts.push(`不少于 ${pwd.min} 位`);
+  parts.push(`不少于 ${pwd.min} 位`);
   const need: string[] = [];
-  if (pwd.upper === 'true') need.push('大写字母');
-  if (pwd.digit === 'true') need.push('数字');
-  if (pwd.symbol === 'true') need.push('特殊符号');
+  if (pwd.upper) need.push('大写字母');
+  if (pwd.digit) need.push('数字');
+  if (pwd.symbol) need.push('特殊符号');
   if (need.length) parts.push(`含${need.join('、')}`);
-  const days = Number(pwd.expireDays || 0);
-  parts.push(days > 0 ? `${days} 天需更换` : '长期有效');
-  if (pwd.forceFirst === 'true') parts.push('首次登录须修改');
+  parts.push(pwd.expireDays > 0 ? `${pwd.expireDays} 天需更换` : '长期有效');
+  if (pwd.forceFirst) parts.push('首次登录须修改');
   return parts.join('，');
 }
 

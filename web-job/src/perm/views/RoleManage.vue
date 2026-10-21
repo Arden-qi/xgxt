@@ -35,7 +35,7 @@
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { PERM_ROUTE, permUserEditRoute } from '@/perm/utils/links';
+import { PERM_ROUTE } from '@/perm/utils/links';
 import type {
   PermDeptTreeNode,
   PermItem,
@@ -48,7 +48,7 @@ import type {
   RoleStatus,
   RoleType,
 } from 'shared-types/perm';
-import { assignApi, deptApi, exportApi, roleApi, userApi } from '@/perm/api/perm';
+import { deptApi, exportApi, roleApi, userApi } from '@/perm/api/perm';
 import { useOptionStore } from '@/perm/stores/option';
 import { usePermStore } from '@/perm/stores/perm';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
@@ -106,8 +106,11 @@ function countModules(p: RolePermMap): number {
 /** 职位图标 —— 统一走 @/perm/utils/roleIcon（列表 / 弹窗 / 详情三处共用一份映射表） */
 const roleIcon = roleIconOf;
 
-/** 职位类型标签配色（原型第 1534 行：系统职位→p、管理职位→w、其余→n） */
-const typeTag = (t: string): string => (t === '系统职位' ? 'p' : t === '管理职位' ? 'w' : 'n');
+/* ★ 2026-10-20：职位类型（业务/管理/职能/系统职位）已按用户要求从界面上整列移除 ——
+ *   列表列、筛选下拉、详情弹窗、新建/编辑表单、批量导入、导出表都不再展示或让人填。
+ *   ⚠️ 字段本身（t_perm_role.role_type）与接口里的一律保留：
+ *      数据仍按原值存着，编辑职位时原样带回、保存时原样提交，不会被重置成「业务职位」。
+ *      原先用于给类型标签配色的 typeTag() 因此一并删除（没有落点了）。 */
 
 /* ============================================================
  * 一、列表（原型 ROLE_FILTER + renderRoleList）
@@ -123,7 +126,6 @@ const query = reactive({
   page: 1,
   size: 10,
   keyword: '',
-  roleType: '',
   roleStatus: '',
   deptId: '',
 });
@@ -165,12 +167,6 @@ const defaultDeptId = computed(
 );
 
 const deptNameOf = (id: string): string => flatDepts.value.find((d) => d.id === id)?.deptName || '—';
-
-const roleTypes = computed<{ value: string; label: string }[]>(() =>
-  optionStore.roleTypes.length
-    ? optionStore.roleTypes.map((o) => ({ value: String(o.value), label: o.label }))
-    : ['业务职位', '管理职位', '职能职位', '系统职位'].map((v) => ({ value: v, label: v })),
-);
 
 const roleStatuses = computed<{ value: string; label: string }[]>(() =>
   optionStore.roleStatuses.length
@@ -225,7 +221,7 @@ function onKeywordInput(): void {
 }
 
 function resetFilter(): void {
-  Object.assign(query, { page: 1, keyword: '', roleType: '', roleStatus: '', deptId: '' });
+  Object.assign(query, { page: 1, keyword: '', roleStatus: '', deptId: '' });
   void load();
   toast('已重置筛选条件', 'warn');
 }
@@ -325,22 +321,18 @@ async function openDetail(row: PermRoleListItem): Promise<void> {
 
 /* ============================================================
  * 六、权限树（原型 openPermTree / renderPermTree / treeXxx / updatePermStat）
- *    三种模式：
- *      view —— 只读查看（列表「权限数」）
- *      edit —— 编辑并保存（详情「编辑权限」）  → assignApi.save
+ *    两种模式（★ 2026-10-20：原为三种，edit 随「职位详情 → 编辑权限」按钮一起删除）：
+ *      view —— 只读查看（列表「权限数」）。编辑权限改去「职位权限分配」页
  *      form —— 职位表单草稿（表单「＋ 配置权限」）→ 应用到表单
  * ============================================================ */
 
-type TreeMode = 'view' | 'edit' | 'form';
+type TreeMode = 'view' | 'form';
 
 const treeOpen = ref(false);
 const treeMode = ref<TreeMode>('view');
 const treeTitle = ref('');
 const treeDraft = ref<RolePermMap>({});
-const treeTargetId = ref('');
 const treeRoleName = ref('');
-const treeRoleCode = ref('');
-const treeUserCount = ref(0);
 /** 模块折叠（原型 treeTog） */
 const collapsed = reactive<Record<string, boolean>>({});
 
@@ -418,55 +410,36 @@ function collapseAll(): void {
   });
 }
 
-function openTreeWith(
-  id: string,
-  roleName: string,
-  roleCode: string,
-  mode: TreeMode,
-  perms: RolePermMap,
-  userCount: number,
-): void {
-  treeTargetId.value = id;
+function openTreeWith(roleName: string, perms: RolePermMap): void {
   treeRoleName.value = roleName;
-  treeRoleCode.value = roleCode;
-  treeUserCount.value = userCount;
-  treeMode.value = mode;
+  treeMode.value = 'view';
   treeDraft.value = clonePerms(perms);
   collapseAll();
 
-  const em = `<span class="em">${esc(roleName)}</span>`;
-  treeTitle.value =
-    mode === 'view'
-      ? `查看权限 · ${em} <span class="tag n" style="font-weight:400">只读模式</span>`
-      : `编辑权限 · ${em} <span class="tag n" style="font-weight:400">改动需点击「保存」生效</span>`;
+  /* ★ 2026-10-20 只剩「查看权限」一种口径：原来按 mode 分两套标题，
+     编辑模式随详情弹窗那个按钮一起删掉了。 */
+  treeTitle.value = `查看权限 · <span class="em">${esc(roleName)}</span> <span class="tag n" style="font-weight:400">只读模式</span>`;
   treeOpen.value = true;
 }
 
-/** 列表「权限数」→ 查看权限 */
-async function openPermTree(row: PermRoleListItem, mode: 'view' | 'edit'): Promise<void> {
+/** 列表「权限数」→ 查看权限（只读；编辑权限请去「职位权限分配」页） */
+async function openPermTree(row: PermRoleListItem): Promise<void> {
   try {
     const d = await roleApi.detail(row.id);
-    openTreeWith(row.id, row.roleName, row.roleCode, mode, d.perms || {}, row.userCount);
+    openTreeWith(row.roleName, d.perms || {});
   } catch {
     /* 已提示 */
   }
 }
 
-/** 详情弹窗底部「编辑权限」（原型先关详情再开权限树）；「查看完整权限树」按钮已随 2026-10-16 界面清理移除 */
-function openPermTreeFromDetail(mode: 'view' | 'edit'): void {
-  const d = detail.value;
-  if (!d) return;
-  detailOpen.value = false;
-  openTreeWith(d.id, d.roleName, d.roleCode, mode, d.perms || {}, d.userCount || 0);
-}
+/* ★ 2026-10-20 删除 openPermTreeFromDetail()：它只服务「职位详情」底栏那个
+   「编辑权限」按钮，按钮已按用户要求删除 → 函数失去唯一调用方，属死代码。
+   权限编辑入口现在只剩「职位权限分配」页（那边是完整的编辑 UI）。 */
 
 /** 表单「＋ 配置权限」（原型 openFormPermTree） */
 function openFormTree(): void {
   treeMode.value = 'form';
-  treeTargetId.value = '';
   treeRoleName.value = form.roleName;
-  treeRoleCode.value = form.roleCode;
-  treeUserCount.value = 0;
   treeDraft.value = clonePerms(draftPerms.value);
   collapseAll();
   treeTitle.value =
@@ -514,16 +487,23 @@ function onModToggle(m: PermModule, e: Event): void {
   treeDraft.value = next;
 }
 
-function treeSelectAll(on: boolean): void {
+/**
+ * 全选全部权限（原型 treeSelectAll）。
+ * ★ 2026-10-20：原签名 `treeSelectAll(on: boolean)`，`false` 分支是"取消全部勾选"，
+ *   对应按钮已按用户要求删除（与「一键清空」重复、又与关弹窗的「取消」撞名）。
+ *   这里收敛成无参 —— 不留一个永远走不到的分支。
+ *   要清空请用 treeClear()（带二次确认）。
+ */
+function treeSelectAll(): void {
   if (readonlyTree.value) return;
   const next: RolePermMap = {};
   modules.value.forEach((m) => {
     m.items.forEach((it) => {
-      next[permKey(m.moduleKey, it.itemName)] = on ? it.actions.map((a) => a.actionCode) : [];
+      next[permKey(m.moduleKey, it.itemName)] = it.actions.map((a) => a.actionCode);
     });
   });
   treeDraft.value = next;
-  toast(on ? '已全选全部权限' : '已取消全部勾选', 'warn');
+  toast('已全选全部权限', 'warn');
 }
 
 function treeClear(): void {
@@ -553,41 +533,12 @@ function applyFormPerm(): void {
   toast(`已应用 ${countActions(draftPerms.value)} 项权限到表单`);
 }
 
-/** 编辑模式：保存权限（原型 treeSave），走 assignApi.save 全量覆盖 */
-function saveRolePerms(): void {
-  const n = treeActionCount.value;
-  openConfirm(
-    {
-      title: '保存权限配置',
-      icon: '💾',
-      msg: `确认保存 ${treeRoleName.value} 的权限配置？`,
-      detail: [
-        {
-          k: '职位',
-          v: `${esc(treeRoleName.value)} <span class="desc">${esc(treeRoleCode.value)}</span>`,
-        },
-        { k: '勾选动作', v: `<b>${n}</b> 项` },
-        { k: '影响账号', v: `<b>${treeUserCount.value}</b> 个账号` },
-      ],
-      tip: '保存后立即生效，相关账号下次刷新页面即可看到新菜单。',
-      okText: '确认保存',
-    },
-    () => {
-      void doSaveRolePerms(n);
-    },
-  );
-}
-
-async function doSaveRolePerms(n: number): Promise<void> {
-  try {
-    await assignApi.save(treeTargetId.value, cleanPerms(treeDraft.value));
-    treeOpen.value = false;
-    toast(`已保存 ${n} 项权限，${treeUserCount.value} 个账号已生效`);
-    await Promise.all([load(), loadOverview()]);
-  } catch {
-    /* 已提示 */
-  }
-}
+/* ★ 2026-10-20 删除 saveRolePerms() / doSaveRolePerms()：
+   这两个只服务权限树的「编辑模式」，而编辑模式的唯一入口是
+   「职位详情 → 编辑权限」按钮（已按用户要求删除）。
+   按钮没了 → 编辑模式不可达 → 保存链路成死代码，一并清掉。
+   连带的 assignApi 已从 import 移除（本页再无调用）。
+   权限编辑走「职位权限分配」页（assignApi.save 在那里仍是主路径）。 */
 
 /* ============================================================
  * 七、停用 / 启用（原型 toggleRole）
@@ -651,7 +602,7 @@ function delRole(row: PermRoleListItem): void {
         icon: '🚫',
         iconBg: 'var(--dg-l)',
         msg: '系统预置职位不可删除',
-        desc: `「${esc(row.roleName)}」是系统预置的 <b>${overview.value?.presetTotal ?? 0}</b> 个基础职位之一，只能编辑权限或停用。`,
+        desc: `「${esc(row.roleName)}」是系统预置的 <b>${overview.value?.presetTotal ?? 0}</b> 个基础职位之一，只能停用，或到「职位权限分配」页调整它的权限。`,
         tip: '如确认不再需要，可改为"停用"，效果等同但可随时恢复。',
         okText: '改为停用该职位',
         okClass: 'wn',
@@ -692,7 +643,6 @@ function delRole(row: PermRoleListItem): void {
       iconBg: 'var(--dg-l)',
       msg: `确认删除职位「${row.roleName}」？`,
       detail: [
-        { k: '职位编码', v: esc(row.roleCode) },
         { k: '所属部门', v: esc(row.deptName || '—') },
         { k: '已配权限', v: `${row.permCount} 项` },
         { k: '关联账号', v: '0 个' },
@@ -852,12 +802,13 @@ function openUserDetail(u: PermUserListItem): void {
   userDetailOpen.value = true;
 }
 
-/** 详情里的「去编辑」→ 关掉弹窗，去账号管理把该账号的编辑表单打开 */
-function openUserEditById(id: string): void {
-  usersOpen.value = false;
-  userDetailOpen.value = false;
-  void router.push(permUserEditRoute(id));
-}
+/**
+ * ★ 2026-10-19 按用户要求：详情弹窗里的「去编辑」按钮已删除（共享组件里也彻底去掉了），
+ *   随之 `openUserEditById()` 成了死代码，一并删除（`permUserEditRoute` 导入也清掉）。
+ * ⚠️ 副作用要说清楚：本页「职位下人员」的行操作只有「移出该职位」「账号详情」，
+ *   去掉这个按钮后，在职位管理这一页已经**没有任何编辑账号的入口** ——
+ *   要改账号请走左侧「账号管理」→ 该行「编辑」。
+ */
 
 /* ============================================================
  * 十、新建 / 编辑职位（原型 openRoleForm + submitRoleForm）
@@ -866,8 +817,12 @@ function openUserEditById(id: string): void {
 interface RoleForm {
   id: string;
   roleName: string;
-  roleCode: string;
   deptId: string;
+  /**
+   * ★ 2026-10-20：界面上已没有「职位类型」这个字段，但模型里**必须留着**——
+   *   编辑职位时从详情带回原值、保存时原样提交，否则后端会把类型重置成默认的「业务职位」
+   *   （存量里「管理职位 / 职能职位」的 5 个职位会被悄悄改掉）。新建时填默认值即可。
+   */
   roleType: string;
   roleStatus: string;
   /** 弹窗里不展示（原型无此字段），但保存时要带上，避免把排序号覆盖掉 */
@@ -882,7 +837,6 @@ const submitting = ref(false);
 const form = reactive<RoleForm>({
   id: '',
   roleName: '',
-  roleCode: '',
   deptId: '',
   roleType: '业务职位',
   roleStatus: '启用',
@@ -914,7 +868,6 @@ function openAdd(): void {
   Object.assign(form, {
     id: '',
     roleName: '',
-    roleCode: '',
     deptId: defaultDeptId.value,
     roleType: '业务职位',
     roleStatus: '启用',
@@ -933,7 +886,6 @@ async function openEdit(row: PermRoleListItem): Promise<void> {
     Object.assign(form, {
       id: d.id,
       roleName: d.roleName,
-      roleCode: d.roleCode,
       deptId: d.deptId || defaultDeptId.value,
       roleType: d.roleType,
       roleStatus: d.roleStatus,
@@ -1029,12 +981,9 @@ function applyRoleTpl(tpl: string): void {
 /** 提交（原型 submitRoleForm：校验 → 确认 → 落库） */
 function submitForm(): void {
   const name = form.roleName.trim();
-  const code = form.roleCode.trim();
   const err: string[] = [];
 
   if (!name) err.push('职位名称必填');
-  if (!code) err.push('职位编码必填');
-  if (code && !/^[A-Z][A-Z0-9_]*$/.test(code)) err.push('职位编码需为大写字母/数字/下划线');
   if (!form.deptId) err.push('所属部门必填');
 
   if (err.length) {
@@ -1051,8 +1000,7 @@ function submitForm(): void {
       msg: isEdit ? `确认保存对「${name}」的修改？` : `确认创建职位「${name}」？`,
       detail: [
         { k: '职位名称', v: `<b>${esc(name)}</b>` },
-        { k: '职位编码', v: `<code>${esc(code)}</code>` },
-        { k: '类型 / 部门', v: `${esc(form.roleType)} · ${esc(deptNameOf(form.deptId))}` },
+        { k: '所属部门', v: esc(deptNameOf(form.deptId)) },
         { k: '已配权限', v: `<b>${draftActionCount.value}</b> 项动作` },
       ],
       tip: isEdit
@@ -1061,17 +1009,16 @@ function submitForm(): void {
       okText: isEdit ? '确认保存' : '确认创建',
     },
     () => {
-      void saveForm(isEdit, name, code);
+      void saveForm(isEdit, name);
     },
   );
 }
 
-async function saveForm(isEdit: boolean, name: string, code: string): Promise<void> {
+async function saveForm(isEdit: boolean, name: string): Promise<void> {
   submitting.value = true;
   try {
     const payload = {
       roleName: name,
-      roleCode: code,
       deptId: form.deptId,
       roleType: form.roleType as RoleType,
       roleStatus: form.roleStatus as RoleStatus,
@@ -1101,19 +1048,19 @@ async function saveForm(isEdit: boolean, name: string, code: string): Promise<vo
 
 interface ImportRow {
   roleName: string;
-  roleCode: string;
-  roleType: string;
   deptName: string;
   remark: string;
   ok: boolean;
   reason: string;
 }
 
-const IMPORT_HEADER = '职位名称,职位编码,类型,所属部门,职位说明';
+/* ★ 2026-10-20：模板去掉「类型」列（职位类型已不在界面出现）。
+ *   导入时后端 roleType 不传 → 按默认「业务职位」落库（与新建职位同一套兜底）。 */
+const IMPORT_HEADER = '职位名称,所属部门,职位说明';
 const IMPORT_TEMPLATE = [
   IMPORT_HEADER,
-  '实训助教,TRAIN_ASSIST,业务职位,实训教学部,导入创建',
-  '财务主管,FIN_LEADER,管理职位,财务管理部,导入创建',
+  '实训助教,实训管理,导入创建',
+  '财务主管,财务管理部,导入创建',
 ].join('\n');
 
 const importOpen = ref(false);
@@ -1189,13 +1136,11 @@ function toImportPreview(): void {
 
   const seen = new Set<string>();
   const rows: ImportRow[] = lines.map((line) => {
-    const [roleName, roleCode, roleType, deptName, remark] = line
+    const [roleName, deptName, remark] = line
       .split(',')
       .map((s) => (s || '').trim());
     const r: ImportRow = {
       roleName: roleName || '',
-      roleCode: roleCode || '',
-      roleType: roleType || '业务职位',
       deptName: deptName || '',
       remark: remark || '',
       ok: true,
@@ -1204,17 +1149,11 @@ function toImportPreview(): void {
     if (!r.roleName) {
       r.ok = false;
       r.reason = '职位名称必填';
-    } else if (!r.roleCode) {
+    } else if (seen.has(r.roleName)) {
       r.ok = false;
-      r.reason = '职位编码必填';
-    } else if (!/^[A-Z][A-Z0-9_]*$/.test(r.roleCode)) {
-      r.ok = false;
-      r.reason = '编码格式非法';
-    } else if (seen.has(r.roleCode)) {
-      r.ok = false;
-      r.reason = '文件内编码重复';
+      r.reason = '文件内职位名称重复';
     }
-    seen.add(r.roleCode);
+    seen.add(r.roleName);
     return r;
   });
 
@@ -1231,7 +1170,7 @@ function downloadFailList(): void {
   const text = [
     `${IMPORT_HEADER},失败原因`,
     ...importFail.value.map(
-      (r) => `${r.roleName},${r.roleCode},${r.roleType},${r.deptName},${r.remark},${r.reason}`,
+      (r) => `${r.roleName},${r.deptName},${r.remark},${r.reason}`,
     ),
   ].join('\n');
   downloadText('职位导入失败清单.csv', text);
@@ -1249,9 +1188,7 @@ async function doImport(): Promise<void> {
     const res = await roleApi.importList(
       rows.map((r) => ({
         roleName: r.roleName,
-        roleCode: r.roleCode,
         deptName: r.deptName,
-        roleType: r.roleType,
         remark: r.remark,
       })),
     );
@@ -1318,15 +1255,11 @@ async function doExport(): Promise<void> {
           <input
             v-model="query.keyword"
             class="inp"
-            placeholder="搜索职位名称 / 编码"
+            placeholder="搜索职位名称"
             style="width: 200px"
             @input="onKeywordInput"
             @keyup.enter="reloadFromFirstPage"
           />
-          <select v-model="query.roleType" class="inp" @change="reloadFromFirstPage">
-            <option value="">全部类型</option>
-            <option v-for="t in roleTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-          </select>
           <select v-model="query.roleStatus" class="inp" @change="reloadFromFirstPage">
             <option value="">全部状态</option>
             <option v-for="s in roleStatuses" :key="s.value" :value="s.value">{{ s.label }}</option>
@@ -1344,18 +1277,23 @@ async function doExport(): Promise<void> {
 
       <div class="card-b p0">
         <div class="tb-wrap">
-          <table class="tb">
+          <table class="tb tb-role">
             <thead>
               <tr>
-                <th style="width: 180px">职位名称</th>
-                <th style="width: 130px">职位编码</th>
-                <th style="width: 120px">所属部门</th>
-                <th style="width: 92px">类型</th>
-                <th style="width: 74px">关联人数</th>
-                <th style="width: 80px">权限数</th>
-                <th style="width: 72px">状态</th>
-                <th style="width: 112px">创建时间</th>
-                <th style="width: 230px">操作</th>
+                <!-- ★ 2026-10-20 列宽改百分比（合计 100）+ .tb-role 固定布局。
+                     原来写死 220/170/74/80/72/112/230px，但 table-layout 是 auto：
+                     声明的 px 只是建议值，浏览器按内容把多余宽度全砸给前两列
+                     （实测 1520 视口、表宽 1264 时「职位名称」220→290、「所属部门」170→224，
+                     两列富余 282px 占全表富余 423px 的 67%），看着就是大片空洞。
+                     新比例＝各列「内容宽 + 同样的呼吸空间」反算（每列富余 69~75px 均摊），
+                     不再让某一列独自吃掉富余（操作列实测只需 193px，给 23% 即够）。 -->
+                <th style="width: 17%">职位名称</th>
+                <th style="width: 13%">所属部门</th>
+                <th style="width: 10%">关联人数</th>
+                <th style="width: 10%">权限数</th>
+                <th style="width: 11%">状态</th>
+                <th style="width: 16%">创建时间</th>
+                <th style="width: 23%">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -1366,14 +1304,10 @@ async function doExport(): Promise<void> {
                   </span>
                   <span v-if="r.isSys" class="tag n" style="margin-left: 4px">预置</span>
                 </td>
-                <td>
-                  <code style="font-size: 11.5px; background: #FBF7F4; padding: 1px 6px; border-radius: 4px">{{ r.roleCode }}</code>
-                </td>
                 <td>{{ r.deptName || '—' }}</td>
-                <td><span class="tag" :class="typeTag(r.roleType)">{{ r.roleType }}</span></td>
                 <td class="num">{{ r.userCount }} 人</td>
                 <td class="num">
-                  <span class="lk" @click="openPermTree(r, 'view')">{{ r.permCount }} 项</span>
+                  <span class="lk" @click="openPermTree(r)">{{ r.permCount }} 项</span>
                 </td>
                 <td>
                   <span v-if="r.roleStatus === '启用'" class="tag g">启用</span>
@@ -1398,7 +1332,7 @@ async function doExport(): Promise<void> {
                 </td>
               </tr>
               <tr v-if="!list.length">
-                <td colspan="9">
+                <td colspan="7">
                   <div class="empty">
                     <div class="ic">🔍</div>
                     {{ loading ? '加载中…' : '没有符合条件的职位，试试调整筛选条件' }}
@@ -1427,18 +1361,6 @@ async function doExport(): Promise<void> {
     <ProtoDialog v-model="detailOpen" :title="detailTitle" size="lg">
       <div class="fm" style="grid-template-columns: repeat(3, 1fr)">
         <div class="f"><label>职位名称</label><div style="font-weight: 600">{{ detail?.roleName || '—' }}</div></div>
-        <div class="f">
-          <label>职位编码</label>
-          <div>
-            <code style="background: #FBF7F4; padding: 2px 7px; border-radius: 4px">{{ detail?.roleCode || '—' }}</code>
-          </div>
-        </div>
-        <div class="f">
-          <label>职位类型</label>
-          <div>
-            <span class="tag" :class="detail?.roleType === '系统职位' ? 'p' : 'n'">{{ detail?.roleType || '—' }}</span>
-          </div>
-        </div>
         <div class="f"><label>所属部门</label><div>{{ detail?.deptName || '—' }}</div></div>
         <div class="f">
           <label>状态</label>
@@ -1493,8 +1415,11 @@ async function doExport(): Promise<void> {
 
       <template #footer>
         <div class="lft">职位 ID：{{ detail?.id || '—' }}</div>
+        <!-- ★ 2026-10-20 按用户要求删掉这里的「编辑权限」按钮。
+             职责归位：本弹窗是「职位详情」（只读查看），
+             改权限请回「职位权限分配」页（那边有 全选 / 一键清空 / 保存权限 的完整编辑 UI），
+             不在详情里再开一个编辑入口 —— 与「详情＝只读」的语义一致。 -->
         <button class="btn" type="button" @click="detailOpen = false">关闭</button>
-        <button class="btn pri" type="button" @click="openPermTreeFromDetail('edit')">编辑权限</button>
       </template>
     </ProtoDialog>
 
@@ -1616,15 +1541,20 @@ async function doExport(): Promise<void> {
           <b style="color: var(--brand)">{{ treeModuleCount }}</b> 个模块
         </div>
         <template v-if="!readonlyTree">
-          <button class="btn" type="button" @click="treeSelectAll(true)">全选</button>
-          <button class="btn" type="button" @click="treeSelectAll(false)">取消</button>
+          <button class="btn" type="button" @click="treeSelectAll()">全选</button>
+          <!-- ★ 2026-10-20 按用户要求删掉这里原来的「取消」（= treeSelectAll(false) 取消全部勾选）：
+               它与右侧关闭弹窗的「取消」在 edit 模式下撞名，一屏两个「取消」分不清；
+               功能上又与「一键清空」重复（后者还带二次确认）。清空请走「一键清空」。
+               现在：全选 / 一键清空 / 取消（关弹窗）/ 保存权限。
+               ⚠️ 权限树在本项目里有【两份独立实现】：本页一套、PermAssign.vue 一套，
+                  改一处必须同步另一处（上轮只改了 PermAssign 导致本页漏改）。 -->
           <button class="btn" type="button" @click="treeClear">一键清空</button>
         </template>
+        <!-- 编辑模式已删（2026-10-20），文案只剩两种：表单模式「放弃」、只读模式「关闭」 -->
         <button class="btn" type="button" @click="treeOpen = false">
-          {{ treeMode === 'form' ? '放弃' : treeMode === 'edit' ? '取消' : '关闭' }}
+          {{ treeMode === 'form' ? '放弃' : '关闭' }}
         </button>
         <button v-if="treeMode === 'form'" class="btn pri" type="button" @click="applyFormPerm">应用到表单</button>
-        <button v-else-if="treeMode === 'edit'" class="btn pri" type="button" @click="saveRolePerms">保存权限</button>
       </template>
     </ProtoDialog>
 
@@ -1635,21 +1565,6 @@ async function doExport(): Promise<void> {
         <div class="f">
           <label>职位名称 <span class="req">*</span></label>
           <input v-model="form.roleName" class="inp" placeholder="如：学管主任" />
-        </div>
-        <div class="f">
-          <label>职位编码 <span class="req">*</span></label>
-          <input
-            v-model="form.roleCode"
-            class="inp"
-            :disabled="form.isSys"
-            placeholder="如：TEACH_DEAN（英文大写+下划线）"
-          />
-        </div>
-        <div class="f">
-          <label>职位类型 <span class="req">*</span></label>
-          <select v-model="form.roleType" class="inp">
-            <option v-for="t in roleTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-          </select>
         </div>
         <div class="f">
           <label>所属部门 <span class="req">*</span></label>
@@ -1724,7 +1639,7 @@ async function doExport(): Promise<void> {
 
     <!-- ==================== 批量导入（原型 dlgImportRole 第 1858~1872 行） ==================== -->
     <ProtoDialog v-model="importOpen" title="批量导入职位" size="md">
-      <div class="notice i mb12">ℹ<div>支持 Excel(.xlsx) / CSV，列顺序：职位名称、职位编码、类型、所属部门、职位说明。</div></div>
+      <div class="notice i mb12">ℹ<div>支持 Excel(.xlsx) / CSV，列顺序：职位名称、类型、所属部门、职位说明。</div></div>
       <div
         style="border: 2px dashed var(--line); border-radius: 10px; padding: 26px; text-align: center; cursor: pointer"
         @click="pickFile"
@@ -1753,13 +1668,11 @@ async function doExport(): Promise<void> {
       </div>
       <table class="tb">
         <thead>
-          <tr><th>职位名称</th><th>编码</th><th>类型</th><th>部门</th><th>校验</th></tr>
+          <tr><th>职位名称</th><th>部门</th><th>校验</th></tr>
         </thead>
         <tbody>
           <tr v-for="(r, i) in importRows" :key="i" :style="r.ok ? '' : 'background:var(--dg-l)'">
             <td>{{ r.roleName || '—' }}</td>
-            <td><code style="font-size: 11.5px">{{ r.roleCode || '—' }}</code></td>
-            <td>{{ r.roleType }}</td>
             <td>{{ r.deptName || '—' }}</td>
             <td>
               <span v-if="r.ok" class="tag g">通过</span>
@@ -1827,11 +1740,12 @@ async function doExport(): Promise<void> {
     />
 
     <!-- ==================== 账号详情（就地弹窗，与账号管理同一份组件） ==================== -->
+    <!-- ★ 2026-10-19：「去编辑」按钮已从共享组件里彻底删除，故这里不再传开关。
+         本页「职位下人员」没有行级编辑，要改该账号请走「账号管理」列表里的「编辑」。 -->
     <UserDetailDialog
       v-model="userDetailOpen"
       :user-id="userDetailId"
       :fallback="userDetailRow"
-      @edit="openUserEditById"
     />
   </div>
 </template>

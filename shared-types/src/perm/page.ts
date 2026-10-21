@@ -35,6 +35,14 @@ export interface PermPageItem {
   pagePath: string;
   /** legacy 模块的页面权限码（如 job:classTransfer:view）；新模块为空 */
   pageCode?: string;
+  /**
+   * ★ 2026-10-20 合并板块：一页挂多个权限码（每个学段一个）
+   *
+   * 「出勤管理」这类页面由初高 / 大学 / 实训多套页面合并成一页，
+   * 合并后只剩一个 path，但权限判定仍按学段走 → 一页要挂多个码。
+   * 判定口径 = **任一命中即可见**。与 `pageCode` 同时存在时以本字段为准。
+   */
+  pageCodes?: string[];
   /** 排序号（板块内顺序 = 侧栏顺序） */
   pageSort: number;
   /** ★ 该板块是否拥有这个页面（打勾 = true） */
