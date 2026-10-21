@@ -123,6 +123,7 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       class_code: 'E2E' + Math.random().toString(36).slice(2, 8).toUpperCase(),
       stage: 2,
       dept_code: 2,
+      class_status: 2, // ★ 新建默认封班（远端口径：开放→已结业 走不通）
       classroom: '3号楼201',
       head_teacher_id: 'T-ZHOUJ',
       head_teacher_name: '周佳',
@@ -133,8 +134,8 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     }, 'job');
 
     // 各班挂 2 个学生（验人数实时统计）
-    await mkStudent(dbJh, 'sms_class_jh', 't_class_student', jhCls.id, { student_status: 1 }, 'jh');
-    await mkStudent(dbJh, 'sms_class_jh', 't_class_student', jhCls.id, { student_status: 1 }, 'jh');
+    await mkStudent(dbJh, 'sms_class_jh', 't_class_student', jhCls.id, { student_status: 5 }, 'jh');
+    await mkStudent(dbJh, 'sms_class_jh', 't_class_student', jhCls.id, { student_status: 5 }, 'jh');
     await mkStudent(dbCls, 'sms_class', 't_class_student', clsCls.id, { student_status: 5 }, 'class');
     await mkStudent(dbCls, 'sms_class', 't_class_student', clsCls.id, { student_status: 5 }, 'class');
 
@@ -267,25 +268,17 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     });
     check('★ 合法流转 开放→封班 成功', isOk(toSealed), `code=${toSealed.json?.code} ${toSealed.json?.message || ''}`);
 
+    // ★ 2026-10-19 远端口径：「待结业」状态已废弃（页面不再出现），
+    //   封班之后**直接**进「已结业」；3→已结业 仅保留给历史数据。
     const toGraduating = await req(`${API}/change-status`, {
       method: 'POST',
       body: { stage: 'jh', id: jhCls.id, classStatus: 3 },
       token: tQiansy,
     });
-    check('★ 合法流转 封班→待结业 成功', isOk(toGraduating));
-
-    // 非法：待结业 → 开放（流转表里没有这条）
-    const illegal = await req(`${API}/change-status`, {
-      method: 'POST',
-      body: { stage: 'jh', id: jhCls.id, classStatus: 1 },
-      token: tQiansy,
-    });
-    // ★★ 断言必须区分「被状态机拦」和「被学管只读闸拦」——
-    //   两者 code 都是 40302，光看 code 会把「闸拦对了」当成「状态机生效了」。
     check(
-      '★ 非法流转 待结业→开放 被状态机拦（不是被权限闸）',
-      isBlocked(illegal) && /不可从/.test(illegal.json?.message || ''),
-      `code=${illegal.json?.code} ${illegal.json?.message || ''}`,
+      '★ 新口径：封班→待结业 被状态机拦（待结业已废弃）',
+      isBlocked(toGraduating) && /不可从/.test(toGraduating.json?.message || ''),
+      `code=${toGraduating.json?.code} ${toGraduating.json?.message || ''}`,
     );
 
     const toGraduated = await req(`${API}/change-status`, {
@@ -293,14 +286,19 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       body: { stage: 'jh', id: jhCls.id, classStatus: 4 },
       token: tQiansy,
     });
-    check('★ 合法流转 待结业→已结业 成功', isOk(toGraduated));
-    // 终态：已结业 → 开放
+    check('★ 合法流转 封班→已结业 成功', isOk(toGraduated), `code=${toGraduated.json?.code} ${toGraduated.json?.message || ''}`);
+
+    // 终态：已结业 → 开放（非结业撤销专用动作，必须拦）
     const fromTerminal = await req(`${API}/change-status`, {
       method: 'POST',
       body: { stage: 'jh', id: jhCls.id, classStatus: 1 },
       token: tQiansy,
     });
-    check('★ 已结业是终态 → 不能再退回开放', isBlocked(fromTerminal), `code=${fromTerminal.json?.code}`);
+    check(
+      '★ 已结业是终态 → 不能再退回开放',
+      isBlocked(fromTerminal) && /不可从/.test(fromTerminal.json?.message || ''),
+      `code=${fromTerminal.json?.code} ${fromTerminal.json?.message || ''}`,
+    );
 
     const badStatus = await req(`${API}/change-status`, {
       method: 'POST',
@@ -309,22 +307,16 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     });
     check('★ 状态码 9（不存在）被拦', isBlocked(badStatus), `code=${badStatus.json?.code}`);
 
-    // 实训结业要自动写结业日期
+    // 实训结业同样「封班 → 已结业」，并自动写结业日期
     const jobGraduate = await req(`${API}/change-status`, {
-      method: 'POST',
-      body: { stage: 'job', id: jobCls.id, classStatus: 3 },
-      token: tQiansy,
-    });
-    check('★ 实训 封班→待结业 成功', isOk(jobGraduate), `code=${jobGraduate.json?.code}`);
-    const jobGraduate2 = await req(`${API}/change-status`, {
       method: 'POST',
       body: { stage: 'job', id: jobCls.id, classStatus: 4 },
       token: tQiansy,
     });
-    check('★ 实训 待结业→已结业 成功', isOk(jobGraduate2));
+    check('★ 实训 封班→已结业 成功', isOk(jobGraduate), `code=${jobGraduate.json?.code} ${jobGraduate.json?.message || ''}`);
     const jobRow = await probe(dbJob, 'sms_job', 't_job_class', 'job').where({ id: jobCls.id }).first();
     check('★ 实训结业自动写入 close_date', !!jobRow?.close_date, `close_date=${jobRow?.close_date}`);
-    check('★ 实训结业记录 prev_class_status（撤销结业用）', jobRow?.prev_class_status === 3, `prev=${jobRow?.prev_class_status}`);
+    check('★ 实训结业记录 prev_class_status（撤销结业用）', Number(jobRow?.prev_class_status) === 2, `prev=${jobRow?.prev_class_status}`);
 
     /* ============ 7. 保存（新增 / 修改）+ 唯一性 ============ */
     // 编辑不清阶段的测试对象（复用大学夹具班，测完统一清理）
@@ -463,7 +455,8 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     check('★ 大学新增班级成功', isOk(created) && !!created.json?.data?.id, `code=${created.json?.code} ${created.json?.message || ''}`);
     const newId = created.json?.data?.id;
     const newRow = newId ? await probe(dbCls, 'sms_class', 't_class_info', 'class').where({ id: newId }).first() : null;
-    check('★★ 大学新增：教室写进了 room 列', newRow?.room === '新建教室A101', `room=${newRow?.room}`);
+    // ★ 2026-10-19 远端新增教室规范化：'新建教室A101' → 'A-101'
+    check('★★ 大学新增：教室规范化后写进 room 列', newRow?.room === 'A-101', `room=${newRow?.room}`);
     reg('sms_class', 't_class_info', newId);
 
     // 修改
@@ -474,7 +467,7 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     });
     check('★ 修改班级成功', isOk(updated), `code=${updated.json?.code} ${updated.json?.message || ''}`);
     const reread = await probe(dbCls, 'sms_class', 't_class_info', 'class').where({ id: newId }).first();
-    check('★ 修改后教室更新', reread?.room === '改后教室B202' && reread?.class_name === '自检改名大学班');
+    check('★ 修改后教室更新', reread?.room === 'B-202' && reread?.class_name === '自检改名大学班', `room=${reread?.room}`);
 
     // 生成编号（只有实训有）
     const genJob = await req(`${API}/gen-code?stage=job`, { token: tQiansy });
@@ -485,7 +478,7 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     /* ============ 8. 元信息 ============ */
     const meta = await req(`${API}/meta`, { token: tQiansy });
     const metaList = meta.json?.data || [];
-    check('★ /meta 返回三学段特性', isOk(meta) && metaList.length === 3, `得到 ${metaList.length} 个`);
+    check('★ /meta 返回四学段特性（含就业部 emp）', isOk(meta) && metaList.length === 4, `得到 ${metaList.length} 个`);
     const mJob = metaList.find((m) => m.stage === 'job');
     const mJh = metaList.find((m) => m.stage === 'jh');
     const mCls = metaList.find((m) => m.stage === 'class');

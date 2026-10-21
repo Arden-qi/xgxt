@@ -248,7 +248,7 @@ function mkJobDorm(db, dbName, over = {}) {
     );
     check(
       '★ 每行都带学段名',
-      allList.every((x) => ['初高', '大学', '实训'].includes(x.stageName)),
+      allList.every((x) => ['初高部', '大学部', '实训', '就业部'].includes(x.stageName)),
     );
 
     /* ============ 2. ★★ 三学段房间状态一致（统一模型） ============ */

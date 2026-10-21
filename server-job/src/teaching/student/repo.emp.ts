@@ -184,7 +184,7 @@ function buildBase(q: StudentListQuery, user: any) {
   //   靠 stage_key 区分（emp / job）。
   const qb = tbl(db, 'sms_job', T, STAGE)
     .where('is_deleted', false)
-    .andWhere('stage_key', 'emp')
+    /* ★ 2026-10-21：同上，靠 edu_stage 区分 */
     .whereIn('student_status', VISIBLE_STATUS);
   if (q.classId) qb.andWhere('class_id', q.classId);
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);

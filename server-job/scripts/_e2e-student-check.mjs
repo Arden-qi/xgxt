@@ -369,7 +369,7 @@ async function mkStudent(db, table, over = {}) {
     /* ============ K. 元信息 / 班级下拉 ============ */
     const meta = await req(`${API}/meta`, { token: tPrincipal });
     const metas = meta.json?.data || [];
-    check('meta 返回 4 个学段', metas.length === 4, metas.map((m) => m.stage).join(','));
+    check('meta 返回 5 个学段（含就业部 emp）', metas.length === 5, metas.map((m) => m.stage).join(','));
     check('meta 含阶段码选项与区块声明', metas.every((m) => Array.isArray(m.phaseOptions) && Array.isArray(m.sections)));
 
     const metaJh = await req(`${API}/meta`, { token: tJhHead });

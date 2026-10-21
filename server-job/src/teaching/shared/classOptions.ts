@@ -80,7 +80,7 @@ export async function listClassesByStage(
   }
   // ★ 2026-10-19：实训与就业部共用 t_job_class、dept 都是 3，靠 stage_key 区分
   const qb = tbl(jobDb, 'sms_job', 't_job_class', stage).where('is_deleted', 0);
-  qb.andWhere('stage_key', stage === 'emp' ? 'emp' : 'job');
+  /* ★ 2026-10-21：tbl() 已按 edu_stage 过滤，不再依赖 stage_key（历史行可能为空） */
   const rows = (await qb.select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{
     id: string;
     name: string;
