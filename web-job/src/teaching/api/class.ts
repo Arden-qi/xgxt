@@ -404,7 +404,7 @@ export function listTransferTargets(p: {
   fromClassId: string;
   mode: 'repeat' | 'promote';
 }) {
-  return http.get<TransferTarget[]>('/api/teaching/class/transfer-targets', p);
+  return http.get<TransferTarget[]>('/api/teaching/class-transfer/targets', p);
 }
 
 export function transferStudentToClass(body: {
@@ -416,5 +416,5 @@ export function transferStudentToClass(body: {
   reason?: string | null;
   examId?: string | null;
 }) {
-  return http.post<{ ok: true; toClassName: string }>('/api/teaching/class/transfer', body);
+  return http.post<{ ok: true; toClassName: string }>('/api/teaching/class-transfer/do', body);
 }

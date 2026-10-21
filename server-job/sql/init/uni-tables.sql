@@ -302,6 +302,7 @@ CREATE TABLE IF NOT EXISTS `t_uni_checkout_apply` (
 CREATE TABLE IF NOT EXISTS `t_uni_class` (
   `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '主键（randomUUID）',
   `edu_stage` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '学段 jh初高/class大学/job实训（★不是阶段码，阶段码在 stage_code）',
+  `stage_key` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '学段细分：实训=job / 就业部=emp',
   `stage_code` int DEFAULT NULL COMMENT '学段内阶段码（初高101/大学201~206）',
   `class_name` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `stage` int DEFAULT NULL,
@@ -333,11 +334,15 @@ CREATE TABLE IF NOT EXISTS `t_uni_class` (
   `create_time` datetime DEFAULT NULL,
   `update_by` varchar(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `update_time` datetime DEFAULT NULL,
+  `scheme_id` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '阶段方案ID',
+  `scheme_stage_id` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '方案阶段明细ID',
+  `scheme_stage_name` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '方案阶段名称',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_class` (`class_name`,`dept_code`,`edu_stage`),
   KEY `idx_edu_stage` (`edu_stage`),
   KEY `idx_class_name` (`class_name`),
-  KEY `idx_class_status` (`class_status`)
+  KEY `idx_class_status` (`class_status`),
+  KEY `idx_uni_class_stage_key` (`edu_stage`,`stage_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='班级管理 · 第4期统一表';
 
 -- ---------- t_uni_class_student ----------
@@ -1333,6 +1338,7 @@ CREATE TABLE IF NOT EXISTS `t_uni_stage_log` (
 CREATE TABLE IF NOT EXISTS `t_uni_student` (
   `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '主键（randomUUID）',
   `edu_stage` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '学段 jh初高/class大学/job实训（★不是阶段码，阶段码在 stage_code）',
+  `stage_key` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '学段细分：实训=job / 就业部=emp（2026-10-20 实训与就业部拆分）',
   `stage_code` int DEFAULT NULL COMMENT '学段内阶段码（初高101/大学201~206）',
   `student_no` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `student_name` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -1357,6 +1363,7 @@ CREATE TABLE IF NOT EXISTS `t_uni_student` (
   `enroll_date` date DEFAULT NULL,
   `phone` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `parent_phone` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `parent_name` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '家长姓名',
   `home_address` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `id_card_no` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `agreement_status` int DEFAULT NULL,
@@ -1407,6 +1414,7 @@ CREATE TABLE IF NOT EXISTS `t_uni_student` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_student` (`student_no`,`edu_stage`),
   KEY `idx_edu_stage` (`edu_stage`),
+  KEY `idx_uni_student_stage_key` (`edu_stage`,`stage_key`),
   KEY `idx_class_id` (`class_id`),
   KEY `idx_dept_status` (`dept_code`,`student_status`),
   KEY `idx_dorm_id` (`dorm_id`)

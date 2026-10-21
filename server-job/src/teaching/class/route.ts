@@ -24,7 +24,6 @@ import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 // 升实训单独一个文件（跨库搬迁逻辑较重，且不参与班级仓储的适配器分发）
 import * as trainingSvc from './training';
-import { transferStudent, transferTargets } from './transfer';
 import type { ClassListQuery, ClassStage, TeachingStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
 import { normalizeClassroom } from '../shared/format';
@@ -317,49 +316,5 @@ teachingClassRouter.post(
       req.user,
     );
     res.json(ok(r, `已升实训：${r.targetClassName}（${r.classCode}），转入 ${r.moved} 人`));
-  }),
-);
-
-/* ============================================================
- * 12. 学生换班（末班 / 升班）— 成绩管理行操作用
- *   末班：成绩不达标 → 进度相同或更慢的班重修
- *   升班：成绩达标   → 进度更快的班
- *   ⚠️ 直接生效，不走待接收审批
- * ============================================================ */
-
-teachingClassRouter.get(
-  '/transfer-targets',
-  wrap(async (req, res) => {
-    const stage = req.query.stage as TeachingStage;
-    const fromClassId = str(req.query.fromClassId);
-    if (!fromClassId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
-    const mode = req.query.mode === 'promote' ? 'promote' : 'repeat';
-    res.json(ok(await transferTargets(stage, fromClassId, mode), '查询成功'));
-  }),
-);
-
-teachingClassRouter.post(
-  '/transfer',
-  wrap(async (req, res) => {
-    const b = req.body || {};
-    const studentId = str(b.studentId);
-    const fromClassId = str(b.fromClassId);
-    const toClassId = str(b.toClassId);
-    if (!studentId || !fromClassId || !toClassId) {
-      throw new BizError(BizCode.PARAM_ERROR, '缺少学生或班级参数');
-    }
-    const out = await transferStudent(
-      {
-        stage: b.stage as TeachingStage,
-        studentId,
-        fromClassId,
-        toClassId,
-        mode: b.mode === 'promote' ? 'promote' : 'repeat',
-        reason: b.reason ? String(b.reason) : null,
-        examId: str(b.examId) ?? null,
-      },
-      req.user,
-    );
-    res.json(ok(out, `已转入「${out.toClassName}」`));
   }),
 );

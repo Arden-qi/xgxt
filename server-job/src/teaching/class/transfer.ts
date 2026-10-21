@@ -20,7 +20,7 @@ import { BizCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { uniDb } from '../shared/uniTable';
 import { assertClassInScope } from '../shared/dataScope';
-import type { TeachingStage } from '../shared/dto';
+import type { ClassStage } from '../shared/dto';
 
 export type TransferMode = 'repeat' | 'promote';
 
@@ -40,7 +40,7 @@ type ClassRow = {
 /** 已结业（CLASS_STATUS 4）的班不再作为换班目标 */
 const CLOSED_STATUS = 4;
 
-async function classOf(stage: TeachingStage, id: string): Promise<ClassRow> {
+async function classOf(stage: ClassStage, id: string): Promise<ClassRow> {
   const row = (await uniDb('t_uni_class')
     .where({ id, edu_stage: stage, is_deleted: 0 })
     .first()) as Record<string, any> | undefined;
@@ -65,7 +65,7 @@ async function classOf(stage: TeachingStage, id: string): Promise<ClassRow> {
  * @param mode repeat = 末班（进度 ≤ 当前）；promote = 升班（进度 > 当前）
  */
 export async function transferTargets(
-  stage: TeachingStage,
+  stage: ClassStage,
   fromClassId: string,
   mode: TransferMode,
 ): Promise<Array<{ id: string; name: string; stageCode: number | null; headTeacherName: string | null }>> {
@@ -94,7 +94,7 @@ export async function transferTargets(
 
 export async function transferStudent(
   body: {
-    stage: TeachingStage;
+    stage: ClassStage;
     studentId: string;
     fromClassId: string;
     toClassId: string;

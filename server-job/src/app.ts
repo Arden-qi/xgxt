@@ -73,6 +73,7 @@ import { teachingRefundRouter } from './teaching/refund/route';
 import { teachingLeaveRouter } from './teaching/leave/route';
 import { teachingStudentRouter } from './teaching/student/route';
 import { teachingClassRouter } from './teaching/class/route';
+import { teachingTransferRouter } from './teaching/class/transfer.route';
 import { teachingDormRouter } from './teaching/dorm/route';
 import { denyReadOnlyAdmin } from './teaching/shared/readOnlyGuard';
 
@@ -694,6 +695,26 @@ app.use(
   denyApprovalOnlyWrite,
   requireAnyPage(['classjh:classInfo:view', 'class:info:view', 'job:class:view']),
   teachingClassRouter,
+);
+
+// ★ 学生换班（末班 / 升班）
+//   ⚠️ 入口在「成绩管理」页，如果挂在 /api/teaching/class 下，
+//      只有成绩权限（class:grade:view）的老师会被班级查看权限拦成 403。
+//      这里单独一个前缀，两组权限码都放行。
+app.use(
+  '/api/teaching/class-transfer',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage([
+    'classjh:score:view',
+    'class:grade:view',
+    'job:examScore:view',
+    'classjh:classInfo:view',
+    'class:info:view',
+    'job:class:view',
+  ]),
+  teachingTransferRouter,
 );
 
   app.use(
