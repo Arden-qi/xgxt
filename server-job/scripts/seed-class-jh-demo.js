@@ -60,6 +60,7 @@ const SETTINGS = [
     remark: '分母=在读/试学/预读，分子=出勤+迟到',
   },
   { key: 'feeRemindDays', name: '催费提前提醒天数', value: '7', remark: '剩余天数<=该值标红' },
+  { key: 'feeUrgeWindowDays', name: '催费列表窗口天数', value: '20', remark: '到期日距今<=该值才进催费列表（含已逾期）' },
   { key: 'refundThresholdAmount', name: '退费审批阈值（分）', value: '500000', remark: '超阈值走校长审批' },
   { key: 'closedClassIntakeTypes', name: '封班可转入类型', value: JSON.stringify([1, 2]), remark: '休学复学/末班' },
   { key: 'allowStudentAdd', name: '是否允许手动新增学生', value: 'false', remark: '默认关闭' },

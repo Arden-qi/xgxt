@@ -45,6 +45,7 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { today, fmtDate, fmtDateTime } from '../utils/date';
 import { validate } from '../middleware/validate';
+import { boolFlag } from '../utils/query';
 import { BizError } from '../middleware/errorHandler';
 import { sendNotice, NOTICE_TYPE } from '../utils/notice';
 // ★ 阶段隔离（班主任只看大学 / 项目经理只看实训）
@@ -162,8 +163,31 @@ const listSchema = z.object({
   keyword: z.string().optional(),
   feeType: z.coerce.number().int().optional(),
   classId: z.string().optional(),
-  callStatus: z.coerce.number().int().optional(),
+  /**
+   * 催费单状态：1 待催缴 / 2 催缴中 / 3 已缴清
+   *
+   * ★ 2026-10-20：支持多值（逗号分隔，如 `1,2`）。
+   *   催费页的「缴费状态」已统一成初高/大学那套（待缴/已缴/已核对/逾期/冻结），
+   *   其中「待缴」= 待催缴 + 催缴中 两种催费单状态，单选传不进来。
+   *   单值仍然照旧可用（`3` 就是只看已缴清），不影响就业模块自己的调用。
+   */
+  callStatus: z.union([z.coerce.number().int(), z.string()]).optional(),
+  /**
+   * 统一缴费状态（催费页用，与初高/大学同一套码：1待缴 2已缴 3已核对 4逾期 5冻结）
+   *
+   * ★ 2026-10-20：催费页「缴费状态」三部门统一后，就业侧不能再让前端自己折算
+   *   （「待缴」还要排掉已过期的、「逾期」要按应缴日派生），这里按展示口径翻译成
+   *   call_status + due_date 条件：
+   *     1 待缴 → call_status 1,2 且未过应缴日
+   *     2 已缴 → call_status 3（已缴清）
+   *     4 逾期 → call_status 1,2 且已过应缴日
+   *     3 已核对 / 5 冻结 → 就业没有这些状态 → 不出数据（不是忽略条件）
+   */
+  payStatus: z.coerce.number().int().optional(),
   onlyMine: z.coerce.boolean().optional(),
+  // ★ 2026-10-20：「仅看紧急」对就业也要生效 ——
+  //   就业行的 isUrgent 就是 overdue（逾期未缴清），这里按同一口径过滤。
+  onlyOverdue: boolFlag.optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
 });
@@ -186,9 +210,29 @@ feeCallRouter.get(
     }
     if (q.feeType !== undefined) base.andWhere('fee_type', q.feeType);
     if (q.classId) base.andWhere('class_id', q.classId);
-    if (q.callStatus !== undefined) base.andWhere('call_status', q.callStatus);
+    // 催费单状态：单值 / 逗号多值都支持（`1,2` = 待催缴 + 催缴中）
+    if (q.callStatus !== undefined && q.callStatus !== '') {
+      const arr = String(q.callStatus)
+        .split(',')
+        .map((s: string) => Number(s.trim()))
+        .filter((n: number) => Number.isInteger(n) && n > 0);
+      if (arr.length === 1) base.andWhere('call_status', arr[0]);
+      else if (arr.length > 1) base.whereIn('call_status', arr);
+    }
     if (q.startDate) base.andWhere('due_date', '>=', q.startDate);
     if (q.endDate) base.andWhere('due_date', '<=', q.endDate);
+    // 统一缴费状态 → 催费单状态 + 应缴日（口径见 payStatus 注释）
+    if (q.payStatus !== undefined) {
+      const t = today();
+      if (q.payStatus === 1) base.whereIn('call_status', [1, 2]).andWhere('due_date', '>=', t);
+      else if (q.payStatus === 2) base.where('call_status', 3);
+      else if (q.payStatus === 4) base.whereIn('call_status', [1, 2]).andWhere('due_date', '<', t);
+      else base.whereRaw('1 = 0'); // 已核对 / 冻结：就业无此状态
+    }
+    // 仅看逾期（= 仅看紧急）：已缴清的不算逾期，与 decorate 的 overdue 同口径
+    if (q.onlyOverdue) {
+      base.whereNot('call_status', FeeCallStatus.PAID).andWhere('due_date', '<', today());
+    }
 
     // ★ 班主任只看自己的班（数据范围）
     //   ★ 2026-10-08 修：补上项目经理 —— 原来只判班主任，

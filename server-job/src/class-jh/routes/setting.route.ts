@@ -50,6 +50,7 @@ const SETTING_NAME: Record<string, string> = {
   attendanceTargetRate: '出勤率目标（%）',
   attendanceScope: '出勤统计口径',
   feeRemindDays: '催费提前提醒天数',
+  feeUrgeWindowDays: '催费列表窗口天数（到期日距今 ≤ N 天进列表，含已逾期）',
   refundThresholdAmount: '退费审批阈值（分）',
   closedClassIntakeTypes: '封班可转入类型',
   allowStudentAdd: '是否允许手动新增学生',

@@ -127,6 +127,14 @@ export const STAGE_ACCESS = {
     class: { code: 'class:suspend:view', path: null },
     job: { code: 'job:suspendApproval:view', path: null },
   },
+  fee: {
+    // ★ 2026-10-19 域重组后 fee 也改 unified（不再靠 stages 判菜单显隐），
+    //   这四个码 = 原四学段页签的 pageCode：任一可见即显示「催费 / 缴费」菜单项
+    jh: { code: 'classjh:fee:view', path: null },
+    class: { code: 'class:urge:view', path: null },
+    job: { code: 'job:feeCall:view', path: null },
+    edu: { code: 'edu:fee:view', path: null },
+  },
   dorm: {
     jh: { code: 'classjh:dorm:view', path: null },
     class: { code: 'class:dorm:view', path: null },

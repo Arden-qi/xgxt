@@ -353,6 +353,8 @@ export function urgeList(params: {
   feeType?: number;
   payStatus?: number;
   onlyOverdue?: boolean;
+  startDate?: string;
+  endDate?: string;
   keyword?: string;
 }) {
   return get<PageData<import('./types').UrgeRow>>('/api/class/urge/list', params as Record<string, unknown>);
