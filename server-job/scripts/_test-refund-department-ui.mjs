@@ -127,8 +127,8 @@ const { check, summary } = makeChecker();
     const rd = names(deptBlock(refundApi, 'REFUND_DEPARTMENTS: RefundDepartment[]'));
     const ld = names(deptBlock(leaveApi, 'LEAVE_DEPARTMENTS_DEFAULT: LeaveDepartment[]'));
     check(
-      '★ refund.REFUND_DEPARTMENTS = 初高中/大学/实训（jh/class/job）',
-      rd.join('|') === 'jh:初高中:jh|class:大学:class|job:实训:job',
+      '★ refund.REFUND_DEPARTMENTS = 初高中/大学/就业（jh/class/job，2026-10-21 实训改叫就业）',
+      rd.join('|') === 'jh:初高中:jh|class:大学:class|job:就业:job',
       rd.join(' '),
     );
     check(

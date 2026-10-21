@@ -260,6 +260,20 @@ export interface UrgeRow {
   lastUrgeTime: string | null;
   overdueDays: number;
   isOverdue: boolean;
+
+  /* ★ 2026-10-21 登记缴费五列（与初高 t_class_fee 同口径，对齐催费页操作列） */
+  /** 缴费方式 1微信支付 2支付宝 3现金；未登记为 null */
+  payMethod?: number | null;
+  /** 枚举双返回 */
+  payMethodName?: string;
+  /** 实缴金额（分） */
+  paidAmount?: number | null;
+  /** 缴费日期 YYYY-MM-DD */
+  payDate?: string | null;
+  /** 缴费凭证地址 */
+  voucherUrl?: string | null;
+  /** 缴费备注 */
+  payRemark?: string | null;
 }
 
 export interface UrgeLogRow {
