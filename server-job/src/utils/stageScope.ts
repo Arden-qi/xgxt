@@ -31,7 +31,7 @@ import { db } from './db';
 //   t_student_base）都已归一 → 走 tbl()；下面那句「拼列限定名」必须跟着换成
 //   统一表名，否则开关开时 SQL 里会出现一个**不存在的表别名**
 //   （如 `t_job_dorm.id`，而 FROM 已经是 `t_uni_dorm_building`）→ Unknown column。
-import { tbl, tblRef } from '../teaching/shared/uniTable';
+import { tbl, tblRef, uniDb } from '../teaching/shared/uniTable';
 
 /** 实训/就业阶段（本文件里全部走 sms_job） */
 const JOB_DB = 'sms_job';
@@ -88,12 +88,14 @@ export function stageOfRoles(roles: string[] | undefined): Stage {
  */
 export async function myTrainingClassIds(user: {
   userId: string;
+  userIds?: string[];
   roles: string[];
 }): Promise<string[] | null> {
   const stage = stageOfRoles(user.roles);
   if (stage === 'all') return null;
   if (stage === 'university') return [];   // 班主任不看实训 → 空
-  if (!user.userId) return [];
+  const ids = user.userIds && user.userIds.length ? user.userIds : [user.userId].filter(Boolean);
+  if (!ids.length) return [];
 
   // ★ 2026-10-08：改用 hasRole（别名感知）—— 项目经理在权限库里是 RM_PROJECT，
   //   原来直接 includes(RoleCode.PROJECT_MANAGER) 恒 false，
@@ -103,18 +105,24 @@ export async function myTrainingClassIds(user: {
   if (!isPM && !isJob) return [];          // 其他角色不在实训侧兜任何数据
 
   try {
-    const rows = (await tbl(db, JOB_DB, 't_job_class', JOB_STAGE)
-      .where('is_deleted', 0)
-      .andWhere((q: any) => {
-        if (isPM) {
+    /* ★ 2026-10-21：就业部（emp）是独立学段，与实训共用 t_uni_class、
+     *   dept 都是 3，只查 edu_stage='job' 会把就业老师自己带的就业班排除掉
+     *   → 就业日志 / 复盘 列表恒空。这里按角色分开取：
+     *     项目经理 → 实训(job) 未结业的班
+     *     就业老师 → 实训已交棒 + 就业部(emp) 的班
+     */
+    const rows = isJob
+      ? ((await uniDb('t_uni_class')
+          .where('is_deleted', 0)
+          .whereIn('edu_stage', ['job', 'emp'])
+          .whereIn('employment_teacher_id', ids)
+          .select('id')) as Array<{ id: string }>)
+      : ((await tbl(db, JOB_DB, 't_job_class', JOB_STAGE)
+          .where('is_deleted', 0)
+          .whereIn('project_manager_id', ids)
           // 未结业的班归项目经理；已结业（转就业）= 已交棒给就业指导老师
-          q.where('project_manager_id', user.userId)
-            .andWhereNot('class_status', ClassStatus.GRADUATED);
-        } else {
-          q.where('employment_teacher_id', user.userId);
-        }
-      })
-      .select('id')) as Array<{ id: string }>;
+          .andWhereNot('class_status', ClassStatus.GRADUATED)
+          .select('id')) as Array<{ id: string }>);
     return rows.map((r) => r.id);
   } catch {
     // 查不到按「没有班」处理（数据范围最保守）
@@ -167,7 +175,7 @@ export async function myUniversityClassIds(user: {
  * ============================================================ */
 
 /** 从 req 里取出 { userId, roles }（各路由都有 getOperator，形状一样） */
-export function operatorOf(req: any): { userId: string; roles: string[] } {
+export function operatorOf(req: any): { userId: string; userIds: string[]; roles: string[] } {
   const u = req?.user || {};
   /**
    * ★ 2026-10-15 修复：业务表责任人列（t_job_class.employment_teacher_id、
@@ -178,7 +186,10 @@ export function operatorOf(req: any): { userId: string; roles: string[] } {
    *   缺失时退回 userId（保持兼容）。
    */
   const effectiveUserId = u.businessUserId || u.userId || '';
-  return { userId: effectiveUserId, roles: u.roles || [] };
+  /* ★ 2026-10-21：班级表里的责任人列，历史上两种写法都用过（门户 UUID / 权限库 U_xxx），
+     所以范围过滤必须**两个都比**，否则一边的数据永远查不出来。 */
+  const userIds = [...new Set([u.businessUserId, u.userId].map((x: any) => String(x || '')).filter(Boolean))];
+  return { userId: effectiveUserId, userIds, roles: u.roles || [] };
 }
 
 /**
@@ -299,7 +310,9 @@ export async function applyTrainingScope(
       // 本表存 student_id → 换成一串「我班上的学生 id」
       b.whereIn(
         col,
-        tbl(db, JOB_DB, STUDENT_TABLE, JOB_STAGE).select('id').whereIn('class_id', ids).where('is_deleted', 0),
+        // ★ 2026-10-21：ids 已经是「我的班」，不能再按 edu_stage='job' 过滤 ——
+        //   否则就业部(emp)的学生查不出来，就业老师的日志/复盘列表恒空。
+        uniDb('t_uni_student').select('id').whereIn('class_id', ids).where('is_deleted', 0),
       );
       return;
     }
@@ -307,7 +320,7 @@ export async function applyTrainingScope(
       // 本表是房间 → 用「我班学生住过的房间 id」反查
       b.whereIn(
         col,
-        tbl(db, JOB_DB, STUDENT_TABLE, JOB_STAGE)
+        uniDb('t_uni_student')
           .select('dorm_id')
           .whereIn('class_id', ids)
           .whereNotNull('dorm_id')

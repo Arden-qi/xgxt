@@ -159,11 +159,30 @@ function mapRow(r: Record<string, any>): StudentRow {
  */
 async function applyScope(qb: any, user: any): Promise<void> {
   const roles = user?.roles || [];
-  const uid = user?.userId || '';
+  /* ★ 2026-10-21：责任人列两种写入口径（门户 UUID / 权限库 U_xxx）都要比中 */
+  const uids = [
+    ...new Set([user?.userId, user?.businessUserId].map((x) => String(x || '')).filter(Boolean)),
+  ];
+  const uid = uids[0] || '';
   const isAdmin = hasRole(roles, RoleCode.SYS_ADMIN);
   const isDean = hasRole(roles, RoleCode.TEACH_DEAN);
   const isPrincipal = hasRole(roles, RoleCode.RM_PRINCIPAL);
   if (isAdmin || isDean || isPrincipal) return;
+
+  /* ★ 2026-10-21：就业老师按「交棒给我的就业班」隔离
+   *   原来这里没有 JOB_STAFF 分支 → 不过滤 = 看到全部就业部学生（多就业老师会串数据）。
+   *   口径与实训侧一致：只看 employment_teacher = 我 的班。
+   */
+  if (hasRole(roles, RoleCode.JOB_STAFF)) {
+    const mine = (await tbl(db, 'sms_job', CLASS_TABLE, STAGE)
+      .where({ is_deleted: false })
+      .whereIn('employment_teacher_id', uids)
+      .select('id')) as Array<{ id: string }>;
+    const ids = mine.map((c) => c.id);
+    if (!ids.length) qb.whereRaw('1 = 0');
+    else qb.whereIn('class_id', ids);
+    return;
+  }
 
   if (hasRole(roles, RoleCode.PROJECT_MANAGER)) {
     const mine = (await tbl(db, 'sms_job', CLASS_TABLE, STAGE)

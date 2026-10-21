@@ -377,7 +377,8 @@ async function mkStudent(db, table, over = {}) {
 
     const cls = await req(`${API}/classes`, { token: tPrincipal });
     const clsList = cls.json?.data || [];
-    check('班级下拉合并 4 学段', new Set(clsList.map((c) => c.stage)).size === 4, clsList.length + ' 项');
+    // ★ 2026-10-21：就业部（emp）独立成第 5 个学段 —— 库里有就业班时下拉会出现它
+    check('班级下拉合并 5 学段（含就业部）', new Set(clsList.map((c) => c.stage)).size === 5, clsList.length + ' 项');
     check('班级下拉含教务的去重班级', clsList.some((c) => c.stage === 'edu' && c.name === '自检-教务班'));
 
     /* ============ L. 分页 ============ */

@@ -73,6 +73,28 @@ export async function visibleClassIds(
   ];
   if (!ids.length) return [];
 
+  /* ★ 2026-10-21：就业部（emp）独立学段，按「就业老师」隔离
+   *
+   *   原来 emp 直接落到下面的「初高/大学」分支 →
+   *     `if (side === 'training') return []` → 就业老师永远拿到空数组
+   *     （任何叠了 applyClassScope 的就业部查询都会一行不剩）。
+   *
+   *   口径：就业部只有就业老师参与（项目经理管实训，不看就业部）；
+   *        就业老师也只看「employment_teacher 是我」的班。
+   */
+  if (stage === 'emp') {
+    if (!hasRole(roles, RoleCode.JOB_STAFF)) return [];
+    try {
+      const rows = (await tbl(jobDb, 'sms_job', 't_job_class', 'emp')
+        .where('is_deleted', 0)
+        .whereIn('employment_teacher_id', ids)
+        .select('id')) as Array<{ id: string }>;
+      return rows.map((r) => String(r.id));
+    } catch {
+      return [];
+    }
+  }
+
   if (stage === 'job') {
     // 班主任三人组 → 实训/就业侧一个都看不到（交棒后彻底隔离）
     if (side === 'university') return [];

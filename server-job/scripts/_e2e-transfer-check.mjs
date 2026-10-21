@@ -20,14 +20,31 @@ const check = (name, pass, detail = '') => {
   console.log(`  ${pass ? '✅' : '❌'} ${name}${detail ? '  —— ' + detail : ''}`);
 };
 
-const FROM = 'CLS-U2601'; // 大学部 阶段206
-const TO = 'CLS-U2602'; // 大学部 阶段203（更慢）
+/* ★ 2026-10-21：原来硬编码 CLS-U2601/U2602，这两个班后来被软删了 →
+ *   "班级不存在" 全线失败。改成自己造夹具（阶段 206 / 203，进度一快一慢）。 */
+const FIX_FROM = 'TEST-XFER-FROM';
+const FIX_TO = 'TEST-XFER-TO';
+const FROM = FIX_FROM; // 大学部 阶段206
+const TO = FIX_TO; // 大学部 阶段203（更慢）
 
 await startServices();
 const tokens = {};
 for (const a of ['zhanght', 'sunjl', 'qiansy', 'lilx']) tokens[a] = await login(a);
 
 const db = conn('sms_common');
+
+/* 夹具：一快一慢两个大学部班（id 固定，先删后建） */
+async function seedClasses() {
+  await db('t_uni_class').whereIn('id', [FIX_FROM, FIX_TO]).del();
+  await db('t_uni_class').insert([
+    { id: FIX_FROM, edu_stage: 'class', stage_code: 206, class_code: 'XFROM', class_name: '自检换班源班206',
+      dept_code: 2, class_status: 2, student_count: 0, is_deleted: 0, create_time: new Date(),
+      head_teacher_id: '85a47f05-6f96-4602-944e-d5c29b0154ae', head_teacher_name: '张海涛' },
+    { id: FIX_TO, edu_stage: 'class', stage_code: 203, class_code: 'XTO', class_name: '自检换班目标班203',
+      dept_code: 2, class_status: 2, student_count: 0, is_deleted: 0, create_time: new Date() },
+  ]);
+}
+await seedClasses();
 const sid = 'TEST-XFER-' + Date.now();
 const empClasses = [];
 let empSid = null;
@@ -79,14 +96,19 @@ try {
   check('★ 班主任执行末班成功（不再 403）', doRes.json?.code === 200, `code=${doRes.json?.code} ${doRes.json?.message || ''}`);
 
   const stu = await db('t_uni_student').where({ id: sid }).first();
-  check('★ 学生班籍已改到目标班', stu?.class_name === 'U2602', `class_name=${stu?.class_name}`);
+  // 夹具自造后，班级名固定为「自检换班源班206 / 自检换班目标班203」
+  check('★ 学生班籍已改到目标班', stu?.class_name === '自检换班目标班203', `class_name=${stu?.class_name}`);
   check('★ repeat_count +1', Number(stu?.repeat_count) === 1, `repeat_count=${stu?.repeat_count}`);
 
   const rep = await db('t_uni_repeat').where({ student_id: sid }).first();
-  check('★ 末班记录已写入（含 from→to）', !!rep && rep.from_class_name === 'U2601' && rep.to_class_name === 'U2602');
+  check(
+    '★ 末班记录已写入（含 from→to）',
+    !!rep && rep.from_class_name === '自检换班源班206' && rep.to_class_name === '自检换班目标班203',
+    `${rep?.from_class_name}→${rep?.to_class_name}`,
+  );
 
   const tr = await db('t_uni_class_transfer').where({ student_id: sid }).first();
-  check('★ 转班留痕已写入', !!tr && tr.to_class_name === 'U2602', `reason=${tr?.transfer_reason}`);
+  check('★ 转班留痕已写入', !!tr && tr.to_class_name === '自检换班目标班203', `reason=${tr?.transfer_reason}`);
 
   /* ---------- 4. 进度规则 ---------- */
   // 末班往更快班（U2602→U2601）必须被拒
@@ -147,13 +169,16 @@ try {
   const empRep = await req(`${BASE}/api/teaching/class-transfer/targets?stage=emp&fromClassId=${em2}&mode=repeat`, { token: tokens.qiansy });
   check(
     '就业部：末班只给进度≤当前的班（301）',
-    (empRep.json?.data || []).length === 1 && empRep.json?.data?.[0]?.name === '自检就业一阶段班',
+    // 库里可能还有其它 301 的就业班（演示数据），只断言「含一阶段、不含三阶段」
+    (empRep.json?.data || []).some((x) => x.name === '自检就业一阶段班') &&
+      !(empRep.json?.data || []).some((x) => x.name === '自检就业三阶段班'),
     (empRep.json?.data || []).map((x) => x.name).join(','),
   );
   const empPro = await req(`${BASE}/api/teaching/class-transfer/targets?stage=emp&fromClassId=${em2}&mode=promote`, { token: tokens.qiansy });
   check(
     '就业部：升班只给进度更快的班（303）',
-    (empPro.json?.data || []).length === 1 && empPro.json?.data?.[0]?.name === '自检就业三阶段班',
+    (empPro.json?.data || []).some((x) => x.name === '自检就业三阶段班') &&
+      !(empPro.json?.data || []).some((x) => x.name === '自检就业一阶段班'),
     (empPro.json?.data || []).map((x) => x.name).join(','),
   );
 
@@ -176,6 +201,7 @@ try {
   check('就业部：班籍改为 303 班', empS2?.class_name === '自检就业三阶段班', empS2?.class_name);
 
 } finally {
+  await db('t_uni_class').whereIn('id', [FIX_FROM, FIX_TO]).del().catch(() => {});
   for (const id of empClasses) await db('t_uni_class').where({ id }).del().catch(() => {});
   if (empSid) {
     await db('t_uni_repeat').where({ student_id: empSid }).del().catch(() => {});

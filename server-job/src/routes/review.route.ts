@@ -117,7 +117,7 @@ reviewRouter.get(
     //   校长 / 学管 / 管理员 → 不限。
     //   ownCreatedBy：姓名可手填 → 未关联学生（student_id 为 NULL）的记录，
     //   也要让**建单人自己**看得到，否则建完就"消失"了。
-    await applyTrainingScope(query, req, { table: TABLE, via: 'student', ownCreatedBy: true });
+    await applyTrainingScope(query, req, { table: TABLE, dbName: DB, via: 'student', ownCreatedBy: true });
 
     if (q.studentId) query.andWhere('student_id', q.studentId);
     // ★ 2026-10-16：班级筛选 —— 复盘表没有 class_id（只有 class_name 快照），
@@ -162,7 +162,7 @@ reviewRouter.get(
     // ★ 2026-10-16：详情也要过数据范围，否则拿到 id 就能绕过列表看别人的复盘。
     //   不通过时统一抛「不存在」，避免暴露"这条记录存在但你没权限"。
     const guard: any = tbl(db, DB, TABLE, STAGE).where({ id, is_deleted: false });
-    await applyTrainingScope(guard, req, { table: TABLE, via: 'student', ownCreatedBy: true });
+    await applyTrainingScope(guard, req, { table: TABLE, dbName: DB, via: 'student', ownCreatedBy: true });
     if (!(await guard.first())) throw new BizError(BizCode.PARAM_ERROR, '复盘记录不存在');
 
     const row = await tbl(db, DB, TABLE, STAGE)
