@@ -1448,6 +1448,13 @@ async function assignBlockReason(stu: Record<string, any>): Promise<string | nul
   return null;
 }
 
+/**
+ * 全款是否已缴清 —— 已抽到 `services/fee-order.service#isFullFeeSettled`
+ *
+ * ★ 2026-10-20：接收建档（class 侧 doReceive）也要问同一个判断，
+ *   放在 service 里两边共用，避免两套口径打架。
+ */
+
 studentRouter.post(
   '/enroll-to-class',
   validate(
@@ -1511,11 +1518,16 @@ studentRouter.post(
 
     /* ---- 分流：初高 / 大学部 都推「待接收学员」，由对应学段的班主任接收 ----
      *
-     * ★ 2026-10-19 行为变更（用户口径）：
-     *   「接收权限放宽到初高中、大学，初高中、大学接收来自咨询的学生」
-     *   原来初高是**分班即入班**（直接建档，班主任无感知）；
-     *   现在初高也走推送 → 初高班主任在「待接收学员」里接收后建档。
-     *   两个学段的差别只剩「目标班属于哪个库」，接收端按 intend_dept_code 分流。
+     * ★ 2026-10-20 最终口径（用户确认，两个学段统一）：
+     *   「初高班主任在班级侧点了接收之后，系统会在初高学籍表建档，并回写咨询侧状态。
+     *     大学侧和初高中一样，都需要老师接收之后入班」
+     *
+     *   → 咨询侧**只负责交人**：推送一条「待接收」单，不建档、不推进状态。
+     *     建档 + 回写状态统一在 class 侧 `doReceive` 里做（见 consult.route.ts）：
+     *       接收 → 建档（学籍按钱落到「试学中 / 正式在读」）→ 调咨询内部接口回写状态。
+     *
+     *   ⚠️ 不要在这里恢复「分班即入班」（auto-receive）：
+     *      那会让班主任看不到人就被动入班，与本次口径相反。
      */
     let result;
     let msg: string;
@@ -1581,16 +1593,25 @@ studentRouter.post(
       );
     }
 
+    /* ---- ★ 2026-10-20 两个学段完全统一：分班 = 推「待接收」，入班在接收端 ----
+     *
+     *   咨询侧到这里就结束了：**不建档、不推进咨询状态**。
+     *   学生什么时候真正入班、咨询状态什么时候从「待分班」走到「试学中 / 正式在读」，
+     *   统一由 class 侧班主任点「接收」时触发（见 class/modules/consult/consult.route.ts
+     *   的 doReceive：建档 + 调 /internal/receive-ack 回写咨询状态）。
+     *
+     *   ⚠️ 不要再加「大学部分班即入班」的分支 —— 2026-10-20 用户明确要求
+     *      「大学侧和初高中一样，都需要老师接收之后入班」。
+     */
     const inserted = Number(result.data?.inserted ?? 0);
     const skipped = Number(result.data?.skipped ?? 0);
     const reopened = Number(result.data?.reopened ?? 0);
     const where = isJhTarget ? '教学管理（初高）' : '班级管理（大学部）';
-    msg =
-      reopened > 0
-        ? `已把「${stu.student_name}」重新推送到${where}的「待接收学员」（原驳回单已重新激活），请班主任重新接收`
-        : inserted > 0
-          ? `已把「${stu.student_name}」推送到${where}的「待接收学员」，请班主任接收并建档`
-          : `「${stu.student_name}」已在${where}的「待接收学员」里了（未重复推送）`;
+    msg = reopened > 0
+      ? `已把「${stu.student_name}」重新推送到${where}的「待接收学员」（原驳回单已重新激活），请班主任重新接收`
+      : inserted > 0
+        ? `已把「${stu.student_name}」推送到${where}的「待接收学员」，请班主任接收并建档`
+        : `「${stu.student_name}」已在${where}的「待接收学员」里了（未重复推送）`;
 
     await addHistory(id, operator.userName, `分班：${msg}`, operator.roleTitle, 'ENROLL_TO_CLASS');
 
@@ -1617,7 +1638,16 @@ studentRouter.post(
         .update({ class_id: classId, class_name: targetName, update_time: new Date() });
     }
 
-    res.json(ok({ consultNo, inserted, skipped, reopened }, msg));
+    /* ---- ★ 2026-10-20 状态推进挪到「接收」时刻 ----
+     *
+     *   之前大学部是分班即入班，所以在这里把状态从「待分班(4)」推到
+     *   「试学中(5) / 正式在读(7)」。现在两个学段都等班主任接收后才入班，
+     *   人还没进班就把状态改了会出现「试学中但班级里没有这个人」，
+     *   所以状态的推进统一在 class 侧接收成功后回调
+     *   `/api/consult/student/internal/receive-ack` 完成。
+     */
+
+    res.json(ok({ consultNo, inserted, skipped, reopened, duplicate: false }, msg));
   }),
 );
 

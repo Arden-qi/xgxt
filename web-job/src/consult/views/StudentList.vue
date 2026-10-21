@@ -27,6 +27,7 @@ import {
   CONSULT_STATE_NAME,
   ConsultState as CS,
   DEPT_NAME,
+  DEPT_OPTIONS,
   FEE_TYPE_NAME,
   FeeType,
   FormalPayMode as FPM,
@@ -38,7 +39,6 @@ import {
   updateStudentExtra,
   assignOwner,
   claimStudent,
-  assignClass,
   recordLoss,
   fetchConsultants,
   toFormal,
@@ -80,7 +80,7 @@ const query = ref({
 
 /**
  * 状态筛选按钮 —— ★ 2026-10-14 用户指令：只保留学生主线状态
- *   待分配 → 待面试 → 咨询中 → 待分班 → 试学中 → 正式学员
+ *   待分配 → 待面试 → 咨询中 → 待分班 → 试学中 → 正式在读
  *
  * ★ 2026-10-15 用户指令：补上「咨询中」（缴费阶段）——
  *   面试通过并确认报名后即进入本状态；「没缴费」或「已缴费但财务还没确认」
@@ -101,7 +101,7 @@ const STUDENT_STATE_WHITELIST: ConsultState[] = [
   CS.TRIAL_FEE_PENDING, // 咨询中（缴费阶段：未缴费 / 缴费待财务确认）
   CS.TRIAL_WAIT_CLASS, // 待分班（费用已到账）
   CS.TRIAL, // 试学中
-  CS.FORMAL, // 正式学员
+  CS.FORMAL, // 正式在读
   CS.LOST, // 流失（含财务退款后自动流转）
 ];
 
@@ -123,7 +123,7 @@ async function load() {
     });
     list.value = res.list;
     total.value = res.total;
-    // 拉取「分班/入班」权威状态，用于禁用已入班的「入班」按钮（与收款与缴费页同口径）
+    // 拉取「分配班级」权威状态，用于禁用已入班的「分配班级」按钮
     await loadAssignStatus();
   } finally {
     loading.value = false;
@@ -423,67 +423,30 @@ async function submitInterviewResult() {
   if (detailVisible.value) await refreshDetail();
 }
 
-/* ---------- 分班 ---------- */
-const classVisible = ref(false);
-const classForm = ref({ consultStudentId: '', className: '' });
-const classOptions = ref<string[]>([]);
-const classLoading = ref(false);
-
-function openClass(d: ConsultStudent) {
-  classForm.value = { consultStudentId: d.id, className: '' };
-  classOptions.value = d.classOptions || [];
-  classVisible.value = true;
-}
-
-/**
- * ★ 2026-10-15 列表操作列的「分班」
+/* ---------- ★ 2026-10-20 分配班级（分班 + 入班合并） ----------
  *
- * 用户口径：「缴费完成之后学生管理那里分班，分班不能在收款与缴费那里」——
- * 学费到账后学生进入「待分班」，分班动作统一在学生管理做。
+ * 用户口径：「缴费结束之后，直接给他分配班级。分配班级之后，到什么部认领，
+ *           就是入班和分班合并。」
  *
- * 详情弹窗里本来就有「分班」（详情已带 classOptions），
- * 但列表行只有摘要字段，所以先拉一次详情拿班级候选再开弹窗。
+ * ★ 2026-10-20 二次确认（最终口径）：
+ *   「大学侧和初高中一样，都需要老师接收之后入班」
+ *   → 两个学段落地方式**完全一致**：
+ *       咨询侧确认分配 = 推一条「待接收」单（不建档、不改状态）
+ *       对应学段班主任在「待接收学员」点接收 → 建档 + 回写咨询侧状态
  */
-async function openClassFromList(row: any) {
-  const id = row?.consultStudentId || row?.id;
-  if (!id) return;
-  classLoading.value = true;
-  try {
-    const d = await fetchStudentDetail(id);
-    openClass(d);
-  } catch {
-    ElMessage.error('获取可选班级失败，请重试');
-  } finally {
-    classLoading.value = false;
-  }
-}
 
-async function submitClass() {
-  if (!classForm.value.className) {
-    ElMessage.warning('请选择班级');
-    return;
-  }
-  try {
-    await assignClass(classForm.value);
-    ElMessage.success('分班成功，学生状态 → 试学中');
-    classVisible.value = false;
-    await load();
-    await refreshDetail();
-  } catch {
-    /* 后端已提示（如「试学费未到账」） */
-  }
-}
-
-/* ---------- ★ 2026-10-06 入班（选学段 + 选开放班级） ---------- */
+/* ---------- ★ 分配班级（选学部 + 选开放班级） ---------- */
 /**
- * 用户口径（2026-10-06）：
- *   「学生管理点『入班』→ 选择进入 初高中 / 大学部 → 选择对应的开放班级
- *     → 确认后学生信息进入到班级」
+ * 用户口径（2026-10-20）：
+ *   「缴费结束之后，直接给他分配班级。分配班级之后，到什么部认领，
+ *     就是入班和分班合并。」
  *
- * 分流规则与「收款与缴费 → 分班」**完全一致**（复用同一个后端接口）：
- *   · 大学部（module='class'）   → 进「待接收学员」，班主任接收后入班
- *   · 初高中（module='class-jh'）→ **直接入班**（用户口径：初高不需要班主任同意）
- * 幂等：后端按学号去重，重复确认不会重复推送。
+ * 老流程是两步：分班（只写班级名）→ 入班（推送到班级管理）。
+ * 现在合成一步：选学部 + 选班级 → 确认 → 推到对应学段的「待接收学员」，
+ * 由该班班主任接收后建档（初高 / 大学部同一套流程）。
+ *
+ * 后端统一走 /enroll-to-class（module 只用于目标库定位）。
+ * 幂等：重复确认不会重复推送。
  */
 const enrollVisible = ref(false);
 const enrollSaving = ref(false);
@@ -516,7 +479,7 @@ async function loadAssignStatus() {
   }
 }
 
-/** 当前行还能不能入班（没查到状态时不误伤） */
+/** 当前行还能不能分配班级（没查到状态时不误伤） */
 function canEnrollOf(row: ConsultStudentListItem | ConsultStudent): boolean {
   const s = assignStatus.value[(row as any).consultStudentId || (row as any).id];
   return s ? s.canAssign : true;
@@ -525,7 +488,7 @@ function canEnrollOf(row: ConsultStudentListItem | ConsultStudent): boolean {
 /** 按钮禁用原因 */
 function enrollTipOf(row: ConsultStudentListItem | ConsultStudent): string {
   const s = assignStatus.value[(row as any).consultStudentId || (row as any).id];
-  return s ? s.label : '选择学段与开放班级后入班';
+  return s ? s.label : '选择学部与开放班级后，推送给该班班主任接收';
 }
 
 /** 按学段切开放班级（初高/大学部字段名不同：classId / id） */
@@ -560,14 +523,15 @@ async function submitEnroll() {
   const name = (f.row as any).studentName || '该学员';
   const opt = enrollClassOptions.value.find((o) => o.value === f.classId);
   const target = `「${opt?.label ?? f.classId}」`;
+  /* ★ 2026-10-20 最终口径：两个学段都要班主任接收后才入班，
+   *   咨询侧确认分配只是「交人」，所以提示语统一（只有学部名不同） */
+  const sideName = f.side === 'jh' ? '初高' : '大学部';
 
   try {
     await ElMessageBox.confirm(
-      f.side === 'jh'
-        ? `确认把「${name}」直接分入初高 ${target}？\n初高不需要班主任接收，确认后立即建立学籍入班。`
-        : `确认把「${name}」分入 ${target}？\n该学员会进入「待接收学员」，由该班班主任接收后入班（重复确认不会重复推送）。`,
-      '确认入班',
-      { confirmButtonText: '确认入班', cancelButtonText: '取消', type: 'info' },
+      `确认把「${name}」分配到 ${target}（${sideName}）？\n确认后推送到该学部的「待接收学员」，由对应班级班主任接收后才建立学籍并入班。`,
+      '确认分配班级',
+      { confirmButtonText: '确认分配', cancelButtonText: '取消', type: 'info' },
     );
   } catch {
     return; // 用户取消
@@ -575,16 +539,13 @@ async function submitEnroll() {
 
   enrollSaving.value = true;
   try {
-    const r = await enrollToClassApi(id, f.classId, f.side === 'jh' ? 'class-jh' : 'class');
+    await enrollToClassApi(id, f.classId, f.side === 'jh' ? 'class-jh' : 'class');
     ElMessage.success(
-      f.side === 'jh'
-        ? `已把「${name}」分入初高 ${target}`
-        : r.inserted > 0
-          ? `已把「${name}」推送到班级管理，请班主任接收建档`
-          : `「${name}」已在「待接收学员」里了（未重复推送）`,
+      `已把「${name}」推送到 ${target} 的「待接收学员」，等${sideName}班主任接收后建档入班`,
     );
     enrollVisible.value = false;
     await load();
+    await loadAssignStatus();
     if (detailVisible.value) await refreshDetail();
   } catch {
     /* 后端已提示（未缴 / 已分班 / 班级模块不可用 等） */
@@ -842,6 +803,25 @@ async function submitExtra() {
  *    试学中   → 转正式 →「是否一次性付清学费」（转正式弹窗里分 FULL/INSTALLMENT）
  *    未报名·待跟进 → 取消未报名（回「咨询中」，不重复面试）
  */
+
+/**
+ * ★ 2026-10-20 面试只能由「学生所属的那个咨询老师」录入
+ *
+ * 用户口径（原话）：「经理已经分配给咨询老师，经理这里就不可以再面试了」
+ *  → 学生已经分配给张三 → 只有张三能录面试结果；经理/管理员在旁边只能看，不能替他面试。
+ *  → 未分配（owner 为空）→ 视为公海，谁都能面（经理接待的走「领取」后 owner 就是自己）。
+ *
+ * 注：`/claim` 认领时经理的 owner_name 会带「（本人接待）」后缀，比对前先剥掉。
+ */
+function isMyStudent(row: any): boolean {
+  const owner = String(row?.ownerName || '').trim();
+  if (!owner) return true;
+  const me = String(auth.account?.userName || '').trim();
+  if (!me) return false;
+  const normalized = owner.replace(/[（(]本人接待[）)]$/, '').trim();
+  return normalized === me || owner === me;
+}
+
 function actionsOf(row: ConsultStudentListItem | ConsultStudent) {
   const s = (row as any).consultState as ConsultState;
   const isMgr = auth.isManagerUp;
@@ -849,17 +829,17 @@ function actionsOf(row: ConsultStudentListItem | ConsultStudent) {
   return {
     canAssign: s === CS.WAIT_ASSIGN && isMgr,
     canClaim: s === CS.WAIT_ASSIGN && !isMgr,
-    canInterview: s === CS.WAIT_INTERVIEW,
-    canClass: s === CS.TRIAL_WAIT_CLASS,
-    canToFormal: s === CS.TRIAL || s === CS.FULL_FEE_PENDING,
+    /** ★ 2026-10-20：已分配给他人 → 经理也不能替人面试 */
+    canInterview: s === CS.WAIT_INTERVIEW && isMyStudent(row),
     /**
-     * ★ 2026-10-05 入班（咨询 → 班级管理）
+     * ★ 2026-10-20 分配班级（分班 + 入班合并）
      *
-     * 已分班（试学中）及之后的学生，可以把人「交」给学管：
-     * 推到班级管理的「待接收学员」，由班主任接收并建档。
-     * 幂等：重复点不会重复推送（class 侧按学号/咨询单号去重）。
+     * 缴费到账（待分班）就可以分配；已经试学 / 缴费中 / 正式的学生
+     * 如果之前在「待接收」里没落地，也允许补分配一次（后端幂等）。
+     * 两个学段一律推到「待接收学员」，等对应班主任接收后才建档入班。
      */
-    canEnroll: [CS.TRIAL, CS.FULL_FEE_PENDING, CS.FORMAL].includes(s),
+    canEnroll: [CS.TRIAL_WAIT_CLASS, CS.TRIAL, CS.FULL_FEE_PENDING, CS.FORMAL].includes(s),
+    canToFormal: s === CS.TRIAL || s === CS.FULL_FEE_PENDING,
     /**
      * ★ 2026-10-08：「未报名」不再是待面试阶段的独立按钮 ——
      * 面试结果弹窗里直接确定「报名 / 未报名」。
@@ -980,8 +960,11 @@ onMounted(load);
   <div class="page">
     <!-- 搜索栏 -->
     <el-card shadow="never" class="toolbar">
+      <!--
+        ★ 2026-10-21 用户口径：搜索区与「新建学生」原来是上下两行，
+          现在合成一行并整体居中 —— 新建学生紧跟在「重置」后面。
+      -->
       <div class="toolbar-row">
-        <div class="spacer" />
         <el-input
           v-model="query.keyword"
           class="kw-input"
@@ -991,13 +974,12 @@ onMounted(load);
           @clear="search"
         />
         <el-select v-model="query.deptCode" placeholder="全部部门" clearable style="width: 130px">
-          <el-option :value="1" :label="DEPT_NAME[1]" />
-          <el-option :value="2" :label="DEPT_NAME[2]" />
+          <!-- ★ 2026-10-20 初中部 / 高中部 / 大学部（顺序由 DEPT_OPTIONS 统一给出） -->
+          <el-option v-for="d in DEPT_OPTIONS" :key="d" :value="d" :label="DEPT_NAME[d]" />
         </el-select>
         <el-button type="primary" @click="search">查询</el-button>
         <el-button @click="resetQuery">重置</el-button>
         <el-button type="primary" plain @click="openNew">＋ 新建学生</el-button>
-        <div class="spacer" />
       </div>
 
       <!-- 状态筛选 -->
@@ -1087,16 +1069,6 @@ onMounted(load);
         <el-table-column label="操作" width="390" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">详情</el-button>
-            <!-- ★ 2026-10-15 缴费完成（待分班）后在这里分班，不在收款与缴费页 -->
-            <el-button
-              v-if="actionsOf(row).canClass"
-              link
-              type="success"
-              :loading="classLoading"
-              @click="openClassFromList(row)"
-            >
-              分班
-            </el-button>
             <el-button v-if="actionsOf(row).canAssign" link type="warning" @click="openAssign(row)">
               分配
             </el-button>
@@ -1119,7 +1091,7 @@ onMounted(load);
             >
               取消未报名
             </el-button>
-            <!-- 入班：已推送/已接收/初高已入班 → 禁用并提示（与收款与缴费页同口径） -->
+            <!-- ★ 2026-10-20 分配班级 = 分班 + 入班（两个学段都推到「待接收」，班主任接收后建档） -->
             <el-tooltip
               v-if="actionsOf(row).canEnroll"
               :content="enrollTipOf(row)"
@@ -1132,7 +1104,7 @@ onMounted(load);
                   :disabled="!canEnrollOf(row)"
                   @click="openEnroll(row)"
                 >
-                  入班
+                  分配班级
                 </el-button>
               </span>
             </el-tooltip>
@@ -1181,14 +1153,6 @@ onMounted(load);
               >
                 录入面试结果
               </el-button>
-              <el-button
-                v-if="actionsOf(detail).canClass"
-                size="small"
-                type="primary"
-                @click="openClass(detail)"
-              >
-                分班
-              </el-button>
               <el-tooltip
                 v-if="actionsOf(detail).canEnroll"
                 :content="enrollTipOf(detail)"
@@ -1202,7 +1166,7 @@ onMounted(load);
                     :disabled="!canEnrollOf(detail)"
                     @click="openEnroll(detail)"
                   >
-                    入班
+                    分配班级
                   </el-button>
                 </span>
               </el-tooltip>
@@ -1571,8 +1535,8 @@ onMounted(load);
         </el-form-item>
         <el-form-item label="部门">
           <el-select v-model="newForm.deptCode" style="width: 100%">
-            <el-option :value="1" :label="DEPT_NAME[1]" />
-            <el-option :value="2" :label="DEPT_NAME[2]" />
+            <!-- ★ 2026-10-20 初中部 / 高中部 / 大学部 -->
+            <el-option v-for="d in DEPT_OPTIONS" :key="d" :value="d" :label="DEPT_NAME[d]" />
           </el-select>
         </el-form-item>
         <el-form-item label="来源">
@@ -1831,27 +1795,34 @@ onMounted(load);
       </template>
     </el-dialog>
 
-    <!-- ============ ★ 入班（选学段 + 选开放班级） ============ -->
-    <el-dialog v-model="enrollVisible" title="入班" width="560px">
+    <!-- ============ ★ 分配班级（分班 + 入班，一次完成） ============ -->
+    <el-dialog v-model="enrollVisible" title="分配班级" width="560px">
       <el-alert
         type="info"
         :closable="false"
         show-icon
-        title="先选学段，再选该学段下的开放班级；大学部需班主任接收，初高确认后直接入班"
+        title="交完试学费或学费（财务确认到账）后即可分配；确认后推到该学部的「待接收学员」，由对应班级班主任接收后才建档入班并回写学生状态"
+        class="mb"
+      />
+      <el-alert
+        type="success"
+        :closable="false"
+        show-icon
+        title="只交了试学费 → 接收后为「试学中」；学费等全款已缴清 → 接收后直接是「正式在读」"
         class="mb"
       />
       <el-form label-width="90px" label-position="right">
         <el-form-item label="学生">
           <span>{{ (enrollForm.row && (enrollForm.row.studentName || '—')) || '—' }}</span>
         </el-form-item>
-        <el-form-item label="进入学段" required>
+        <el-form-item label="进入学部" required>
           <el-radio-group
             v-model="enrollForm.side"
             :disabled="enrollSaving"
             @change="enrollForm.classId = ''"
           >
             <el-radio-button value="univ">大学部</el-radio-button>
-            <el-radio-button value="jh">初高中</el-radio-button>
+            <el-radio-button value="jh">初中部 / 高中部</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="开放班级" required>
@@ -1877,26 +1848,8 @@ onMounted(load);
       <template #footer>
         <el-button :disabled="enrollSaving" @click="enrollVisible = false">取消</el-button>
         <el-button type="primary" :loading="enrollSaving" @click="submitEnroll">
-          确认入班
+          确认分配
         </el-button>
-      </template>
-    </el-dialog>
-
-    <!-- ============ 分班 ============ -->
-    <el-dialog v-model="classVisible" title="分班" width="420px">
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        title="分班前系统会校验试学费是否已到账"
-        class="mb"
-      />
-      <el-select v-model="classForm.className" placeholder="请选择班级" style="width: 100%">
-        <el-option v-for="c in classOptions" :key="c" :value="c" :label="c" />
-      </el-select>
-      <template #footer>
-        <el-button @click="classVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitClass">确定分班</el-button>
       </template>
     </el-dialog>
 
@@ -1961,12 +1914,14 @@ onMounted(load);
 .toolbar-row {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 /* ★ 2026-10-15 工具栏一行放齐：关键词输入框可伸缩，其余控件不压缩，
      「重置」紧跟在「查询」后面，不再被挤到第二行 */
+/* ★ 2026-10-21 搜索区 + 新建学生合并为一行，整体水平居中（不再用左右 spacer 撑开） */
 .toolbar-row > * {
   flex-shrink: 0;
 }
@@ -1974,11 +1929,7 @@ onMounted(load);
 .kw-input {
   flex: 1 1 240px;
   max-width: 380px;
-  min-width: 200px;
-}
-
-.spacer {
-  flex: 1;
+  min-width: 160px;
 }
 
 .state-filter {

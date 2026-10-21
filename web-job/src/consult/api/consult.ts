@@ -136,15 +136,17 @@ export function assignClass(payload: AssignClassPayload): Promise<null> {
  * 入班 / 分班（咨询 → 班级管理 / 教学管理初高）
  *
  * 不带 classId：把学员推送到大学部「待接收学员」，由班主任接收并建档。
- * 带 classId（★ 2026-10-05 分班）：目标 = 大学部走「待接收学员」；
- *   目标 = 初高则**直接**进入对应班级。幂等：按 consultNo 去重。
+ * 带 classId（★ 2026-10-05 分班）：目标 = 大学部 / 初高，**都是分班即入班**。
+ *   ★ 2026-10-20 用户口径「入班和分班合并」：大学部不再进「待接收学员」，
+ *     推送后立刻由班级侧建档入班，学部（初中/高中/大学部）直接能看到学生。
+ *   幂等：按 consultNo 去重，重复确认返回 duplicate=true，不会重复建档。
  */
 export function enrollToClass(
   id: string,
   classId?: string,
   module?: 'class' | 'class-jh',
-): Promise<{ consultNo: string; inserted: number; skipped: number }> {
-  return http.post<{ consultNo: string; inserted: number; skipped: number }>(
+): Promise<{ consultNo: string; inserted: number; skipped: number; duplicate?: boolean }> {
+  return http.post<{ consultNo: string; inserted: number; skipped: number; duplicate?: boolean }>(
     '/api/consult/student/enroll-to-class',
     { id, classId, module },
   );
@@ -311,6 +313,31 @@ export function fetchFeeDetail(orderId: string): Promise<ConsultFeeOrder> {
  */
 export function createFees(payload: ConsultFeeCreatePayload): Promise<ConsultFeeCreateResult> {
   return http.post<ConsultFeeCreateResult>('/api/consult/fee/create', payload);
+}
+
+/**
+ * ★ 2026-10-20 补费（试学转正尾款 / 差额补收，金额自定义）
+ *
+ * 只对「已缴过试学费」的学生开放；金额由老师手填（单位：分）。
+ * 落库类型是「补费(8)」，到账后自动把试学学员转成正式在读。
+ */
+export interface ConsultSupplementPayload {
+  consultStudentId: string;
+  /** 补费金额（单位：分） */
+  amount: number;
+  voucherUrl: string;
+  voucherNo?: string;
+  payMethod?: string;
+  remark?: string;
+}
+
+export function createSupplementFee(
+  payload: ConsultSupplementPayload,
+): Promise<{ orderId: string; orderNo: string; amount: number }> {
+  return http.post<{ orderId: string; orderNo: string; amount: number }>(
+    '/api/consult/fee/supplement',
+    payload,
+  );
 }
 
 /** 上传图片（base64 → 返回相对 URL） */

@@ -145,3 +145,35 @@ export function guardOwnStudent(req: Request, res: Response, next: NextFunction)
     .then(() => next())
     .catch(next);
 }
+
+/**
+ * ★ 2026-10-20 面试归属校验（比数据范围更严，经理也受约束）
+ *
+ * 用户口径（原话）：「经理已经分配给咨询老师，经理这里就不可以再面试了」
+ *
+ * 和数据范围的区别：
+ *   · 数据范围是「能看多少」，经理能看全部 → 不拦；
+ *   · 面试是「谁负责谁录」，学生已经挂在张三名下，就只有张三能录面试结果，
+ *     经理/管理员在旁边只能看、不能替他面。
+ *
+ * ⚠️ 为什么不做成中间件：它比 guardOwnStudent 窄（只用于面试类接口），
+ *    而且必须拿到学生行（owner_name）才能判，所以做成 handler 内的断言，
+ *    在 findStudent 之后调用。
+ *
+ * @param row  学生表行（需含 owner_name / student_name）
+ */
+export function assertInterviewOwner(row: any, user?: any): void {
+  if (!row) return;
+  const own = String(row.owner_name || '').trim();
+  if (!own) return; // 未分配 → 公海，谁都能面
+
+  const me = String(user?.userName || '').trim();
+  // /claim 认领时经理的 owner_name 带「（本人接待）」后缀，比对前先剥掉
+  const normalized = own.replace(/[（(]本人接待[）)]$/, '').trim();
+  if (me && (normalized === me || own === me)) return;
+
+  throw new BizError(
+    BizCode.NO_OPERATION_PERMISSION,
+    `「${row.student_name || '该学生'}」已分配给 ${own}，面试结果只能由该咨询老师录入`,
+  );
+}

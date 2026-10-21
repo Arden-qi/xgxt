@@ -134,9 +134,22 @@
       <el-table-column label="入学时间" min-width="100" align="center">
         <template #default="{ row }">{{ row.enrollDate || '—' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="170" fixed="right" align="center">
+      <el-table-column label="操作" width="260" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
+          <!-- ★ 2026-10-20 试学闭环：只有大学学段的「试学中」学生才显示 -->
+          <el-button
+            v-if="canTrialAct(row)"
+            link
+            type="success"
+            size="small"
+            @click="openTrialPlan(row)"
+          >
+            转正式
+          </el-button>
+          <el-button v-if="canTrialAct(row)" link type="danger" size="small" @click="openTrialQuit(row)">
+            退学
+          </el-button>
           <el-button v-if="!isReadOnlyUser" link type="primary" size="small" @click="openEdit(row)">
             编辑
           </el-button>
@@ -727,6 +740,91 @@
         <el-button type="primary" :loading="saving" @click="doSave">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- ============ 试学转正（发起补费） ============ -->
+    <el-dialog v-model="trialVisible" title="试学转正 · 发起补费" width="560px">
+      <div v-loading="trialLoading">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="班主任只负责「发起补费」，收款仍由咨询老师上传缴费截图、财务核对到账；到账后学生自动转为正式在读"
+          class="trial-alert"
+        />
+        <el-descriptions v-if="trialPlan" :column="2" border size="small">
+          <el-descriptions-item label="学生">{{ trialPlan.studentName }}</el-descriptions-item>
+          <el-descriptions-item label="班级">{{ trialPlan.className || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="全款应缴">{{ money(trialPlan.totalAmount) }}</el-descriptions-item>
+          <el-descriptions-item label="已到账">{{ money(trialPlan.arrivedAmount) }}</el-descriptions-item>
+          <el-descriptions-item label="还差">
+            <b class="trial-missing">{{ money(trialPlan.missingAmount) }}</b>
+          </el-descriptions-item>
+          <el-descriptions-item label="缺缴项">
+            {{ trialPlan.missingTypeNames?.join('、') || '—' }}
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-alert
+          v-if="trialPlan && (trialPlan.inFlightAmount || 0) > 0"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="`另有 ${money(trialPlan.inFlightAmount || 0)} 在途（已发起、等财务确认），不要重复收取`"
+          class="trial-alert"
+        />
+        <el-alert
+          v-if="trialPlan && trialPlan.allArrived"
+          type="success"
+          :closable="false"
+          show-icon
+          title="该生费用已全部到账，点确认会直接转为正式在读（无需补缴）"
+          class="trial-alert"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="trialVisible = false">取消</el-button>
+        <el-button type="primary" :loading="trialSaving" :disabled="!trialPlan" @click="doTrialSupplement">
+          {{ trialPlan?.allArrived ? '直接转正式' : '发起补费' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ============ 试学退学（提交退学申请） ============ -->
+    <el-dialog v-model="quitVisible" title="退学申请" width="520px">
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="退学需要审批：班主任发起 → 学管初审 → 校长终审；通过后学籍改为「退学」，咨询侧同步为「流失」"
+        class="trial-alert"
+      />
+      <el-form :model="quitForm" label-width="90px">
+        <el-form-item label="学生">
+          <span>{{ quitRow?.studentName }}（{{ quitRow?.studentNo }}）</span>
+        </el-form-item>
+        <el-form-item label="退学原因" required>
+          <el-input
+            v-model="quitForm.applyReason"
+            type="textarea"
+            :rows="3"
+            maxlength="300"
+            show-word-limit
+            placeholder="如：试学一周后学生不适应，家长提出退学"
+          />
+        </el-form-item>
+        <el-form-item label="生效日期">
+          <el-date-picker
+            v-model="quitForm.effectDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="quitVisible = false">取消</el-button>
+        <el-button type="danger" :loading="quitSaving" @click="doTrialQuit">提交退学申请</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -769,6 +867,8 @@ import {
   type UpgradeTargetClass,
 } from '@/teaching/api/student';
 import { http } from '@/api/request';
+// ★ 2026-10-20 试学闭环：班主任「转正式（发起补费）」与「退学」
+import { fetchTrialPlan, trialSupplement, trialQuit, type TrialPlan } from '@/teaching/api/trial';
 
 /* ---------------- 部门（2026-10-16 批注：学段改叫部门，判权仍不依赖旧路由） ---------------- */
 const STAGE_ORDER: StudentStage[] = ['jh', 'class', 'job', 'emp', 'edu'];
@@ -1685,6 +1785,95 @@ onMounted(async () => {
   loadDormRooms();
   await load(1);
 });
+
+/* ============================================================
+ * ★ 2026-10-20 试学闭环（用户口径）
+ *   交试学费 → 分配班级 → 试学中
+ *     ├─ 试学有问题 → 退学（班主任发起 → 学管 → 校长）
+ *     └─ 试学通过   → 班主任发起补费 → 补缴到账 → 正式在读
+ *
+ * 只有【大学学段】有试学概念（初高另有自己的流程，就业/教务没有），
+ * 所以按钮只在 stage === 'class' 且状态为「试学中(3)」时出现。
+ * ============================================================ */
+
+const trialVisible = ref(false);
+const trialLoading = ref(false);
+const trialSaving = ref(false);
+const trialPlan = ref<TrialPlan | null>(null);
+const trialRow = ref<StudentRow | null>(null);
+
+const quitVisible = ref(false);
+const quitSaving = ref(false);
+const quitRow = ref<StudentRow | null>(null);
+const quitForm = reactive({ applyReason: '', effectDate: '' as string });
+
+function canTrialAct(row: StudentRow): boolean {
+  return !isReadOnlyUser.value && row.stage === 'class' && row.studentStatus === 3;
+}
+
+function money(cent?: number | null): string {
+  return `¥${((Number(cent) || 0) / 100).toFixed(2)}`;
+}
+
+async function openTrialPlan(row: StudentRow) {
+  trialRow.value = row;
+  trialPlan.value = null;
+  trialVisible.value = true;
+  trialLoading.value = true;
+  try {
+    trialPlan.value = await fetchTrialPlan(row.studentId);
+  } catch {
+    // 错误提示由统一拦截器给出（如「不是从咨询同步进来的」）
+    trialVisible.value = false;
+  } finally {
+    trialLoading.value = false;
+  }
+}
+
+async function doTrialSupplement() {
+  if (!trialRow.value) return;
+  trialSaving.value = true;
+  try {
+    const r = await trialSupplement(trialRow.value.studentId);
+    ElMessage.success(r ? '已发起补费，待财务确认到账后自动转为正式在读' : '已发起补费');
+    trialVisible.value = false;
+    load(query.page);
+  } catch {
+    // 统一提示
+  } finally {
+    trialSaving.value = false;
+  }
+}
+
+function openTrialQuit(row: StudentRow) {
+  quitRow.value = row;
+  quitForm.applyReason = '';
+  quitForm.effectDate = new Date().toISOString().slice(0, 10);
+  quitVisible.value = true;
+}
+
+async function doTrialQuit() {
+  if (!quitRow.value) return;
+  if (!quitForm.applyReason.trim()) {
+    ElMessage.warning('请填写退学原因');
+    return;
+  }
+  quitSaving.value = true;
+  try {
+    const r = await trialQuit({
+      studentId: quitRow.value.studentId,
+      applyReason: quitForm.applyReason.trim(),
+      effectDate: quitForm.effectDate || null,
+    });
+    ElMessage.success(`退学申请已提交（${r?.applyNo || ''}），等待学管审批`);
+    quitVisible.value = false;
+    load(query.page);
+  } catch {
+    // 统一提示
+  } finally {
+    quitSaving.value = false;
+  }
+}
 </script>
 
 <style scoped>
@@ -1824,5 +2013,13 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 4px 18px;
   font-size: 13px;
+}
+
+/* ★ 2026-10-20 试学闭环弹窗 */
+.trial-alert {
+  margin-bottom: 10px;
+}
+.trial-missing {
+  color: var(--el-color-danger);
 }
 </style>
