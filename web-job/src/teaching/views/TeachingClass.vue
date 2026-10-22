@@ -64,8 +64,18 @@
         <el-button type="primary" @click="load(1)">查询</el-button>
         <el-button @click="reset">重置</el-button>
         <el-button v-if="!isReadOnlyUser" type="success" @click="openCreate">新增班级</el-button>
+        <!-- ★ 2026-10-22：阶段方案设计从「系统设置」搬到这里，只给校长 / 学管主任 -->
+        <el-button v-if="canDesignScheme" :icon="SetUp" @click="schemeVisible = true">阶段方案设计</el-button>
       </el-form-item>
     </el-form>
+
+    <!-- 阶段方案设计（弹窗；组件与原来系统设置里的方案页是同一套逻辑） -->
+    <el-dialog v-model="schemeVisible" title="阶段方案设计" width="900px" top="6vh" destroy-on-close>
+      <StageSchemePanel />
+      <template #footer>
+        <el-button @click="schemeVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 列表 -->
     <!-- ★ 列宽纪律：内容大多只有 2~4 个字，一律用 min-width 让浏览器按需收缩/伸展，
@@ -681,9 +691,12 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { isReadOnlyUser } from '@/store/permission';
+import { SetUp } from '@element-plus/icons-vue';
+import { isReadOnlyUser, myRoles } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
 import { http } from '@/api/request';
+// ★ 2026-10-22：阶段方案设计从「系统设置」搬进班级管理，以弹窗呈现
+import StageSchemePanel from '@/teaching/components/StageSchemePanel.vue';
 import { DeptCode } from 'shared-types';
 import type { PermUserListItem } from 'shared-types/perm';
 import {
@@ -722,6 +735,15 @@ import {
 } from '@/teaching/classroom';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
+/**
+ * 阶段方案设计：★ 2026-10-22 用户口径「只给校长 / 学管主任」
+ *   后端 /api/class-jh/stage-scheme/* 也加了同样的角色限制，这里只管入口显隐。
+ */
+const canDesignScheme = computed(() =>
+  ['RM_PRINCIPAL', 'TEACH_DEAN', 'SYS_ADMIN'].some((r) => myRoles.value.includes(r)),
+);
+const schemeVisible = ref(false);
+
 // ★ 2026-10-22 部门口径统一：对外只有「初高中 / 大学部 / 就业部」三个部门。
 //   「实训」是就业部下的一个阶段（班级 dept_code=3），不是并列部门。
 const STAGE_LABEL: Record<ClassStage, string> = {
@@ -1138,9 +1160,16 @@ async function openEdit(row: ClassRow) {
   editVisible.value = true;
 }
 
-/** ★ 表单切学段：编号 / 交棒 / 备注字段要跟着清（否则会带着上一个学段的脏值提交） */
+/** ★ 表单切学段：编号 / 交棒 / 备注字段要跟着清（否则会带着上一个学段的脏值提交）
+ *
+ * ⚠️ 2026-10-22 修：这里原来只保住 id / className，
+ *    结果用户「先填班级编号、再选部门」时，onFormDeptChange → 本函数
+ *    → Object.assign(form, emptyForm(...)) 把刚填的 classCode 一起抹掉了
+ *    （用户反馈：填完班级编号去选部门，编号自动清空）。
+ *    班级编号是三个部门通用、与学段无关的字段，必须原样保留。
+ */
 function onFormStageChange() {
-  const keep = { id: form.id, className: form.className };
+  const keep = { id: form.id, className: form.className, classCode: form.classCode };
   Object.assign(form, emptyForm(form.stage), keep);
 }
 

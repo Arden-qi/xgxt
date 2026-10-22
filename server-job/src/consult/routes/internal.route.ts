@@ -31,7 +31,7 @@ import { validate } from '../middleware/validate';
 import { BizError } from '../middleware/errorHandler';
 import { STUDENT_TABLE, addHistory, today } from '../services/student.service';
 import { changeState } from '../services/state.service';
-import { getSupplementPlan, isFullFeeSettled } from '../services/fee-order.service';
+import { getSupplementPlan, isFullFeeSettled, advanceStudentStateOnArrival, FEE_ORDER_TABLE } from '../services/fee-order.service';
 import { terminateStudentPlans } from '../services/installment.service';
 import { config } from '../config';
 
@@ -436,9 +436,22 @@ consultInternalRouter.post(
       cur === ConsultState.FORMAL || fullSettled ? StudentStatus.STUDYING : StudentStatus.TRIAL;
     const className = String(b.className || stu.class_name || '').trim();
 
-    /* 只处理「待分班」。其他状态说明已经被人推过（试学中 / 正式 / 流失…），
-     * 重复点接收不能让状态倒退，也不能再写一遍历史。 */
-    if (cur !== ConsultState.TRIAL_WAIT_CLASS) {
+    /* 哪些状态可以被「接收」推进
+     *
+     * ★ 2026-10-22 用户口径：**允许跳过「分配 / 面试」** ——
+     *   咨询师录完学生直接收费分班时，学生可能还停在待分配(1)/待面试(2)，
+     *   这时接收也必须能推进，否则永远卡在待分配。
+     *
+     * ⚠️ 退费中(8/9)、已退费(10)、流失(12)、未通过(13) 不在集合里：
+     *    这些状态不该被接收动作往前推（也防状态倒退）。
+     */
+    const RECEIVE_ADVANCEABLE: ConsultState[] = [
+      ConsultState.WAIT_ASSIGN,
+      ConsultState.WAIT_INTERVIEW,
+      ConsultState.TRIAL_FEE_PENDING,
+      ConsultState.TRIAL_WAIT_CLASS,
+    ];
+    if (!RECEIVE_ADVANCEABLE.includes(cur)) {
       return res.json(
         ok(
           {
@@ -486,5 +499,44 @@ consultInternalRouter.post(
         `已回写咨询侧：「${stu.student_name}」→ ${nameOf(CONSULT_STATE_NAME, next)}`,
       ),
     );
+  }),
+);
+
+/* ============================================================
+ * ★ 2026-10-22 财务核对到账 → 立即回推咨询侧推进学生状态
+ *
+ * POST /api/consult/student/internal/fee-arrived
+ * body: { financeFeeId }
+ *
+ * 【为什么需要】
+ *   财务核对只把咨询收款单 status 直接改成了「已到账」，
+ *   但「学生状态推进 + 学籍同步」挂在 advanceStudentStateOnArrival 上，
+ *   原来要等咨询老师打开「收款与缴费」列表触发 syncFromFinance 才跑。
+ *   用户口径：核对补学费后，教学侧学生状态应当立刻从「试学中」变「正式在读」。
+ *
+ * 【为什么按 financeFeeId 而不是 orderId】
+ *   财务侧只有自己的缴费单 id，咨询收款单 id 它不知道（两边各自主键）。
+ *   用 finance_fee_id 反查是唯一稳定的关联键。
+ * ============================================================ */
+consultInternalRouter.post(
+  '/fee-arrived',
+  validate(z.object({ financeFeeId: z.string().min(1, '缺少财务缴费单 id') })),
+  wrap(async (req, res) => {
+    const { financeFeeId } = (req as any).validated as { financeFeeId: string };
+
+    const row = (await db(FEE_ORDER_TABLE)
+      .where({ finance_fee_id: financeFeeId, is_deleted: false })
+      .first()) as Record<string, any> | undefined;
+
+    if (!row) {
+      // 不是咨询发起的单（教务/班级直建），没有学生状态要推进
+      res.json(ok({ synced: 0 }, '该财务单不是咨询发起的，无需同步'));
+      return;
+    }
+
+    // 推进本身幂等：状态不满足前置条件的会直接返回，不会重复写历史
+    await advanceStudentStateOnArrival(row);
+
+    res.json(ok({ synced: 1, orderNo: row.order_no }, '已推进咨询侧学生状态'));
   }),
 );

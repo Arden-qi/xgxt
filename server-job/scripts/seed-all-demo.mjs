@@ -308,29 +308,29 @@ const UNIV_CLASSES = [
     // ★ 2026-10-06：特意放在【六阶段（206）】且未升实训 →
     //   左侧「班级管理 → 班级管理」该行会出现「升实训」按钮，
     //   点开即演示「选项目经理 + 就业指导老师 → 交接到就业管理」的完整流程。
-    id: 'CLS-U2601', name: 'U2601', stage: 206, head: S.headU,
+    id: 'CLS-U2601', name: 'U2601', code: 'Q1', stage: 206, head: S.headU,
     room: '教学楼 A-101', students: ['U26001', 'U26002', 'U26003', 'U26004', 'U26005'],
   },
   {
     // 这台班停在三阶段，用来演示「阶段推进」逐级往上走
-    id: 'CLS-U2602', name: 'U2602', stage: 203, head: S.headU,
+    id: 'CLS-U2602', name: 'U2602', code: 'Q2', stage: 203, head: S.headU,
     room: '教学楼 A-102', students: ['U26006', 'U26007', 'U26008', 'U26009', 'U26010'],
   },
 ];
 
 const JH_CLASSES = [
   {
-    id: 'CLS-JH-G2601', name: 'G2601', stage: 102, head: S.headJ, teacher: S.headJ, room: '综合楼 201',
+    id: 'CLS-JH-G2601', name: 'G2601', code: 'J101', stage: 102, head: S.headJ, teacher: S.headJ, room: '综合楼 201',
     students: ['J26001', 'J26002', 'J26003', 'J26004', 'J26005', 'J26011', 'J26013'],
   },
   {
-    id: 'CLS-JH-J2602', name: 'J2602', stage: 105, head: S.headJ, teacher: S.headJ, room: '综合楼 202',
+    id: 'CLS-JH-J2602', name: 'J2602', code: 'J102', stage: 105, head: S.headJ, teacher: S.headJ, room: '综合楼 202',
     students: ['J26006', 'J26007', 'J26008', 'J26009', 'J26010', 'J26012', 'J26014'],
   },
 ];
 
 const JOB_CLASS = {
-  id: 'CLS-JOB-SX2601', name: 'SX2601', stage: 301, head: S.job,
+  id: 'CLS-JOB-SX2601', name: 'SX2601', code: 'T101', stage: 301, head: S.job,
   room: '实训基地 B-1', students: ['U26011', 'U26012', 'U26013', 'U26014', 'U26015'],
 };
 
@@ -823,6 +823,10 @@ function seedClass(conn) {
   // 8.1 班级
   const classes = UNIV_CLASSES.map((c) => base(c.id, {
     class_name: c.name, dept_code: E.DEPT_UNIV, stage: c.stage,
+    /* ★ 2026-10-22：班级编号必填（学号 = LZ + 班级编号 + 序号）。
+       演示数据原来没写这一列，导致新环境「新增学生」一律报
+       「还没有班级编号，学号无法生成」—— 直接卡死第一线功能。 */
+    class_code: c.code,
     head_teacher_id: c.head.id, head_teacher_name: c.head.name,
     teacher_id: null, teacher_name: null, assistant_id: null, assistant_name: null,
     room: c.room, open_date: D(-120), student_count: c.students.length,
@@ -1002,6 +1006,8 @@ function seedClassJh(conn) {
   // 9.3 班级
   const classes = JH_CLASSES.map((c) => base(c.id, {
     class_name: c.name, stage: c.stage,
+    /* ★ 2026-10-22：同上，演示班级也要有编号，否则新增学生被拦 */
+    class_code: c.code,
     head_teacher_id: c.head.id, head_teacher_name: c.head.name,
     teacher_id: c.teacher.id, teacher_name: c.teacher.name,
     assistant_id: null, assistant_name: null,
@@ -1334,7 +1340,7 @@ function seedJob(conn) {
 
   // 11.1 实训班
   const classes = [base(JOB_CLASS.id, {
-    class_name: JOB_CLASS.name, class_code: JOB_CLASS.name, dept_code: E.DEPT_EMP, stage: JOB_CLASS.stage,
+    class_name: JOB_CLASS.name, class_code: JOB_CLASS.code, dept_code: E.DEPT_EMP, stage: JOB_CLASS.stage,
     stage_key: 'job',
     head_teacher_id: S.job.id, head_teacher_name: S.job.name,
     teacher_id: null, teacher_name: null, assistant_id: null, assistant_name: null,
