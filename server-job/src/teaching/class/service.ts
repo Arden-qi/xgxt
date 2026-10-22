@@ -33,6 +33,9 @@ import { assertClassInScope } from '../shared/dataScope';
 import { uniDb } from '../shared/uniTable';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
+/* ★ 2026-10-22：教职员工下拉直接读权限库的用户表（与本模块其它跨库查询同款，
+ *   参考 teaching/dorm/repo.uni.ts 的 sms_perm.t_perm_user 用法）。 */
+import { db as permDb } from '../../perm/utils/db';
 import type { ClassDetail, ClassRepo } from './types';
 import {
   HANDOVER_ROLES,
@@ -407,4 +410,29 @@ export async function handoverClass(
     operatorId: userId || null,
     operatorName: userName || null,
   });
+}
+
+
+/* ============================================================
+ * ★ 2026-10-22 新增：教职员工下拉（建班 / 交接时选班主任、教员、助教…）
+ *
+ * 【为什么不在前端直接拉 /api/perm/user/list】
+ *   那个接口挂 permAuth（要求账号 modules 含 perm）。
+ *   初高 / 大学 / 就业账号一进「班级管理」就会 403 ——
+ *   前端拦截器弹一条「您没有该操作的权限」，而且下拉是空的（建班选不了人）。
+ *   （2026-10-22 用户报障：每个账号登录都弹没有权限）
+ *
+ * 【口径】
+ *   本函数只吐下拉要用的 id + 姓名，跟着「班级页面权限」走
+ *   （app.ts 里 /api/teaching/class 已用 requireAnyPage 卡三个学段的班级页面码），
+ *   不额外要求权限管理模块。停用 / 已删的账号不返回。
+ * ============================================================ */
+export async function listStaffOptions(): Promise<Array<{ id: string; userName: string }>> {
+  const rows = (await permDb('t_perm_user')
+    .where('is_deleted', false)
+    .andWhere('user_status', '正常')
+    .orderBy('user_name', 'asc')
+    .select('id', 'user_name as userName')) as any[];
+
+  return rows.map((r) => ({ id: String(r.id), userName: String(r.userName ?? '') }));
 }

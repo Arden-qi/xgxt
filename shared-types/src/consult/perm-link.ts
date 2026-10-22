@@ -82,17 +82,28 @@ export interface RemotePermResult {
  *                       保留给财务负责人，见 FINANCE_ALWAYS_MENUS。
  * ============================================================ */
 
-/** 权限库 fin 模块功能点 → 财务 menuKey */
+/**
+ * ★ 2026-10-22：权限树改成「板块 → 页面」之后，这张表变成**页面名 → menuKey**
+ *
+ * 以前权限树的 fin 模块功能点是「试学学费名单 / 正式学费名单 / 保险费名单…」，
+ * 与财务模块的菜单（缴费管理 / 冻结名单 / 费用标准…）不是一一对应，
+ * 只能靠这张表归并（三个名单 → 一个缴费管理）。
+ * 现在权限树的功能点就是页面本身，板块 key 与门户一致（finance），
+ * 所以映射是 1:1 的，改页面名时两边（页面管理 / 本表）必须一起改。
+ */
+
+/** 权限库 finance 模块的页面名 → 财务 menuKey */
 export const FIN_PERM_ITEM_TO_MENU: Record<string, string> = {
-  试学学费名单: 'fee',
-  正式学费名单: 'fee',
-  保险费名单: 'fee',
-  退费名单: 'refund',
+  财务概览: 'finance',
+  缴费管理: 'fee',
+  冻结名单: 'freeze',
+  退费管理: 'refund',
   账单明细: 'bill',
+  费用标准: 'standard',
 };
 
 /**
- * ⭐ 始终可见的财务页面（不受权限分配影响）
+ * 始终可见的财务页面（不受权限分配影响）
  *
  * ⚠️ finance（财务概览）是本模块首页：
  *    一个账号能进财务模块就必然要有个落地页，
@@ -101,30 +112,23 @@ export const FIN_PERM_ITEM_TO_MENU: Record<string, string> = {
 export const FINANCE_ALWAYS_MENUS: string[] = ['finance'];
 
 /* ============================================================
- * 3. 咨询模块：权限库功能点 → 咨询 menuKey
+ * 3. 咨询模块：权限库页面名 → 咨询 menuKey
  * ============================================================ */
 
-/** 权限库 market 模块功能点 → 咨询 menuKey */
+/** 权限库 consult 模块的页面名 → 咨询 menuKey */
 export const MARKET_PERM_ITEM_TO_MENU: Record<string, string> = {
-  预到校名单: 'student',
-  咨询测试: 'student',
-  学生档案: 'student',
-  缴费: 'fee',
-  退费: 'refund',
-  跟进记录: 'student',
-  统计分析: 'student',
+  学生管理: 'student',
+  收款与缴费: 'fee',
+  审批中心: 'approve',
+  退费管理: 'refund',
+  流失记录: 'loss',
 };
 
-/** 权限库 approve 模块功能点 → 咨询 menuKey（审批中心） */
-export const APPROVE_PERM_ITEM_TO_MENU: Record<string, string> = {
-  待办事项: 'approve',
-  教务核算: 'approve',
-  财务出款: 'approve',
-  校长审批: 'approve',
-  '教质/学术审批': 'approve',
-  '休学/退学审批': 'approve',
-  退费审批: 'approve',
-};
+/**
+ * 旧口径的审批中心映射表 —— 权限树合并进 consult 板块后已无对应模块
+ * （审批中心现在就是 consult 板块下的一个页面），保留空对象只为兼容老引用。
+ */
+export const APPROVE_PERM_ITEM_TO_MENU: Record<string, string> = {};
 
 /** 始终可见的咨询页面（模块首页） */
 export const CONSULT_ALWAYS_MENUS: string[] = ['student'];
@@ -137,8 +141,8 @@ export const CONSULT_ALWAYS_MENUS: string[] = ['student'];
  * 把「权限库功能点清单」换算成「本模块 menuKeys」
  *
  * @param moduleItems 权限库的 moduleItems（模块 key → 功能点名数组）
- * @param permModuleKey 要读的权限库模块 key（财务 'fin' / 咨询 'market'）
- * @param mapping 功能点 → menuKey 对照表
+ * @param permModuleKey 要读的权限库模块 key（财务 'finance' / 咨询 'consult'）
+ * @param mapping 页面名 → menuKey 对照表
  * @param always 始终可见的 menuKey（模块首页）
  */
 export function menusFromPermItems(
@@ -164,23 +168,21 @@ export function financeMenusFromPerm(profile: RemotePermProfile | null): string[
   if (!profile || !profile.found) return [...FINANCE_ALWAYS_MENUS];
   return menusFromPermItems(
     profile.moduleItems,
-    'fin',
+    'finance',
     FIN_PERM_ITEM_TO_MENU,
     FINANCE_ALWAYS_MENUS,
   );
 }
 
-/** 咨询：按权限档案算 menuKeys（合并 market + approve 两个权限库模块） */
+/** 咨询：按权限档案算 menuKeys（审批中心已并入 consult 板块） */
 export function consultMenusFromPerm(profile: RemotePermProfile | null): string[] {
   if (!profile || !profile.found) return [...CONSULT_ALWAYS_MENUS];
-  const market = menusFromPermItems(
+  return menusFromPermItems(
     profile.moduleItems,
-    'market',
+    'consult',
     MARKET_PERM_ITEM_TO_MENU,
     CONSULT_ALWAYS_MENUS,
   );
-  const approve = menusFromPermItems(profile.moduleItems, 'approve', APPROVE_PERM_ITEM_TO_MENU);
-  return Array.from(new Set([...market, ...approve]));
 }
 
 /* ============================================================

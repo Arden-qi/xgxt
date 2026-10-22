@@ -58,15 +58,25 @@ const query = reactive({
 /** 服务端分页 → 总页数 */
 const totalPages = computed<number>(() => Math.max(1, Math.ceil(total.value / query.size)));
 
-/** 操作人下拉候选：原型取 LOGS 里去重后的 by；开发版按当前页数据去重（接口未提供操作人字典） */
-const operatorNames = computed<string[]>(() => {
-  const set = new Set<string>();
-  list.value.forEach((l) => {
-    if (l.operatorName) set.add(l.operatorName);
-  });
-  if (query.operatorName) set.add(query.operatorName);
-  return Array.from(set);
-});
+/**
+ * 操作人下拉候选
+ *
+ * ★ 2026-10-22 改：以前取「当前页数据去重」——
+ *   全系统留痕前日志只有权限板块在写，一页里操作人翻来覆去就那几个，
+ *   凑合能用。现在市场咨询、财务、班主任、教务的写操作全进来了，
+ *   一页 10 条可能 10 个不同的人，下拉里根本选不到「上周那个财务」。
+ *   → 改成调 `/log/operators` 拿全量（按操作次数倒序），一次加载、会话内复用。
+ */
+const operatorNames = ref<string[]>([]);
+
+async function loadOperators(): Promise<void> {
+  try {
+    const rows = await logApi.operators();
+    operatorNames.value = rows.map((r) => r.name);
+  } catch {
+    /* 字典加载失败不影响列表，下拉退化为「全部操作人」 */
+  }
+}
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -91,7 +101,7 @@ async function loadOverview(): Promise<void> {
 
 onMounted(async () => {
   await optionStore.load();
-  await Promise.all([loadOverview(), load()]);
+  await Promise.all([loadOverview(), load(), loadOperators()]);
 });
 
 /** 查询（开发版多出来的显式触发点） */
@@ -145,12 +155,19 @@ function gotoPage(p: number): void {
  * 二、表格单元渲染（与原型 class 一一对应）
  * ============================================================ */
 
-/** 操作类型标签配色：新增 g / 删除 d / 审批 w / 登录 p / 其它 n（原型 renderLogs） */
+/**
+ * 操作类型标签配色
+ *
+ * 原型只区分了 新增 g / 删除 d / 审批 w / 登录 p，其余一律灰色。
+ * ★ 2026-10-22 全系统留痕后，「修改」成了占比最高的一类（各种编辑/保存/状态变更），
+ *   全灰会让整张表失去可扫读性 —— 补上「修改」= 蓝、「登出」= 紫。
+ */
 function actionTagClass(a: string): string {
   if (a === '新增') return 'tag g';
   if (a === '删除') return 'tag d';
   if (a === '审批') return 'tag w';
-  if (a === '登录') return 'tag p';
+  if (a === '修改') return 'tag b';
+  if (a === '登录' || a === '登出') return 'tag p';
   return 'tag n';
 }
 
@@ -417,17 +434,37 @@ async function doExport(): Promise<void> {
           <div class="f"><label>操作模块</label><div>{{ cur.moduleName }}</div></div>
           <div class="f"><label>操作类型</label><div>{{ cur.actionType }}</div></div>
           <div class="f full"><label>操作对象</label><div>{{ cur.targetObj || '—' }}</div></div>
-          <div class="f"><label>操作前值</label><div>{{ cur.beforeValue || '—' }}</div></div>
-          <div class="f"><label>操作后值</label><div>{{ cur.afterValue || '—' }}</div></div>
+          <!-- ★ 2026-10-22：全系统留痕后每条日志都带接口信息，排障时能直接定位到是哪个接口干的 -->
+          <div class="f full">
+            <label>访问接口</label>
+            <div class="num" style="word-break: break-all">
+              <span v-if="cur.httpMethod" class="tag n">{{ cur.httpMethod }}</span>
+              {{ cur.apiPath || '—' }}
+            </div>
+          </div>
+          <div class="f">
+            <label>操作前值</label>
+            <div style="word-break: break-all">{{ cur.beforeValue || '—' }}</div>
+          </div>
+          <div class="f">
+            <label>操作后值</label>
+            <div style="word-break: break-all">{{ cur.afterValue || '—' }}</div>
+          </div>
           <div class="f"><label>IP 地址</label><div class="num">{{ cur.ip || '—' }}</div></div>
           <div class="f">
             <label>操作结果</label>
             <div>
               <span v-if="!isFail(cur.result)" class="tag g">成功</span>
               <span v-else class="tag d">失败</span>
+              <span v-if="cur.statusCode" class="desc" style="margin-left: 8px">
+                HTTP {{ cur.statusCode }} · {{ cur.durationMs ?? 0 }} ms
+              </span>
             </div>
           </div>
-          <div class="f"><label>设备</label><div class="desc">Chrome 128 / Windows 11</div></div>
+          <div class="f full">
+            <label>设备</label>
+            <div class="desc">{{ cur.userAgent || '—' }}</div>
+          </div>
         </div>
 
         <div class="divider"></div>
@@ -454,7 +491,10 @@ async function doExport(): Promise<void> {
         </table>
 
         <div v-if="isFail(cur.result)" class="notice d mt12">
-          ✕<div>操作失败原因：账号「{{ cur.operatorName }}」密码错误，该账号已被锁定。</div>
+          <!-- ★ 2026-10-22：原来是写死的「密码错误，账号已被锁定」，
+               全系统留痕后失败原因五花八门（权限不足 / 参数校验失败 / 单据状态不允许…），
+               统一改为显示后端回传的真实原因 -->
+          ✕<div>{{ cur.afterValue || '操作失败，原因未记录' }}</div>
         </div>
       </template>
 

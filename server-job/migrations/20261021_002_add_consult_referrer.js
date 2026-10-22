@@ -39,6 +39,10 @@ exports.up = async function (knex) {
  * @param { import("knex").Knex } knex
  */
 exports.down = async function (knex) {
+  /* ★ 2026-10-22 补：回滚路径同样要判表在不在。up 里有 hasTable 保护、down 里没有，
+     在 sms_job 这类没有该表的库上跑 migrate:rollback 仍会抛
+     Table 'sms_job.t_consult_student' doesn't exist。 */
+  if (!(await knex.schema.hasTable('t_consult_student'))) return;
   const hasName = await knex.schema.hasColumn('t_consult_student', 'referrer_name');
   const hasPhone = await knex.schema.hasColumn('t_consult_student', 'referrer_phone');
   if (hasName || hasPhone) {

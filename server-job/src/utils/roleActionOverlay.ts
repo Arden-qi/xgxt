@@ -55,6 +55,7 @@
  */
 
 import { db } from '../perm/utils/db';
+import { PERM_TREE, PERM_TREE_ACTION_OPS } from '../perm/config/permTree';
 
 /* ============================================================
  * 1. 映射表：(module||item) → { 树上动作码 → legacy 操作码[] }
@@ -69,273 +70,34 @@ import { db } from '../perm/utils/db';
  *       后端叫 `class:examScore:add`，两套码都要给到）
  *   · **只登记能明确对应的**；对应不上的动作不写 → 该动作不影响按钮
  */
-export const PERM_POINT_TO_ACTION_CODES: Record<string, Record<string, string[]>> = {
-  /* ---------- teach（教学部门 · 大学部）→ class:* ---------- */
-  'teach||学生基础数据': {
-    view: ['class:student:view'],
-    create: ['class:student:add'],
-    edit: ['class:student:edit'],
-    export: ['class:student:export'],
-  },
-  'teach||班级管理': {
-    view: ['class:classInfo:view'],
-    add: ['class:classInfo:add'],
-    edit: ['class:classInfo:edit'],
-    handoverHead: ['class:handover:add'],
-    handoverTutor: ['class:handover:add'],
-  },
-  'teach||出勤管理': {
-    view: ['class:attendance:view'],
-    uploadAttend: ['class:attendance:add'],
-    export: ['class:attendance:export'],
-  },
-  'teach||考试管理': {
-    view: ['class:exam:view', 'class:examScore:view'],
-    createExam: ['class:exam:add'],
-    entryScore: ['class:grade:add', 'class:examScore:add'],
-    editScore: ['class:grade:edit'],
-  },
-  'teach||宿舍管理': {
-    view: ['class:dorm:view', 'class:dormApply:view'],
-    assignDorm: ['class:dorm:add'],
-    submitDormApply: ['class:dorm:apply', 'class:dormApply:add'],
-  },
-  'teach||催费管理': {
-    view: ['class:fee:view'],
-    share: ['class:fee:add'],
-  },
-  'teach||退费申请': {
-    view: ['class:refund:view'],
-    submitApply: ['class:refund:add'],
-  },
-  'teach||流程管理': {
-    viewFlow: ['class:flow:view'],
-    startFlow: ['class:flow:add'],
-    flowApprove: ['class:flow:approve'],
-  },
-
-  /* ---------- train（实训-教学）→ job:* ---------- */
-  'train||实训-班级信息': {
-    view: ['job:class:view'],
-    edit: ['job:class:edit'],
-    // ★★ 2026-10-08 补登：管理员在权限树里勾/取消「实训-班级信息 → 休学/退学/复学」时，
-    //   必须同时作用于**两个**操作码，缺一不可：
-    //     ① `job:class:suspend|quit|resume` —— ClassList.vue（班级信息管理页）
-    //        行内「休学/退学/复学」按钮用的码；
-    //     ② `job:leave:apply` —— **真正发起的接口**
-    //        `POST /api/job/student-leave/create` 在 boardPermGate 里登记的码。
-    //   漏 ② 的后果（本轮实测）：管理员取消校长/项目经理的「休学」勾选后，
-    //   按钮确实消失了（① 被撤销），但**直接敲接口仍然成功**（② 没被撤销）
-    //   —— 前后端口径割裂，管理员以为收走了权限，实际没拦住。
-    suspendStudy: ['job:class:suspend', 'job:leave:apply'],
-    quitStudy: ['job:class:quit', 'job:leave:apply'],
-    resumeStudy: ['job:class:resume', 'job:leave:apply'],
-    // ★★ 2026-10-08 补登：管理员在权限树里勾了「实训-班级信息 → 结业转就业 /
-    //   撤销结业」时，对应到 class.route.ts 的 canGraduateClass / canRevokeGraduate。
-    //   漏登记的后果：自建角色（如 XMJL_000）勾了「结业转就业」也转不了 ——
-    //   这正是斌哥报的「项目经理勾了转就业的权限却还是没有转就业的权限」。
-    graduate: ['job:class:graduate'],
-    revokeGraduate: ['job:class:graduate-revoke'],
-  },
-  'train||实训-考试管理': {
-    createExam: ['job:exam:add'],
-    editExam: ['job:exam:edit'],
-    delExam: ['job:exam:delete'],
-  },
-  'train||实训-成绩管理': {
-    entryScore: ['job:exam-score:edit'],
-    editScore: ['job:exam-score:edit'],
-    promoteRepeat: ['job:exam-score:repeat'],
-  },
-  'train||实训-班级交接': {
-    startHandover: ['job:class-handover:add'],
-    confirmHandover: ['job:class-handover:confirm'],
-  },
-  /* ★ 2026-10-07 补全：train 模块其余 6 个功能点（之前只登记了 4 个） */
-  'train||实训-催费管理': {
-    view: ['job:feeCall:view'],
-    createCall: ['job:feeCall:add'],
-    handleCall: ['job:feeCall:handle'],
-  },
-  'train||实训-出勤管理': {
-    view: ['job:attendance:view'],
-    uploadAttend: ['job:attendance:add'],
-    fillAbsentReason: ['job:attendance:add'],
-    export: ['job:attendance:export'],
-  },
-  'train||实训-宿舍管理': {
-    view: ['job:dorm:view'],
-    assignDorm: ['job:dorm:add', 'job:dorm:edit'],
-    submitDormApply: ['job:dorm:apply'],
-    approveDormApply: ['job:dorm:approve'],
-  },
-  'train||实训-成绩汇总': {
-    view: ['job:examSummary:view'],
-    export: ['job:examSummary:export'],
-  },
-  'train||实训-退费申请': {
-    view: ['job:refund:view'],
-    submitApply: ['job:refund:apply'],
-    agree: ['job:refund:approve'],
-    reject: ['job:refund:approve'],
-  },
-  'train||实训-休学退学复学审批': {
-    view: ['job:suspendApproval:view'],
-    agree: ['job:leave:approve'],
-    reject: ['job:leave:approve'],
-  },
-
-  /* ---------- job（就业管理）→ job:* ---------- */
-  'job||就业信息档案': {
-    view: ['job:empArchive:view'],
-    edit: ['job:empArchive:edit'],
-  },
-  'job||就业日志': {
-    view: ['job:employmentLog:view'],
-    add: ['job:employmentLog:add'],
-    edit: ['job:employmentLog:edit'],
-  },
-  'job||复盘填写': {
-    view: ['job:review:view'],
-    add: ['job:review:add'],
-    edit: ['job:review:edit'],
-  },
-  'job||数据统计': {
-    view: ['job:statistics:view'],
-    export: ['job:statistics:export'],
-  },
-  'job||换班交接': {
-    view: ['job:classTransfer:view'],
-    startHandover: ['job:classTransfer:add'],
-    confirmHandover: ['job:classTransfer:confirm'],
-  },
-
-  /* ---------- acad（教务部门）→ edu:* ---------- */
-  'acad||学生档案': {
-    view: ['edu:student:view'],
-    edit: ['edu:student:edit'],
-  },
-  /* ★ 2026-10-07 补全：acad 模块其余 6 个功能点（之前只登记了 1 个） */
-  'acad||临期名单': {
-    view: ['edu:fee:view'],
-    batchUpload: ['edu:fee:import'],
-    notifyOnce: ['edu:fee:notify'],
-    uploadVoucher: ['edu:fee:upload'],
-  },
-  'acad||宿舍总名单': {
-    view: ['edu:dorm:view'],
-    add: ['edu:dorm:add'],
-    del: ['edu:dorm:delete'],
-    edit: ['edu:dorm:edit'],
-  },
-  'acad||换宿/退宿审批': {
-    view: ['edu:dorm:view'],
-    agree: ['edu:dorm:approve'],
-    reject: ['edu:dorm:approve'],
-  },
-  'acad||缴费总名单': {
-    view: ['edu:fee:view'],
-    add: ['edu:fee:add'],
-    freeze: ['edu:fee:freeze'],
-    import: ['edu:fee:import'],
-    toggleStatus: ['edu:fee:freeze'],
-  },
-  'acad||退宿名单': {
-    view: ['edu:dorm:view'],
-    export: ['edu:dorm:export'],
-  },
-  'acad||餐费住宿费缴费名单': {
-    view: ['edu:fee:view'],
-    export: ['edu:fee:export'],
-    freeze: ['edu:fee:freeze'],
-    unfreeze: ['edu:fee:freeze'],
-  },
-
-  /* ---------- market（市场咨询）→ consult:* ----------
-   * ⚠️ 2026-10-07 补全：权限树 market 模块共 7 个功能点，原先只登记了「学生档案」，
-   *    导致咨询模块其余 6 个功能点「改了权限树但接口不动」。
-   *    操作码一律用 `consult:{资源}:{动作}`，供咨询模块的 requireMarketAction 判定。
-   */
-  'market||预到校名单': {
-    view: ['consult:preArrival:view'],
-    add: ['consult:preArrival:add'],
-    edit: ['consult:preArrival:edit'],
-    assignConsult: ['consult:preArrival:assign'],
-    markAbsent: ['consult:preArrival:absent'],
-  },
-  'market||咨询测试': {
-    view: ['consult:test:view'],
-    entryWritten: ['consult:test:written'],
-    entryInterview: ['consult:test:interview'],
-  },
-  'market||学生档案': {
-    view: ['consult:student:view'],
-    add: ['consult:student:add'],
-    edit: ['consult:student:edit'],
-    viewFullPhone: ['consult:student:fullPhone'],
-  },
-  'market||缴费': {
-    view: ['consult:fee:view'],
-    entryTrialFee: ['consult:fee:trial'],
-    entryFormalFee: ['consult:fee:formal'],
-    discount: ['consult:fee:discount'],
-  },
-  'market||退费': {
-    view: ['consult:refund:view'],
-    submitApply: ['consult:refund:apply'],
-    approve: ['consult:refund:approve'],
-  },
-  'market||跟进记录': {
-    view: ['consult:follow:view'],
-    add: ['consult:follow:add'],
-    edit: ['consult:follow:edit'],
-  },
-  'market||统计分析': {
-    view: ['consult:stat:view'],
-    export: ['consult:stat:export'],
-  },
-
-  /* ---------- fin（财务管理）→ finance:* ---------- */
-  'fin||账单明细': {
-    view: ['finance:fee:view'],
-    add: ['finance:fee:add'],
-  },
-  'fin||退费名单': {
-    view: ['finance:refund:view'],
-    startRefund: ['finance:refund:apply'],
-    execRefund: ['finance:refund:pay'],
-  },
-  'fin||试学学费名单': {
-    view: ['finance:trial:view'],
-    verifyDone: ['finance:fee:verify'],
-  },
-  'fin||正式学费名单': {
-    view: ['finance:formal:view'],
-    verifyDone: ['finance:fee:verify'],
-  },
-  'fin||保险费名单': {
-    view: ['finance:insurance:view'],
-    verifyDone: ['finance:fee:verify'],
-  },
-};
+/**
+ * ★ 2026-10-22：映射表不再手写，改为**由权限树定义派生**
+ *
+ * 旧版这里是一张手抄的大表（8 板块 53 功能点 → 各模块操作码），
+ * 每加一个功能点就要记得来登记一次 —— 2026-10-07 就因为漏登记 6 个
+ * train 功能点，出现「权限树改了、按钮和接口都不动」。
+ *
+ * 现在权限树本身（`perm/config/permTree.ts`）的每个动作都带 `ops`，
+ * 这张表直接从它派生：
+ *   键盘输入 → t_perm_menu（界面） 与 操作码（判权）**同源**，不可能漂移。
+ */
+export const PERM_POINT_TO_ACTION_CODES: Record<string, Record<string, string[]>> =
+  PERM_TREE_ACTION_OPS;
 
 /* ============================================================
- * 2. 权限管理模块（perm）—— **同名映射**，不需要单独登记
+ * 2. 权限管理模块（perm）—— **同名映射**
  *
- *   树上的模块名就叫 `perm`，且它的操作码格式天然就是
- *   `perm:{功能点名}:{动作码}` —— 与权限树完全同构。
- *     · perm||职位管理||add        → perm:职位管理:add
- *     · perm||权限配置||editPerm   → perm:权限配置:editPerm
- *   这里登记「每个功能点有哪些动作」，用于双向判定。
+ *   树上的模块 key 就叫 `perm`，操作码格式天然同构：
+ *     · perm||职位管理||add          → perm:职位管理:add
+ *     · perm||职位权限分配||editPerm → perm:职位权限分配:editPerm
+ *   所以这里只需要「每个页面有哪些动作」，同样从权限树派生。
  * ============================================================ */
 
-const PERM_MODULE_ACTIONS: Record<string, string[]> = {
-  'perm||职位管理': ['view', 'add', 'edit', 'toggleStatus', 'del'],
-  'perm||权限配置': ['view', 'editPerm'],
-  'perm||账号管理': ['view', 'add', 'edit', 'resetPwd', 'toggleStatus'],
-  'perm||规则配置': ['view', 'edit'],
-  'perm||操作日志': ['view', 'export'],
-};
+const PERM_MODULE_ACTIONS: Record<string, string[]> = Object.fromEntries(
+  PERM_TREE.filter((b) => b.moduleKey === 'perm').flatMap((b) =>
+    b.pages.map((p) => [`perm||${p.name}`, p.actions.map((a) => a.code)] as [string, string[]]),
+  ),
+);
 
 /** 把 `perm||功能点||动作` 拼成权限管理自己的操作码 */
 function permCodeOf(itemKey: string, action: string): string {
