@@ -88,7 +88,9 @@ const createdNotifyIds = [];
       /sendContent: z\.string\(\)\.max\(500\)\.optional\(\)/.test(route) && /remark: sendContent \|\| null/.test(route),
     );
     // 只看 shareText 的拼接代码（注释里「不再带备注：前缀」这种说明不算违规）
-    const textBlock = /const shareText =[\s\S]{0,600}?;\n/.exec(route)?.[0] || '';
+    // ⚠️ fee.route.ts 在库里存的是 CRLF → 先归一化，否则 `;\n` 匹配不到（假红）
+    const routeLf = route.replace(/\r\n/g, '\n');
+    const textBlock = /const shareText =[\s\S]{0,600}?;\n/.exec(routeLf)?.[0] || '';
     check(
       '⑤ 生成文案不再拼「备注：」前缀，而是原样附上发送内容',
       !!textBlock && !textBlock.includes('备注') && textBlock.includes('sendContent'),

@@ -52,7 +52,7 @@ import { ok } from '../../utils/response';
 import { validate } from '../../middleware/validate';
 import { checkPayDate, PAY_METHOD_NAME, todayStr } from '../../utils/feeVoucher';
 import { writeOpLog } from '../../class-jh/utils/opLog';
-import { tbl, uniUpdCols } from '../shared/uniTable';
+import { tbl, uniUpdCols, uniTableOf } from '../shared/uniTable';
 
 export const teachingFeeRouter = Router();
 
@@ -214,9 +214,17 @@ interface CandidateScan {
   paid: number;
 }
 
-/** 初高：sms_class_jh.t_class_fee */
+/**
+ * 初高：sms_class_jh.t_class_fee
+ *
+ * ★★ 2026-10-23：改走 `tbl()`（→ 统一表 `sms_common.t_uni_fee`）。
+ *   原来这里是裸 `jhDb('t_class_fee')`（老表），而催费列表读统一表 ——
+ *   结果是「页面刚登记缴费的单，转交弹窗里一条都没有」，
+ *   以及「转交成功但 finance_fee_id 写进老表，统一表里仍是未转交 → 重复建单」。
+ *   大学的 `t_class_urge_sync` / 就业的 `t_job_fee_call` 早就这么写了，只有初高漏了。
+ */
 async function candidatesJh(): Promise<CandidateScan> {
-  const base0 = () => jhDb('t_class_fee').where('is_deleted', false);
+  const base0 = () => tbl(jhDb, 'sms_class_jh', 't_class_fee', 'jh').where('is_deleted', false);
   const scanned = Number(
     ((await base0().count({ c: '*' })) as any[])[0]?.c ?? 0,
   );
@@ -363,7 +371,7 @@ async function loadRows(dept: Dept, ids: string[]): Promise<Map<string, any>> {
   const stage = DEPT_STAGE[dept];
   const qb =
     dept === 'jh'
-      ? jhDb('t_class_fee')
+      ? tbl(jhDb, 'sms_class_jh', 't_class_fee', 'jh')
       : dept === 'class'
         ? tbl(commonDb, 'sms_common', 't_class_urge_sync', stage)
         : tbl(jobDb, 'sms_job', 't_job_fee_call', stage);
@@ -387,15 +395,28 @@ async function loadRows(dept: Dept, ids: string[]): Promise<Map<string, any>> {
  *   宁可这次转交失败（并且说清原因），也不能「钱转了、标记没写」。
  */
 async function assertTransferColumns(conn: any, srcDb: string, table: string): Promise<void> {
-  const rows = await conn
-    .select(conn.raw('COLUMN_NAME AS name'))
-    .from(conn.raw('information_schema.COLUMNS'))
-    .whereRaw('TABLE_SCHEMA = ? AND TABLE_NAME = ?', [srcDb, table]);
+  /**
+   * ★ 2026-10-23：必须检查**实际写入的那张表**。
+   *   统一表模式下 `t_class_fee` / `t_job_fee_call` 都写 `sms_common.t_uni_fee`，
+   *   只查老表 = 查了个不影响结果的地方：
+   *   老表有列 → 放行 → `uniUpdCols` 按统一表列过滤 → 缺列被静默剔除
+   *   → 又回到「转交成功、标记没写、财务重复记账」，防护形同虚设。
+   *   （`t_uni_fee` 少了这两列，就是 20261023_001 这个迁移补的。）
+   */
+  const uni = uniTableOf(srcDb, table);
+  const targetConn: any = uni ? commonDb : conn;
+  const targetSchema = uni ? 'sms_common' : srcDb;
+  const targetTable = uni || table;
+
+  const rows = await targetConn
+    .select(targetConn.raw('COLUMN_NAME AS name'))
+    .from(targetConn.raw('information_schema.COLUMNS'))
+    .whereRaw('TABLE_SCHEMA = ? AND TABLE_NAME = ?', [targetSchema, targetTable]);
   const have = new Set(rows.map((r: any) => r.name));
   const missing = ['finance_fee_id', 'finance_transfer_time'].filter((c) => !have.has(c));
   if (missing.length) {
     throw new Error(
-      `${srcDb}.${table} 缺列 ${missing.join(' / ')} —— 在 server-job 目录执行 npm run migrate 后重启后端再试`,
+      `${targetSchema}.${targetTable} 缺列 ${missing.join(' / ')} —— 在 server-job 目录执行 npm run migrate 后重启后端再试`,
     );
   }
 }
@@ -415,9 +436,14 @@ async function markTransferred(
 
   if (dept === 'jh') {
     // 初高表有 source_system / source_id（老的判重口径），一并写上保持兼容
-    await jhDb('t_class_fee')
-      .where({ id })
-      .update({ ...patch, source_system: 'finance', source_id: financeFeeId });
+    // ★ 2026-10-23：同样走 tbl() + uniUpdCols（原来写老表 → 页面读不到，会重复建单）
+    await assertTransferColumns(jhDb, 'sms_class_jh', 't_class_fee');
+    const cols = await uniUpdCols(jhDb, 'sms_class_jh', 't_class_fee', {
+      ...patch,
+      source_system: 'finance',
+      source_id: financeFeeId,
+    });
+    await tbl(jhDb, 'sms_class_jh', 't_class_fee', 'jh').where({ id }).update(cols as never);
     return;
   }
 

@@ -7,15 +7,18 @@
  * 【落地口径】
  *   · 「转交」= 在财务 `sms_finance.t_finance_fee` 里**生成对应的缴费单**（凭证/实缴金额/缴费日期/备注），
  *     走财务自己的 `addFee()`，凭证唯一性等规则不在本模块重写；
- *   · 转交成功后回写 `t_class_fee.source_system='finance' + source_id`，
+ *   · 转交成功后回写 `finance_fee_id`（★ 2026-10-23 三部门统一判重口径）
+ *     + 老的 `source_system='finance' + source_id`（财务侧单 id，兼容老数据），
  *     既表示「已转交」（transferred），也保证财务后续同步不会多出一条；
+ *     ⚠️ 回写必须落在**统一表** `sms_common.t_uni_fee`（接口读的也是它），
+ *     写老表 `t_class_fee` = 页面永远看不到「已转交」→ 反复转交重复建单。
  *   · 已转交 / 未登记缴费 / 非初高 的单会被**跳过**（返回 skip 原因），不算失败；
  *   · 实缴金额写进财务的 amount；缴费方式财务表没有列 → 拼进财务 remark（现金另外标注无凭证）。
  *
  * 【钉住什么】
  *   A. 静态：接口/校验/财务 addFee 复用/前端弹窗（全选、只选未上传过、selection 在序号前）
- *   B. live：造 2 行已登记夹具 → 转交 → 财务表真出现 2 条（金额/状态/凭证/备注对得上）、
- *      台账回写 source_id、重复转交被跳过、未登记单被跳过、空数组报错、候选项带 transferred
+ *   B. live：造 3 行夹具（老表 + 统一表双写）→ 转交 → 财务表真出现 2 条（金额/状态/凭证/备注对得上）、
+ *      台账回写 finance_fee_id、重复转交被跳过、未登记单被跳过、空数组报错、候选项带 transferred
  *   C. 清理：逻辑删除台账夹具 + 财务侧新建单
  *
  * 【跑法】在 server-job 目录下（后端 8004 / 前端 5173 已运行）：
@@ -73,6 +76,10 @@ function baseRow(over = {}) {
     voucher_url: null,
     source_system: 'local',
     source_id: null,
+    // ★ 2026-10-23：必须显式清掉「已转交」标记，否则上一轮跑完的行带着
+    //   finance_fee_id 进来 → 候选里被标成已转交 → 本轮「转交成功」断言假红
+    finance_fee_id: null,
+    finance_transfer_time: null,
     period: null,
     pay_method: null,
     paid_amount: null,
@@ -84,6 +91,7 @@ function baseRow(over = {}) {
 (async () => {
   let dbJh = null;
   let dbFin = null;
+  let dbUni = null;
   try {
     /* ================= A. 静态契约 ================= */
     const route = read('server-job', 'src', 'class-jh', 'routes', 'fee.route.ts');
@@ -109,12 +117,18 @@ function baseRow(over = {}) {
       ['缴费单不存在', '只有初高的缴费单能转交财务', '还没登记缴费', '已转交过财务'].every((m) => route.includes(m)),
     );
     check(
-      '① 后端：转交后回写 source_system=finance + source_id（幂等、防重复建单）',
-      /source_system: 'finance',\s*\n\s*source_id: financeFeeId/.test(route),
+      '① 后端：转交后回写 finance_fee_id（三部门统一判重口径）+ 老的 source_system/source_id 兜底',
+      /finance_fee_id: financeFeeId/.test(route) && /source_system: 'finance'/.test(route),
     );
     check(
+      /*
+       * ★ 2026-10-23 口径变更：判重锚点从 `source_system + source_id` 改成 `finance_fee_id`。
+       *   原因：`source_system='finance'` 对本表还有另一层意思是「这张单本来就从财务同步过来」，
+       *   拿它当「已转交」会把财务同步来的单全标成已转交（转交弹窗里就一条都选不了）。
+       *   断言钉**行为**（有 finance_fee_id 即已转交），不钉旧写法。
+       */
       '① 后端：实体带 transferred（前端「只选未上传过」靠它）',
-      /transferred: r\.source_system === 'finance' && !!r\.source_id/.test(route),
+      /transferred: !!.{0,20}finance_fee_id/.test(route),
     );
     check('① 类型：FeeTransferPayload / FeeTransferResult 已定义', /interface FeeTransferPayload/.test(types) && /interface FeeTransferResult/.test(types));
 
@@ -201,12 +215,26 @@ function baseRow(over = {}) {
       }),
       baseRow({ id: FIX_C, student_no: `${P}NOC`, pay_method: null, paid_amount: null, pay_date: null }),
     ];
+    /**
+     * ★★ 2026-10-23：夹具必须**双写**（老表 + 统一表 `sms_common.t_uni_fee`）
+     *   转交候选/回写都走 `tbl()` → 统一表；只写老表 →
+     *   候选里查不到、转交回「缴费单不存在」，断言全红（实测 18/29，红的是夹具）。
+     */
+    dbUni = conn('sms_common');
     for (const r of rows) {
-      const exists = await dbJh('t_class_fee').where({ id: r.id }).first('id');
-      if (exists) await dbJh('t_class_fee').where({ id: r.id }).update(r);
-      else await dbJh('t_class_fee').insert(r);
+      try {
+        const exists = await dbJh('t_class_fee').where({ id: r.id }).first('id');
+        if (exists) await dbJh('t_class_fee').where({ id: r.id }).update(r);
+        else await dbJh('t_class_fee').insert(r);
+      } catch (e) {
+        console.log(`（老表 t_class_fee 写入跳过：${e?.message || e}）`);
+      }
+      const uniRow = { ...r, edu_stage: 'jh' };
+      const uniExists = await dbUni('t_uni_fee').where({ id: r.id }).first('id');
+      if (uniExists) await dbUni('t_uni_fee').where({ id: r.id }).update(uniRow);
+      else await dbUni('t_uni_fee').insert(uniRow);
     }
-    check('★ 造了 3 行夹具（微信+凭证 / 现金无凭证 / 未登记）', true);
+    check('★ 造了 3 行夹具（老表 + 统一表双写；微信+凭证 / 现金无凭证 / 未登记）', true);
 
     const cand = await req(`${BASE}/api/class-jh/fee/transfer/candidates`, { token, timeout: 20000 });
     const candRows = cand.json?.data || [];
@@ -235,18 +263,20 @@ function baseRow(over = {}) {
         (r1.failed?.length ? ` 原因：${r1.failed.map((x) => `${x.feeId.slice(-8)}=${x.reason}`).join('；')}` : ''),
     );
 
-    const aRow = await dbJh('t_class_fee').where({ id: FIX_A }).first();
-    const bRow = await dbJh('t_class_fee').where({ id: FIX_B }).first();
+    // ★ 回写发生在统一表（接口写的就是它）→ 断言必须查统一表
+    const aRow = await dbUni('t_uni_fee').where({ id: FIX_A }).first();
+    const bRow = await dbUni('t_uni_fee').where({ id: FIX_B }).first();
+    const finIdOf = (r) => String(r?.finance_fee_id || r?.source_id || '');
     check(
-      '★ 台账回写：source_system=finance 且 source_id 有值（= 已转交）',
-      aRow?.source_system === 'finance' && !!aRow?.source_id && bRow?.source_system === 'finance' && !!bRow?.source_id,
-      `A=${aRow?.source_system}/${aRow?.source_id?.slice(0, 8)} B=${bRow?.source_system}/${bRow?.source_id?.slice(0, 8)}`,
+      '★ 台账回写：finance_fee_id 有值（= 已转交；老的 source_system/source_id 也一并写）',
+      !!aRow?.finance_fee_id && !!bRow?.finance_fee_id && aRow?.source_system === 'finance' && bRow?.source_system === 'finance',
+      `A=${aRow?.finance_fee_id?.slice(0, 8)} B=${bRow?.finance_fee_id?.slice(0, 8)}`,
     );
-    if (aRow?.source_id) createdFinanceIds.push(String(aRow.source_id));
-    if (bRow?.source_id) createdFinanceIds.push(String(bRow.source_id));
+    if (finIdOf(aRow)) createdFinanceIds.push(finIdOf(aRow));
+    if (finIdOf(bRow)) createdFinanceIds.push(finIdOf(bRow));
 
-    const finA = await dbFin('t_finance_fee').where({ id: String(aRow?.source_id) }).first();
-    const finB = await dbFin('t_finance_fee').where({ id: String(bRow?.source_id) }).first();
+    const finA = await dbFin('t_finance_fee').where({ id: finIdOf(aRow) }).first();
+    const finB = await dbFin('t_finance_fee').where({ id: finIdOf(bRow) }).first();
     check(
       '★ 财务侧真的生成了单据：金额=实缴、状态=待核对(2)、凭证带过去',
       Number(finA?.amount) === 123456 &&
@@ -279,7 +309,7 @@ function baseRow(over = {}) {
       body: { feeIds: [FIX_A] },
     });
     const r2 = res2.json?.data || {};
-    const finCount = await dbFin('t_finance_fee').where({ id: String(aRow?.source_id) }).count({ n: '*' });
+    const finCount = await dbFin('t_finance_fee').where({ id: finIdOf(aRow) }).count({ n: '*' });
     check(
       '★ 重复转交 → 跳过「已转交过财务」，财务侧不会多出一张单',
       r2.success === 0 && r2.skipped?.some((x) => x.reason.includes('已转交')),
@@ -304,7 +334,9 @@ function baseRow(over = {}) {
     if (dbJh) {
       try {
         await dbJh('t_class_fee').whereIn('id', [FIX_A, FIX_B, FIX_C]).update({ is_deleted: 1 });
-        console.log('（已逻辑删除 3 行初高夹具）');
+        // ★ 双写就双清
+        if (dbUni) await dbUni('t_uni_fee').whereIn('id', [FIX_A, FIX_B, FIX_C]).update({ is_deleted: 1 });
+        console.log('（已逻辑删除 3 行初高夹具：老表 + 统一表）');
       } catch (e) {
         console.log(`（初高夹具清理失败：${e?.message || e}）`);
       }
@@ -321,6 +353,7 @@ function baseRow(over = {}) {
       }
       await dbFin.destroy();
     }
+    if (dbUni) await dbUni.destroy();
     const ok = summary();
     process.exit(ok ? 0 : 1);
   }

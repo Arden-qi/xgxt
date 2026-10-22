@@ -75,10 +75,30 @@ const FIXTURES = [
  *    也不能物理删（项目铁律）。存在就把 is_deleted 归零 + 到期日刷回目标值。
  */
 async function upsertRows(db, rows) {
-  for (const row of rows) {
-    const exists = await db('t_class_fee').where({ id: row.id }).first('id');
-    if (exists) await db('t_class_fee').where({ id: row.id }).update({ ...row, is_deleted: 0 });
-    else await db('t_class_fee').insert(row);
+  /**
+   * ★★ 2026-10-23：夹具必须**双写**（老表 + 统一表 `sms_common.t_uni_fee`）
+   *
+   *   催费列表走 `tbl()` → 统一表；只写老表 = 列表里一行都没有，
+   *   断言 19/22 全红但功能是好的（实测）。这正是 `_e2e-lib.mjs` 顶部
+   *   「自检夹具必须双写」那条纪律说的场景。
+   */
+  const uniDb = conn('sms_common');
+  try {
+    for (const row of rows) {
+      try {
+        const exists = await db('t_class_fee').where({ id: row.id }).first('id');
+        if (exists) await db('t_class_fee').where({ id: row.id }).update({ ...row, is_deleted: 0 });
+        else await db('t_class_fee').insert(row);
+      } catch (e) {
+        console.log(`（老表 t_class_fee 写入跳过：${e?.message || e}）`);
+      }
+      const uniRow = { ...row, edu_stage: 'jh' };
+      const uniExists = await uniDb('t_uni_fee').where({ id: row.id }).first('id');
+      if (uniExists) await uniDb('t_uni_fee').where({ id: row.id }).update({ ...uniRow, is_deleted: 0 });
+      else await uniDb('t_uni_fee').insert(uniRow);
+    }
+  } finally {
+    await uniDb.destroy();
   }
 }
 
@@ -223,7 +243,11 @@ async function upsertRows(db, rows) {
     if (db) {
       try {
         await db('t_class_fee').whereIn('id', FIXTURES.map((f) => `${P}${f.key}`)).update({ is_deleted: 1 });
-        console.log(`\n（已逻辑删除 ${FIXTURES.length} 行自检夹具）`);
+        // ★ 双写就双清（统一表里那份不删，下次跑会被候选统计算进去）
+        const uniDb = conn('sms_common');
+        await uniDb('t_uni_fee').whereIn('id', FIXTURES.map((f) => `${P}${f.key}`)).update({ is_deleted: 1 });
+        await uniDb.destroy();
+        console.log(`\n（已逻辑删除 ${FIXTURES.length} 行自检夹具：老表 + 统一表）`);
       } catch (e) {
         console.log(`\n（清理失败，人工处理：${e?.message || e}）`);
       }

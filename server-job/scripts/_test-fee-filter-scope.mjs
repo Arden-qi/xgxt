@@ -64,6 +64,28 @@ async function upsertRows(knexInst, table, rows) {
   }
 }
 
+/**
+ * 夹具双写：老表写完再写统一表
+ *
+ * ★★ 2026-10-23：P8 之后统一表是唯一真源，接口读 `sms_common.t_uni_urge`
+ *   / `t_uni_fee`（`tbl()` 路由）。只写老表 → 列表里看不到夹具，
+ *   「催费单筛选」这组断言全是红的，但红的不是功能（实测 21/33）。
+ *   与 `_e2e-lib.mjs` 顶部那条「自检夹具必须双写」是同一件事。
+ *
+ * @param {object} knexInst  统一表所在连接（sms_common）
+ * @param {string} table     统一表名
+ * @param {string} stage     edu_stage（'jh'|'class'|'job'）
+ * @param {Array}  rows      与老表同形状的行
+ */
+async function upsertUni(knexInst, table, stage, rows) {
+  for (const row of rows) {
+    const uniRow = { ...row, edu_stage: stage };
+    const exists = await knexInst(table).where({ id: row.id }).first('id');
+    if (exists) await knexInst(table).where({ id: row.id }).update({ ...uniRow, is_deleted: 0 });
+    else await knexInst(table).insert(uniRow);
+  }
+}
+
 (async () => {
   const db = { jh: null, common: null, job: null };
   try {
@@ -91,8 +113,15 @@ async function upsertRows(knexInst, table, rows) {
         /Object\.entries\(PAY_STATUS_NAME\)\.map/.test(feeList),
     );
     check(
-      '★ 就业催费单状态折算成缴费状态（已缴清→已缴，待催缴/催缴中→待缴）',
-      /function callStatusToPayStatus[\s\S]{0,200}?PayStatus\.PAID[\s\S]{0,120}?PayStatus\.UNPAID/.test(feeList),
+      /*
+       * ★ 2026-10-23：断言跟着口径改（原来钉的是「只有 callStatus 折算」，
+       *   2026-10-22 起后端已按 pay_status 下发派生结果，函数只剩兜底作用）。
+       *   钉行为：① 后端给了 payStatus 就直接用 ② 没给才按 callStatus 兜底。
+       *   （旧断言卡在 200 字符窗口里，加了一行兜底分支就假红。）
+       */
+      '★ 就业催费单状态：payStatus 优先，callStatus 仅兜底（已缴清→已缴）',
+      /function callStatusToPayStatus\([\s\S]{0,400}?if \(payStatus != null[^\n]*return Number\(payStatus\)/.test(feeList) &&
+        /if \(s === 3\) return PayStatus\.PAID/.test(feeList),
     );
 
     /* ---- A3. 三源都把三个参数传下去（去 disabled 不传参 = 点了没反应） ---- */
@@ -148,15 +177,20 @@ async function upsertRows(knexInst, table, rows) {
 
     /* ---- A5. 就业「紧急」= 逾期且未缴清（与 decorate 的 overdue 同口径） ---- */
     check(
-      '★ 就业 onlyOverdue 过滤：due_date < 今天 且 call_status ≠ 已缴清',
-      /q\.onlyOverdue[\s\S]{0,200}whereNot\('call_status',\s*FeeCallStatus\.PAID\)[\s\S]{0,80}due_date/.test(callRoute),
+      // ★ 2026-10-23：就业表补了 pay_status（与初高同码）→ 不再用 call_status 判「已缴清」
+      '★ 就业 onlyOverdue 过滤：未结清(1 待缴 / 4 逾期) 且 due_date < 今天',
+      /q\.onlyOverdue[\s\S]{0,200}?whereIn\('pay_status',\s*\[PayStatus\.UNPAID,\s*PayStatus\.OVERDUE\]\)[\s\S]{0,120}?due_date/.test(
+        callRoute,
+      ),
     );
 
     /* ---- A6. 初高导出与列表同口径（导出补了应缴日期） ---- */
-    const exportBlock = feeRoute.slice(feeRoute.indexOf("feeRouter.get(\n  '/export'"));
+    // ⚠️ fee.route.ts 在库里存的换行是 CRLF → 先归一化，否则 indexOf 找不到路由（假红）
+    const feeRouteLf = feeRoute.replace(/\r\n/g, '\n');
+    const exportBlock = feeRouteLf.slice(feeRouteLf.indexOf("feeRouter.get(\n  '/export'"));
     check(
       '★ 初高导出也按应缴日期过滤（列表筛完导出却是全量 = 用户以为筛选没生效）',
-      /if \(q\.startDate\)[\s\S]{0,200}if \(q\.endDate\)/.test(exportBlock.slice(0, 3000)),
+      exportBlock.length > 1 && /if \(q\.startDate\)[\s\S]{0,300}if \(q\.endDate\)/.test(exportBlock.slice(0, 3000)),
     );
 
     /* ================= B. live ================= */
@@ -209,7 +243,7 @@ async function upsertRows(knexInst, table, rows) {
     /* ---- B3. 大学：夹具 3 行（逾期未缴 / 逾期已缴 / 未来未缴） ---- */
     db.common = conn('sms_common');
     const t = nowText();
-    await upsertRows(db.common, 't_class_urge_sync', [
+    const urgeFixRows = [
       {
         id: URGE_FIX.overdue, create_time: t, is_deleted: 0, source_system: 'test', source_id: `${P}src-1`,
         sync_status: 2, student_id: `${P}stu-1`, student_no: `${P}NO1`, student_name: '自检逾期未缴',
@@ -225,7 +259,10 @@ async function upsertRows(knexInst, table, rows) {
         sync_status: 2, student_id: `${P}stu-3`, student_no: `${P}NO3`, student_name: '自检未来未缴',
         fee_type: 1, amount: 100000, expire_date: DATE_FAR, pay_status: 1, urge_count: 0, phone: '13700000003',
       },
-    ]);
+    ];
+    await upsertRows(db.common, 't_class_urge_sync', urgeFixRows);
+    // ★ 双写：大学催缴列表读的是 t_uni_urge（edu_stage='class'）
+    await upsertUni(db.common, 't_uni_urge', 'class', urgeFixRows);
 
     const urge = async (qs) => {
       const r = await req(`${BASE}/api/class/urge/list?page=1&size=200${qs}`, { token, timeout: 20000 });
@@ -267,8 +304,10 @@ async function upsertRows(knexInst, table, rows) {
     );
     const urgeOverdue = await urge('&payStatus=4');
     check(
+      // ⚠️ 不能断言「只有 1 行」：库里本来就有真实的逾期单，数据一多就假红。
+      //   钉行为：夹具里过期那条在，且返回的每一行派生状态都是 4（逾期）。
       '★ 大学「缴费状态」= 逾期 → 出「待缴 + 已过应缴日」的行（库里还是 1，按到期日派生）',
-      urgeOverdue.list.length === 1 &&
+      urgeOverdue.list.length > 0 &&
         ids(urgeOverdue).includes(URGE_FIX.overdue) &&
         urgeOverdue.list.every((r) => r.payStatus === 4),
       `rows=${urgeOverdue.list.length}`,
@@ -283,23 +322,32 @@ async function upsertRows(knexInst, table, rows) {
 
     /* ---- B4. 就业：夹具 3 行 ---- */
     db.job = conn('sms_job');
-    await upsertRows(db.job, 't_job_fee_call', [
+    /**
+     * ★ 2026-10-23：夹具补 `pay_status`（与初高同码）。
+     *   2026-10-22 起就业的「缴费状态 / 仅看紧急」直接按 `pay_status` 筛，
+     *   只给 `call_status` 的夹具在「待缴/逾期」筛选下一条都出不来（假红）。
+     *   `call_status` 仍保留 = 催收进度（备查，接口也还能按它筛）。
+     */
+    const callFixRows = [
       {
         id: CALL_FIX.overdue, create_time: t, is_deleted: 0, fee_type: 3, student_id: `${P}jstu-1`,
         student_no: `${P}JNO1`, student_name: '自检待催缴', fee_amount: 50000, due_date: DATE_OLD,
-        call_status: 1, phone: '13700000011',
+        call_status: 1, pay_status: 1, phone: '13700000011',
       },
       {
         id: CALL_FIX.paid, create_time: t, is_deleted: 0, fee_type: 3, student_id: `${P}jstu-2`,
         student_no: `${P}JNO2`, student_name: '自检已缴清', fee_amount: 50000, due_date: DATE_OLD,
-        call_status: 3, phone: '13700000012',
+        call_status: 3, pay_status: 2, phone: '13700000012',
       },
       {
         id: CALL_FIX.future, create_time: t, is_deleted: 0, fee_type: 3, student_id: `${P}jstu-3`,
         student_no: `${P}JNO3`, student_name: '自检未到期', fee_amount: 50000, due_date: DATE_FAR,
-        call_status: 2, phone: '13700000013',
+        call_status: 2, pay_status: 1, phone: '13700000013',
       },
-    ]);
+    ];
+    await upsertRows(db.job, 't_job_fee_call', callFixRows);
+    // ★ 双写：就业催费列表读的是 t_uni_fee（edu_stage='job'）
+    await upsertUni(db.common, 't_uni_fee', 'job', callFixRows);
 
     const call = async (qs) => {
       const r = await req(`${BASE}/api/job/fee-call/page?page=1&size=200${qs}`, { token, timeout: 20000 });
@@ -358,7 +406,12 @@ async function upsertRows(knexInst, table, rows) {
   } finally {
     /* ---- 清理：逻辑删除夹具（禁止物理删除） ---- */
     try {
-      if (db.common) await db.common('t_class_urge_sync').whereIn('id', Object.values(URGE_FIX)).update({ is_deleted: 1 });
+      if (db.common) {
+        await db.common('t_class_urge_sync').whereIn('id', Object.values(URGE_FIX)).update({ is_deleted: 1 });
+        // ★ 双写就双清（t_uni_urge 两份：大学催缴 + 就业催费都在 t_uni_fee/urge）
+        await db.common('t_uni_urge').whereIn('id', Object.values(URGE_FIX)).update({ is_deleted: 1 });
+        await db.common('t_uni_fee').whereIn('id', Object.values(CALL_FIX)).update({ is_deleted: 1 });
+      }
       if (db.job) await db.job('t_job_fee_call').whereIn('id', Object.values(CALL_FIX)).update({ is_deleted: 1 });
     } catch (e) {
       console.log('⚠️ 夹具清理失败，请手动处理 testfilter-* 记录：', e?.message || e);
