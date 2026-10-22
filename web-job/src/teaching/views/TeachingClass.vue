@@ -1168,14 +1168,43 @@ async function doSave() {
 }
 
 async function doDelete(row: ClassRow) {
-  await ElMessageBox.confirm(
-    `确定删除班级「${row.className}」吗？该班当前有 ${row.studentCount} 名学生，删除后不影响学生本人。`,
-    '删除确认',
-    { type: 'warning' },
-  );
-  await deleteClass(row.stage, row.classId);
-  ElMessage.success('已删除');
-  load();
+  /**
+   * ★ 2026-10-22 批注：**不可删除有人的班级**
+   *   原文（红字 + 红框）：「不可删除有人的班级」
+   *
+   * 【原实现的问题】
+   *   不管班里有没有学生，一律弹「确定删除班级吗…该班当前有 N 名学生」，
+   *   点【确定】班就删了 —— 提示语写着"有 3 名学生"却又让删，前后矛盾。
+   *
+   * 【改法】
+   *   有人（studentCount > 0，与列表「人数」列同口径 = 在读学生）→ 只给提示，不给删；
+   *   没人 → 才走原来的二次确认。
+   *   ⚠️ 后端 `service.removeClass` 也加了同一道拦截，这里只是提前给友好提示。
+   */
+  if (Number(row.studentCount || 0) > 0) {
+    await ElMessageBox.alert(
+      `「${row.className}」当前有 ${row.studentCount} 名学生，请先将学生转出或结业后再删除。`,
+      '不可删除有人的班级',
+      { type: 'warning', confirmButtonText: '我知道了' },
+    ).catch(() => {});
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定删除班级「${row.className}」吗？删除后不可恢复。`,
+      '删除确认',
+      { type: 'warning' },
+    );
+  } catch {
+    return; // 点了取消 / 关闭
+  }
+  try {
+    await deleteClass(row.stage, row.classId);
+    ElMessage.success('已删除');
+    load();
+  } catch {
+    // 失败提示由请求层统一弹出（后端还会兜底拦一次「有人的班级」）
+  }
 }
 
 /* ---------------- 班级交接（2026-10-19 批注） ---------------- */

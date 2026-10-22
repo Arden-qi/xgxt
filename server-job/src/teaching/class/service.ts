@@ -162,6 +162,31 @@ export async function saveClass(body: ClassSaveBody, user: any): Promise<{ id: s
 /** 删除 */
 export async function removeClass(stage: ClassStage, id: string, user: any): Promise<void> {
   await assertStageView(user, stage);
+  /**
+   * ★ 2026-10-22 批注：**不可删除有人的班级**
+   *   原实现直接软删班级 —— 班里还有学生时，删完班级就没了，
+   *   学生档案与花名册里会留下指向已删班级的孤儿记录。
+   *
+   * 【为什么在这里拦，而不在各仓储的 remove()】
+   *   四个 repo 的 remove 只做一句 update，口径各异（jh/class 读 t_class_student、
+   *   job/emp 读 t_job_class_student）。detail() 已经把「在读人数」算好了
+   *   （base.studentCount，与列表「人数」列同源），复用它可以避免四份重复判断。
+   *
+   * 【为什么用 detail 现算，不信前端传的 studentCount】
+   *   前端只是提前提示；真要删的时候必须由后端复算，否则改个请求就能删掉有人的班。
+   *
+   * ⚠️ 提示文案与前端弹窗标题一致（「不可删除有人的班级」），
+   *    前端拦截 + 后端兜底，两层同一句话，用户不会看到两种说法。
+   */
+  const detail = await pick(stage).detail(id, user);
+  if (!detail) throw new BizError(BizCode.PARAM_ERROR, '班级不存在或无权操作');
+  const studentCount = Number(detail.base?.studentCount ?? 0);
+  if (studentCount > 0) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `不可删除有人的班级：「${detail.base.className}」当前有 ${studentCount} 名学生，请先将学生转出或结业后再删除`,
+    );
+  }
   await pick(stage).remove(id, user?.userId || '');
 }
 
