@@ -69,7 +69,7 @@ import { authMiddleware as classJhAuth } from './class-jh/middleware/auth';
 import { teachingAttendanceRouter } from './teaching/attendance/route';
 import { teachingExamRouter } from './teaching/exam/route';
 import { teachingScoreRouter } from './teaching/score/route';
-import { teachingRefundRouter } from './teaching/refund/route';
+import { teachingRefundRouter, teachingRefundInternalRouter } from './teaching/refund/route';
 import { teachingLeaveRouter } from './teaching/leave/route';
 import { teachingStudentRouter } from './teaching/student/route';
 import { teachingClassRouter } from './teaching/class/route';
@@ -653,6 +653,13 @@ app.use(
   requireAnyPage(['classjh:score:view', 'class:grade:view', 'job:examScore:view']),
   teachingScoreRouter,
 );
+
+// ★ 2026-10-22：退费「财务出款自动回写」内部接口（不走登录态，改校验 x-internal-token）
+//   财务 `payRefund()` 出款成功后回调 `POST /api/teaching/refund/internal/finance-paid`，
+//   把出款时间 / 财务单号 / 账单号写回教务退费单（用户口径：上游不再人工登记出款）。
+//   ⚠️ 必须挂在下面带 authMiddleware 的 `/api/teaching/refund` **之前** ——
+//     Express 按注册顺序匹配，挂后面会被登录态先拦掉（consult /internal 同款坑）。
+app.use('/api/teaching/refund/internal', teachingRefundInternalRouter);
 
 // ★ 退费（第四个合并的业务域）
 //   ★★ 审批链统一采用「实训那一套」（斌哥 2026-10-09 拍板）：

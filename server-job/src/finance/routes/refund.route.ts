@@ -29,6 +29,8 @@ import {
   payRefund,
   rejectRefund,
   advanceRefund,
+  loadRefundItems,
+  itemsOfRefund,
 } from '../services/refund.service';
 
 export const refundRouter = Router();
@@ -89,7 +91,21 @@ refundRouter.get(
       .limit(q.size)
       .offset((q.page - 1) * q.size);
 
-    res.json(page(rows.map(toRefundListItem), Number(total), q));
+    /**
+     * ★ 2026-10-22：补费用项明细
+     *
+     * 一笔退费可含多个项目（学费 + 住宿费），财务侧**每个项目一行**。
+     * 列表一次批量查一页的明细，不在循环里逐条查（N+1）。
+     */
+    const itemMap = await loadRefundItems(rows.map((r: any) => r.id));
+
+    res.json(
+      page(
+        rows.map((r: any) => ({ ...toRefundListItem(r), items: itemMap.get(r.id) || [] })),
+        Number(total),
+        q,
+      ),
+    );
   }),
 );
 
@@ -107,7 +123,9 @@ refundRouter.get(
     if (!row) {
       throw new BizError(BizCode.PARAM_ERROR, '退费单不存在');
     }
-    res.json(ok(toRefundDetail(row)));
+    // ★ 2026-10-22：带上费用项明细（前端详情里逐项列出，出款仍是一次）
+    const items = await itemsOfRefund(id);
+    res.json(ok({ ...toRefundDetail(row), items }));
   }),
 );
 
@@ -125,6 +143,30 @@ const applySchema = z.object({
   deptCode: z.coerce.number().int().optional(),
   /** 退费项目，可多选 */
   refundItems: z.array(z.coerce.number().int().min(1).max(5)).min(1, '请至少选择一个退费项目'),
+  /**
+   * ★ 2026-10-22：费用项明细（含各自金额，单位「分」）
+   *
+   * 上游（教学域）推送时必带 —— 每个费用项在财务侧对应一行。
+   * 不传则按「refundItems + refundAmount」落一行，向后兼容老调用方。
+   */
+  refundItemDetails: z
+    .array(
+      z.object({
+        feeType: z.coerce.number().int().min(1).max(5),
+        amount: z.coerce.number().int().min(0),
+      }),
+    )
+    .optional(),
+  /** 上游模块（teaching / consult），配合 sourceRefundId 做幂等 */
+  sourceModule: z.string().max(32).optional(),
+  /** 上游学段（jh / class / job） */
+  sourceStage: z.string().max(16).optional(),
+  /** 上游退费单 id */
+  sourceRefundId: z.string().max(64).optional(),
+  /** 上游校长审批通过时间（点亮财务时间轴） */
+  upstreamApproveTime: z.string().max(32).optional(),
+  /** 上游校长审批人姓名 */
+  upstreamApproverName: z.string().max(64).optional(),
   /** ⚠️ 金额单位「分」 */
   refundAmount: z.coerce.number().int().positive('退费金额必须大于 0（单位：分）'),
   refundReason: z.string().min(1, '退费原因必填').max(255),
@@ -140,7 +182,11 @@ refundRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof applySchema>;
     const r = await applyRefund(body, operatorOf(req));
-    res.json(ok(r, `退费申请已提交，单号 ${r.orderNo}`));
+    // 幂等命中 → 不重复建单，提示也用「已存在」口径，避免调用方以为推了两张
+    const msg = r.duplicated
+      ? `该退费单已推送过（单号 ${r.orderNo}），本次仅同步费用项明细`
+      : `退费申请已提交，单号 ${r.orderNo}`;
+    res.json(ok(r, msg));
   }),
 );
 

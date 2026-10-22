@@ -21,7 +21,7 @@ import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME } from '../shared/dto';
 import { toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
-import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { tbl, tblTrx, tblInsTrx, uniUpdCols } from '../shared/uniTable';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 import { hydrateWithArchive, ARCHIVE_TABLE } from '../shared/studentRef';
 
@@ -116,6 +116,8 @@ async function decorate(
     currentHandlerHint: null, // 由 service 从审批单统一补
     financeRemark: row.finance_remark || null,
     refundTime: fmtDateTime(row.refund_time),
+    // ★ 2026-10-22：财务退费单号（推送成功即回写；出款状态靠 refundTime 判断）
+    financeRefundNo: row.finance_refund_no || null,
     createTime: fmtDateTime(row.create_time),
     canApprove: false,
     canCancel: false,
@@ -346,6 +348,34 @@ export async function setFinance(
       refund_time: refundTime ? new Date(refundTime) : new Date(),
       update_time: new Date(),
     });
+}
+
+/**
+ * ★ 2026-10-22：回写财务退费单（推送成功后立刻写）
+ *
+ * 用途两件：
+ *   ① 溯源 —— 财务出款后按 `finance_refund_id` 对回这张单并自动回写
+ *   ② 展示 —— 列表/详情能看到财务单号（TF20260001 这类），不用去财务系统翻
+ *
+ * ⚠️ 列只在统一表 `t_uni_refund` 上（迁移 `_migrate-finance-refund-20261022`），
+ *   所以走 `uniUpdCols` 过滤；失败只 warn —— 财务单已经建好了，回写失败不该让审批报错。
+ */
+export async function setPushInfo(
+  id: string,
+  financeRefundId: string | null,
+  financeRefundNo: string | null,
+): Promise<void> {
+  try {
+    const patch = await uniUpdCols(db, SRC, T, {
+      finance_refund_id: financeRefundId,
+      finance_refund_no: financeRefundNo,
+      update_time: new Date(),
+    });
+    await tbl(db, SRC, T, STAGE).where({ id }).update(patch as never);
+  } catch (err: any) {
+    // eslint-disable-next-line no-console
+    console.warn('[退费] 回写财务单号失败', STAGE, id, err?.message);
+  }
 }
 
 /** 校验：该学生是否有进行中的退费单（大学那条"禁止重复"规则的统一版） */

@@ -43,6 +43,27 @@
         empty-text="暂无匹配数据"
       >
         <el-table-column prop="orderNo" label="退费单号" width="130" />
+        <!--
+          ★ 2026-10-22：费用项明细（用户口径「每一个费用项都要在财务那里对应一行」）
+          主单一行 + 展开看各费用项金额；出款仍是一次（一笔转账、一张账单）。
+        -->
+        <el-table-column type="expand" width="34">
+          <template #default="{ row }">
+            <div class="item-lines">
+              <template v-if="row.items && row.items.length">
+                <div v-for="it in row.items" :key="it.feeType" class="item-line">
+                  <span class="item-name">{{ it.feeTypeName }}</span>
+                  <span class="money">{{ formatAmount(it.amount) }}</span>
+                </div>
+                <div v-if="row.items.length > 1" class="item-line item-total">
+                  <span class="item-name">合计</span>
+                  <span class="money">{{ formatAmount(row.refundAmount) }}</span>
+                </div>
+              </template>
+              <span v-else class="muted">该单没有费用项明细（改造前推送的存量单，按主项金额计）</span>
+            </div>
+          </template>
+        </el-table-column>
         <!-- 未分班的学生没有学号，显示「—」（与缴费核对台同口径） -->
         <el-table-column label="学号" width="115">
           <template #default="{ row }">{{ dash(row.studentNo) }}</template>
@@ -51,7 +72,9 @@
         <el-table-column prop="className" label="班级" width="85">
           <template #default="{ row }">{{ dash(row.className) }}</template>
         </el-table-column>
-        <el-table-column prop="refundTypeName" label="退费项目" width="90" align="center" />
+        <el-table-column label="退费项目" width="110" align="center">
+          <template #default="{ row }">{{ itemText(row) }}</template>
+        </el-table-column>
         <el-table-column label="退费金额" width="120" align="right">
           <template #default="{ row }">
             <span class="money">{{ formatAmount(row.refundAmount) }}</span>
@@ -125,7 +148,7 @@
           <el-descriptions-item label="姓名">{{ detail.studentName }}</el-descriptions-item>
           <el-descriptions-item label="班级">{{ dash(detail.className) }}</el-descriptions-item>
           <el-descriptions-item label="部门">{{ dash(detail.deptName) }}</el-descriptions-item>
-          <el-descriptions-item label="退费项目">{{ detail.refundTypeName }}</el-descriptions-item>
+          <el-descriptions-item label="退费项目">{{ itemText(detail) }}</el-descriptions-item>
           <el-descriptions-item label="退费金额">
             <span class="amount">{{ formatAmount(detail.refundAmount) }}</span>
           </el-descriptions-item>
@@ -137,8 +160,36 @@
           </el-descriptions-item>
         </el-descriptions>
 
+        <!-- ---- ★ 费用项明细（一项一行，金额各自独立）---- -->
+        <div class="timeline-title">费用项明细</div>
+        <el-table
+          v-if="detail.items && detail.items.length"
+          :data="detail.items"
+          size="small"
+          border
+          style="width: 100%"
+        >
+          <el-table-column prop="feeTypeName" label="费用项" width="140" />
+          <el-table-column label="退费金额" align="right">
+            <template #default="{ row }">
+              <span class="money">{{ formatAmount(row.amount) }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-else class="muted-line">
+          该单没有费用项明细（改造前推送的存量单，按主项金额计）
+        </div>
+
         <!-- ---- 审批链时间轴 ---- -->
         <div class="timeline-title">审批流转记录</div>
+        <el-alert
+          v-if="detail.sourceModule"
+          type="info"
+          :closable="false"
+          show-icon
+          class="src-tip"
+          title="该单由上游审批通过后推送：上游只走「学管审批 → 校长审批」两步，财务侧不再重复经理审批 / 教务核算"
+        />
         <el-timeline>
           <el-timeline-item
             v-for="step in approvalSteps"
@@ -310,12 +361,37 @@ function handleOnlyPending() {
 const detailVisible = ref(false);
 const detail = ref<RefundDetail | null>(null);
 
-/** 把详情里的时间戳拼成时间轴 */
+/**
+ * 把详情里的时间戳拼成时间轴
+ *
+ * ★ 2026-10-22 用户反馈修正（截图那个 bug）：
+ *   原来不分来源一律按财务那套 6 节点渲染，而上游（教学域）推送的单
+ *   只走「学管审批 → 校长审批」两步，财务侧也没有经理审批 / 教务核算
+ *   → 时间轴永远有两三个「待处理」，看着像没推过来。
+ *
+ *   现在分两种口径：
+ *     · 上游推送单（sourceModule 有值）→ 只画真实存在的 4 步
+ *     · 财务自建单（无 sourceModule）→ 保留原来的 6 步
+ */
 const approvalSteps = computed(() => {
   const d = detail.value;
   if (!d) return [];
 
   const done = (t?: string): 'success' | 'primary' => (t ? 'success' : 'primary');
+
+  if (d.sourceModule) {
+    return [
+      { label: '上游提交申请', time: d.applyTime, by: d.applicantName, type: done(d.applyTime) },
+      {
+        label: '校长审批通过',
+        time: d.principalApproveTime,
+        by: d.principalApproveBy,
+        type: done(d.principalApproveTime),
+      },
+      { label: '推送到财务', time: d.pushedTime, by: '', type: done(d.pushedTime) },
+      { label: '财务出款', time: d.financePayTime, by: d.financePayBy, type: done(d.financePayTime) },
+    ];
+  }
 
   return [
     { label: '班主任提交申请', time: d.applyTime, by: d.applicantName, type: done(d.applyTime) },
@@ -326,6 +402,19 @@ const approvalSteps = computed(() => {
     { label: '财务出款', time: d.financePayTime, by: d.financePayBy, type: done(d.financePayTime) },
   ];
 });
+
+/**
+ * 退费项目展示文案
+ *
+ * 单项 → 直接显示类型名；多项 → 「学费 等 2 项」（明细在展开行/详情里逐项列出）。
+ * 老单（无明细）→ 回落主项 `refundTypeName`。
+ */
+function itemText(row: any): string {
+  const items = (row?.items || []) as Array<{ feeTypeName: string }>;
+  if (items.length > 1) return `${items[0].feeTypeName} 等 ${items.length} 项`;
+  if (items.length === 1) return items[0].feeTypeName;
+  return row?.refundTypeName || '';
+}
 
 async function handleDetail(row: RefundListItem) {
   try {
@@ -443,5 +532,45 @@ onMounted(loadData);
 .by {
   color: #A2938E;
   font-size: 12px;
+}
+
+/* ★ 2026-10-22：费用项明细（展开行 / 详情弹窗） */
+.item-lines {
+  padding: 8px 16px 8px 48px;
+}
+
+.item-line {
+  display: flex;
+  justify-content: space-between;
+  max-width: 360px;
+  padding: 3px 0;
+  font-size: 13px;
+  color: #443432;
+}
+
+.item-line.item-total {
+  border-top: 1px dashed #e4e7ed;
+  margin-top: 4px;
+  padding-top: 6px;
+  font-weight: 600;
+}
+
+.item-name {
+  color: #6b5b57;
+}
+
+.muted {
+  color: #A2938E;
+  font-size: 13px;
+}
+
+.muted-line {
+  color: #A2938E;
+  font-size: 13px;
+  padding: 6px 0;
+}
+
+.src-tip {
+  margin-bottom: 12px;
 }
 </style>

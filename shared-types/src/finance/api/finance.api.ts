@@ -417,6 +417,21 @@ export interface RefundListQuery extends PageQuery {
   keyword?: string;
 }
 
+/**
+ * 退费费用项明细一行（★ 2026-10-22 新增）
+ *
+ * 一笔退费单可以退多个项目（如学费 + 住宿费），每个项目在财务侧对应一行，
+ * 金额各自独立；主单 `refundAmount` 恒等于各行 `amount` 之和。
+ */
+export interface RefundFeeItemLine {
+  /** 费用类型：1 学费 / 2 住宿费 / 3 餐费 / 4 保险费 / 5 试学费 */
+  feeType: FeeType;
+  /** 费用类型中文名（双返回） */
+  feeTypeName: string;
+  /** 该项目退费金额（单位：分） */
+  amount: number;
+}
+
 /** 退费列表项 */
 export interface RefundListItem {
   id: string;
@@ -445,6 +460,23 @@ export interface RefundListItem {
   applicantName?: string;
   applyTime?: string;
   pushedTime?: string;
+  /**
+   * ★ 2026-10-22：费用项明细（一笔多项目时前端展开显示）
+   *
+   * 老单（改造前推送的）没有明细，此数组为空 → 前端按主项 `refundType` 兜底显示。
+   */
+  items?: RefundFeeItemLine[];
+  /**
+   * ★ 2026-10-22：上游模块（`teaching` 教学域 / `consult` 咨询域）
+   *
+   * 有值 = 这张单是**上游审批通过后推送过来的**，财务侧不再走经理审批 / 教务核算，
+   * 前端时间轴按「上游提交 → 校长审批 → 推送财务 → 财务出款」渲染，不显示「待处理」。
+   */
+  sourceModule?: string;
+  /** 上游学段：jh 初高中 / class 大学 / job 就业 */
+  sourceStage?: string;
+  /** 上游退费单 id（出款后按它对回上游回写） */
+  sourceRefundId?: string;
   /** 是否可标记已退费（仅「待财务出款」状态） */
   canRefund: boolean;
   isInBill: boolean;
@@ -475,11 +507,31 @@ export interface RefundApplyPayload {
   studentId: string;
   /** 退费项目，可多选 */
   refundItems: FeeType[];
+  /**
+   * ★ 2026-10-22：费用项明细（含各自金额）
+   *
+   * 给了就以它为准落 `t_finance_refund_item`；没给则按「refundItems + refundAmount」
+   * 自动生成一行（老调用方不用改）。
+   */
+  refundItemDetails?: Array<{ feeType: FeeType; amount: number }>;
   /** 退费金额（单位：分） */
   refundAmount: number;
   /** 退费原因，必填 */
   refundReason: string;
   attachmentUrl?: string;
+  /**
+   * ★ 2026-10-22：上游幂等三元组
+   *
+   * `sourceModule + sourceRefundId` 在财务侧有唯一索引 → 同一张上游单重复推送
+   * 只会返回原单，不会重复建单（出款也不会重复打款）。
+   */
+  sourceModule?: string;
+  sourceStage?: string;
+  sourceRefundId?: string;
+  /** 上游校长审批通过时间（`YYYY-MM-DD HH:mm:ss`），点亮财务时间轴的「校长审批」节点 */
+  upstreamApproveTime?: string;
+  /** 上游校长审批人姓名（时间轴显示「谁批的」） */
+  upstreamApproverName?: string;
 }
 
 /** 确认出款（财务） */

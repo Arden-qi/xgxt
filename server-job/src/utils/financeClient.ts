@@ -144,12 +144,32 @@ export interface FinanceApplyRefundPayload {
    *    与就业侧的 RefundType 值域**一致**（两边都是 1-5），可直接透传。
    */
   refundItems: number[];
+  /**
+   * ★ 2026-10-22：费用项明细（含各自金额，单位「分」）
+   *
+   * 用户口径：「每一个费用项都要在财务那里对应一行」。
+   * 财务按此落 `t_finance_refund_item`，主单金额仍是合计、出款仍是一次。
+   */
+  refundItemDetails?: Array<{ feeType: number; amount: number }>;
   /** ⚠️ 金额单位「分」 */
   refundAmount: number;
   /** 退费原因（必填，≤255） */
   refundReason: string;
-  /** 来源类型：1 咨询 / 2 就业（就业侧固定传 2） */
+  /** 来源类型：1 咨询 / 2 校长审批推送 */
   sourceType?: number;
+  /**
+   * ★ 2026-10-22：上游幂等三元组
+   *
+   * 财务侧 `uk_source(source_module, source_refund_id)` 唯一索引兜底：
+   * 同一张上游单重复推送只会返回原单，不会重复建单 / 重复出款。
+   */
+  sourceModule?: string;
+  sourceStage?: string;
+  sourceRefundId?: string;
+  /** 上游校长审批通过时间（`YYYY-MM-DD HH:mm:ss`） */
+  upstreamApproveTime?: string;
+  /** 上游校长审批人姓名 */
+  upstreamApproverName?: string;
   remark?: string;
 }
 
@@ -157,6 +177,8 @@ export interface FinanceApplyRefundPayload {
 export interface FinanceApplyRefundResult {
   id: string;
   orderNo: string;
+  /** ★ 2026-10-22：命中幂等（该上游单之前推过）→ true，本次只同步了明细 */
+  duplicated?: boolean;
 }
 
 /**

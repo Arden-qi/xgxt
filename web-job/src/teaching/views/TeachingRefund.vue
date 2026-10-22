@@ -150,6 +150,13 @@
       <el-table-column label="结束日期" width="105" align="center">
         <template #default="{ row }">{{ row.refundTime ? row.refundTime.slice(0, 10) : '—' }}</template>
       </el-table-column>
+      <!--
+        ★ 2026-10-22：财务退费单号（推送成功即回写）
+          有值 = 财务侧已建单；再等财务点「确认出款」，出款后结束日期会自动回写。
+      -->
+      <el-table-column label="财务单号" width="130" align="center">
+        <template #default="{ row }">{{ row.financeRefundNo || '—' }}</template>
+      </el-table-column>
       <el-table-column label="状态" width="105" align="center">
         <template #default="{ row }">
           <el-tag :type="tagType(row.approvalStatus)" size="small">
@@ -179,7 +186,9 @@
             撤回
           </el-button>
           <el-button
-            v-if="row.approvalStatus === REFUND_STATUS.APPROVED && canFinanceConfirm"
+            v-if="
+              row.approvalStatus === REFUND_STATUS.APPROVED && canFinanceConfirm && !row.refundTime
+            "
             link
             type="info"
             size="small"
@@ -299,6 +308,9 @@
           </el-descriptions-item>
           <el-descriptions-item label="退费原因" :span="2">
             {{ detail.record.refundReason || '—' }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detail.record.financeRefundNo" label="财务单号">
+            {{ detail.record.financeRefundNo }}
           </el-descriptions-item>
           <el-descriptions-item v-if="detail.record.refundTime" label="出款时间" :span="2">
             {{ detail.record.refundTime }}

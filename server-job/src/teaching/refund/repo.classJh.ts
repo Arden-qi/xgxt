@@ -23,7 +23,7 @@ import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME } from '../shared/dto';
 import { toRawRefundStatus, toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
-import { tbl, tblInsTrx, tblTrx } from '../shared/uniTable';
+import { tbl, tblInsTrx, tblTrx, uniUpdCols } from '../shared/uniTable';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 import { hydrateWithArchive } from '../shared/studentRef';
 
@@ -109,6 +109,8 @@ async function decorate(
     // 初高没有独立的财务备注/出款时间列名对齐 → 复用 pay_out_time
     financeRemark: null,
     refundTime: fmtDateTime(row.pay_out_time),
+    // ★ 2026-10-22：财务退费单号（推送成功即回写；初高没有 finance_remark 列，全靠这一列）
+    financeRefundNo: row.finance_refund_no || null,
     createTime: fmtDateTime(row.create_time),
     canApprove: false,
     canCancel: false,
@@ -343,6 +345,31 @@ export async function setFinance(
       pay_out_voucher_no: `PO${now.getTime()}`,
       update_time: now,
     });
+}
+
+/**
+ * ★ 2026-10-22：回写财务退费单（推送成功后立刻写）
+ *
+ * 见 repo.job.ts 同名函数的说明：溯源 + 展示；失败只 warn，不影响推送结果。
+ * ⚠️ 初高老表没有 `finance_remark` 列（setFinance 里 `_financeRemark` 未使用），
+ *   所以财务单号只能靠 `finance_refund_no` 这一列呈现。
+ */
+export async function setPushInfo(
+  id: string,
+  financeRefundId: string | null,
+  financeRefundNo: string | null,
+): Promise<void> {
+  try {
+    const patch = await uniUpdCols(db, DB, T, {
+      finance_refund_id: financeRefundId,
+      finance_refund_no: financeRefundNo,
+      update_time: new Date(),
+    });
+    await tbl(db, DB, T, STAGE).where({ id }).update(patch as never);
+  } catch (err: any) {
+    // eslint-disable-next-line no-console
+    console.warn('[退费] 回写财务单号失败', STAGE, id, err?.message);
+  }
 }
 
 /** 该学生是否有进行中的退费单 */
