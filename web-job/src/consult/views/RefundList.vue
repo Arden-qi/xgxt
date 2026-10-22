@@ -14,7 +14,7 @@ import type {
   ConsultRefundCalcResult,
   ConsultStudentListItem,
 } from 'shared-types/consult';
-import { ConsultRefundStatus as CRS, CONSULT_REFUND_STATUS_NAME } from 'shared-types/consult';
+import { ConsultState, ConsultRefundStatus as CRS, CONSULT_REFUND_STATUS_NAME } from 'shared-types/consult';
 import {
   fetchRefundList,
   fetchRefundStats,
@@ -106,7 +106,17 @@ const studentSearching = ref(false);
 async function searchStudents(keyword: string) {
   studentSearching.value = true;
   try {
-    const res = await fetchStudentList({ page: 1, size: 20, keyword: keyword || undefined });
+    /**
+     * ★ 2026-10-22 用户口径：退费只针对「试学中」的学生，
+     *   所以下拉里只列试学中的 —— 正式在读 / 已退费 / 流失 都不出现在候选里，
+     *   避免选到不能退的人才报错。
+     */
+    const res = await fetchStudentList({
+      page: 1,
+      size: 20,
+      keyword: keyword || undefined,
+      consultState: ConsultState.TRIAL,
+    });
     studentOptions.value = res.list.map((s: ConsultStudentListItem) => ({
       consultStudentId: s.consultStudentId,
       studentName: s.studentName,
@@ -143,7 +153,16 @@ async function onStudentChange() {
   if (!applyForm.value.consultStudentId) return;
   try {
     const pre = await fetchRefundPrefill(applyForm.value.consultStudentId);
-    if (pre.trialStart) applyForm.value.trialStart = pre.trialStart;
+    /**
+     * ⚠️ 只接受 YYYY-MM-DD
+     *
+     * 后端 prefill 曾经返回过 `"Thu Oct 22"`（Date 被 String() 再截断），
+     * 直接塞进 trialStart 会让 /refund/calc 报「参数格式不正确」。
+     * 后端已修，这里再兜一道：格式不对就不填，让用户自己选日期。
+     */
+    if (pre.trialStart && /^\d{4}-\d{2}-\d{2}$/.test(pre.trialStart)) {
+      applyForm.value.trialStart = pre.trialStart;
+    }
     if (!applyForm.value.trialEnd) {
       const d = new Date();
       const p = (n: number) => String(n).padStart(2, '0');

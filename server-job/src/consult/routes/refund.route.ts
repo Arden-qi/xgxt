@@ -30,7 +30,7 @@ import {
   manualPay,
   syncRefundFromFinance,
 } from '../services/refund.service';
-import { findStudent } from '../services/student.service';
+import { findStudent, formatDate } from '../services/student.service';
 // ★ 2026-10-16 数据范围：咨询师只能给自己名下（分配给自己的）学生发起退费
 import { assertStudentIdInScope } from '../services/data-scope';
 
@@ -332,9 +332,16 @@ refundRouter.get(
 
     const { today } = await import('../services/student.service');
     const end = today();
-    const start = stu.trial_start
-      ? String(stu.trial_start).slice(0, 10)
-      : end;
+    /**
+     * ⚠️ 必须用 formatDate，不能 `String(v).slice(0, 10)`
+     *
+     * `trial_start` 从 MySQL 取回来是 **Date 对象**，
+     * `String(new Date())` 得到的是 `"Thu Oct 22 2026 17:56:43 GMT+0800 ..."`，
+     * 截前 10 位就是 `"Thu Oct 22"` —— 前端拿它去调 /refund/calc 时，
+     * 后端 schema 要求 `^\d{4}-\d{2}-\d{2}$`，直接报「参数格式不正确」，
+     * 表现为「退费弹窗一选学生就报错」。
+     */
+    const start = stu.trial_start ? formatDate(stu.trial_start) : end;
 
     // 用「无物品、无每日消耗」先算一次，给前端初始值（前端会按勾选立即重算）
     const calc = await calcRefund(consultStudentId, start, end, undefined, [], []);
