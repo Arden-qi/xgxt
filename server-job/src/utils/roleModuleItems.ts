@@ -25,6 +25,8 @@
  */
 
 import { db } from '../perm/utils/db';
+// ★ 2026-10-22 旧版权限树功能点名 → 新树页面名 的兼容翻译（纯配置，不引 db，不产生环）
+import { canonicalItemKeys } from '../perm/config/permTreeLegacy';
 
 /** 角色编码 → 权限库 module_key → 功能点名数组 */
 export type ModuleItemsByRole = Map<string, Record<string, string[]>>;
@@ -67,7 +69,29 @@ export async function loadRoleModuleItems(force = false): Promise<ModuleItemsByR
         items = {};
         map.set(code, items);
       }
-      (items[mod] ||= []).push(item);
+
+      /**
+       * ★★ 2026-10-22 兼容旧版权限树的功能点名
+       *
+       * 库里的授权记录还是旧名字（`学生基础数据` / `催费管理` / `实训-出勤管理`…），
+       * 而 `permTree.ts` 已经改成了新页面名（`学生档案` / `催费` / `出勤管理`）。
+       * 不翻译的话，下游三处会同时失效：
+       *   · removeCodesOfRevokedPages → 认定「该页没勾任何动作」→ 收回页面码
+       *     → my-pages 少一大截 → **左侧菜单整片消失**（校长只剩 4 个菜单）；
+       *   · deriveDefaultPaths → 页面管理里勾选框全空；
+       *   · roleGrantedOps → 按钮基线漂移。
+       *
+       * 翻译放在**读库唯一入口**，三处自动对齐；不改库、也不用人手重勾。
+       * 映射表见 `perm/config/permTreeLegacy.ts`。
+       */
+      for (const key of canonicalItemKeys(mod, item)) {
+        const i = key.indexOf('||');
+        const kmod = key.slice(0, i);
+        const kitem = key.slice(i + 2);
+        if (!kmod || !kitem) continue;
+        const list = (items[kmod] ||= []);
+        if (!list.includes(kitem)) list.push(kitem);
+      }
     }
   } catch {
     // 查库失败 → 空 Map（退化成「没有功能点」），绝不抛错
