@@ -56,7 +56,7 @@ function mapRow(r: Record<string, any>): ScoreRow {
   return {
     id: String(r.id),
     stage: STAGE,
-    stageName: '实训',
+    stageName: '就业部',
     examId: String(r.exam_id ?? ''),
     examName: String(r.exam_name ?? ''),
     examDate: null,
@@ -140,7 +140,7 @@ export async function entry(examId: string, classId: string): Promise<ScoreEntry
 
   return {
     stage: STAGE,
-    stageName: '实训',
+    stageName: '就业部',
     examId,
     examName: String(exam.exam_name ?? ''),
     examDate: null,

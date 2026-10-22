@@ -57,7 +57,7 @@ async function decorate(row: Record<string, any>): Promise<RefundRow> {
 
   return {
     stage: STAGE,
-    stageName: '实训',
+    stageName: '就业部',
     id: String(row.id),
     studentId: String(row.student_id || ''),
     studentNo: String(row.student_no || ''),

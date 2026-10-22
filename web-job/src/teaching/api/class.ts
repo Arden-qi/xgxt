@@ -374,10 +374,12 @@ export const CLASS_STATUS_TAG: Record<number, string> = {
   4: 'danger',
 };
 
+// ★ 2026-10-22 部门口径统一：对外只有「初高中 / 大学部 / 就业部」三个部门。
+//   「实训」是就业部下的一个阶段（班级 dept_code=3），不是并列部门。
 export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
   emp: '就业部',
 };
 

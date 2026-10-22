@@ -500,14 +500,9 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           <b>{{ row.totalScore ?? '—' }}</b>
         </template>
       </el-table-column>
-      <el-table-column prop="examResultName" label="结果" width="90" align="center">
-        <template #default="{ row }">
-          <el-tag v-if="row.examResult" size="small" :type="row.examResult === 1 ? 'success' : 'danger'" effect="plain">
-            {{ row.examResultName }}
-          </el-tag>
-          <span v-else>—</span>
-        </template>
-      </el-table-column>
+      <!-- ★ 2026-10-22 用户要求：列表不再显示「结果」列
+           （通过/未通过由老师在「录入成绩」里手选，不再在列表里占一列）。
+           ⚠️ 后端仍会存 exam_result（汇总统计、末班判定都要用），只是不展示。 -->
       <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openRowDetail(row)">详情</el-button>

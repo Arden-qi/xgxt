@@ -62,7 +62,7 @@ function mapRow(r: Record<string, any>): AttendanceRow {
   return {
     id: String(r.id),
     stage: STAGE,
-    stageName: '实训',
+    stageName: '就业部',
     classId: String(r.class_id ?? ''),
     className: String(r.class_name ?? ''),
     attendanceDate: fmtDate(r.attend_date),
@@ -305,7 +305,7 @@ export async function board(classId: string, date: string): Promise<AttendanceBo
 
   return {
     stage: STAGE,
-    stageName: '实训',
+    stageName: '就业部',
     classId,
     className: String(cls.class_name ?? ''),
     attendanceDate: date,
