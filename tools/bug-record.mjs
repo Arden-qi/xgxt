@@ -16,6 +16,10 @@
  *   node tools/bug-record.mjs prune  <hash>                  收敛该 hash 的重复，保留最早一条
  *   node tools/bug-record.mjs audit                          全表查重（按 hash / 标题）
  *
+ * 作者守卫：upsert 默认只处理 menglinglei 的提交，其它作者会**静默跳过**（exit 0）。
+ *   补录别人的改动必须加 --any-author，否则会看到「全部 OK 但一条没进」：
+ *   node tools/bug-record.mjs upsert <hash> --payload f.json --any-author
+ *
  * payload 只需写业务字段（纯文本即可，脚本自动转单选数组）：
  *   {
  *     "BUG标题": "一句人话，说清哪里错了",
@@ -372,8 +376,16 @@ function main() {
   }
   const payload = JSON.parse(readFileSync(payloadPath, 'utf8'));
   const info = gitInfo(hash);
-  if (info && !/menglinglei/.test(info.author)) {
+  /**
+   * 作者守卫：默认只写 menglinglei 的提交（历史团队约定）。
+   *
+   * ⚠️ 但它是个**静默跳过**：打印一句「按约定跳过」就 exit 0。
+   * 批量补录别的同事的改动时，若不注意就会看到「48/48 OK、失败 0」，
+   * 实际表里一条没进（2026-10-20 踩过）。补录其它作者必须显式加 --any-author。
+   */
+  if (!opts['any-author'] && info && !/menglinglei/.test(info.author)) {
     console.log(`作者 ${info.author} 不是 menglinglei，按约定跳过（不写缺陷表）。`);
+    console.log('  → 确实要补录这位作者的改动，请加 --any-author 重跑（本次什么都没写）。');
     process.exit(0);
   }
   const fields = normalizePayload(hash, payload, opts.time ? String(opts.time) : info?.time);
