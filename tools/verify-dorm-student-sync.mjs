@@ -70,6 +70,13 @@ check('入住时同步', (repo.match(/syncStudentDorm\(/g) || []).length >= 3);
 check('退宿时清空同步', /async checkout[\s\S]{0,1200}syncStudentDorm/.test(repo));
 check('审批通过后同步', /applyChangeOnApproved[\s\S]{0,3000}syncStudentDorm/.test(repo));
 
+// 编辑弹窗：当前宿舍不在下拉选项里时要补一条，否则 Select 会显示裸 UUID
+const form = read('web-job/src/teaching/views/TeachingStudent.vue');
+check(
+  '编辑弹窗宿舍下拉能兜底显示宿舍号',
+  form.includes('formDormOptions') && form.includes('当前宿舍（宿舍管理）'),
+);
+
 console.log('\n▶ 运行时检查');
 const token = await login('sunmin');
 check('班主任登录', !!token);

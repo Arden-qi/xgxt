@@ -693,7 +693,7 @@
                 style="width: 100%"
                 @change="onFormDormChange"
               >
-                <el-option v-for="r in dormRoomOptions" :key="r.roomId" :label="r.label" :value="r.roomId" />
+                <el-option v-for="r in formDormOptions" :key="r.roomId" :label="r.label" :value="r.roomId" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -1255,6 +1255,22 @@ const dormRoomOptions = computed(() =>
   })),
 );
 
+/**
+ * 宿舍下拉的最终选项（★ 2026-10-22）
+ *
+ * 下拉数据仍来自旧的教务宿舍表，而学生在宿舍管理里入住的是合并后的
+ * `t_job_dorm` 房间 —— 当前宿舍的 roomId 不在选项里时，Select 会把
+ * **裸 UUID** 显示出来（用户看到的「乱码」）。
+ * → 把当前宿舍补成一条选项，label 用详情里同步过来的 dormNo（如「1号楼-101」）。
+ */
+const formDormOptions = computed(() => {
+  const list = dormRoomOptions.value;
+  if (form.dormId && !list.some((r) => r.roomId === form.dormId)) {
+    return [{ roomId: form.dormId, label: form.dormNo || '当前宿舍（宿舍管理）' }, ...list];
+  }
+  return list;
+});
+
 /** 床位下拉：取所选宿舍的床位；老数据只有床位号没匹配到宿舍时，兜底展示原值 */
 const formBedOptions = computed(() => {
   const room = dormRooms.value.find((r) => r.roomId === form.dormId);
@@ -1268,10 +1284,17 @@ const formBedOptions = computed(() => {
 });
 
 function onFormDormChange(roomId: string) {
+  if (!roomId) {
+    form.dormNo = '';
+    form.bedNo = '';
+    return;
+  }
   const r = dormRooms.value.find((x) => x.roomId === roomId);
+  // 当前宿舍来自「宿舍管理」，不在旧教务宿舍列表里 → dormNo 已经是对的，别清空
+  if (!r) return;
   // ★ 2026-10-20：清空宿舍时要连 dorm_no 一起清（原来只清床位号，导致
   //   「移出宿舍」实际上把旧房号又存回去，也让保存前的变更清单漏掉这一项）
-  form.dormNo = r ? (r.building ? `${r.building}-${r.room}` : r.room) : '';
+  form.dormNo = r.building ? `${r.building}-${r.room}` : r.room;
   form.bedNo = '';
 }
 
