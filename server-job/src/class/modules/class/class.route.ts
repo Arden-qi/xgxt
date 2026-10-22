@@ -41,6 +41,14 @@ function toClassItem(row: Record<string, unknown>): Record<string, unknown> {
     ...c,
     classStatusName: ClassStatusName[st] ?? '未知',
     stageName: stageNameOf(readPhaseCode(row)),
+    /**
+     * ★ 2026-10-22 阶段方案名（「一阶段」~「六阶段」）
+     *
+     * 新表单建班是选「方案阶段」而不是选 stage 码，阶段名以方案为准。
+     * 咨询「分配班级」下拉要优先显示它 —— 历史脏数据里 stage_code 可能被写成
+     * 13（实训），只看 stageName 会把一阶段的班显示成「XX（实训）」。
+     */
+    schemeStageName: (row.scheme_stage_name as string) ?? null,
     attendanceRate: row.attendance_rate !== null && row.attendance_rate !== undefined
       ? Number(row.attendance_rate)
       : null,
