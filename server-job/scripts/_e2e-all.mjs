@@ -67,7 +67,23 @@ if (!suites.length) {
   process.exit(1);
 }
 
-console.log(`== 1/3 准备临时老表（用例夹具要用）==`);
+/* ★ 先做「迁移守卫审计」：确认没有「老表已删→迁移跳过→统一表却缺列」的隐患
+   （2026-10-21 的 class_no / pay_remark 就是这么漏的，运行期才炸） */
+console.log(`== 0/3 迁移守卫审计 ==`);
+{
+  const audit = spawnSync(process.execPath, [path.join(SCRIPTS, '_audit-migration-guards.mjs')], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  });
+  const out = `${audit.stdout || ''}${audit.stderr || ''}`.trim().split('\n');
+  console.log(out.slice(0, 6).map((l) => '  ' + l).join('\n'));
+  if (audit.status !== 0) {
+    console.log('\n✗ 存在「跳过但统一表缺列」的迁移，先补统一表迁移再继续');
+    process.exit(1);
+  }
+}
+
+console.log(`\n== 1/3 准备临时老表（用例夹具要用）==`);
 run('_uni-recreate-legacy.mjs');
 
 console.log(`\n== 2/3 跑 ${suites.length} 个套件 ==`);
