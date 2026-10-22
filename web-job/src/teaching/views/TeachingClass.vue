@@ -1,24 +1,19 @@
 <template>
   <div class="tcv">
     <!-- 说明条 -->
-    <!-- ★ 2026-10-22 批注：「说明与下方的规则保持一致」（红字标注 + 红框圈本说明条）
-         → 三处按下方实际规则改写：
-           ① 状态码清单补上「筛选只列 1/2/5/6/7」——4 已结业已从状态筛选下拉移除（379023a），
-              但仍是合法状态（列表状态列展示、统计卡计数、编辑弹窗「封班→已结业」流转保留）；
-           ② 「班级编号」「结业日期」改成「实训 / 就业部」——就业部复用 t_job_class，
-              这两列同样有（两张 meta 里 hasClassCode / hasCloseDate 都是 true），
-              原说明写"只有实训有"，与列表里就业部班级带编号的事实不符；
-           ③ 「出勤率」按部门不同口径 —— 与仓储一致（初高 today_attendance_rate = 当日，
-              大学 / 实训 / 就业 attendance_rate = 累计）；原说明写"今日出勤率只有初高有"，
-              但列表里四个部门都有「出勤率」列（非初高是累计值），措辞与下方对不上。 -->
+    <!-- ★ 2026-10-22 批注（红字）：「班级状态没有已结业，前后端以及上方的说明全都删除已结业」
+         ① 已结业(4) 整体下线 —— 状态字典 / 流转表 / 统计卡 / 说明全部去掉，封班即终态；
+         ② 部门从 4 个变 3 个：实训班与就业班在库里是同一张表、dept_code 都是 3，
+            下拉里单列「实训」是重复，统一并入「就业部」查询；
+         ③ 「班级编号」「结业日期」列只有就业部有（两张 meta 里 hasClassCode / hasCloseDate 都是 true），
+            「出勤率」初高按当日、其余部门按累计。 -->
     <el-alert class="tcv-tip" type="info" :closable="false" show-icon>
       <template #title>
-        本页合并了 <b>4 个部门</b>的班级信息（初高部 / 大学部 / 实训 / 就业部）。
+        本页合并了 <b>3 个部门</b>的班级信息（初高部 / 大学部 / 就业部，实训班归就业部）。
         <span class="muted">
-          班级状态码三套一致（1 开放 / 2 封班 / 4 已结业；升实训后自动为 5 实训、
-          升就业后为 6 待就业、【已就业】确认后为 7 已就业）；
-          状态筛选只列 1 / 2 / 5 / 6 / 7（4 已结业为历史状态，仅在列表与统计卡展示，「封班→已结业」流转保留）；
-          「班级编号」「结业日期」只有实训 / 就业部有，「出勤率」初高按当日、其余部门按累计 —— 表单会按部门自动隐藏不适用的字段。
+          班级状态码（1 开放 / 2 封班 / 5 实训 / 6 待就业 / 7 已就业：升实训后自动为 5 实训、
+          升就业后为 6 待就业、【已就业】确认后为 7 已就业；封班即终态，可解封回开放）；
+          「班级编号」「结业日期」只有就业部有，「出勤率」初高按当日、其余部门按累计 —— 表单会按部门自动隐藏不适用的字段。
         </span>
       </template>
     </el-alert>
@@ -31,7 +26,6 @@
         <div class="tcv-card__x">
           <span class="ok">开放 {{ s.openCount }}</span>
           <span>封班 {{ s.closedCount }}</span>
-          <span class="danger">已结业 {{ s.graduatedCount }}</span>
         </div>
         <!-- ★ 2026-10-21 批注：升实训 / 升就业 / 已就业 会写入三个系统态，
              卡片不加这三项，数字就和「班级总数」对不上。没有时才不显示。 -->
@@ -51,12 +45,16 @@
     <!-- 筛选 -->
     <!-- ★ 2026-10-21 批注：「将教学管理的所有筛选选择完成后，点击查询才可以进行查询」
          → 部门 / 阶段 / 状态 三个下拉只改条件、不自动发请求，
-           全部选完由用户点【查询】才查（之前选完即查，一改条件列表就跳）。 -->
+           全部选完由用户点【查询】才查（之前选完即查，一改条件列表就跳）。
+    ★ 2026-10-22 批注：「选择部门时不进行查询，点击查询，才可以按照所选内容进行查询」
+         → 光不自动发请求还不够：列表的列显隐 / 出勤率列头 / 部门列都跟着 query.stage 走，
+           选个部门列表当场就变样，看起来还是"选了就查"。
+           现在拆成两套状态：query = 正在填的条件（草稿），applied = 已生效的条件
+           （点【查询】/【重置】时快照过去）。列表、统计卡、列显隐一律只看 applied。 -->
     <el-form class="tcv-filter" inline>
-      <!-- 2026-10-16 按批注：原「学段」筛选改名「部门」（选项 = 初高部 / 大学部 / 实训）。
-           原来紧挨着的那个 deptCode「部门」下拉是**没接上接口的死筛选**
-           （query.deptCode 既没进查询参数、也没进 load），批注口径下两者重名，
-           这里把死掉的那个删掉，只留一个真正生效的。 -->
+      <!-- 2026-10-16 按批注：原「学段」筛选改名「部门」。
+           ★ 2026-10-22：选项 = 初高部 / 大学部 / 就业部（「实训」并入就业部，
+             见 api/class.ts#CLASS_DEPT_STAGES）。 -->
       <el-form-item label="部门">
         <el-select v-model="query.stage" clearable placeholder="全部部门" style="width: 130px" @change="onStageChange">
           <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
@@ -70,8 +68,8 @@
       <el-form-item label="状态">
         <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px">
           <!-- 2026-10-19 批注：删除「待结业」选项 -->
-          <!-- 2026-10-21 批注：删除「已结业」选项 → 选项表见 api/class.ts#CLASS_STATUS_SELECTABLE
-               （只删筛选项；列表状态列 / 统计卡 / 编辑弹窗流转都不受影响） -->
+          <!-- 2026-10-21 批注：删除「已结业」选项 → 选项表见 api/class.ts#CLASS_STATUS_SELECTABLE -->
+          <!-- 2026-10-22 批注：「已结业」状态整体下线（后端流转表里也没有 4 了） -->
           <el-option v-for="s in CLASS_STATUS_SELECTABLE" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>
@@ -81,11 +79,11 @@
           placeholder="班级名 / 编号 / 班主任"
           clearable
           style="width: 180px"
-          @keyup.enter="load(1)"
+          @keyup.enter="applyQuery"
         />
       </el-form-item>
       <el-form-item>
-        <el-button type="primary" @click="load(1)">查询</el-button>
+        <el-button type="primary" @click="applyQuery">查询</el-button>
         <el-button @click="reset">重置</el-button>
         <el-button v-if="!isReadOnlyUser" type="success" @click="openCreate">新增班级</el-button>
       </el-form-item>
@@ -98,7 +96,7 @@
     <el-table v-loading="loading" :data="rows" border stripe size="small">
       <!-- 2026-10-16：原来「学段」与「部门」是两列（部门列取 row.deptName），
            批注口径下重名，合并成一列 —— 取部门名，没部门就退回学段名 -->
-      <el-table-column v-if="!query.stage" label="部门" width="70" align="center">
+      <el-table-column v-if="!applied.stage" label="部门" width="70" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain">{{ row.deptName || row.stageName }}</el-tag>
         </template>
@@ -126,10 +124,10 @@
         <template #default="{ row }">{{ row.assistantName || '—' }}</template>
       </el-table-column>
       <!-- ★ 只有大学/实训有交棒岗位（初高没有） -->
-      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="项目经理" min-width="80">
+      <el-table-column v-if="!applied.stage || applied.stage !== 'jh'" label="项目经理" min-width="80">
         <template #default="{ row }">{{ row.projectManagerName || '—' }}</template>
       </el-table-column>
-      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="就业老师" min-width="80">
+      <el-table-column v-if="!applied.stage || applied.stage !== 'jh'" label="就业老师" min-width="80">
         <template #default="{ row }">{{ row.employmentTeacherName || '—' }}</template>
       </el-table-column>
       <el-table-column label="人数" width="55" align="center">
@@ -212,8 +210,8 @@
       class="tcv-page"
       layout="total, prev, pager, next"
       :total="total"
-      :current-page="query.page"
-      :page-size="query.size"
+      :current-page="applied.page"
+      :page-size="applied.size"
       @current-change="load"
     />
 
@@ -384,9 +382,11 @@
             </el-form-item>
           </el-col>
           <!-- 2026-10-19 批注：原来的操作列【改状态】移到编辑弹窗里；
-               「待结业」已删除，封班后直接选「已结业」。已结业是终态，下拉禁用。
-               ★ 2026-10-21：实训 / 待就业 / 已就业 是系统态，同样只读
-                 （只能由操作列的【升实训】【升就业】【已就业】写入）。 -->
+               「待结业」已删除。
+               ★ 2026-10-21：实训 / 待就业 / 已就业 是系统态，只读
+                 （只能由操作列的【升实训】【升就业】【已就业】写入）。
+               ★ 2026-10-22：「已结业」整体下线 —— 状态只剩 开放 ⇄ 封班，
+                 封班即终态（可解封回开放），下拉里不会再出现已结业。 -->
           <el-col v-if="form.id" :span="8">
             <el-form-item label="班级状态">
               <el-select v-model="form.classStatus" style="width: 100%" :disabled="editStatusLocked">
@@ -729,7 +729,8 @@
  *   · 一个页面 + 学段筛选（不再 3 个页面各一套）
  *   · 「班级编号 / 结业日期 / 交棒岗位 / 备注」按学段自动显隐
  *     —— 由后端 /meta 下发的 hasClassCode / hasCloseDate 决定，**不写死学段判断**
- *   · 状态机统一（1 开放 / 2 封班 / 4 已结业；2026-10-19 起「待结业」下线），非法流转后端会拦
+ *   · 状态机统一（1 开放 / 2 封班 / 5 实训 / 6 待就业 / 7 已就业；
+ *     2026-10-19 起「待结业」下线、2026-10-22 起「已结业」整体下线），非法流转后端会拦
  *
  * 【★ 与学生档案页最大的不同：不按名字去重】
  *   「初高 G104」和「大学 G104」是两个不同的班，同名是常态。
@@ -761,7 +762,7 @@ import {
   CLASS_STATUS_TAG,
   CLASS_STATUS_SELECTABLE,
   classStatusOptions,
-  CLASS_STAGES,
+  CLASS_DEPT_STAGES,
   DEPT_OPTIONS,
   type ClassDetail,
   type ClassHandoverPayload,
@@ -790,7 +791,11 @@ const STAGE_LABEL: Record<ClassStage, string> = {
   emp: '就业部',
 };
 
-const stageOptions = computed(() => visibleStageOptions('class', CLASS_STAGES, STAGE_LABEL));
+/**
+ * ★ 2026-10-22：部门下拉用 CLASS_DEPT_STAGES（初高部 / 大学部 / 就业部），
+ *   不用 CLASS_STAGES —— 后者含内部的 job（实训），只用于行排序与类型。
+ */
+const stageOptions = computed(() => visibleStageOptions('class', CLASS_DEPT_STAGES, STAGE_LABEL));
 
 /* ---------------- 列表 ---------------- */
 const loading = ref(false);
@@ -799,8 +804,21 @@ const total = ref(0);
 const summary = ref<ClassSummary[]>([]);
 const metaList = ref<ClassStageMeta[]>([]);
 
+/** 筛选条件（草稿）—— 只跟着下拉/输入框变，**不发请求** */
 const query = reactive({
-  // 「部门」筛选复用 stage：初高部 = jh、大学部 = class、实训 = job
+  // 「部门」筛选复用 stage：初高部 = jh、大学部 = class、就业部 = emp（实训 job 也归这一项）
+  stage: undefined as ClassStage | undefined,
+  classStatus: undefined as number | undefined,
+  phaseCode: undefined as number | undefined,
+  keyword: '',
+});
+
+/**
+ * 已生效的查询条件 —— 只有点【查询】/【重置】才从 query 快照过来。
+ * ★ 列表、统计卡、列显隐、出勤率列头全部只看这一份：
+ *   否则用户选了部门（条件还没提交），表格列就已经跟着变，看着仍像"选了就查"。
+ */
+const applied = reactive({
   stage: undefined as ClassStage | undefined,
   classStatus: undefined as number | undefined,
   phaseCode: undefined as number | undefined,
@@ -812,16 +830,18 @@ const query = reactive({
 /* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
 useBreadcrumbStageKey(() => query.stage || '');
 
-/** 当前所选学段的 meta（列显隐/标签都靠它） */
-const curMeta = computed(() => metaList.value.find((m) => m.stage === query.stage) || null);
-const phaseOptions = computed(() => curMeta.value?.phaseOptions || []);
+/** 当前**已生效**学段的 meta（列显隐/标签都靠它） */
+const curMeta = computed(() => metaList.value.find((m) => m.stage === applied.stage) || null);
+/** 草稿学段的 meta —— 「阶段」下拉要跟着刚选的部门立刻换选项（但列表不动） */
+const draftMeta = computed(() => metaList.value.find((m) => m.stage === query.stage) || null);
+const phaseOptions = computed(() => draftMeta.value?.phaseOptions || []);
 
 /** 未选学段时，只要任一可见学段有编号/结业日期就显示该列 */
 const hasClassCodeCol = computed(() =>
-  query.stage ? !!curMeta.value?.hasClassCode : metaList.value.some((m) => m.hasClassCode),
+  applied.stage ? !!curMeta.value?.hasClassCode : metaList.value.some((m) => m.hasClassCode),
 );
 const hasCloseDateCol = computed(() =>
-  query.stage ? !!curMeta.value?.hasCloseDate : metaList.value.some((m) => m.hasCloseDate),
+  applied.stage ? !!curMeta.value?.hasCloseDate : metaList.value.some((m) => m.hasCloseDate),
 );
 
 /**
@@ -830,8 +850,8 @@ const hasCloseDateCol = computed(() =>
  *   （判断依据直接用初高这个固定事实，不去猜 meta 的其它标志位。）
  */
 const rateLabel = computed(() => {
-  if (!query.stage) return '出勤率';
-  return query.stage === 'jh' ? '今日出勤率' : '累计出勤率';
+  if (!applied.stage) return '出勤率';
+  return applied.stage === 'jh' ? '今日出勤率' : '累计出勤率';
 });
 
 function rateClass(row: ClassRow): string {
@@ -850,13 +870,15 @@ function isQuitStatus(row: Record<string, any>): boolean {
   return Number(row?.studentStatus) === StudentStatus.QUIT;
 }
 
+/** 拉数据：只认 applied（分页也走这里，翻页不会把草稿条件带上） */
 async function load(page?: number) {
-  if (page) query.page = page;
+  if (page) applied.page = page;
   loading.value = true;
   try {
+    const params = { ...applied };
     const [r, s, m] = await Promise.all([
-      listClasses({ ...query }),
-      getClassSummary({ ...query }),
+      listClasses(params),
+      getClassSummary(params),
       metaList.value.length ? Promise.resolve(metaList.value) : getClassMeta(),
     ]);
     rows.value = r.list || [];
@@ -868,6 +890,18 @@ async function load(page?: number) {
   } finally {
     loading.value = false;
   }
+}
+
+/**
+ * ★ 2026-10-22 批注：「点击查询，才可以按照所选内容进行查询」
+ *   → 把草稿条件提交成生效条件，再拉第一页。
+ */
+function applyQuery() {
+  applied.stage = query.stage;
+  applied.classStatus = query.classStatus;
+  applied.phaseCode = query.phaseCode;
+  applied.keyword = query.keyword;
+  load(1);
 }
 
 /** 切学段：阶段码和状态都是学段内的，必须清掉，否则会带着上一个学段的筛选去查
@@ -882,7 +916,7 @@ function reset() {
   query.classStatus = undefined;
   query.phaseCode = undefined;
   query.keyword = '';
-  load(1);
+  applyQuery();
 }
 
 /* ---------------- 详情 / 花名册 ---------------- */
@@ -1002,12 +1036,11 @@ const editStatusFrom = ref<number | null>(null);
 const editStatusOptions = computed(() => classStatusOptions(editStatusFrom.value));
 /**
  * 状态是否只读：
- *   已结业(4) 是终态；实训(5) / 待就业(6) / 已就业(7) 是系统态 ——
- *   都不能在编辑弹窗里手工改（只能由操作列三个按钮写入）。
+ *   实训(5) / 待就业(6) / 已就业(7) 是系统态 —— 不能在编辑弹窗里手工改
+ *   （只能由操作列三个按钮写入）。
+ *   ★ 2026-10-22：已结业(4) 已下线，不再有"终态只读"这条判断。
  */
-const editStatusLocked = computed(
-  () => Number(editStatusFrom.value) === 4 || isSystemClassStatus(editStatusFrom.value),
-);
+const editStatusLocked = computed(() => isSystemClassStatus(editStatusFrom.value));
 
 const formPhaseOptions = computed(() => {
   const plan = planOptionsAll.value.find((p) => p.id === formPlanId.value);

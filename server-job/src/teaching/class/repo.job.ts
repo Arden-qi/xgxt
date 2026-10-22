@@ -109,7 +109,8 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     studentCount: studentCount ?? Number(r.student_count ?? 0),
     classStatus: status,
     classStatusName: CLASS_STATUS_NAME[status] ?? '',
-    canChangeStatus: status !== CLASS_STATUS.GRADUATED,
+    // ★ 2026-10-22：已结业(4) 下线后，只有「已就业」是终态
+    canChangeStatus: status !== CLASS_STATUS.EMPLOYED,
     attendanceRate: numOrNull(r.attendance_rate),
     // 实训这张表是累计出勤率（初高才是 today_*）
     attendanceRateKind: 'total',
@@ -270,12 +271,8 @@ export const repo: ClassRepo = {
             `班级状态不可从「${CLASS_STATUS_NAME[from]}」流转为「${CLASS_STATUS_NAME[body.classStatus]}」`,
           );
         }
-        // ★ 2026-10-19：改状态挪进「编辑班级」后，保存这条路径也要补上原来
-        //   changeStatus 做的事 —— 结业写结业日期 + 记住上一个状态。
-        if (from !== body.classStatus && body.classStatus === CLASS_STATUS.GRADUATED) {
-          if (!payload.close_date) payload.close_date = now;
-          payload.prev_class_status = from;
-        }
+        // ★ 2026-10-22：已结业(4) 下线，「改成已结业自动写结业日期」的分支一并删除 ——
+        //   结业日期现在是表单里手填的字段，不再由状态变更隐式写入。
       }
       await tbl(db, 'sms_job', T, STAGE).where({ id: body.id }).update(payload);
       return { id: body.id };
@@ -398,11 +395,6 @@ export const repo: ClassRepo = {
       update_time: new Date(),
       update_by: userId,
     };
-    // 结业要写结业日期（原实现口径）
-    if (to === CLASS_STATUS.GRADUATED) {
-      patch.close_date = new Date();
-      patch.prev_class_status = from;
-    }
     await tbl(db, 'sms_job', T, STAGE).where({ id }).update(patch);
   },
 
@@ -415,7 +407,6 @@ export const repo: ClassRepo = {
     let openCount = 0;
     let closedCount = 0;
     let graduatingCount = 0;
-    let graduatedCount = 0;
     // ★ 2026-10-21：系统态计数（实训 / 待就业 / 已就业）—— 卡片里要和总数对得上
     let trainingCount = 0;
     let waitEmployCount = 0;
@@ -426,7 +417,6 @@ export const repo: ClassRepo = {
       if (s === CLASS_STATUS.OPEN) openCount++;
       else if (s === CLASS_STATUS.CLOSED) closedCount++;
       else if (s === CLASS_STATUS.GRADUATING) graduatingCount++;
-      else if (s === CLASS_STATUS.GRADUATED) graduatedCount++;
       else if (s === CLASS_STATUS.TRAINING) trainingCount++;
       else if (s === CLASS_STATUS.WAIT_EMPLOY) waitEmployCount++;
       else if (s === CLASS_STATUS.EMPLOYED) employedCount++;
@@ -438,7 +428,6 @@ export const repo: ClassRepo = {
       openCount,
       closedCount,
       graduatingCount,
-      graduatedCount,
       trainingCount,
       waitEmployCount,
       employedCount,
@@ -451,9 +440,9 @@ export const repo: ClassRepo = {
 function transitionsFrom(from: number): number[] {
   const map: Record<number, number[]> = {
     [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED],
-    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATED]: [],
+    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN],
+    // 历史状态：没有任何下一跳
+    [CLASS_STATUS.GRADUATING]: [],
     // ★ 2026-10-21 系统态：实训 → 待就业 → 已就业（只给详情页展示用，编辑弹窗禁选）
     [CLASS_STATUS.TRAINING]: [CLASS_STATUS.WAIT_EMPLOY],
     [CLASS_STATUS.WAIT_EMPLOY]: [CLASS_STATUS.EMPLOYED],

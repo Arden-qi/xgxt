@@ -157,8 +157,8 @@ export interface ClassSummary {
   total: number;
   openCount: number;
   closedCount: number;
+  /** 2026-10-19 起「待结业」已下线，恒为 0（保留字段兼容旧数据） */
   graduatingCount: number;
-  graduatedCount: number;
   /** ★ 2026-10-21：系统态计数（实训 / 待就业 / 已就业），只有实训 / 就业部会有 */
   trainingCount?: number;
   waitEmployCount?: number;
@@ -382,7 +382,6 @@ export const CLASS_STATUS_NAME: Record<number, string> = {
   1: '开放',
   2: '封班',
   3: '待结业',
-  4: '已结业',
   // ★ 2026-10-21 批注：系统态（升实训 / 升就业 / 已就业 三个动作写入）
   5: '实训',
   6: '待就业',
@@ -402,8 +401,9 @@ export function isSystemClassStatus(s: number | null | undefined): boolean {
  *   2026-10-19 批注：「待结业」删除。
  *   2026-10-21 批注：补上「实训 / 待就业 / 已就业」—— 不补就筛不到这三类班。
  *   2026-10-21 批注（第二批）：「已结业」从筛选下拉删除。
- *     → 只是筛选项不再提供；已结业(4) 仍是合法状态（列表状态列照常显示、
- *       统计卡照常计数、编辑弹窗 2→4 照常可流转），后端筛选也仍支持 status=4。
+ *   ★ 2026-10-22 批注：「班级状态没有已结业，前后端以及上方的说明全都删除已结业」
+ *     → 已结业(4) 整体下线（状态字典 / 流转表 / 统计卡 / 说明条全去掉），
+ *       封班即终态（仍可解封回开放）。
  */
 export const CLASS_STATUS_SELECTABLE = [
   { value: 1, label: '开放' },
@@ -415,19 +415,18 @@ export const CLASS_STATUS_SELECTABLE = [
 
 /**
  * 编辑班级时「班级状态」可选项：当前状态 + 允许流转到的状态（与后端同一张表）
- *   1 开放 → 1/2；2 封班 → 2/1/4；4 已结业 → 终态（只读）
- *   （3 待结业 只为兼容历史数据保留 3→4，不作为任何状态的下一跳）
+ *   1 开放 → 1/2；2 封班 → 2/1（封班即终态，可解封回开放）；3 待结业 → 终态
  *   ★ 2026-10-21：实训 / 待就业 / 已就业 是系统态 → 只回显自己，不给别的选项；
  *     弹窗里同时整条下拉禁用（见 TeachingClass.vue 的 editStatusLocked）。
+ *   ★ 2026-10-22：已结业(4) 已下线，不再有任何状态能流转到 4。
  */
 export function classStatusOptions(cur: number | null | undefined): Array<{ value: number; label: string }> {
   const c = Number(cur) || 1;
   if (isSystemClassStatus(c)) return [{ value: c, label: CLASS_STATUS_NAME[c] ?? '' }];
   const map: Record<number, number[]> = {
     1: [1, 2],
-    2: [2, 1, 4],
-    3: [3, 4],
-    4: [4],
+    2: [2, 1],
+    3: [3],
   };
   const list = map[c] || [c];
   return list.map((v) => ({ value: v, label: CLASS_STATUS_NAME[v] }));
@@ -438,7 +437,6 @@ export const CLASS_STATUS_TAG: Record<number, string> = {
   1: 'success',
   2: 'info',
   3: 'warning',
-  4: 'danger',
   5: 'warning', // 实训
   6: 'primary', // 待就业
   7: 'success', // 已就业
@@ -451,7 +449,18 @@ export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
   emp: '就业部',
 };
 
+/** 全部学段（内部 key，用于排序/类型，**不做下拉用**） */
 export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job', 'emp'];
+
+/**
+ * ★ 2026-10-22 批注：「将部门里的前后端实训都删除」
+ *   「部门」筛选只留 初高部 / 大学部 / 就业部 —— 实训(job) 与就业(emp) 在库里
+ *   是同一张表（sms_job.t_job_class），dept_code 都是 3，本来就同属就业部；
+ *   下拉里再单列一项「实训」只是重复。选中「就业部」时后端会同时查这两套
+ *   （见 server-job/src/teaching/class/service.ts#STAGE_FANOUT）。
+ *   ⚠️ CLASS_STAGES 不能直接改 —— 行的 stage 仍是 job / emp，排序与类型都靠它。
+ */
+export const CLASS_DEPT_STAGES: ClassStage[] = ['jh', 'class', 'emp'];
 
 export const DEPT_OPTIONS = [
   { value: 1, label: '初高部' },

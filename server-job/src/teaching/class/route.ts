@@ -180,6 +180,7 @@ teachingClassRouter.post(
       throw new BizError(BizCode.PARAM_ERROR, '班级名称必填');
     }
     // 状态值校验必须在入仓储前 —— 否则非法值会静默落库
+    // ★ 2026-10-22：校验走 CLASS_STATUS_NAME，已结业(4) 已从中删除 → 会自动被拦成「取值非法」
     if (b.classStatus !== undefined && b.classStatus !== null && b.classStatus !== '') {
       const st = Number(b.classStatus);
       if (!CLASS_STATUS_NAME[st]) {
@@ -216,6 +217,7 @@ teachingClassRouter.post(
     const stage = reqStage(b.stage);
     const id = requireId(b.id);
     const to = Number(b.classStatus);
+    // ★ 2026-10-22：已结业(4) 已从 CLASS_STATUS_NAME 删除，这里天然拒绝旧请求
     if (!Number.isFinite(to) || !CLASS_STATUS_NAME[to]) {
       throw new BizError(BizCode.PARAM_ERROR, '目标状态取值非法');
     }

@@ -92,6 +92,63 @@ function optStage(v: unknown): ClassStage | undefined {
 }
 
 /* ============================================================
+ * ★ 2026-10-22 批注：「部门」下拉删除「实训」，实训班并入「就业部」
+ * ------------------------------------------------------------
+ *   前端「部门」筛选只剩 初高部 / 大学部 / 就业部。
+ *   实训(job) 与就业(emp) 在库里是**同一张表**（sms_job.t_job_class），
+ *   只靠 stage_key 区分，dept_code 都是 3 —— 所以选「就业部」必须同时查这两套，
+ *   否则做了「升实训」的班在页面上就凭空消失了。
+ *   行的 stage 仍是 job / emp（操作按钮、删改、详情都要按真实 stage 走），
+ *   只是「部门」这一层的展示合并成就业部。
+ * ============================================================ */
+const STAGE_FANOUT: Record<ClassStage, ClassStage[]> = {
+  jh: ['jh'],
+  class: ['class'],
+  job: ['job'],
+  emp: ['job', 'emp'],
+};
+
+/** 把「部门选项」展开成真正要查的学段（去重、保持顺序） */
+function expandStages(stages: ClassStage[]): ClassStage[] {
+  const out: ClassStage[] = [];
+  for (const s of stages) {
+    for (const x of STAGE_FANOUT[s]) if (!out.includes(x)) out.push(x);
+  }
+  return out;
+}
+
+/** 按学段固定顺序排（初高 → 大学 → 实训 → 就业） */
+function sortByStage<T extends { stage: ClassStage }>(list: T[]): T[] {
+  return list.sort((a, b) => CLASS_STAGES.indexOf(a.stage) - CLASS_STAGES.indexOf(b.stage));
+}
+
+/**
+ * 统计卡：把「实训」那一行并进「就业部」，页面上不再出现「实训班级」卡
+ *   （部门下拉已经没有实训了，卡片再单列一行就和筛选对不上）
+ */
+function mergeJobIntoEmp(list: ClassSummary[]): ClassSummary[] {
+  const job = list.find((x) => x.stage === 'job');
+  if (!job) return list;
+  const n = (v: number | undefined) => Number(v || 0);
+  const out = list.filter((x) => x.stage !== 'job');
+  const emp = out.find((x) => x.stage === 'emp');
+  if (!emp) {
+    // 只有实训班（还没有真正的就业班）→ 用实训那条顶上，名字统一成「就业部」
+    out.push({ ...job, stage: 'emp', stageName: CLASS_STAGE_NAME.emp });
+  } else {
+    emp.total += job.total;
+    emp.openCount += job.openCount;
+    emp.closedCount += job.closedCount;
+    emp.graduatingCount += job.graduatingCount;
+    emp.studentCount += job.studentCount;
+    emp.trainingCount = n(emp.trainingCount) + n(job.trainingCount);
+    emp.waitEmployCount = n(emp.waitEmployCount) + n(job.waitEmployCount);
+    emp.employedCount = n(emp.employedCount) + n(job.employedCount);
+  }
+  return sortByStage(out);
+}
+
+/* ============================================================
  * 列表（合并 + 分页；统计与列表共用 mergedRows，保证「卡片 = 列表」）
  * ============================================================ */
 
@@ -99,14 +156,16 @@ async function mergedRows(
   q: ClassListQuery,
   user: any,
 ): Promise<{ rows: ClassRow[]; stages: ClassStage[] }> {
-  const stages: ClassStage[] = q.stage ? [q.stage] : await visibleStages(user);
+  const stages: ClassStage[] = expandStages(q.stage ? [q.stage] : await visibleStages(user));
   if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有班级信息的访问权限');
   if (q.stage) await assertStageView(user, q.stage);
 
+  // ★ 展开出来的子学段（就业部 → job + emp）不再单独判权：
+  //   两个学段用的是同一个权限码（见 CODES），父级过了就等于子级也过了。
   const parts = await Promise.all(stages.map((s) => REPOS[s].list(q, user)));
   let rows = parts.flat();
 
-  // 学段顺序固定（初高 → 大学 → 实训），再按创建时间倒序
+  // 学段顺序固定（初高 → 大学 → 实训 → 就业），再按创建时间倒序
   rows.sort((a, b) => {
     const sa = CLASS_STAGES.indexOf(a.stage);
     const sb = CLASS_STAGES.indexOf(b.stage);
@@ -135,12 +194,14 @@ export async function summaryClasses(
   q: ClassListQuery,
   user: any,
 ): Promise<ClassSummary[]> {
-  const stages: ClassStage[] = q.stage ? [q.stage] : await visibleStages(user);
+  const stages: ClassStage[] = expandStages(q.stage ? [q.stage] : await visibleStages(user));
   if (!stages.length) return [];
   if (q.stage) await assertStageView(user, q.stage);
 
   // 逐学段统计（每个仓储自己算，口径与它自己的 list 一致）
-  return Promise.all(stages.map((s) => REPOS[s].summary(q, user)));
+  const list = await Promise.all(stages.map((s) => REPOS[s].summary(q, user)));
+  // ★ 2026-10-22：「实训」不再单列一行卡片，并进「就业部」
+  return mergeJobIntoEmp(list);
 }
 
 /** 详情 */
@@ -257,8 +318,6 @@ export async function listClassOptions(user: any) {
   for (const s of stages) {
     const rows = await REPOS[s].list({ stage: s, page: 1, size: 200 }, user);
     for (const r of rows) {
-      // 已结业的班不作为「可转入」选项
-      if (r.classStatus === 4) continue;
       out.push({
         stage: r.stage,
         stageName: r.stageName,

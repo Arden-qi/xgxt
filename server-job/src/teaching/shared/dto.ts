@@ -1166,12 +1166,12 @@ export interface StudentStageMeta {
  *   ④ 结业日期 `close_date` **只有实训有**
  *
  * 【✅ 好消息：班级状态码三套完全一致】（实测 t_job_class / 两个 t_class_info）
- *   1 开放 · 2 封班 · 3 待结业 · 4 已结业  → 直接用 `ClassStatus`，不需要映射表
+ *   1 开放 · 2 封班 · 5 实训 · 6 待就业 · 7 已就业  → 直接用 `ClassStatus`，不需要映射表
+ *   （3 待结业 / 4 已结业 均已下线，见下方 CLASS_STATUS 注释）
  *
  * 【⚠️ 状态机三套不同 —— 这是本域最需要小心的地方】
  *   初高（classInfo.route.ts）有显式流转表：
- *     开放 → 开放/封班/待结业；封班 → 封班/开放/待结业；
- *     待结业 → 待结业/已结业；已结业 → （终态）
+ *     开放 → 开放/封班；封班 → 封班/开放（封班即终态）
  *   实训只有「封班/解封」两个动作，且**"开放"已废弃**（能进实训的班只会是封班）；
  *   大学原实现没有独立的状态流转接口。
  *   → 统一成同一张流转表（取初高那套，最完整），
@@ -1191,8 +1191,11 @@ export interface StudentStageMeta {
 export const CLASS_STATUS = {
   OPEN: 1,
   CLOSED: 2,
+  /**
+   * ⚠️ 历史状态，已整体下线（2026-10-22 批注：班级状态里没有「已结业」）。
+   *   只为兼容老数据的读取保留名字，**不再作为任何流转的目标**。
+   */
   GRADUATING: 3,
-  GRADUATED: 4,
   /** 实训（升实训成功后由系统写入） */
   TRAINING: 5,
   /** 待就业（升就业成功后由系统写入） */
@@ -1205,7 +1208,6 @@ export const CLASS_STATUS_NAME: Record<number, string> = {
   [CLASS_STATUS.OPEN]: '开放',
   [CLASS_STATUS.CLOSED]: '封班',
   [CLASS_STATUS.GRADUATING]: '待结业',
-  [CLASS_STATUS.GRADUATED]: '已结业',
   [CLASS_STATUS.TRAINING]: '实训',
   [CLASS_STATUS.WAIT_EMPLOY]: '待就业',
   [CLASS_STATUS.EMPLOYED]: '已就业',
@@ -1225,20 +1227,21 @@ export function isSystemClassStatus(s: number): boolean {
 
 /**
  * ★ 统一班级状态流转表
- *   已结业 / 已就业是终态，不可回退 —— 撤销结业属于「结业撤销」专用动作，不走这里。
+ *   已就业是终态，不可回退。
  *
- * 2026-10-19 批注：「待结业」这个状态删除（页面下拉不再出现），
- *   封班之后直接进「已结业」。为兼容历史数据，3→已结业 的流转仍保留，
- *   但**不再作为任何状态的下一跳目标**（新数据不可能变成 3）。
+ * 2026-10-19 批注：「待结业」这个状态删除（页面下拉不再出现）。
+ * ★ 2026-10-22 批注：「班级状态没有已结业」→ 已结业(4) 整体下线：
+ *   状态字典 / 状态名 / 流转表 / 统计卡 / 编辑弹窗全部去掉，**封班即终态**
+ *   （封班后仍可解封回开放）。
  *
  * ★ 2026-10-21：系统态之间只留一条单向链 实训 → 待就业 → 已就业，
  *   保证「改状态」这条老路径不会把 已就业 拉回 待就业（已就业是终态）。
  */
 export const CLASS_STATUS_TRANSITIONS: Record<number, number[]> = {
   [CLASS_STATUS.OPEN]: [CLASS_STATUS.OPEN, CLASS_STATUS.CLOSED],
-  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
-  [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATING, CLASS_STATUS.GRADUATED],
-  [CLASS_STATUS.GRADUATED]: [CLASS_STATUS.GRADUATED],
+  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN],
+  // 历史状态：不再有任何下一跳
+  [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATING],
   [CLASS_STATUS.TRAINING]: [CLASS_STATUS.TRAINING, CLASS_STATUS.WAIT_EMPLOY],
   [CLASS_STATUS.WAIT_EMPLOY]: [CLASS_STATUS.WAIT_EMPLOY, CLASS_STATUS.EMPLOYED],
   [CLASS_STATUS.EMPLOYED]: [CLASS_STATUS.EMPLOYED],
@@ -1301,7 +1304,7 @@ export interface ClassRow {
    */
   studentCount: number;
 
-  /** 1 开放 / 2 封班 / 3 待结业 / 4 已结业（三套一致） */
+  /** 1 开放 / 2 封班 / 5 实训 / 6 待就业 / 7 已就业（三套一致） */
   classStatus: number;
   classStatusName: string;
   /** 由 classStatus + 流转表推出：这个班现在还能改状态吗 */
@@ -1363,7 +1366,6 @@ export interface ClassSummary {
   closedCount: number;
   /** 2026-10-19 起「待结业」已下线，恒为 0（保留字段兼容前端旧代码） */
   graduatingCount: number;
-  graduatedCount: number;
   /** ★ 2026-10-21：系统态计数（只有实训 / 就业部会有；其它学段恒 0） */
   trainingCount?: number;
   waitEmployCount?: number;
