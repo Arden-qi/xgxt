@@ -70,16 +70,16 @@ check('入住时同步', (repo.match(/syncStudentDorm\(/g) || []).length >= 3);
 check('退宿时清空同步', /async checkout[\s\S]{0,1200}syncStudentDorm/.test(repo));
 check('审批通过后同步', /applyChangeOnApproved[\s\S]{0,3000}syncStudentDorm/.test(repo));
 
-// 编辑弹窗：宿舍下拉必须来自「宿舍管理」合并接口；当前宿舍不在选项里时补一条
+// 编辑弹窗：宿舍号/床位号改为只读展示（宿舍只能走「宿舍管理」办理）
 const form = read('web-job/src/teaching/views/TeachingStudent.vue');
 check(
-  '编辑弹窗宿舍下拉能兜底显示宿舍号',
-  form.includes('formDormOptions') && form.includes('当前宿舍（宿舍管理）'),
+  '宿舍号/床位号只读展示',
+  form.includes('label="宿舍号"') &&
+    form.includes('label="床位号"') &&
+    form.includes('placeholder="办理入住后自动带出"') &&
+    !form.includes('formDormOptions'),
 );
-check(
-  '宿舍下拉数据源是合并宿舍接口',
-  form.includes("from '@/teaching/api/dorm'") && form.includes('loadFormBeds'),
-);
+check('床位中文标签按需拉取', form.includes('formBedLabel') && form.includes('getDormBeds'));
 
 console.log('\n▶ 运行时检查');
 const token = await login('sunmin');
@@ -91,17 +91,18 @@ let studentNo = '';
 let assigned = false;
 
 try {
-  // 先找空床位，再按房间性别挑学生（男寝只能填男生）
+  // 先挑学生，再按「学生班级可用」找空床位（别的开放班是锁定的）
+  const cands = await req('GET', '/api/teaching/dorm/candidates?stage=jh', { token });
+  const stu = (cands.body?.data || []).find((c) => !c.dormNo && c.gender === 1);
+  check('找到未入住学生', !!stu, stu ? `${stu.studentName}(${stu.studentNo})` : '无');
+
   const rooms = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token });
-  const room = (rooms.body?.data || []).find((r) => (r.freeBeds || []).length > 0);
+  const room = (rooms.body?.data || []).find(
+    (r) => (r.freeBeds || []).length > 0 && (!r.locked || r.assignedTo === stu?.className),
+  );
   dormId = room?.roomId || '';
   bedId = room?.freeBeds?.[0]?.bedId || '';
   check('找到本班可用空床位', !!bedId, room ? `${room.building}${room.room} ${room.freeBeds[0].bedLabel}` : '无');
-
-  const wantGender = room?.category === 2 ? 2 : 1;
-  const cands = await req('GET', '/api/teaching/dorm/candidates?stage=jh', { token });
-  const stu = (cands.body?.data || []).find((c) => !c.dormNo && c.gender === wantGender);
-  check('找到未入住学生', !!stu, stu ? `${stu.studentName}(${stu.studentNo})` : '无');
 
   if (stu && bedId) {
     studentNo = stu.studentNo;
