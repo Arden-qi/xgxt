@@ -243,6 +243,8 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
 import { consultList, consultReceive, consultReject, consultReceivePlan } from '@/class/api';
 import type { ConsultItem } from '@/class/api/types';
 import { useDictStore } from '@/class/stores/dict';
+// ★ 2026-10-22：学历选项与学生档案统一（初中/高中/专科/本科/研究生），收口在 shared-types
+import { EDUCATION_OPTIONS } from 'shared-types';
 import BedSelect, { type BedPick } from '@/class/components/BedSelect.vue';
 
 /**
@@ -285,7 +287,7 @@ const tablePage = ref(1);
 const tableSize = ref(10);
 const tableFilters = reactive<{ keyword: string; applyStatus: number | null }>({ keyword: '', applyStatus: null });
 
-const EDUCATIONS = ['初中', '高中', '中专', '大专', '本科在读', '本科', '硕士'];
+const EDUCATIONS = EDUCATION_OPTIONS;
 
 async function loadKpi(): Promise<void> {
   const [p, r, j] = await Promise.all([

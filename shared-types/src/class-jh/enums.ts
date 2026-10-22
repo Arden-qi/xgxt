@@ -12,14 +12,12 @@ export enum Gender {
   FEMALE = 2,  // 女
 }
 
-/** 部门 */
+/** 部门（★ 2026-10-22：撤销「初中部/高中部」拆分，恢复三项） */
 export enum DeptCode {
   JUNIOR_SENIOR = 1,  // 初高部
   UNIVERSITY = 2,     // 大学部
   /** ★ 2026-10-19 新增：就业部（独立学段「就业」） */
   EMPLOYMENT = 3,     // 就业部
-  /** ★ 2026-10-20 新增：高中部（4；3 已被就业部占用） */
-  SENIOR = 4,         // 高中部
 }
 
 /** 学生状态（全系统最重要的字段） */
@@ -285,7 +283,6 @@ export const DEPT_NAME: Record<number, string> = {
   [DeptCode.JUNIOR_SENIOR]: '初高部',
   [DeptCode.UNIVERSITY]: '大学部',
   [DeptCode.EMPLOYMENT]: '就业部',
-  [DeptCode.SENIOR]: '高中部',
 };
 
 export const STUDENT_STATUS_NAME: Record<number, string> = {

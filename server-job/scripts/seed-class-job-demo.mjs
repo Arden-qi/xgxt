@@ -229,6 +229,10 @@ async function seedUniv(head) {
       {
         id: c.id,
         class_name: c.name,
+        /* ★ 2026-10-22：班级编号必填 —— 学号按「LZ + 班级编号 + 序号」生成，
+           演示班没有编号时，页面「新增学生」会被直接拦住。
+           这里直接用班名当编号（U2601…），与其它种子（Q1/J101/T101）不冲突。 */
+        class_code: c.name,
         dept_code: DEPT_UNIV,
         stage: c.stage,
         head_teacher_id: head.id,

@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { BizCode, STAGE_NAME, DEPT_NAME, FLOW_TYPE_NAME } from 'shared-types/class-jh';
+import { BizCode, STAGE_NAME, DEPT_NAME, FLOW_TYPE_NAME, RoleCode } from 'shared-types/class-jh';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 // ★ 2026-10-19 就业部接入阶段方案：判断阶段是否被「就业部 / 实训」的班级或学生占用，
@@ -26,7 +26,7 @@ import { nameOf } from '../utils/enumName';
 import { refreshStageDict } from '../utils/stageDict';
 import { getAllSettings, SETTING_DEFAULTS } from '../utils/setting';
 import { validate } from '../middleware/validate';
-import { checkPermission } from '../middleware/auth';
+import { checkPermission, checkRole } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
 import {
   listSchemes,
@@ -575,6 +575,8 @@ const schemeSaveSchema = z.object({
 
 stageSchemeRouter.get(
   '/list',
+  // ★ 2026-10-22：阶段方案迁到「班级管理」后只给校长 / 学管主任（系统管理员放行）
+  checkRole(RoleCode.PRINCIPAL, RoleCode.QUALITY_MGR, RoleCode.ADMIN),
   checkPermission('class:setting:view'),
   validate(z.object({ deptCode: z.coerce.number().int().optional() })),
   wrap(async (req, res) => {
@@ -585,6 +587,7 @@ stageSchemeRouter.get(
 
 stageSchemeRouter.post(
   '/add',
+  checkRole(RoleCode.PRINCIPAL, RoleCode.QUALITY_MGR, RoleCode.ADMIN),
   checkPermission('class:setting:edit'),
   validate(schemeSaveSchema),
   wrap(async (req, res) => {
@@ -607,6 +610,7 @@ stageSchemeRouter.post(
 
 stageSchemeRouter.put(
   '/update/:id',
+  checkRole(RoleCode.PRINCIPAL, RoleCode.QUALITY_MGR, RoleCode.ADMIN),
   checkPermission('class:setting:edit'),
   validate(schemeSaveSchema),
   wrap(async (req, res) => {
@@ -633,6 +637,7 @@ stageSchemeRouter.put(
 
 stageSchemeRouter.delete(
   '/delete/:id',
+  checkRole(RoleCode.PRINCIPAL, RoleCode.QUALITY_MGR, RoleCode.ADMIN),
   checkPermission('class:setting:edit'),
   wrap(async (req, res) => {
     const { id } = req.params;
