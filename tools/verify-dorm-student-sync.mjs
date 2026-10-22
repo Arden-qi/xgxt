@@ -70,11 +70,15 @@ check('入住时同步', (repo.match(/syncStudentDorm\(/g) || []).length >= 3);
 check('退宿时清空同步', /async checkout[\s\S]{0,1200}syncStudentDorm/.test(repo));
 check('审批通过后同步', /applyChangeOnApproved[\s\S]{0,3000}syncStudentDorm/.test(repo));
 
-// 编辑弹窗：当前宿舍不在下拉选项里时要补一条，否则 Select 会显示裸 UUID
+// 编辑弹窗：宿舍下拉必须来自「宿舍管理」合并接口；当前宿舍不在选项里时补一条
 const form = read('web-job/src/teaching/views/TeachingStudent.vue');
 check(
   '编辑弹窗宿舍下拉能兜底显示宿舍号',
   form.includes('formDormOptions') && form.includes('当前宿舍（宿舍管理）'),
+);
+check(
+  '宿舍下拉数据源是合并宿舍接口',
+  form.includes("from '@/teaching/api/dorm'") && form.includes('loadFormBeds'),
 );
 
 console.log('\n▶ 运行时检查');

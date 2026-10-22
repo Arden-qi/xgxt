@@ -845,7 +845,13 @@ import { DEPT_NAME, DeptCode, StudentStatus, STUDENT_STATUS_NAME } from 'shared-
 import type { DormRoomItem } from 'shared-types/edu';
 import { isReadOnlyUser } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
-import { fetchDormList } from '@/api/edu/dorm';
+/**
+ * ★ 2026-10-22：宿舍下拉改用「宿舍管理」的合并房间接口
+ *   原来是 /api/edu/dorm/list（旧教务宿舍，班主任还没有 edu:dorm:view → 403），
+ *   选项为空时宿舍号既显示不了、也改不了。
+ */
+import { listDorms, getDormBeds } from '@/teaching/api/dorm';
+import type { DormBedRow, DormStage } from '@/teaching/api/dorm';
 import {
   listStudents,
   getStudentDetail,
@@ -1226,25 +1232,44 @@ function onFormDeptChange(v: number | undefined) {
 const dormLoading = ref(false);
 const dormRooms = ref<DormRoomItem[]>([]);
 
-async function loadDormRooms() {
+async function loadDormRooms(stage?: StudentStage) {
   dormLoading.value = true;
   try {
-    // ⚠️ /api/edu/dorm/list 的 size 上限是 200（zod 校验），一次拉 500 会被
-    //   「参数 size 超出允许范围」400 拒掉 —— 这里按 200/页自动翻页拉全量
-    const out: DormRoomItem[] = [];
-    const size = 200;
-    const first = await fetchDormList({ page: 1, size });
-    out.push(...(first.list || []));
-    const pages = Math.ceil((first.total || 0) / size);
-    for (let p = 2; p <= Math.min(pages, 10); p++) {
-      const d = await fetchDormList({ page: p, size });
-      out.push(...(d.list || []));
-    }
-    dormRooms.value = out;
+    const st = (stage || form.stage || 'jh') as DormStage;
+    const res = await listDorms({ stage: st, page: 1, size: 100 });
+    dormRooms.value = (res.list || []).map(
+      (r) =>
+        ({
+          roomId: r.dormId,
+          category: r.dormType as never,
+          categoryName: r.dormTypeName,
+          building: r.buildingName,
+          room: r.roomNo,
+          capacity: r.bedCount,
+          occupied: r.occupiedCount,
+          // 床位按需再拉（见 loadFormBeds），列表阶段不带
+          beds: [],
+          source: 'job',
+        }) as DormRoomItem,
+    );
   } catch {
     dormRooms.value = [];
   } finally {
     dormLoading.value = false;
+  }
+}
+
+/** 当前所选宿舍的床位（编辑时按需拉取，用于「床位号」下拉） */
+const formBedList = ref<DormBedRow[]>([]);
+
+async function loadFormBeds(roomId: string) {
+  formBedList.value = [];
+  if (!roomId || !dormRooms.value.some((r) => r.roomId === roomId)) return;
+  try {
+    const r = await getDormBeds((form.stage || 'jh') as DormStage, roomId);
+    formBedList.value = r.beds || [];
+  } catch {
+    formBedList.value = [];
   }
 }
 
@@ -1271,13 +1296,12 @@ const formDormOptions = computed(() => {
   return list;
 });
 
-/** 床位下拉：取所选宿舍的床位；老数据只有床位号没匹配到宿舍时，兜底展示原值 */
+/** 床位下拉：优先用当前宿舍拉到的床位；老数据只有床位号没匹配到宿舍时，兜底展示原值 */
 const formBedOptions = computed(() => {
-  const room = dormRooms.value.find((r) => r.roomId === form.dormId);
-  if (room) {
-    return room.beds.map((b) => ({
+  if (formBedList.value.length) {
+    return formBedList.value.map((b) => ({
       value: b.bedNo,
-      label: b.studentName ? `${b.bedNo}（${b.studentName}）` : b.bedNo,
+      label: b.studentName ? `${b.bedLabel || b.bedNo}（${b.studentName}）` : b.bedLabel || b.bedNo,
     }));
   }
   return form.bedNo ? [{ value: form.bedNo, label: form.bedNo }] : [];
@@ -1287,15 +1311,17 @@ function onFormDormChange(roomId: string) {
   if (!roomId) {
     form.dormNo = '';
     form.bedNo = '';
+    formBedList.value = [];
     return;
   }
   const r = dormRooms.value.find((x) => x.roomId === roomId);
-  // 当前宿舍来自「宿舍管理」，不在旧教务宿舍列表里 → dormNo 已经是对的，别清空
+  // 当前宿舍来自「宿舍管理」，不在选项里 → dormNo 已经是对的，别清空
   if (!r) return;
   // ★ 2026-10-20：清空宿舍时要连 dorm_no 一起清（原来只清床位号，导致
   //   「移出宿舍」实际上把旧房号又存回去，也让保存前的变更清单漏掉这一项）
   form.dormNo = r.building ? `${r.building}-${r.room}` : r.room;
   form.bedNo = '';
+  void loadFormBeds(roomId);
 }
 
 /**
@@ -1389,6 +1415,8 @@ function openCreate() {
   formAge.value = null;
   editOrigin.value = null;
   editVisible.value = true;
+  // 宿舍下拉按当前学段重新拉（班主任没有 edu:dorm:view，只能走合并宿舍接口）
+  void loadDormRooms(st);
 }
 
 async function openEdit(row: StudentRow) {
@@ -1431,6 +1459,9 @@ async function openEdit(row: StudentRow) {
   // ★ 2026-10-20：留一份原始快照，保存时用它算「改了哪些内容」
   editOrigin.value = { ...form };
   editVisible.value = true;
+  // 宿舍下拉 + 当前宿舍的床位（编辑时要能改宿舍号/床位号）
+  await loadDormRooms(form.stage);
+  void loadFormBeds(form.dormId);
 }
 
 function onFormClassChange(id: string) {
@@ -1805,7 +1836,6 @@ async function loadAux() {
 onMounted(async () => {
   await loadAux();
   // 宿舍号/床位号下拉的数据源（宿舍管理）；失败不阻塞页面
-  loadDormRooms();
   await load(1);
 });
 
