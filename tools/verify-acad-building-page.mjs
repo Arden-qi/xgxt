@@ -77,7 +77,11 @@ check('pagePermissions 注册 classjh:building:view', perms.includes("code: 'cla
 check('pageRegistry 注册 /class-jh/building', registry.includes("path: '/class-jh/building'") && registry.includes('classjh:building:view'));
 check('CLASS_JH_ACAD_PAGES 含 classjh:building:view', /CLASS_JH_ACAD_PAGES[\s\S]{0,300}classjh:building:view/.test(source));
 check('R08 台账 KEEP 含 /class-jh/building', /KEEP\s*=\s*\[[^\]]*'\/class-jh\/building'/.test(ledger));
-check('系统设置页复用公共面板', setting.includes('BuildingSettingPanel') && !setting.includes('saveDormBuilding'));
+// ★ 2026-10-22：楼栋设置已从「系统设置」下线（搬到宿舍管理），这里断言真的没了
+check(
+  '系统设置已移除楼栋设置页签',
+  !/<el-tab-pane[^>]*label="楼栋设置"/.test(setting) && !/^import BuildingSettingPanel/m.test(setting),
+);
 
 // ★ 2026-10-22：楼栋设置搬进「宿舍管理」成为子页签（排在申请审批后面）
 const teachingDorm = read('web-job/src/teaching/views/TeachingDorm.vue');
