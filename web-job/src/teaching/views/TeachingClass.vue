@@ -275,13 +275,10 @@
             </el-form-item>
           </el-col>
           <!-- ★ 2026-10-21 用户口径：班级编号三部门统一（初高部/大学部/就业部），必填 -->
+          <!-- ★ 2026-10-22 用户口径：去掉「生成」按钮，一律由相关人员手工填写 -->
           <el-col :span="8">
             <el-form-item label="班级编号" prop="classCode">
-              <el-input v-model="form.classCode" maxlength="32" placeholder="Q17/J101/T101">
-                <template v-if="canGenCode" #append>
-                  <el-link type="primary" @click="doGenCode">生成</el-link>
-                </template>
-              </el-input>
+              <el-input v-model="form.classCode" maxlength="32" placeholder="Q17/J101/T101" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -697,7 +694,6 @@ import {
   getClassMeta,
   getClassSummary,
   getSchemeOptions,
-  genClassCode,
   listClassHandovers,
   doClassHandover,
   upgradeClassToTraining,
@@ -767,13 +763,6 @@ const hasClassCodeCol = computed(() =>
 const hasCloseDateCol = computed(() =>
   query.stage ? !!curMeta.value?.hasCloseDate : metaList.value.some((m) => m.hasCloseDate),
 );
-
-/**
- * ★ 2026-10-21：编号「生成」按钮只对实训/就业部有
- *   生成器按实训的 SX+年份 规则出号（repo.job / repo.emp），初高和大学没有这套规则，
- *   所以只保留输入框、不给生成按钮 —— 不要造一个用了就出错的按钮。
- */
-const canGenCode = computed(() => form.stage === 'job' || form.stage === 'emp');
 
 /**
  * ★ 出勤率列头必须随口径变：初高是「今日出勤率」，大学/实训是「累计出勤率」。
@@ -1148,12 +1137,6 @@ async function openEdit(row: ClassRow) {
 function onFormStageChange() {
   const keep = { id: form.id, className: form.className };
   Object.assign(form, emptyForm(form.stage), keep);
-}
-
-async function doGenCode() {
-  const r = await genClassCode(form.stage);
-  if (r?.classCode) form.classCode = r.classCode;
-  else ElMessage.info('该部门没有自动生成规则（只有实训/就业部有），请手工填写');
 }
 
 async function doSave() {
