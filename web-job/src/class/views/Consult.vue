@@ -159,8 +159,9 @@
       </el-form-item>
       <el-row :gutter="16">
         <el-col :span="12">
+          <!-- ★ 2026-10-22：学号由系统按「LZ+班级编号+序号」生成，接收时不再手填 -->
           <el-form-item label="学号">
-            <el-input v-model="receiveForm.studentNo" placeholder="留空则由系统生成" />
+            <el-input v-model="receiveForm.studentNo" disabled placeholder="按「LZ+班级编号+序号」自动生成" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
@@ -239,7 +240,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { Search } from '@element-plus/icons-vue';
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
-import { consultList, consultReceive, consultReject } from '@/class/api';
+import { consultList, consultReceive, consultReject, consultReceivePlan } from '@/class/api';
 import type { ConsultItem } from '@/class/api/types';
 import { useDictStore } from '@/class/stores/dict';
 import BedSelect, { type BedPick } from '@/class/components/BedSelect.vue';
@@ -369,11 +370,26 @@ function openReceive(row: ConsultItem): void {
   receiveForm.parentPhone = row.parentPhone || '';
   receiveForm.education = row.education;
   receiveForm.enrollDate = null;
-  // 初高接收后默认「正式在读」（与原「分班即入班」的口径一致）；大学部维持「试学中」
-  receiveForm.studentStatus = row.targetIsJh ? 5 : 3;
+  /**
+   * ★ 2026-10-20：学生状态由「钱交到哪一步」决定，不再按学段猜。
+   *   先用「试学中」兜底，再问咨询侧真实缴费进度校正：
+   *     只交试学费 → 试学中(3)；学费等全款已到账 → 正式在读(5)
+   *   （后端接收时也会按同一份判断再校正一次，这里只是让弹窗默认值正确）
+   */
+  receiveForm.studentStatus = 3;
   receiveForm.remark = row.remark || '';
   dormPick.value = { dormId: null, dormNo: null, bedNo: null };
   receiveVisible.value = true;
+
+  consultReceivePlan(row.id)
+    .then((p) => {
+      // 弹窗可能已切换/关闭，别把旧结果写进新弹窗
+      if (activeConsult.value?.id !== row.id) return;
+      if (p?.studentStatus) receiveForm.studentStatus = Number(p.studentStatus);
+    })
+    .catch(() => {
+      /* 咨询侧不可用：保持兜底值，不打断接收 */
+    });
 }
 
 async function submitReceive(): Promise<void> {

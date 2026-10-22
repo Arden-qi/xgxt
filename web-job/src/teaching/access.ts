@@ -90,10 +90,9 @@ export const STAGE_ACCESS = {
   student: {
     jh: { code: 'classjh:student:view', path: null },
     class: { code: 'class:student:view', path: null },
-    job: { code: 'job:empArchive:view', path: '/archive/basic-info' },
-    // ★ 2026-10-19：就业部（独立学段，沿用就业模块的档案权限）
+    // ★ 2026-10-21：学生档案删掉「就业」「教务」两个学段，只留就业部
+    //   （就业部的数据 = sms_job 里 dept_code=3 的学生，沿用就业模块的档案权限）
     emp: { code: 'job:empArchive:view', path: null },
-    edu: { code: 'edu:student:view', path: '/edu/student' },
   },
   class: {
     jh: { code: 'classjh:classInfo:view', path: null },

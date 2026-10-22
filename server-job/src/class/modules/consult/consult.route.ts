@@ -6,7 +6,9 @@ import { TransferType } from 'shared-types';
 import { db } from '../../db';
 import { Errors, ok, pageData } from '../../http/response';
 import { pageQuerySchema, q, validate } from '../../lib/validate';
-import { baseInsert, baseUpdate, maxStudentNo, notDeleted, paginate } from '../../lib/repo';
+import { baseInsert, baseUpdate, notDeleted, paginate } from '../../lib/repo';
+// ★ 2026-10-22：学号统一按「LZ+班级编号+序号」生成（初高/大学两个接收入口共用）
+import { nextStudentNoForClass } from '../../../teaching/shared/studentNo';
 import { assertClassAccess } from '../../middleware/dataScope';
 import { requirePerm } from '../../lib/permGuard';
 import { isFullAccess } from '../../lib/authUser';
@@ -26,6 +28,10 @@ import {
 import classSync from '../../../utils/classSync';
 // ★ 2026-10-19：判断目标班到底在哪个库（初高的班只在 sms_class_jh 里）
 import { db as jhDb } from '../../../class-jh/utils/db';
+// ★ 2026-10-20：接收后要回写咨询侧状态（班主任 token 在咨询侧不认，走内部令牌通道）
+import { consultClient } from '../../lib/consultClient';
+// ★ 2026-10-22 方案A：建档生成学号后回填财务单据并重推缴费台账（同进程直调，非阻断）
+import { syncStudentNoFromTeaching } from '../../../finance/services/student-no-sync.service';
 
 /**
  * 咨询推送（需求 v1.2）
@@ -266,6 +272,8 @@ consultRouter.post(
     let inserted = 0;
     let skipped = 0;
     let reopened = 0;
+    /** ★ 2026-10-20 分班即入班：还没建档的单子改派到别的班（原地更新意向班级） */
+    let reassigned = 0;
 
     for (const it of b.items) {
       const dup = (await notDeleted(PUSH())
@@ -315,6 +323,29 @@ consultRouter.post(
           reopened += 1;
           continue;
         }
+
+        /**
+         * ★ 2026-10-20 分班即入班后新增：待建档(1) 期间允许改派班级
+         *
+         *   合并后 pending 只代表「推送了还没建学籍」的过渡态。老师这时如果
+         *   重新选了一个班，必须把意向班级改掉 —— 否则 auto-receive 会按旧
+         *   班级建档，学生被分到没人选的那个班。
+         */
+        if (Number(dup.apply_status) === ConsultStatus.PENDING && it.intendClassId
+          && it.intendClassId !== dup.intend_class_id) {
+          await PUSH()
+            .where({ id: dup.id })
+            .update({
+              intend_class_id: it.intendClassId,
+              intend_class_name: it.intendClassName ?? null,
+              intend_dept_code: it.intendDeptCode ?? dup.intend_dept_code ?? null,
+              intend_stage: it.intendStage ?? dup.intend_stage ?? null,
+              update_time: t,
+            } as never);
+          reassigned += 1;
+          continue;
+        }
+
         skipped += 1;
         continue;
       }
@@ -348,8 +379,8 @@ consultRouter.post(
 
     return ok(
       res,
-      { inserted, skipped, reopened },
-      `已接收咨询推送 ${inserted} 条，重新激活驳回单 ${reopened} 条，跳过重复 ${skipped} 条`,
+      { inserted, skipped, reopened, reassigned },
+      `已接收咨询推送 ${inserted} 条，重新激活驳回单 ${reopened} 条，改派 ${reassigned} 条，跳过重复 ${skipped} 条`,
     );
   }),
 );
@@ -399,15 +430,8 @@ consultRouter.get(
 
 /* ------------------------------ 班主任接收并建档 ------------------------------ */
 
-function buildStudentNo(seq: number): string {
-  return `S${new Date().getFullYear()}${String(seq).padStart(4, '0')}`;
-}
-
-function seqOfStudentNo(no: string | null | undefined): number {
-  if (!no) return 0;
-  const m = /(\d{4})$/.exec(no);
-  return m ? Number(m[1]) : 0;
-}
+// ★ 2026-10-22：学号改由 teaching/shared/studentNo 统一生成（LZ+班级编号+序号），
+//   原来的 S+年份+4位流水（buildStudentNo/seqOfStudentNo）已停用并删除。
 
 const receiveSchema = z.object({
   id: z.string().min(1, '缺少咨询单ID'),
@@ -442,13 +466,64 @@ const receiveSchema = z.object({
  *     responses:
  *       200: { description: 接收成功 }
  */
-consultRouter.post(
-  '/receive',
-  // ★ 2026-10-06：改用审批类资源码 —— 学管主任（审批人）必须能接收，
-  //   而他在 student 写白名单里已被移除，挂 student:ADD 会把他误拦。
-  requirePerm('consultApprove', PermAction.APPROVE),
-  validate({ body: receiveSchema }),
-  wrap(async (req, res) => {
+/**
+ * ★ 2026-10-20：接收建档逻辑抽成函数，供两个入口复用
+ *   ① POST /receive        —— 班主任点「接收」（要权限校验）
+ *   ② POST /auto-receive   —— 咨询侧直接入班（内部调用，跳过权限校验；存量/兼容用）
+ *
+ * 【两个学段统一口径（用户 2026-10-20）】
+ *   咨询侧推送后只停在「待接收」，班主任点「接收」这一刻做两件事：
+ *     1. 建档（初高 → sms_class_jh；大学部 → sms_class）
+ *     2. **回写咨询侧状态**（待分班 4 → 试学中 5 / 正式在读 7，看钱交到哪一步）
+ *   所以本函数在接收前后各问一次咨询侧：
+ *     · 建档前 `receive-plan` → 学籍该落「试学中」还是「正式在读」
+ *     · 建档后 `receive-ack`  → 把咨询状态推进掉（失败只记日志，不影响已建的学籍）
+ */
+
+/** 问咨询侧：这个学生收进来该是什么学籍状态（只读，失败返回 null 由调用方给默认值） */
+async function consultReceivePlan(consultNo: string): Promise<number | null> {
+  const r = await consultClient.receivePlan(consultNo);
+  if (!r.ok) {
+    console.warn(`[consult receive] 取学籍落点失败（按试学中处理）：${r.message}`);
+    return null;
+  }
+  const v = Number((r.data as Record<string, unknown>)?.studentStatus);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/**
+ * 建档成功后回写咨询侧状态（幂等；失败只记日志——人已经入班了，不能因此回滚）
+ *
+ * ★ 2026-10-22 增加 `studentNo`：把刚生成的学号一并回写咨询学生表。
+ *   不回写的话，咨询学生表永远没有学号，后续「补费」建单时会走
+ *   `stu.student_no || tempStudentNo(id)` 兜出 `ZX...` 临时号，
+ *   于是同一学生的补费单学号和已入班单据不一致，补费单还推不进教学侧台账。
+ */
+async function consultReceiveAck(
+  consultNo: string,
+  className: string | null,
+  operatorName: string,
+  operatorTitle = '班主任',
+  studentNo?: string,
+): Promise<void> {
+  if (!consultNo) return;
+  const r = await consultClient.receiveAck({
+    consultNo,
+    className,
+    operatorName,
+    operatorTitle,
+    studentNo: studentNo || undefined,
+  });
+  if (!r.ok) {
+    console.warn(`[consult receive] 回写咨询状态失败（${consultNo}）：${r.message}`);
+  }
+}
+
+async function doReceive(
+  req: any,
+  res: any,
+  opts: { internal?: boolean } = {},
+): Promise<any> {
     const user = req.user!;
     const b = req.body as z.infer<typeof receiveSchema>;
 
@@ -463,8 +538,34 @@ consultRouter.post(
       throw Errors.param('该咨询单已驳回，不能直接接收');
     }
 
+    /**
+     * ★ 2026-10-22 方案A：把刚生成的学号回填到财务单据（非阻断）
+     *
+     * 财务缴费单的 student_id 存的是「咨询学生 id」，与教学库学生 id 不是一套，
+     * 学号是两边唯一关联键。不回填会断两件事：
+     *   ① 缴费单/账单学号永远为空，按学号对不了账
+     *   ② 财务推缴费台账前要用学号回查教学学生，为空直接跳过 → 这张单永远进不了台账
+     *
+     * ⚠️ 失败只记日志：学籍建档不能因为财务侧问题回滚。
+     */
+    const syncFinanceStudentNo = async (no: string): Promise<void> => {
+      const consultNo = String(push.consult_no || '');
+      if (!consultNo || !no) return;
+      try {
+        const r = await syncStudentNoFromTeaching(consultNo, no);
+        // eslint-disable-next-line no-console
+        console.log(
+          `[教学→财务] 学号 ${no}（咨询单 ${consultNo}）回填：缴费单 ${r.feeUpdated} 条 / 账单 ${r.billUpdated} 条 / 重推台账 ${r.pushed} 条`,
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[教学→财务] 学号回填失败（不影响建档）：${(e as Error).message}`);
+      }
+    };
+
     // ★ 2026-10-06：接收权限 = 本班班主任 / 校长 / 学管（用户拍板）
-    if (!canHandlePush(user, push)) {
+    // ★ 2026-10-20：分班即入班走内部入口时，操作人是咨询老师，不做班主任归属校验
+    if (!opts.internal && !canHandlePush(user, push)) {
       throw Errors.noOperationPermission('只有该班班主任、校长或学管可以接收学员');
     }
 
@@ -476,7 +577,9 @@ consultRouter.post(
     if (!classId) {
       throw Errors.param('该推送单未指定接受班级，请让咨询 / 教学管理（初高）重新分班后再接收');
     }
-    assertClassAccess(user, classId, '该班级');
+    // ★ 2026-10-20：内部入口（分班即入班）不做班级可见范围校验 ——
+    //   班级已经在咨询侧选定，这里只执行建档
+    if (!opts.internal) assertClassAccess(user, classId, '该班级');
 
     /**
      * ★ 2026-10-19：目标班在【初高】
@@ -491,6 +594,13 @@ consultRouter.post(
      *      不一致时（例如初高部的学生被放到大学班）会把单子导错库 →
      *      「目标班级不存在」。班的归属才是权威。
      */
+    /**
+     * ★ 2026-10-20：接收后学籍落「试学中」还是「正式在读」，由咨询侧按缴费情况回答
+     *   （钱和费用单都在咨询库，班级侧看不到；口径与「补费转正」同源）
+     *   拿不到就返回 null，建档时按各库默认值处理，不影响接收动作本身。
+     */
+    const planStatus = await consultReceivePlan(String(push.consult_no || ''));
+
     const jhCls = (await jhDb('t_class_info')
       .where({ id: classId, is_deleted: 0 })
       .first()) as Record<string, unknown> | undefined;
@@ -508,10 +618,9 @@ consultRouter.post(
         address: push.home_address ?? null,
         classId,
         remark: b.remark ?? push.remark ?? null,
-        studentNo: b.studentNo ?? null,
         education: b.education ?? push.education ?? null,
         enrollDate: b.enrollDate ?? null,
-        studentStatus: b.studentStatus ?? null,
+        studentStatus: b.studentStatus ?? planStatus ?? null,
       });
       if (!r.ok) throw Errors.param(`接收失败：${r.message}`);
 
@@ -530,6 +639,18 @@ consultRouter.post(
           student_no: sno,
           ...baseUpdate(user),
         });
+
+      /* ★ 2026-10-20：初高建档成功后回写咨询侧状态（待分班 → 试学中 / 正式在读） */
+      await consultReceiveAck(
+        String(push.consult_no || ''),
+        (push.intend_class_name as string) ?? null,
+        user.userName,
+        opts.internal ? '系统' : '班主任',
+        String(sno),
+      );
+
+      /* ★ 2026-10-22 方案A：学号已生成/已存在 → 回填财务单据并重推台账 */
+      await syncFinanceStudentNo(String(sno));
 
       return ok(
         res,
@@ -696,18 +817,9 @@ consultRouter.post(
       );
     }
 
-    // 学号
-    let studentNo = b.studentNo?.trim() || '';
-    if (!studentNo) {
-      // ★ 第 4 期第 3 批：`maxStudentNo` 签名改为收「已路由的 builder」，
-      //   原代码这里传的是写死的 `db('t_class_student')`（切读时会读老表 → 新建的学号
-      //   会和种子数据撞号）。第 6 批（咨询域）起改为传 `STU()`，跟着开关走。
-      const max = await maxStudentNo(STU(), `S${new Date().getFullYear()}%`);
-      studentNo = buildStudentNo(seqOfStudentNo(max) + 1);
-    } else {
-      const dup = await notDeleted(STU()).where('student_no', studentNo).first();
-      if (dup) throw Errors.studentNoExists(studentNo);
-    }
+    // 学号：★ 2026-10-22 一律按「LZ+班级编号+序号」生成，忽略接收弹窗手填的值
+    //   （初高 / 大学两个接收入口口径一致；生成后终身不变）
+    const studentNo = await nextStudentNoForClass('class', classId);
 
     // 床位占用校验
     if (b.dormId && b.bedNo) {
@@ -735,7 +847,7 @@ consultRouter.post(
         gender: (push.gender as number) ?? 1,
         age: (b.age as number) ?? ((push.age as number) ?? null),
         dept_code: deptCode,
-        student_status: b.studentStatus ?? StudentStatus.TRIAL,
+        student_status: b.studentStatus ?? planStatus ?? StudentStatus.TRIAL,
         stage,
         phone: b.phone ?? ((push.phone as string) ?? null),
         parent_phone: b.parentPhone ?? ((push.parent_phone as string) ?? null),
@@ -774,7 +886,123 @@ consultRouter.post(
       }
     });
 
-    return ok(res, { studentId, studentNo }, `已接收「${String(push.student_name)}」并建档，学号 ${studentNo}`);
+    /* ★ 2026-10-20：大学部建档成功后同样回写咨询侧状态（与初高完全一致） */
+    await consultReceiveAck(
+      String(push.consult_no || ''),
+      className,
+      user.userName,
+      opts.internal ? '系统' : '班主任',
+      studentNo,
+    );
+
+    /* ★ 2026-10-22 方案A：学号已生成 → 回填财务单据并重推台账 */
+    await syncFinanceStudentNo(studentNo);
+
+    return ok(
+      res,
+      { studentId, studentNo, className },
+      `已接收「${String(push.student_name)}」并建档，学号 ${studentNo}`,
+    );
+}
+
+consultRouter.post(
+  '/receive',
+  // ★ 2026-10-06：改用审批类资源码 —— 学管主任（审批人）必须能接收，
+  //   而他在 student 写白名单里已被移除，挂 student:ADD 会把他误拦。
+  requirePerm('consultApprove', PermAction.APPROVE),
+  validate({ body: receiveSchema }),
+  wrap((req, res) => doReceive(req, res)),
+);
+
+/**
+ * POST /api/class/consult/auto-receive （★ 2026-10-20 分班即入班）
+ *
+ * 用户口径：「缴费结束之后，直接给他分配班级……入班和分班合并」。
+ *
+ * 咨询侧在「学生管理 → 分配班级」选完班级后立刻调本接口：
+ *   推送单已经由 /push 建好（`intend_class_id` = 所选班级），这里直接走
+ *   「接收 + 建档」，学生当场落到目标班级，学部（初中部 / 高中部 / 大学部）
+ *   不需要再到「待接收学员」点一次接收。
+ *
+ * ⚠️ 内部接口：只接受 x-internal-token（见 middleware/auth.ts 的 authAllowSync 白名单），
+ *    操作人固定记为 system，不做班主任归属 / 班级可见范围校验 —— 班级本身
+ *    已由咨询侧在推送时确定，这里只是执行建档。
+ */
+consultRouter.post(
+  '/auto-receive',
+  validate({
+    body: z.object({
+      consultNo: z.string().min(1, '缺少咨询单号'),
+      studentStatus: z.coerce.number().int().optional().nullable(),
+    }),
+  }),
+  wrap(async (req: any, res) => {
+    const { consultNo, studentStatus } = req.body as {
+      consultNo: string;
+      studentStatus?: number | null;
+    };
+
+    const push = (await notDeleted(PUSH()).where('consult_no', consultNo).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!push) throw Errors.param(`未找到咨询单「${consultNo}」的推送记录，请先分班`);
+
+    const status = Number(push.apply_status);
+    if (status === ConsultStatus.RECEIVED) {
+      // 幂等：已入班的直接返回，不重复建档
+      return ok(
+        res,
+        {
+          already: true,
+          studentId: push.student_id ?? null,
+          studentNo: push.student_no ?? null,
+          className: push.intend_class_name ?? null,
+        },
+        `「${String(push.student_name)}」已在班级「${String(push.intend_class_name ?? '')}」中`,
+      );
+    }
+    if (status === ConsultStatus.REJECTED) {
+      throw Errors.param('该推送单已被驳回，请让咨询重新分班后再入班');
+    }
+
+    // 复用接收建档逻辑：仅把 body 收窄成「只带学生状态」
+    req.body = { id: push.id, studentStatus: studentStatus ?? null };
+    req.user = { userId: 'system', userName: '咨询分班', roles: [], permissions: [], token: '' };
+    return doReceive(req, res, { internal: true });
+  }),
+);
+
+/* ------------------------------ 接收弹窗 · 学籍落点默认值 ------------------------------ */
+
+/**
+ * GET /api/class/consult/receive-plan?id=<pushId>
+ *
+ * ★ 2026-10-20：接收弹窗打开时问一次「这个学生该落试学中还是正式在读」。
+ *
+ * 学生只交了试学费 → 试学中；学费等全款已到账 → 正式在读。
+ * 判断依据在咨询库（钱和费用单都在那边），本模块只做转发，不自己算，
+ * 免得两边口径打架（接收时还会按同一份判断再校正一次）。
+ */
+consultRouter.get(
+  '/receive-plan',
+  requirePerm('consultApprove', PermAction.APPROVE),
+  validate({ query: z.object({ id: z.string().min(1, '缺少咨询单ID') }) }),
+  wrap(async (req, res) => {
+    const { id } = q<{ id: string }>(req);
+    const push = (await notDeleted(PUSH()).where('id', id).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!push) throw Errors.param('咨询推送单不存在');
+    if (!canHandlePush(req.user!, push)) {
+      throw Errors.noOperationPermission('只有该班班主任、校长或学管可以接收学员');
+    }
+
+    const r = await consultClient.receivePlan(String(push.consult_no || ''));
+    if (!r.ok) {
+      // 咨询侧不可用不该挡住接收动作 —— 返回空，前端用兜底默认值
+      return ok(res, { studentStatus: null, fullSettled: null }, `取缴费进度失败：${r.message}`);
+    }
+    return ok(res, r.data, '查询成功');
   }),
 );
 

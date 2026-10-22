@@ -41,8 +41,9 @@ const listSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   size: z.coerce.number().int().min(1).max(100).default(50),
   // ★ 2026-10-15：上限 5 → 7（押金 / 校服）
-  feeType: z.coerce.number().int().min(1).max(7).optional(),
-  deptCode: z.coerce.number().int().min(1).max(2).optional(),
+  feeType: z.coerce.number().int().min(1).max(8).optional(),
+  // ★ 2026-10-20 部门拆成 1初中部 / 3高中部 / 2大学部
+deptCode: z.coerce.number().int().min(1).max(3).optional(),
   onlyEnabled: z
     .enum(['true', 'false'])
     .optional()
@@ -79,8 +80,8 @@ standardRouter.get(
 const saveSchema = z.object({
   id: z.string().optional(),
   // ★ 2026-10-15：费用类型上限 5 → 7（新增「押金 6 / 校服 7」）
-  feeType: z.coerce.number().int().min(1).max(7, '费用类型取值 1~7'),
-  deptCode: z.coerce.number().int().min(1).max(2, '部门取值 1(初高部) 2(大学部)'),
+  feeType: z.coerce.number().int().min(1).max(8, '费用类型取值 1~8'),
+  deptCode: z.coerce.number().int().min(1).max(3, '部门取值 1(初中部) 3(高中部) 2(大学部)'),
   amount: z.coerce.number().int().min(0, '标准金额必须大于等于 0（单位：分）'),
   isEnabled: z.boolean().optional(),
   remark: z.string().max(500).optional(),
@@ -134,8 +135,8 @@ standardRouter.post(
 
 const getSchema = z.object({
   // ★ 2026-10-15：费用类型上限 5 → 7（新增「押金 6 / 校服 7」）
-  feeType: z.coerce.number().int().min(1).max(7, '费用类型取值 1~7'),
-  deptCode: z.coerce.number().int().min(1).max(2, '部门取值 1(初高部) 2(大学部)'),
+  feeType: z.coerce.number().int().min(1).max(8, '费用类型取值 1~8'),
+  deptCode: z.coerce.number().int().min(1).max(3, '部门取值 1(初中部) 3(高中部) 2(大学部)'),
 });
 
 standardRouter.get(

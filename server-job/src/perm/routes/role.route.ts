@@ -4,7 +4,7 @@
  * 提供方：权限管理（林晓）
  * 前缀：  /api/perm/role
  *
- *  GET    /list              职位列表（分页）
+ *  GET    /list              职位列表（分页；带 deptId 时默认含其下级部门，可用 withChild=false 关掉）
  *  GET    /detail?id=xxx     职位详情（含权限映射）
  *  POST   /add               新建职位
  *  PUT    /update            编辑职位
@@ -22,6 +22,9 @@
  * ⚠️ 13 个系统预置职位（is_sys = true）不可删除，只能停用或改权限。
  * ⚠️ 职位编码全局唯一（uk_role_code）。逻辑删除后需「释放编码」，
  *    否则同名编码无法重建（唯一索引不认 is_deleted）。
+ * ★ 2026-10-19：界面已完全去掉「职位编码」（用户要求全系统不可见 / 不可填），
+ *    新建、编辑、导入都不再要求传 roleCode —— 不传由 nextRoleCode() 自动生成。
+ *    列与字段本身**必须保留**：它是跨模块鉴权连接键（见 nextRoleCode 注释）。
  */
 
 import { Router } from 'express';
@@ -38,6 +41,7 @@ import { BizError } from '../middleware/errorHandler';
 import {
   addLog,
   clientIp,
+  collectDescendants,
   countRoleUsers,
   getRolePermMap,
   replaceRolePerms,
@@ -109,6 +113,16 @@ const listSchema = z.object({
   roleType: z.string().optional(),
   roleStatus: z.string().optional(),
   deptId: z.string().optional(),
+  /**
+   * 按部门筛职位时是否包含下级部门的职位（默认包含，与账号列表同口径）。
+   *
+   * ★ 2026-10-20：部门树上的「职位数」是**含子部门**的聚合值（dept.route 用
+   *   collectDescendants 算的），但这里原来是 `andWhere('dept_id', deptId)` 精确匹配 ——
+   *   于是「就业部」行上写 1 个职位，点「查看职位」却弹空列表（职位挂在它的
+   *   实训管理 / 就业管理 上）。教学部只有自己挂职位，所以这个不一致以前从没暴露。
+   *   现在默认含下级，数量和弹窗内容终于同源。
+   */
+  withChild: z.union([z.string(), z.boolean()]).optional(),
   /** 只看预置 / 只看自建 */
   isSys: z.union([z.string(), z.boolean()]).optional(),
 });
@@ -128,7 +142,15 @@ roleRouter.get(
     }
     if (q.roleType) query.andWhere('role_type', q.roleType);
     if (q.roleStatus) query.andWhere('role_status', q.roleStatus);
-    if (q.deptId) query.andWhere('dept_id', q.deptId);
+    if (q.deptId) {
+      const withChild = !(q.withChild === false || q.withChild === 'false' || q.withChild === '0');
+      if (withChild) {
+        const all = await db('t_perm_dept').where('is_deleted', false).select('id', 'parent_id');
+        query.whereIn('dept_id', collectDescendants(all, q.deptId));
+      } else {
+        query.andWhere('dept_id', q.deptId);
+      }
+    }
     if (q.isSys !== undefined && q.isSys !== '') {
       query.andWhere('is_sys', q.isSys === true || q.isSys === 'true' || q.isSys === '1');
     }
@@ -192,6 +214,37 @@ roleRouter.get(
   }),
 );
 
+/**
+ * 生成一个可用的职位编码（ROLE_0001、ROLE_0002 …）
+ *
+ * ⚠️ 2026-10-19 按用户要求：**全系统界面不再出现「职位编码」** ——
+ *    新建 / 编辑职位、批量导入都不再让用户填它。
+ *
+ * 【为什么字段和列不能跟着一起删】
+ *    t_perm_role.role_code 不是普通展示字段，它是**跨模块鉴权连接键**：
+ *      · 登录模块 GET /api/perm/role/codes 取它写进 token 的 roles[]
+ *      · 教务 / 班级 / 咨询 / 财务等模块用 `role_code IN (...)` 判定角色
+ *      · app.ts 靠 RoleCode.SYS_ADMIN 决定「只有系统管理员能写」
+ *      · DB 上有唯一索引 uk_role_code
+ *    删列 = 把所有模块的鉴权打穿。所以正确做法是：
+ *    **保留列与字段，改由后端自动补号，前后端都不再让用户看见或填写。**
+ *    （与 2026-10-16「工号」的处理口径完全一致，见 user.route.ts nextGwNo）
+ */
+async function nextRoleCode(): Promise<string> {
+  const rows: any[] = await db(TABLE).where('is_deleted', false).select('role_code');
+  const used = new Set<string>();
+  let max = 0;
+  for (const r of rows) {
+    const code = String(r.role_code || '');
+    used.add(code);
+    const m = /^ROLE_(\d{4,})$/.exec(code);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  let n = max + 1;
+  while (used.has(`ROLE_${String(n).padStart(4, '0')}`)) n += 1;
+  return `ROLE_${String(n).padStart(4, '0')}`;
+}
+
 /* ============================================================
  * 3. 新建职位
  *    POST /api/perm/role/add
@@ -199,11 +252,12 @@ roleRouter.get(
 
 const saveSchema = z.object({
   roleName: z.string().min(1, '职位名称必填').max(50, '职位名称不超过 50 个字'),
-  roleCode: z
-    .string()
-    .min(1, '职位编码必填')
-    .max(64)
-    .regex(ROLE_CODE_RE, '职位编码只能是「大写字母开头 + 大写字母/数字/下划线」'),
+  /**
+   * ★ 2026-10-19：界面已去掉「职位编码」→ 这里改为**可选**。
+   *   不传（或传空串）由 nextRoleCode() 自动生成；
+   *   显式传值时仍按老规则校验，保持开放接口的向后兼容。
+   */
+  roleCode: z.string().max(64).optional(),
   deptId: z.string().optional(),
   roleType: z.string().optional(),
   /**
@@ -261,8 +315,17 @@ roleRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof saveSchema>;
 
-    const dup = await db(TABLE).where({ role_code: body.roleCode, is_deleted: false }).first();
-    if (dup) throw new BizError(BizCode.ROLE_CODE_EXISTS, `职位编码「${body.roleCode}」已被占用`);
+    // ★ 2026-10-19：界面不再填「职位编码」——不传就自动生成一个可用的
+    const roleCode = (body.roleCode || '').trim() || (await nextRoleCode());
+    if (!ROLE_CODE_RE.test(roleCode)) {
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        '职位编码只能是「大写字母开头 + 大写字母/数字/下划线」',
+      );
+    }
+
+    const dup = await db(TABLE).where({ role_code: roleCode, is_deleted: false }).first();
+    if (dup) throw new BizError(BizCode.ROLE_CODE_EXISTS, `职位编码「${roleCode}」已被占用`);
 
     const dupName = await db(TABLE).where({ role_name: body.roleName, is_deleted: false }).first();
     if (dupName) throw new BizError(BizCode.ROLE_NAME_EXISTS, `职位名称「${body.roleName}」已存在`);
@@ -276,7 +339,7 @@ roleRouter.post(
     await db(TABLE).insert({
       id,
       role_name: body.roleName,
-      role_code: body.roleCode,
+      role_code: roleCode,
       dept_id: body.deptId || null,
       role_type: body.roleType || '业务职位',
       // ★ 2026-10-08：等价内置职位（校验后再写，填错直接报错不静默）
@@ -303,7 +366,7 @@ roleRouter.post(
       operatorRole: req.user?.roles?.join('、'),
       moduleName: '权限管理',
       actionType: '新增',
-      targetObj: `职位 ${body.roleName}(${body.roleCode})`,
+      targetObj: `职位 ${body.roleName}(${roleCode})`,
       beforeValue: '—',
       afterValue: `已创建，权限点 ${permCount}`,
       ip: clientIp(req),
@@ -330,8 +393,18 @@ roleRouter.put(
     const exists = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
     if (!exists) throw new BizError(BizCode.ROLE_NOT_FOUND, '职位不存在');
 
+    // ★ 2026-10-19：界面不再填「职位编码」——不传就沿用库里原值，绝不误清空
+    const givenCode = (body.roleCode || '').trim();
+    if (givenCode && !ROLE_CODE_RE.test(givenCode)) {
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        '职位编码只能是「大写字母开头 + 大写字母/数字/下划线」',
+      );
+    }
+    const nextCode = givenCode || exists.role_code;
+
     // ⚠️ 预置职位的编码不可改（登录模块 token 里的 roles[] 依赖它）
-    if (exists.is_sys && body.roleCode !== exists.role_code) {
+    if (exists.is_sys && nextCode !== exists.role_code) {
       throw new BizError(BizCode.PRESET_ROLE_PROTECTED, '系统预置职位的编码不可修改');
     }
 
@@ -341,15 +414,18 @@ roleRouter.put(
       .first();
     if (dupName) throw new BizError(BizCode.ROLE_NAME_EXISTS, `职位名称「${body.roleName}」已存在`);
 
-    const dupCode = await db(TABLE)
-      .where({ role_code: body.roleCode, is_deleted: false })
-      .whereNot('id', body.id)
-      .first();
-    if (dupCode) throw new BizError(BizCode.ROLE_CODE_EXISTS, `职位编码「${body.roleCode}」已被占用`);
+    // 只有真的要换编码时才查重（不传就沿用原值，没必要查）
+    if (nextCode !== exists.role_code) {
+      const dupCode = await db(TABLE)
+        .where({ role_code: nextCode, is_deleted: false })
+        .whereNot('id', body.id)
+        .first();
+      if (dupCode) throw new BizError(BizCode.ROLE_CODE_EXISTS, `职位编码「${nextCode}」已被占用`);
+    }
 
     await db(TABLE).where({ id: body.id }).update({
       role_name: body.roleName,
-      role_code: body.roleCode,
+      role_code: nextCode,
       dept_id: body.deptId || exists.dept_id,
       role_type: body.roleType || exists.role_type,
       // ★ 2026-10-08：等价内置职位。
@@ -565,7 +641,7 @@ roleRouter.get(
 /* ============================================================
  * 10. 导入职位
  *     POST /api/perm/role/import
- *     body: { list: [{ roleName, roleCode, deptName, roleType, remark }] }
+ *     body: { list: [{ roleName, deptName, roleType, remark }] }  // roleCode 可选，不传自动生成
  *
  * ⚠️ 逐行校验，成功的入库、失败的回报行号与原因 —— 不要整批回滚，
  *    否则用户拿不到「哪一行错了」的信息。
@@ -576,7 +652,8 @@ const importSchema = z.object({
     .array(
       z.object({
         roleName: z.string().min(1, '职位名称必填'),
-        roleCode: z.string().min(1, '职位编码必填'),
+        // ★ 2026-10-19：界面已去掉「职位编码」→ 可选，不传自动生成
+        roleCode: z.string().max(64).optional(),
         deptName: z.string().optional(),
         roleType: z.string().optional(),
         remark: z.string().optional(),
@@ -602,13 +679,15 @@ roleRouter.post(
       const row = list[i];
       const rowNo = i + 1;
 
-      if (!ROLE_CODE_RE.test(row.roleCode)) {
-        errors.push({ row: rowNo, reason: `职位编码「${row.roleCode}」格式非法` });
+      // ★ 2026-10-19：导入模板已不含「职位编码」列 → 缺省自动生成
+      const code = (row.roleCode || '').trim() || (await nextRoleCode());
+      if (!ROLE_CODE_RE.test(code)) {
+        errors.push({ row: rowNo, reason: `职位编码「${code}」格式非法` });
         continue;
       }
-      const dup = await db(TABLE).where({ role_code: row.roleCode, is_deleted: false }).first();
+      const dup = await db(TABLE).where({ role_code: code, is_deleted: false }).first();
       if (dup) {
-        errors.push({ row: rowNo, reason: `职位编码「${row.roleCode}」已存在` });
+        errors.push({ row: rowNo, reason: `职位编码「${code}」已存在` });
         continue;
       }
       const dupName = await db(TABLE).where({ role_name: row.roleName, is_deleted: false }).first();
@@ -620,7 +699,7 @@ roleRouter.post(
       await db(TABLE).insert({
         id: randomUUID(),
         role_name: row.roleName,
-        role_code: row.roleCode,
+        role_code: code,
         dept_id: row.deptName ? deptByName.get(row.deptName) || null : null,
         role_type: row.roleType || '业务职位',
         is_sys: false,

@@ -61,7 +61,7 @@ export enum ConsultState {
   TRIAL_WAIT_CLASS = 4,   // 待分班（费用已到账，等分班）
   TRIAL = 5,              // 试学中（已分班）
   FULL_FEE_PENDING = 6,   // 缴费中·待确认（转正式，补缴款项待确认）
-  FORMAL = 7,             // 正式学员（全款到账）
+  FORMAL = 7,             // 正式在读（全款到账）
   REFUND_MGR = 8,         // 退费·待经理审批
   REFUND_FINANCE = 9,     // 退费·待财务打款
   REFUNDED = 10,          // 已退费
@@ -86,7 +86,7 @@ export const CONSULT_STATE_NAME: Record<number, string> = {
   [ConsultState.TRIAL_WAIT_CLASS]: '待分班',
   [ConsultState.TRIAL]: '试学中',
   [ConsultState.FULL_FEE_PENDING]: '缴费中·待确认',
-  [ConsultState.FORMAL]: '正式学员',
+  [ConsultState.FORMAL]: '正式在读',
   [ConsultState.REFUND_MGR]: '退费·待经理审批',
   [ConsultState.REFUND_FINANCE]: '退费·待财务打款',
   [ConsultState.REFUNDED]: '已退费',

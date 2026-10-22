@@ -39,6 +39,7 @@ import {
   getFeeStats,
   createFees,
   createCombinedFees,
+  createSupplementFee,
   uploadVoucher,
   resubmitOrder,
   syncFromFinance,
@@ -343,7 +344,7 @@ feeRouter.get(
 const createSchema = z.object({
   consultStudentId: z.string().min(1, '必须传学生 id'),
   // ★ 2026-10-15：费用类型上限 5 → 7（新增「押金 6 / 校服 7」）
-  feeTypes: z.array(z.coerce.number().int().min(1).max(7)).min(1, '至少选择一个费用类型'),
+  feeTypes: z.array(z.coerce.number().int().min(1).max(8)).min(1, '至少选择一个费用类型'),
   payMethod: z.string().max(20).optional(),
   /**
    * ★ 2026-10-15 金额自定义：key = feeType（字符串），value = 金额（单位：分）
@@ -413,6 +414,60 @@ feeRouter.post(
             body.voucherUrl,
             body.voucherNo,
           );
+
+    res.json(ok(result, result.message));
+  }),
+);
+
+/* ============================================================
+ * 4.5 ★ 2026-10-20 补费（试学转正尾款 / 差额补收，金额自定义）
+ *     POST /api/consult/fee/supplement
+ *
+ * 用户口径：「交了试学费的，后边在收款与缴费管理那儿操作里面
+ *            添加一个补费功能，补费金额自定义。」
+ *
+ * ⚠️ 与 /create 的差别：
+ *    · 金额必须手填（补费没有「费用标准」）；
+ *    · 门槛是「该学生已有到账的试学费」，不是随便哪个学生都能补；
+ *    · 落库类型是「补费(8)」，不占学费额度、不参与全款已缴判定。
+ * ============================================================ */
+
+const supplementSchema = z.object({
+  consultStudentId: z.string().min(1, '必须传学生 id'),
+  /** 补费金额（单位：分），老师手填，后端不再按费用标准覆盖 */
+  amount: z.coerce.number().int().positive('补费金额必须大于 0（单位：分）'),
+  voucherUrl: z.string().optional(),
+  voucherNo: z.string().max(100).optional(),
+  payMethod: z.string().max(20).optional(),
+  remark: z.string().max(200).optional(),
+});
+
+feeRouter.post(
+  '/supplement',
+  validate(supplementSchema),
+  wrap(async (req, res) => {
+    const body = (req as any).validated as z.infer<typeof supplementSchema>;
+    const operator = req.user!;
+
+    // ★ 数据范围：咨询师只能给自己名下学生发起补费（与发起收费同一条铁律）
+    await assertStudentIdInScope(body.consultStudentId, req.user);
+
+    // 凭证必填校验放在 handler：zod 报「类型不正确」看不出人话
+    if (!body.voucherUrl) {
+      throw new BizError(BizCode.PARAM_ERROR, '请先上传缴费凭证截图');
+    }
+
+    const result = await createSupplementFee(
+      body.consultStudentId,
+      body.amount,
+      { name: operator.userName, title: operator.roleTitle },
+      {
+        voucherUrl: body.voucherUrl,
+        voucherNo: body.voucherNo,
+        payMethod: body.payMethod,
+        remark: body.remark,
+      },
+    );
 
     res.json(ok(result, result.message));
   }),
@@ -630,8 +685,9 @@ feeRouter.get(
   validate(
     z.object({
       // ★ 2026-10-15：上限 5 → 7（押金 / 校服）
-      feeType: z.coerce.number().int().min(1).max(7),
-      deptCode: z.coerce.number().int().min(1).max(2).default(1),
+      feeType: z.coerce.number().int().min(1).max(8),
+      /** ★ 2026-10-20 部门拆成 1初中部 / 3高中部 / 2大学部（上限放宽到 3） */
+      deptCode: z.coerce.number().int().min(1).max(3).default(1),
     }),
   ),
   wrap(async (req, res) => {
@@ -653,7 +709,7 @@ feeRouter.get(
   '/standard-batch',
   validate(
     z.object({
-      deptCode: z.coerce.number().int().min(1).max(2).default(1),
+      deptCode: z.coerce.number().int().min(1).max(3).default(1),
       feeTypes: z.string().optional(),
     }),
   ),

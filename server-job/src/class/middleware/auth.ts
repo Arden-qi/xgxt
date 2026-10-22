@@ -234,7 +234,9 @@ function handleInternalIngress(req: Request, res: Response, next: NextFunction):
   // ★ 2026-10-05 增加 open-options：给咨询「分班」/ 初高「升学」提供开放班级清单的内部读接口
   // ★ 2026-10-06 增加 internal-status：给咨询侧查「该生分班到哪一步了」的只读接口
   //    （咨询「分班」按钮要靠它判断「已推送/已接收 → 不可重复分派，已驳回 → 可重新分派」）
-  const isIngress = /\/(sync|push|open-options|internal-status)(\/)?$/.test(req.path);
+  // ★ 2026-10-20 增加 auto-receive：咨询「分配班级」= 分班即入班，
+  //    推送完立刻由班级侧建档，不再等班主任点接收（用户口径：入班和分班合并）
+  const isIngress = /\/(sync|push|open-options|internal-status|auto-receive)(\/)?$/.test(req.path);
   if (!isIngress) return false;
   const expected = config.internalToken;
   const got = String(req.header('x-internal-token') || '');

@@ -32,6 +32,20 @@ import type { JwtPayload } from '../utils/jwt';
 
 export const ACCOUNT_TABLE = 't_sys_account';
 
+/** 密码策略视图（给改密弹窗做提示 + 前端预校验用） */
+export interface PwdPolicyView {
+  /** 最小长度 */
+  min: number;
+  /** 需包含大写字母 */
+  upper: boolean;
+  /** 需包含数字 */
+  digit: boolean;
+  /** 需包含特殊符号 */
+  symbol: boolean;
+  /** 人话版规则文案，例：不少于 8 位，且需包含大写字母、数字 */
+  tip: string;
+}
+
 /* ============================================================
  * 行 → 视图
  * ============================================================ */
@@ -175,11 +189,41 @@ export async function findById(id: string): Promise<any | null> {
  *      正式环境换成 bcrypt 时，只需改本文件这三处比较/写入。
  * ============================================================ */
 
-/** 新密码规则（需与前端弹窗的提示文案保持一致）：6~20 位、不含空格、不能与原密码相同 */
-export function assertNewPassword(newPassword: string, oldPassword?: string): void {
+/**
+ * 取当前生效的密码策略（供改密弹窗提示 + 前端预校验）
+ *
+ * ⚠️ 策略的单一事实来源在权限管理的 t_perm_rule（perm/services/pwdPolicy.ts），
+ *    门户侧只做转发，**不再定义第二份规则** —— 本次 bug 的根因就是两份规则漂移。
+ */
+export async function getPwdPolicy(): Promise<PwdPolicyView> {
+  const { loadPwdRule, describePwdRule } = await import('../../perm/services/pwdPolicy');
+  const [rule, tip] = await Promise.all([loadPwdRule(), describePwdRule()]);
+  return { min: rule.min, upper: rule.upper, digit: rule.digit, symbol: rule.symbol, tip };
+}
+
+/**
+ * 新密码规则
+ *
+ * ★ 2026-10-19 修复：原来这里写死了「6~20 位、不含空格、不能与原密码相同」，
+ *   与账号管理那套密码策略（t_perm_rule：≥8 位 + 含大写字母 + 含数字）**不是同一份**，
+ *   于是出现「规则要求含大写字母，但用户全小写一样能改成功」。
+ *   现在强度判定统一走 assertPwdStrength（读同一份策略），
+ *   本函数只补策略管不到的三条：长度上限、不含空格、不能与原密码相同。
+ *
+ * ⚠️ 策略读取用【动态 import】：门户与权限是两个库，
+ *    不能让「权限库暂时连不上」把用户改自己密码的入口整个拖死
+ *    （pwdPolicy.loadPwdRule 读不到时回退默认策略，不会抛错）。
+ */
+export async function assertNewPassword(newPassword: string, oldPassword?: string): Promise<void> {
   const p = String(newPassword ?? '');
-  if (p.length < 6 || p.length > 20) {
-    throw new BizError(BizCode.PARAM_ERROR, '新密码长度需为 6~20 位');
+
+  // ① 强度：与「账号管理 → 新增账号 / 重置密码」完全同一口径
+  const { assertPwdStrength } = await import('../../perm/services/pwdPolicy');
+  await assertPwdStrength(p);
+
+  // ② 策略之外的补充规则
+  if (p.length > 20) {
+    throw new BizError(BizCode.PARAM_ERROR, '新密码不超过 20 位');
   }
   if (/\s/.test(p)) {
     throw new BizError(BizCode.PARAM_ERROR, '新密码不能包含空格');
@@ -215,7 +259,8 @@ export async function changeOwnPassword(
   newPassword: string,
 ): Promise<boolean> {
   const row = await verifyOwnPassword(accountId, oldPassword);
-  assertNewPassword(newPassword, oldPassword);
+  // ★ 2026-10-19：assertNewPassword 现在要读策略，改成 await
+  await assertNewPassword(newPassword, oldPassword);
 
   await db(ACCOUNT_TABLE).where({ id: accountId }).update({
     password: newPassword,
