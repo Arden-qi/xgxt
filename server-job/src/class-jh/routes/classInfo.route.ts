@@ -61,11 +61,21 @@ function assertClassStatusTransition(from: number, to: number): void {
 
 /** 班级行 → 实体（双返回） */
 function toClassInfo(r: any) {
+  /**
+   * ★ 2026-10-22 阶段码取 `stage_code`（统一表真源），别再读遗留列 `stage`
+   *
+   * 统一表里 `stage` 是历史残留（值恒为 0），`stage_code` 才是真的阶段码（101~107）。
+   * 原来这里读 `r.stage` → resolveStageName(0) 返回空串，导致咨询侧
+   * 「分配班级」下拉里初高班级一个阶段名都没有（只有班名）。
+   */
+  const phase = r.stage_code ?? r.stage;
   return {
     classId: r.id,
     className: r.class_name,
-    stage: r.stage,
-    stageName: resolveStageName(r.stage),
+    stage: phase,
+    stageName: resolveStageName(phase),
+    /** ★ 2026-10-22 阶段方案名（新表单选「阶段」用的是方案阶段） */
+    schemeStageName: r.scheme_stage_name ?? null,
     headTeacherId: r.head_teacher_id,
     headTeacherName: r.head_teacher_name,
     teacherId: r.teacher_id,

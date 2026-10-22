@@ -282,7 +282,8 @@ const newForm = ref({
   studentName: '',
   gender: 1,
   phone: '',
-  deptCode: 1,
+  /** ★ 2026-10-22 用户口径：「部门」换成「年龄」（部门在分配班级时才定） */
+  age: undefined as number | undefined,
   sourceChannel: 1,
   sourceRemark: '',
   /** ★ 2026-10-15 来源=转介绍时填写的招生老师信息 */
@@ -297,7 +298,7 @@ function openNew() {
     studentName: '',
     gender: 1,
     phone: '',
-    deptCode: 1,
+    age: undefined,
     sourceChannel: 1,
     sourceRemark: '',
     referrerName: '',
@@ -323,7 +324,8 @@ async function submitNew() {
     studentName: f.studentName.trim(),
     gender: f.gender,
     phone: f.phone || undefined,
-    deptCode: f.deptCode,
+    // ★ 2026-10-22：「部门」换成「年龄」（部门改为分配班级时选学部）
+    age: f.age ?? undefined,
     sourceChannel: f.sourceChannel,
     sourceRemark: f.sourceRemark || undefined,
     referrerName: f.sourceChannel === 3 ? f.referrerName.trim() || undefined : undefined,
@@ -497,7 +499,14 @@ const enrollClassOptions = computed(() => {
   return (list || [])
     .map((c) => ({
       value: String(c.classId ?? c.id ?? ''),
-      label: c.className + (c.stageName ? `（${c.stageName}）` : ''),
+      /**
+       * ★ 2026-10-22 括号里的阶段名以「阶段方案」为准
+       *
+       * 新表单建班选的是方案阶段（一阶段~六阶段），班级的 stage 码只是兼容列。
+       * 历史数据里 stage 码被写成 13（实训）时，只看 stageName 会显示成
+       * 「运维（实训）」——用户反馈的正是这个。方案名存在就用方案名。
+       */
+      label: c.className + ((c.schemeStageName || c.stageName) ? `（${c.schemeStageName || c.stageName}）` : ''),
     }))
     .filter((o) => o.value);
 });
@@ -1533,11 +1542,17 @@ onMounted(load);
         <el-form-item label="手机号">
           <el-input v-model="newForm.phone" placeholder="学生本人手机号" />
         </el-form-item>
-        <el-form-item label="部门">
-          <el-select v-model="newForm.deptCode" style="width: 100%">
-            <!-- ★ 2026-10-20 初中部 / 高中部 / 大学部 -->
-            <el-option v-for="d in DEPT_OPTIONS" :key="d" :value="d" :label="DEPT_NAME[d]" />
-          </el-select>
+        <el-form-item label="年龄">
+          <!-- ★ 2026-10-22 用户口径：原来的「部门」在这里没有意义（部门是分配班级时才选的学部），
+               改成录入时就能掌握的「年龄」；不填也可以，接收入班时班主任能补 -->
+          <el-input-number
+            v-model="newForm.age"
+            :min="1"
+            :max="100"
+            :controls="false"
+            placeholder="学生年龄"
+            style="width: 140px"
+          />
         </el-form-item>
         <el-form-item label="来源">
           <el-select v-model="newForm.sourceChannel" style="width: 100%">
