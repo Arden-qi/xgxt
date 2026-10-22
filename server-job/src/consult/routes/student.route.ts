@@ -699,6 +699,25 @@ studentRouter.post(
     const stu = await findStudent(body.consultStudentId);
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
+    /**
+     * ★ 2026-10-22 用户口径：「流失不是取消吗？只有咨询中有流失这个操作」
+     *
+     *   流失是**咨询阶段**的放弃动作（还没入班就不来了）；
+     *   已经分班的（待分班 / 试学中 / 正式在读）要走退费流程，
+     *   不能在这里记流失 —— 否则在读人数少一个、流失率虚高，
+     *   而财务侧又没有对应的退费单，账对不上。
+     *
+     *   前端按钮已经只在「咨询中」显示，这里是后端兜底
+     *   （防接口直调、防旧页面缓存）。
+     */
+    const curState = Number(stu.consult_state);
+    if (curState !== ConsultState.TRIAL_FEE_PENDING) {
+      throw new BizError(
+        BizCode.INVALID_STATUS,
+        `「${String(stu.student_name)}」当前状态是「${nameOf(CONSULT_STATE_NAME, curState)}」，只有「咨询中」的学生才能记录流失；已分班的请走退费流程`,
+      );
+    }
+
     await changeState(body.consultStudentId, ConsultState.LOST, {
       byName: operator.userName,
       byTitle: operator.roleTitle,

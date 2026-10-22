@@ -864,13 +864,14 @@ function actionsOf(row: ConsultStudentListItem | ConsultStudent) {
     /** ★ 2026-10-20：已分配给他人 → 经理也不能替人面试 */
     canInterview: s === CS.WAIT_INTERVIEW && isMyStudent(row),
     /**
-     * ★ 2026-10-20 分配班级（分班 + 入班合并）
+     * ★ 2026-10-22 分配班级（分班 + 入班合并）
      *
-     * 缴费到账（待分班）就可以分配；已经试学 / 缴费中 / 正式的学生
-     * 如果之前在「待接收」里没落地，也允许补分配一次（后端幂等）。
-     * 两个学段一律推到「待接收学员」，等对应班主任接收后才建档入班。
+     * 只有「待分班(4)」才需要这个动作。试学中(5) / 缴费中(6) / 正式在读(7)
+     * 说明人已经在班里了 —— 原来这里把它们也留进来（配 canEnrollOf 灰掉），
+     * 结果是「按钮在、但永远点不动」，用户看到的就是「已分班还能看到分配班级」。
+     * 现在直接不渲染；要换班请走学管的转班流程。
      */
-    canEnroll: [CS.TRIAL_WAIT_CLASS, CS.TRIAL, CS.FULL_FEE_PENDING, CS.FORMAL].includes(s),
+    canEnroll: s === CS.TRIAL_WAIT_CLASS,
     canToFormal: s === CS.TRIAL || s === CS.FULL_FEE_PENDING,
     /**
      * ★ 2026-10-08：「未报名」不再是待面试阶段的独立按钮 ——
@@ -879,19 +880,19 @@ function actionsOf(row: ConsultStudentListItem | ConsultStudent) {
      */
     canCancelNotEnroll: s === CS.NOT_ENROLLED,
     /**
-     * 可记录流失：已经进入缴费/试学/在读阶段才谈得上「流失」
+     * 可记录流失：**只有「咨询中」有，其余一律没有**
      *
-     * ★ 2026-10-22 用户口径：「咨询中有流失，只要缴了费，就没有流失这个选项了」
-     *   缴费到账后学生可能直接落到「正式在读」，而原来这段没把 FORMAL 算进来，
-     *   于是钱一交，流失按钮就消失了。现在补上 FORMAL。
+     * ★ 2026-10-22 用户口径（第二次确认，纠正上一版）：
+     *   「流失不是取消吗？只有咨询中有流失这个操作」
+     *
+     *   流失 = 咨询阶段就不来了（取消报名）。一旦分了班（待分班 / 试学中 /
+     *   正式在读），人要退出走的是**退费**流程，不是「流失」——
+     *   在已入班的学生上记流失，会把在读人数和退费金额都算错。
+     *
+     *   ⚠️ 上一版为了「缴费后还能记流失」把 FORMAL 也放进来了，方向错了，
+     *      这里收回：只留咨询中(3)。
      */
-    canLoss: [
-      CS.TRIAL_FEE_PENDING,
-      CS.TRIAL_WAIT_CLASS,
-      CS.TRIAL,
-      CS.FULL_FEE_PENDING,
-      CS.FORMAL,
-    ].includes(s),
+    canLoss: s === CS.TRIAL_FEE_PENDING,
   };
 }
 
