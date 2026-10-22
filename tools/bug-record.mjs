@@ -32,6 +32,10 @@
  *
  * 严重等级：P0阻断 / P1严重 / P2一般 / P3 轻微（注意 P3 中间有空格）
  * BUG来源：用户反馈 / 内部测试 / 改造过程中新发现 / 遗留程序改造
+ *
+ * 负责人：默认写「王寒逸」（本机约定，2026-10-22 起）。
+ *   需要归属他人时用环境变量覆盖，不要改源码：
+ *   BUG_OWNER_OPEN_ID=ou_xxx node tools/bug-record.mjs upsert <hash> --payload f.json
  */
 
 import { execFileSync, execSync } from 'node:child_process';
@@ -42,7 +46,11 @@ import { join, resolve } from 'node:path';
 const BASE_TOKEN = 'KHPobyqjZaBiw5sri3XcHWORnub';
 const TABLE_ID = 'tblsOphac4l6EM6E';
 const PROJECT_RECORD_ID = 'recvxTFfo60NKZ'; // 所属项目 → 学管系统
-const OWNER_OPEN_ID = 'ou_bc9379a083f52b683ad4101f805706dd'; // 负责人 → 孟令磊
+// 负责人默认 → 王寒逸。
+// 约定（2026-10-22）：本机提交的缺陷记录一律归属王寒逸。
+// 别的机器 / 别的同事若需归属他人，用环境变量覆盖，不要改这里：
+//   BUG_OWNER_OPEN_ID=ou_xxx node tools/bug-record.mjs upsert ...
+const OWNER_OPEN_ID = process.env.BUG_OWNER_OPEN_ID || 'ou_c1820c66e8f80b2b71ae1bc6e6d51b2e'; // 王寒逸
 
 const SEVERITY = ['P0阻断', 'P1严重', 'P2一般', 'P3 轻微'];
 const SOURCE = ['用户反馈', '内部测试', '改造过程中新发现', '遗留程序改造'];
