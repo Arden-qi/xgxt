@@ -1437,6 +1437,10 @@ export interface ClassSaveBody {
   classCode?: string | null;
   deptCode?: number | null;
   phaseCode?: number | null;
+  /** ★ 2026-10-16：阶段方案（可选；不选方案的老流程照样能用） */
+  schemeId?: string | null;
+  schemeStageId?: string | null;
+  schemeStageName?: string | null;
   headTeacherId?: string | null;
   headTeacherName?: string | null;
   teacherId?: string | null;
