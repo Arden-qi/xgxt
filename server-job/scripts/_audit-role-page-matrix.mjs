@@ -33,14 +33,16 @@ for (const [dom, label] of [
   ['student', '学生档案'], ['class', '班级管理'], ['attendance', '考勤'], ['exam', '考试'],
   ['score', '成绩'], ['dorm', '宿舍'], ['refund', '退费'], ['leave', '休学退学'],
 ]) {
-  const stages = dom === 'student' ? ['jh', 'class', 'job', 'emp', 'edu'] : STAGES4;
+  // ★ 2026-10-22 口径：学生档案三学段（jh/class/emp）；其余域 jh/class/job（emp 未开放）
+  const stages = dom === 'student' ? ['jh', 'class', 'emp'] : STAGES4;
   for (const st of stages) E.push([`教学·${label}`, st, `/api/teaching/${dom}/list?stage=${st}&page=1&size=50`]);
 }
 const JOB = [
-  ['/api/job/class-student/list?page=1&size=50', '实训花名册'],
+  // 花名册接口 classId 必传（按班查花名册），用现存的实训班探测
+  ['/api/job/class-student/page?page=1&size=50&classId=CLS-JOB-SX2601', '实训花名册(SX2601)'],
   ['/api/job/employment-log/list?page=1&size=50', '就业日志'],
   ['/api/job/review/list?page=1&size=50', '复盘填写'],
-  ['/api/job/fee-call/list?page=1&size=50', '催费通知'],
+  ['/api/job/fee-call/page?page=1&size=50', '催费通知'],
   ['/api/job/emp-dorm/list?page=1&size=50', '就业宿舍'],
 ];
 for (const [p, label] of JOB) E.push(['就业模块', label, p]);
