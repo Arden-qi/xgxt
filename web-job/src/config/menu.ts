@@ -165,6 +165,7 @@ export const MENU: MenuNode[] = [
       domainNode('exam'),
       domainNode('score'),
       domainNode('dorm'),
+
       domainNode('fee'),
       domainNode('refund'),
       domainNode('approval'),
@@ -207,6 +208,21 @@ export const MENU: MenuNode[] = [
         stage: '已完成',
         phase: '初高部',
         desc: '出勤达标线与统计口径、催费提醒天数、封班可转入类型、阶段方案（方案名称+所属部门+多阶段）。',
+      },
+      {
+        /**
+         * ★ 2026-10-20 楼栋设置独立入口
+         *
+         * 从「系统设置」的楼栋页签抽出来单独成页，权限码 `classjh:building:view`。
+         * 目的：只给教务老师楼栋字典，不连带放开系统设置 KV / 阶段字典 / 操作日志。
+         */
+        title: '楼栋设置',
+        path: '/class-jh/building',
+        pageCode: 'classjh:building:view',
+        owner: '初高中部',
+        stage: '已完成',
+        phase: '初高',
+        desc: '宿舍楼栋字典（男寝 / 女寝），与宿舍管理、分派宿舍的楼栋下拉实时一致。',
       },
     ],
   },

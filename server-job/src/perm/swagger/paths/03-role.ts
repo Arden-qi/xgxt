@@ -16,7 +16,7 @@
  *         in: query
  *         schema:
  *           type: string
- *         description: 职位名称 / 编码模糊搜索
+ *         description: 职位名称模糊搜索（★ 2026-10-19 界面已去掉「职位编码」，按编码搜索仅为接口向后兼容保留）
  *       - name: roleType
  *         in: query
  *         schema:
@@ -132,7 +132,11 @@
  *     tags:
  *       - 职位管理
  *     summary: 新建职位（可同时提交权限）
- *     description: '权限标识 `perm:职位管理:add`。编码重复 40010，名称重复 40011。'
+ *     description: |
+ *       权限标识 `perm:职位管理:add`。编码重复 40010，名称重复 40011。
+ *
+ *       ★ 2026-10-19 起界面不再维护「职位编码」：`roleCode` 改为**可选**，
+ *       不传由后端自动生成（如 `ROLE_0001`）。显式传值时仍按老规则校验。
  *     requestBody:
  *       required: true
  *       content:
@@ -403,7 +407,8 @@
  *                       example: 助教组长
  *                     roleCode:
  *                       type: string
- *                       example: TEACH_ASSIST_LEAD
+ *                       description: ★ 可选。2026-10-19 起界面不再维护，不传由后端自动生成
+ *                       example: ROLE_0001
  *                     deptName:
  *                       type: string
  *                       example: 教学部

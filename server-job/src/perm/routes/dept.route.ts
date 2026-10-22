@@ -14,6 +14,8 @@
  *
  * ⚠️ 部门被职位/账号引用时不可删除；有子部门时不可删除。
  * ⚠️ 删除部门为不可恢复操作 —— 前端需二次确认。
+ * ⚠️ 层级最多 3 级（校级 1 / 部门 2 / 下设子部门 3）；改上级部门时 dept_level
+ *    连同其下级一起重算 —— 只改 parent_id 会让整棵树的前端缩进错位。
  */
 
 import { Router } from 'express';
@@ -39,6 +41,8 @@ export const deptRouter = Router();
 const TABLE = 't_perm_dept';
 /** 校级部门的固定 id（与种子数据一致） */
 const ROOT_DEPT_ID = 'D_ALL';
+/** 层级上限（校级 1 / 部门 2 / 下设子部门 3）—— 与前端 MAX_DEPT_LEVEL 同值 */
+const MAX_DEPT_LEVEL = 3;
 
 /* ============================================================
  * 1. 部门列表
@@ -243,6 +247,10 @@ deptRouter.post(
     if (!parent) throw new BizError(BizCode.DEPT_NOT_FOUND, '上级部门不存在');
 
     const deptLevel = Number(parent.dept_level) + 1;
+    // 前端下拉把 level=3 的部门置灰了，这里再拦一次：接口被直接调用时也不能建出第 4 层
+    if (deptLevel > MAX_DEPT_LEVEL) {
+      throw new BizError(BizCode.PARAM_ERROR, `部门层级最多 ${MAX_DEPT_LEVEL} 级，不能再往下建`);
+    }
     const id = randomUUID();
 
     await db(TABLE).insert({
@@ -297,24 +305,55 @@ deptRouter.put(
       .first();
     if (dup) throw new BizError(BizCode.DEPT_NAME_EXISTS, `部门「${body.deptName}」已存在`);
 
+    // 上级部门：不传 = 保持原挂载点
+    const parentId = body.parentId || exists.parent_id;
+
+    const all = await db(TABLE)
+      .where('is_deleted', false)
+      .select('id', 'parent_id', 'dept_level');
+
     // 不允许把部门挂到自己或自己的后代下（会把树挂断）
     if (body.parentId) {
-      const all = await db(TABLE).where('is_deleted', false).select('id', 'parent_id');
       const descendants = collectDescendants(all, body.id);
       if (descendants.includes(body.parentId)) {
         throw new BizError(BizCode.PARAM_ERROR, '不能把部门移动到它自己的下级部门');
       }
     }
 
+    /* ★ 2026-10-20：上级变了，dept_level 必须跟着重算 ——
+     *   原实现只改 parent_id，层级还留在旧值上。前端是按 dept_level 算缩进、
+     *   并按「level 是否已达上限」决定下拉能不能选，层级不对整棵树就错位了
+     *   （就业部 / 教学部这种带下级部门的父级尤其明显）。
+     *   后代也要跟着平移，所以记一个 delta 往下刷。 */
+    const parent = all.find((d) => d.id === parentId);
+    if (!parent) throw new BizError(BizCode.DEPT_NOT_FOUND, '上级部门不存在');
+
+    const nextLevel = Number(parent.dept_level) + 1;
+    if (nextLevel > MAX_DEPT_LEVEL) {
+      throw new BizError(BizCode.PARAM_ERROR, `部门层级最多 ${MAX_DEPT_LEVEL} 级，不能再往下挂`);
+    }
+    const levelDelta = nextLevel - Number(exists.dept_level);
+
     await db(TABLE).where({ id: body.id }).update({
       dept_name: body.deptName,
       dept_short: body.deptShort || body.deptName,
-      parent_id: body.parentId || exists.parent_id,
+      parent_id: parentId,
+      dept_level: nextLevel,
       sort_no: body.sortNo ?? exists.sort_no,
       remark: body.remark || null,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
     });
+
+    // 下级部门的层级跟着同一 delta 平移（不提的话「父 2 子 3」会变成「父 2 子 4」）
+    if (levelDelta !== 0) {
+      const childIds = collectDescendants(all, body.id).filter((id) => id !== body.id);
+      if (childIds.length) {
+        await db(TABLE)
+          .whereIn('id', childIds)
+          .update({ dept_level: db.raw('dept_level + ?', [levelDelta]) });
+      }
+    }
 
     await addLog({
       operatorId: req.user?.userId,

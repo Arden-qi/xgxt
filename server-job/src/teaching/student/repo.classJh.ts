@@ -247,7 +247,17 @@ export const repo: StudentRepo = {
     if (birth) payload.age = calcAge(birth);
     else if (body.age !== undefined) payload.age = body.age;
     set('native_place', body.nativePlace);
-    set('dept_code', body.deptCode);
+    /**
+     * ★ 2026-10-20 修复：初高新增学生报 `Column 'dept_code' cannot be null`
+     *
+     * 初高表单没有「部门」字段（只有初高部/大学部两个值，学生档案里用不到），
+     * 前端会传 `deptCode: null`。旧写法 `set('dept_code', body.deptCode)`
+     * 会把 null **显式写进 SQL** —— 显式 NULL 会让列上的 `DEFAULT 1` 失效，
+     * 直接撞 NOT NULL 约束。
+     * → 这里把 null 归成 undefined（= 不写这一列），新增时走数据库默认值 1（初高部）；
+     *   编辑时也不会把已有部门的记录清空。
+     */
+    set('dept_code', body.deptCode ?? undefined);
     set('class_id', body.classId);
     set('class_name', body.className);
     set(phaseCodeCol(), body.phaseCode);

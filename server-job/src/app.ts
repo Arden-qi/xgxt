@@ -74,6 +74,9 @@ import { teachingLeaveRouter } from './teaching/leave/route';
 import { teachingStudentRouter } from './teaching/student/route';
 import { teachingClassRouter } from './teaching/class/route';
 import { teachingDormRouter } from './teaching/dorm/route';
+import { teachingDormAllocateRouter } from './teaching/dorm/allocate.route';
+// ★ 宿舍楼栋设置（系统设置页与宿舍管理共用的楼栋字典）
+import { teachingBuildingRouter } from './teaching/dorm/building.route';
 import { denyReadOnlyAdmin } from './teaching/shared/readOnlyGuard';
 
 /* ============================================================
@@ -102,6 +105,8 @@ import portalAccountRouter from './portal/routes/account.route';
 // ---- 市场咨询 ----
 import { authMiddleware as consultAuth, consultPermGate } from './consult/middleware/auth';
 import consultStudentRouter from './consult/routes/student.route';
+/** ★ 2026-10-20 试学闭环：咨询侧服务间内部接口（只认 x-internal-token） */
+import { consultInternalRouter } from './consult/routes/internal.route';
 import consultFeeRouter from './consult/routes/fee.route';
 /* ★ 2026-10-16 分期付款路由，挂在 /api/consult/fee/plan 下 */
 import consultInstallmentRouter from './consult/routes/installment.route';
@@ -145,8 +150,11 @@ const app = express();
 // ============================================================
 
 app.use(cors());
-app.use(express.json({ limit: '20mb' }));          // 支持 JSON 请求体
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// ★ 2026-10-16：复盘「上传录音」上限提到 50MB。
+//   音频以 base64 dataURL 走 JSON body 提交 → 50MB 文件 ≈ 66.7MB 请求体，
+//   原来 20mb 会被 body-parser 直接拒（PayloadTooLargeError）。
+app.use(express.json({ limit: '100mb' }));         // 支持 JSON 请求体
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 // 请求日志（开发阶段方便看请求有没有进来）
 app.use((req, _res, next) => {
@@ -439,6 +447,16 @@ app.use('/api/portal/account', portalAccountRouter);
  *   ⚠️ 它只对「权限树里被管理员显式撤销过的动作」生效，其余一律放行
  *      （差异存储，与班级 / 初高 / 财务三模块同一口径）。
  */
+/**
+ * ★ 2026-10-20 试学闭环：服务间内部接口（/api/consult/student/internal/*）
+ *
+ * 为什么必须挂在登录态路由【之前】：
+ *   班主任属于班级模块，他的 token 在咨询侧解不出咨询岗位，走 consultAuth 会 401。
+ *   而「试学结束由班主任发起补费」「退学通过后回写咨询状态」这两个动作必须跨模块调用。
+ *
+ * 鉴权由 internal.route.ts 自己校验 x-internal-token（见文件头注释）。
+ */
+app.use('/api/consult/student/internal', consultInternalRouter);
 app.use('/api/consult/student', consultAuth, consultPermGate, consultStudentRouter);
 app.use('/api/consult/fee', consultAuth, consultPermGate, consultFeeRouter);
 app.use('/api/consult/fee/plan', consultAuth, consultPermGate, consultInstallmentRouter);
@@ -672,14 +690,57 @@ app.use(
   teachingClassRouter,
 );
 
+  /**
+   * ★ 班级宿舍分派（宿舍管理的子页面）
+   *
+   * 必须挂在 `/api/teaching/dorm` **之前** —— 后者会把 `/allocate/*`
+   * 一并吃进 teachingDormRouter（没有匹配路由时才 next() 到后面），
+   * 提前挂载可以避免依赖 fallthrough 的隐式行为。
+   *
+   * 权限码与宿舍域完全一致（教务老师已有 classjh:dorm:view），不新增权限点。
+   */
   app.use(
-    '/api/teaching/dorm',
-    authMiddleware,
-    denyReadOnlyAdmin,
-    denyApprovalOnlyWrite,
-    requireAnyPage(['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view']),
-    teachingDormRouter,
-  );
+  '/api/teaching/dorm/allocate',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage(['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view']),
+  teachingDormAllocateRouter,
+);
+
+  app.use(
+  '/api/teaching/dorm',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage(['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view']),
+  teachingDormRouter,
+);
+
+  /**
+   * ★ 宿舍楼栋设置 · /api/teaching/building/*
+   *
+   * 【为什么权限码是 4 个而不是 dorm 那 3 个】
+   *   两个入口共用这一份字典：
+   *     ① 教学管理 → 系统设置 → 楼栋设置页签   → classjh:setting:view
+   *     ② 教学管理 → 宿舍管理 → 楼栋下拉       → classjh/class/job 的 dorm:view
+   *   只挂 ① 会让「有宿舍权限、没设置权限」的用户拉不到下拉；
+   *   只挂 ② 会让「有设置权限、没宿舍权限」的用户打不开设置页。
+   *   → 两边都放行：看得见楼栋的人就能读，写操作另有只读管理员/学管主任两道闸。
+   */
+  app.use(
+  '/api/teaching/building',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage([
+    'classjh:setting:view',
+    'classjh:dorm:view',
+    'class:dorm:view',
+    'job:dorm:view',
+  ]),
+  teachingBuildingRouter,
+);
 
 // ============================================================
 // 404 处理（放在所有路由之后）
