@@ -802,6 +802,11 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
               if (q.className) b.orWhere('class_name', String(q.className));
             });
           }
+          // ★ 2026-10-22：房间性别过滤（男寝只出男生 / 女寝只出女生）
+          const wantGender = numOrNull(q.gender) ?? 0;
+          if (wantGender === 1 || wantGender === 2) {
+            qb.andWhere("gender", wantGender);
+          }
           if (kw) {
             qb.andWhere((b: any) =>
               b.where('student_name', 'like', `%${kw}%`).orWhere('student_no', 'like', `%${kw}%`),

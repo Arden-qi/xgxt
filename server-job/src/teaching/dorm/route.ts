@@ -169,6 +169,9 @@ teachingDormRouter.get(
           req.user,
           str(req.query.classId) || undefined,
           str(req.query.className) || undefined,
+          req.query.gender === undefined || req.query.gender === ''
+            ? undefined
+            : Number(req.query.gender) || undefined,
         ),
         '查询成功',
       ),

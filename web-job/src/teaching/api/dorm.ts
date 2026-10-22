@@ -316,7 +316,14 @@ export interface DormCandidateRow {
 }
 
 export async function listDormCandidates(
-  q: { stage?: DormStage; keyword?: string; classId?: string; className?: string },
+  q: {
+    stage?: DormStage;
+    keyword?: string;
+    classId?: string;
+    className?: string;
+    /** ★ 2026-10-22：房间性别（1 男 / 2 女），男寝只出男生 */
+    gender?: number;
+  },
 ) {
   const r = await http.get(`${BASE}/candidates${qs(q)}`);
   return r as unknown as DormCandidateRow[];

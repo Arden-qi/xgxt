@@ -328,6 +328,11 @@ export async function listCandidates(
   user: any,
   classId?: string,
   className?: string,
+  /**
+   * ★ 2026-10-22：按性别过滤候选（男寝只出男生 / 女寝只出女生）
+   *   传 0 / undefined = 不限。调用方传的是房间的 dorm_gender。
+   */
+  gender?: number,
 ): Promise<DormCandidateRow[]> {
   const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
   if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有宿舍管理的访问权限');
@@ -340,7 +345,7 @@ export async function listCandidates(
       : stages;
 
   const parts = await Promise.all(
-    scanStages.map((s) => REPOS[s].candidates({ keyword, classId, className }, user)),
+    scanStages.map((s) => REPOS[s].candidates({ keyword, classId, className, gender }, user)),
   );
   const seen = new Set<string>();
   const out: DormCandidateRow[] = [];

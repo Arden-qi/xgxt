@@ -393,7 +393,7 @@
             reserve-keyword
             :remote-method="searchAssignStudents"
             :loading="assignLoading"
-            placeholder="输入学号或姓名搜索（本班未入住学生）"
+            placeholder="输入学号或姓名搜索（本班未入住 · 性别需与宿舍一致）"
             style="width: 100%"
             @change="onAssignStudentChange"
           >
@@ -1049,6 +1049,8 @@ async function searchAssignStudents(keyword?: string) {
     const list = await listDormCandidates({
       stage,
       keyword: keyword || undefined,
+      // ★ 2026-10-22：男寝只出男生、女寝只出女生（房间 dorm_gender：1 男 / 2 女 / 0 不限）
+      gender: curDorm.value?.dormType || undefined,
       ...assignClassFilter(),
     });
     // 保留当前选中项，避免刷新候选后显示成 id

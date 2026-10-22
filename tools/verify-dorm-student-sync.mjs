@@ -96,6 +96,23 @@ try {
   const stu = (cands.body?.data || []).find((c) => !c.dormNo && c.gender === 1);
   check('找到未入住学生', !!stu, stu ? `${stu.studentName}(${stu.studentNo})` : '无');
 
+  /**
+   * ★ 2026-10-22：办理入住弹窗按房间性别过滤候选
+   *   男寝（gender=1）只出男生、女寝（gender=2）只出女生，不传则不限。
+   */
+  const maleCands = await req('GET', '/api/teaching/dorm/candidates?stage=jh&gender=1', { token });
+  const femaleCands = await req('GET', '/api/teaching/dorm/candidates?stage=jh&gender=2', { token });
+  check(
+    '男寝候选只有男生',
+    (maleCands.body?.data || []).length > 0 && (maleCands.body?.data || []).every((c) => c.gender === 1),
+    `${(maleCands.body?.data || []).length} 人`,
+  );
+  check(
+    '女寝候选只有女生',
+    (femaleCands.body?.data || []).length > 0 && (femaleCands.body?.data || []).every((c) => c.gender === 2),
+    `${(femaleCands.body?.data || []).length} 人`,
+  );
+
   const rooms = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token });
   const room = (rooms.body?.data || []).find(
     (r) => (r.freeBeds || []).length > 0 && (!r.locked || r.assignedTo === stu?.className),

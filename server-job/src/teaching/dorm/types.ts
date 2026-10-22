@@ -84,9 +84,12 @@ export interface DormRepo {
   beds(dormId: string, user: any): Promise<DormBedRow[]>;
   /** 在住学生名单（跨房间） */
   residents(q: DormListQuery, user: any): Promise<DormResidentRow[]>;
-  /** 办理入住时的学生候选（按数据范围过滤，默认排除已入住）；classId/className 用于班级-学生联动 */
+  /**
+   * 办理入住时的学生候选（按数据范围过滤，默认排除已入住）
+   * classId/className 用于班级-学生联动；gender = 房间性别（1 男 / 2 女，0 不限）
+   */
   candidates(
-    q: { keyword?: string; limit?: number; classId?: string; className?: string },
+    q: { keyword?: string; limit?: number; classId?: string; className?: string; gender?: number },
     user: any,
   ): Promise<DormCandidateRow[]>;
   /**
