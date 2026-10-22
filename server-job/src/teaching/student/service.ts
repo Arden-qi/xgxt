@@ -39,6 +39,7 @@ import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { listClassesByStage } from '../shared/classOptions';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { loadSchemeStagesForStage } from '../shared/stageSchemes';
+import { nextStudentNoForClass, phaseCodeOfClass } from '../shared/studentNo';
 import { db } from '../../utils/db';
 import { StudentStatus } from 'shared-types';
 import type { StudentRepo, StudentStat } from './types';
@@ -329,6 +330,14 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
   // 大学 / 就业 的 dept_code 是必填列，缺了会撞数据库约束 —— 提前给出可读报错
   if (body.stage !== 'jh' && !body.deptCode) {
     throw new BizError(BizCode.PARAM_ERROR, `${STUDENT_STAGE_NAME[body.stage]}学段「部门」必填`);
+  }
+  /**
+   * ★ 2026-10-22 用户口径：学生阶段跟随所在班级，不再手选。
+   *   前端选班时已带出，这里再按班级覆盖一次 —— 接口调用方也改不了。
+   */
+  if (body.classId) {
+    const phase = await phaseCodeOfClass(body.stage, body.classId);
+    if (phase !== null) body.phaseCode = phase;
   }
   try {
     return await REPOS[body.stage].save(body, user?.userId || 'system');

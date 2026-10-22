@@ -19,18 +19,17 @@ export enum Gender {
  *   （与 consult/enums.ts 保持一致，五份副本必须同步）
  */
 export enum DeptCode {
-  JUNIOR_SENIOR = 1,  // 初中部（历史命名，值不变）
+  JUNIOR_SENIOR = 1,  // 初高部（历史命名，值不变）
   UNIVERSITY = 2,     // 大学部
   /** ★ 2026-10-19：就业部（独立学段，与 enums.ts 保持一致） */
   EMPLOYMENT = 3,     // 就业部
-  SENIOR = 4,         // 高中部
 }
 
 /** 部门下拉顺序（初中部 → 高中部 → 大学部） */
 export const DEPT_OPTIONS: number[] = [
   DeptCode.JUNIOR_SENIOR,
-  DeptCode.SENIOR,
   DeptCode.UNIVERSITY,
+  DeptCode.EMPLOYMENT,
 ];
 
 /** 学生状态（全系统最重要的字段） */
@@ -227,8 +226,7 @@ export const GENDER_NAME: Record<number, string> = {
 };
 
 export const DEPT_NAME: Record<number, string> = {
-  [DeptCode.JUNIOR_SENIOR]: '初中部',
-  [DeptCode.SENIOR]: '高中部',
+  [DeptCode.JUNIOR_SENIOR]: '初高部',
   [DeptCode.UNIVERSITY]: '大学部',
   [DeptCode.EMPLOYMENT]: '就业部',
 };
