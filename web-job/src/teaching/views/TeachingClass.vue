@@ -86,8 +86,18 @@
         <el-button type="primary" @click="applyQuery">查询</el-button>
         <el-button @click="reset">重置</el-button>
         <el-button v-if="!isReadOnlyUser" type="success" @click="openCreate">新增班级</el-button>
+        <!-- ★ 2026-10-22：阶段方案设计从「系统设置」搬到这里，只给校长 / 学管主任 -->
+        <el-button v-if="canDesignScheme" :icon="SetUp" @click="schemeVisible = true">阶段方案设计</el-button>
       </el-form-item>
     </el-form>
+
+    <!-- 阶段方案设计（弹窗；组件与原来系统设置里的方案页是同一套逻辑） -->
+    <el-dialog v-model="schemeVisible" title="阶段方案设计" width="900px" top="6vh" destroy-on-close>
+      <StageSchemePanel />
+      <template #footer>
+        <el-button @click="schemeVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 列表 -->
     <!-- ★ 列宽纪律：内容大多只有 2~4 个字，一律用 min-width 让浏览器按需收缩/伸展，
@@ -736,10 +746,13 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { isReadOnlyUser } from '@/store/permission';
+import { SetUp } from '@element-plus/icons-vue';
+import { isReadOnlyUser, myRoles } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
+import { http } from '@/api/request';
+// ★ 2026-10-22：阶段方案设计从「系统设置」搬进班级管理，以弹窗呈现
+import StageSchemePanel from '@/teaching/components/StageSchemePanel.vue';
 import { DeptCode, StudentStatus } from 'shared-types';
-import { userApi } from '@/perm/api/perm';
 import type { PermUserListItem } from 'shared-types/perm';
 import {
   listClasses,
@@ -779,6 +792,15 @@ import {
 } from '@/teaching/classroom';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
+/**
+ * 阶段方案设计：★ 2026-10-22 用户口径「只给校长 / 学管主任」
+ *   后端 /api/class-jh/stage-scheme/* 也加了同样的角色限制，这里只管入口显隐。
+ */
+const canDesignScheme = computed(() =>
+  ['RM_PRINCIPAL', 'TEACH_DEAN', 'SYS_ADMIN'].some((r) => myRoles.value.includes(r)),
+);
+const schemeVisible = ref(false);
+
 // ★ 2026-10-22 部门口径统一：对外只有「初高中 / 大学部 / 就业部」三个部门。
 //   「实训」是就业部下的一个阶段（班级 dept_code=3），不是并列部门。
 const STAGE_LABEL: Record<ClassStage, string> = {
@@ -1092,17 +1114,20 @@ const staffOptions = ref<PermUserListItem[]>([]);
 async function loadStaff() {
   staffLoading.value = true;
   try {
-    // ⚠️ /api/perm/user/list 的 size 上限 100 —— 按 100/页自动翻页拉全量（≤5 页封顶）
-    const out: PermUserListItem[] = [];
-    const size = 100;
-    const first = await userApi.list({ page: 1, size });
-    out.push(...(first.list || []));
-    const pages = Math.ceil((first.total || 0) / size);
-    for (let p = 2; p <= Math.min(pages, 5); p++) {
-      const d = await userApi.list({ page: p, size });
-      out.push(...(d.list || []));
-    }
-    staffOptions.value = out;
+    /* ★ 2026-10-22：改走教学侧接口 /api/teaching/class/staff-options
+     *
+     * 【为什么换】原来直连 /api/perm/user/list（挂 permAuth，要求账号 modules 含 perm）——
+     *   初高 / 大学 / 就业账号一进班级管理就 403：
+     *   ① 拦截器弹「您没有该操作的权限」（用户报障：每个账号登录都弹没有权限）；
+     *   ② 更实际的问题：staffOptions 被清空 → 新建班级选不了班主任/教员/助教。
+     *   新接口跟着班级页面权限走，只返回 id + 姓名，够下拉用。
+     *   拉取仍带 silent：万一以后某个账号连班级页面权限都没有，也只是下拉空着，不弹窗。 */
+    const rows = await http.get<Array<{ id: string; userName: string }>>(
+      '/api/teaching/class/staff-options',
+      undefined,
+      { silent: true },
+    );
+    staffOptions.value = (rows || []) as unknown as PermUserListItem[];
   } catch {
     staffOptions.value = [];
   } finally {
@@ -1186,9 +1211,16 @@ async function openEdit(row: ClassRow) {
   editVisible.value = true;
 }
 
-/** ★ 表单切学段：编号 / 交棒 / 备注字段要跟着清（否则会带着上一个学段的脏值提交） */
+/** ★ 表单切学段：编号 / 交棒 / 备注字段要跟着清（否则会带着上一个学段的脏值提交）
+ *
+ * ⚠️ 2026-10-22 修：这里原来只保住 id / className，
+ *    结果用户「先填班级编号、再选部门」时，onFormDeptChange → 本函数
+ *    → Object.assign(form, emptyForm(...)) 把刚填的 classCode 一起抹掉了
+ *    （用户反馈：填完班级编号去选部门，编号自动清空）。
+ *    班级编号是三个部门通用、与学段无关的字段，必须原样保留。
+ */
 function onFormStageChange() {
-  const keep = { id: form.id, className: form.className };
+  const keep = { id: form.id, className: form.className, classCode: form.classCode };
   Object.assign(form, emptyForm(form.stage), keep);
 }
 

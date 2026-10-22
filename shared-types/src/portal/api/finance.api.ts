@@ -54,13 +54,16 @@ export const FREEZE_SOURCE_NAME: Record<number, string> = {
 
 /** 退费单据来源 */
 export enum RefundSourceType {
-  HEAD_TEACHER = 1, // 班主任提交
-  PRINCIPAL = 2,    // 校长审批推送
+  HEAD_TEACHER = 1, // 班主任提交（班级模块发起）
+  PRINCIPAL = 2, // 校长审批推送
+  /** ★ 2026-10-22 新增：咨询部门发起（试学阶段流失退费） */
+  CONSULT = 3, // 咨询部门
 }
 
 export const REFUND_SOURCE_NAME: Record<number, string> = {
   [RefundSourceType.HEAD_TEACHER]: '班主任提交',
   [RefundSourceType.PRINCIPAL]: '校长审批推送',
+  [RefundSourceType.CONSULT]: '咨询部门',
 };
 
 /** 支付方式 */

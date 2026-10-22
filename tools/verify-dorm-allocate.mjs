@@ -1,5 +1,5 @@
 /**
- * 校验「宿舍管理 → 班级分派」子页面
+ * 校验「宿舍管理 → 分派宿舍」子页面
  * ============================================================
  *
  * 静态：菜单/页面里确实挂了子页签与接口封装。
@@ -69,7 +69,7 @@ const route = read('server-job/src/teaching/dorm/allocate.route.ts');
 const app = read('server-job/src/app.ts');
 const svc = read('server-job/src/teaching/dorm/allocate.service.ts');
 
-check('TeachingDorm 挂了「班级分派」页签', /班级分派/.test(dorm) && /DormAllocate/.test(dorm));
+check('TeachingDorm 挂了「分派宿舍」页签', /分派宿舍/.test(dorm) && /DormAllocate/.test(dorm));
 check('DormAllocate 列表有六个必需列', ['班级', '班主任', '男生人数', '女生人数', '状态', '所分宿舍'].every((h) => page.includes(h)));
 check('DormAllocate 左右两栏（男寝 / 女寝）', page.includes('男寝') && page.includes('女寝') && page.includes("loadRooms('male')") && page.includes("loadRooms('female')"));
 check('下拉框前有「选择楼栋」四个字', (page.match(/选择楼栋/g) || []).length >= 3);

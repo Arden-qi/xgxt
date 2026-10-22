@@ -46,7 +46,7 @@ function reqCategory(v: unknown): number {
 teachingDormAllocateRouter.get(
   '/classes',
   wrap(async (req, res) => {
-    const list = await svc.listAllocateClasses(str(req.query.keyword));
+    const list = await svc.listAllocateClasses(str(req.query.keyword), req.user);
     res.json(ok(list, '查询成功'));
   }),
 );

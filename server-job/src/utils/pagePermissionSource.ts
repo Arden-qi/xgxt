@@ -36,7 +36,7 @@ import {
   overlayActionCodes,
   PERM_POINT_TO_ACTION_CODES,
 } from './roleActionOverlay';
-import { extraPageCodesFromModuleItems, isBuiltinRoleCode } from './permPointToPages';
+import { pageCodesFromModuleItems, removeCodesOfRevokedPages } from './permPointToPages';
 import { getRoleModuleItems } from './roleModuleItems';
 
 /**
@@ -246,12 +246,15 @@ const CLASS_JH_STAFF_PAGES: string[] = [
   'classjh:dorm:view',
 ];
 
-/** 教务老师：本模块只负责宿舍（调宿审批）与审批中心、楼栋字典 */
+/**
+ * 教务老师：本模块只负责宿舍（调宿审批）
+ *
+ * ★ 2026-10-22：按用户要求去掉「休学/退学审批」——
+ *   `classjh:approval:view` 不再给教务，左侧菜单的「休学 / 退学审批」随之消失。
+ */
 const CLASS_JH_ACAD_PAGES: string[] = [
   'classjh:dashboard:view',
   'classjh:dorm:view',
-  'classjh:approval:view',
-  'classjh:building:view',
 ];
 
 const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
@@ -407,9 +410,6 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
   [RoleCode.ACAD_STAFF]: [
     'edu:student:view',
     'edu:dorm:view',
-    'edu:fee:view',
-    // ★ 2026-10-05：教务发起催费的入口（见上方说明）
-    'job:feeCall:view',
     // ★★ 2026-10-08 修复「宿舍审批死结」：
     //   实训侧「就业管理 → 宿舍管理」（job:dorm:view）**本来就是班主任/教务共用页**——
     //   班主任只能「发起 + 撤回」，教务**只负责审批**（见 api/dorm.ts 头部说明、
@@ -420,7 +420,7 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
     //   与「教务管理 → 宿舍管理」是两套独立宿舍（实训基地 / 教务基地），互不影响。
     'job:dorm:view',
     // ★ 2026-10-05：教学管理（初高）—— 教务在该模块负责【调宿审批】，
-    //   所以给宿舍页与审批中心（其余页面属班主任/经理，不给他）
+    //   所以给宿舍页（其余页面属班主任/经理，不给他）
     ...CLASS_JH_ACAD_PAGES,
   ],
 
@@ -547,11 +547,24 @@ export async function getUserPagePermissions(roles: string[]): Promise<string[]>
      *    · 内置角色 → merged 恒等于 base，行为与改造前逐字一致（零回归）
      *    · 自建角色 → 用权限库功能点推导出它该有哪些页面
      */
+    /**
+     * ★ 2026-10-22：权限树的功能点已经**就是页面**，所以这里改成
+     *   「凡是该角色在权限树里勾到动作的页面，都补上它的页面码」。
+     *
+     *   与旧版的区别：旧版只在「自建角色（静态表查无此人）」时启用，
+     *   因为那时功能点是模块粗粒度、会误伤内置角色。
+     *   现在功能点=页面、且每个页面的 pageCodes 写在定义里，
+     *   再配合 `pageCodesFromModuleItems(items, base)` 的「学段前缀挑选」，
+     *   内置角色只会拿到它本来就有的码（不扩学段），自建角色也能正常拿到页面。
+     */
     let merged = base;
-    if (!isBuiltinRoleCode(role) && base.length === 0) {
+    {
       const items = await getRoleModuleItems(role);
-      const extra = extraPageCodesFromModuleItems(items);
-      if (extra.length) merged = Array.from(new Set(extra));
+      const extra = pageCodesFromModuleItems(items, base);
+      if (extra.length) merged = Array.from(new Set([...base, ...extra]));
+      // ★ 收回：权限树里一个动作都没勾的页面 → 它的页面码要被剔掉，
+      //   这样「取消勾选」对页面级接口是真拦截（不只是菜单不显示）
+      merged = removeCodesOfRevokedPages(merged, items);
     }
 
     // ★ 角色 → 页面 台账：增/删该角色在本轮被显式调整过的页面（优先于上面两层）

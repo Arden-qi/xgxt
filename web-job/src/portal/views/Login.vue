@@ -36,7 +36,10 @@ const errMsg = ref('');
  * ⚠️ 必须与 t_sys_account 种子数据一致，否则点了登不上。
  */
 const demoAccounts = [
-  { account: 'admin', name: '系统管理员', scope: '全部模块', tag: 'admin' },
+  /* ★ 2026-10-22 移除：{ account: 'admin', name: '系统管理员', scope: '全部模块', tag: 'admin' }
+   *   按用户要求从登录页演示账号列表中删除「系统管理员」这一演示角色。
+   *   ⚠️ 仅删除页面上的演示入口，admin 账号本身在 t_sys_account 里仍然存在，
+   *      直接手输账号 admin / 123456 依然可以登录。 */
   { account: 'wangjl', name: '王经理', scope: '市场咨询', tag: 'consult' },
   { account: 'lilx', name: '李老师', scope: '市场咨询', tag: 'consult' },
   { account: 'zhangls', name: '张老师', scope: '市场咨询', tag: 'consult' },

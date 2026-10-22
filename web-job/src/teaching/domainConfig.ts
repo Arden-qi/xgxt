@@ -195,7 +195,7 @@ export const TEACHING_DOMAINS: TeachingDomainDef[] = [
   /* ---------------- 9. 休学 / 退学 / 复学审批 ---------------- */
   {
     key: 'approval',
-    title: '休学 / 退学审批',
+    title: '休学/退学审批',
     icon: 'Stamp',
     desc: '★ 审批链三部门统一（实训那套）：休学/复学 1 步，退学 2 步（学管→校长）。',
     /** ★ 第 2 期已合并（第五个业务域）—— stages 保留作权限判定与回退 */

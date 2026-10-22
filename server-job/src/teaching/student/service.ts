@@ -39,6 +39,7 @@ import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { listClassesByStage } from '../shared/classOptions';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { loadSchemeStagesForStage } from '../shared/stageSchemes';
+import { nextStudentNoForClass, phaseCodeOfClass } from '../shared/studentNo';
 import { db } from '../../utils/db';
 import { StudentStatus } from 'shared-types';
 import type { StudentRepo, StudentStat } from './types';
@@ -336,7 +337,6 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
   if (body.stage !== 'jh' && !body.deptCode) {
     throw new BizError(BizCode.PARAM_ERROR, `${STUDENT_STAGE_NAME[body.stage]}学段「部门」必填`);
   }
-
   /* ★ 2026-10-21 批注：「学生状态为【退学】的，任何操作都不可更改该状态」
    *   编辑学生档案是唯一能直接写 `student_status` 的入口 → 在这里锁死：
    *     ① 库里已经是退学(7) → 传上来的状态必须还是 7，想改就报错（前端下拉也已 disabled）；
@@ -352,6 +352,14 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
     }
   }
 
+  /**
+   * ★ 2026-10-22 用户口径：学生阶段跟随所在班级，不再手选。
+   *   前端选班时已带出，这里再按班级覆盖一次 —— 接口调用方也改不了。
+   */
+  if (body.classId) {
+    const phase = await phaseCodeOfClass(body.stage, body.classId);
+    if (phase !== null) body.phaseCode = phase;
+  }
   try {
     return await REPOS[body.stage].save(body, user?.userId || 'system');
   } catch (e) {

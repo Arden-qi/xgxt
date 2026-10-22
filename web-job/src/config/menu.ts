@@ -200,30 +200,33 @@ export const MENU: MenuNode[] = [
       },
 
       /* ---------- 初高独有 ---------- */
-      {
-        title: '系统设置',
-        path: '/class-jh/setting',
-        pageCode: 'classjh:setting:view',
-        owner: '初高中部',
-        stage: '已完成',
-        phase: '初高部',
-        desc: '出勤达标线与统计口径、催费提醒天数、封班可转入类型、阶段方案（方案名称+所属部门+多阶段）。',
-      },
-      {
-        /**
-         * ★ 2026-10-20 楼栋设置独立入口
-         *
-         * 从「系统设置」的楼栋页签抽出来单独成页，权限码 `classjh:building:view`。
-         * 目的：只给教务老师楼栋字典，不连带放开系统设置 KV / 阶段字典 / 操作日志。
-         */
-        title: '楼栋设置',
-        path: '/class-jh/building',
-        pageCode: 'classjh:building:view',
-        owner: '初高中部',
-        stage: '已完成',
-        phase: '初高',
-        desc: '宿舍楼栋字典（男寝 / 女寝），与宿舍管理、分派宿舍的楼栋下拉实时一致。',
-      },
+      /*
+       * ★ 2026-10-22（第二次核对）按用户要求删除「系统设置」菜单项
+       *
+       * 用户指出参考图里没有这一页，要求「不要这个」。
+       * 同时 `server-job/src/perm/config/pageRegistry.ts` 里删掉了对应的台账行
+       * （key: setting / path: /class-jh/setting / classjh:setting:view）。
+       *
+       * ⚠️ 为什么两个文件必须一起删：`store/pageConfig.ts` 的 `pageEnabled()` 有条硬约定 ——
+       *   「台账里**没登记过**的 path 一律放行」。所以只删台账行的话，
+       *   `/class-jh/setting` 会变成「不受台账管」，菜单反而照旧显示。
+       *   真正让侧栏消失的是**本文件这条字段被删**；台账那边删行是为了让
+       *   「页面管理」列表里不再出现这一项（两边口径一致）。
+       *
+       * 功能没丢：路由 /#/class-jh/setting 与 /api/teaching/setting/* 都在，
+       * 页内（阶段方案 / 出勤达标线 / 催费提醒天数 / 封班可转入类型）的数据与接口也都保留，
+       * 只是不再有侧栏入口、也不再出现在「页面管理」里。
+       * ⚠️ 连带影响：楼栋设置原本是这页的第 2 个页签，现在没有 UI 入口了（路由 /class-jh/building 仍在）。
+       * 如需恢复：把台账行与这条菜单项一起加回来即可（两边必须同增同删）。
+       */
+      /*
+       * ★ 2026-10-22 按用户要求删除「楼栋设置」独立菜单项
+       *
+       * 2026-10-20 曾把楼栋字典从系统设置里抽成独立页（权限码 classjh:building:view），
+       * 用户核对侧栏菜单后要求「菜单里只有这些页面」→ 本次撤掉这个独立入口。
+       * 功能没丢：教学管理 → 系统设置 → 「楼栋设置」页签（SettingList.vue 第 2 个页签）；
+       * 路由 /class-jh/building 与 /api/teaching/building/* 都保留，只是不再占一条菜单。
+       */
     ],
   },
 ];

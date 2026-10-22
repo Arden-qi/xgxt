@@ -142,16 +142,21 @@ async function seedStages() {
  * ============================================================ */
 
 const CLASSES = [
-  { id: 'seed-cls-1', name: 'G104', stage: 102, status: 2, head: ['T001', '张国强'], teacher: ['T002', '李明'], room: '101' },
-  { id: 'seed-cls-2', name: 'G105', stage: 103, status: 1, head: ['T003', '王海燕'], teacher: ['T004', '赵刚'], room: '102' },
-  { id: 'seed-cls-3', name: 'J106', stage: 105, status: 1, head: ['T005', '刘芳'], teacher: ['T006', '陈军'], room: '201' },
-  { id: 'seed-cls-4', name: 'G107', stage: 106, status: 1, head: ['T007', '孙丽'], teacher: ['T008', '周涛'], room: '202' },
+  { id: 'seed-cls-1', name: 'G104', code: 'G104', stage: 102, status: 2, head: ['T001', '张国强'], teacher: ['T002', '李明'], room: '101' },
+  { id: 'seed-cls-2', name: 'G105', code: 'G105', stage: 103, status: 1, head: ['T003', '王海燕'], teacher: ['T004', '赵刚'], room: '102' },
+  { id: 'seed-cls-3', name: 'J106', code: 'J106', stage: 105, status: 1, head: ['T005', '刘芳'], teacher: ['T006', '陈军'], room: '201' },
+  { id: 'seed-cls-4', name: 'G107', code: 'G107', stage: 106, status: 1, head: ['T007', '孙丽'], teacher: ['T008', '周涛'], room: '202' },
 ];
 
 async function seedClasses() {
   for (const c of CLASSES) {
     await ensure('t_class_info', c.id, {
       class_name: c.name,
+      // ★ 2026-10-22：演示班级必须带班级编号 ——
+      //   学号规则是「LZ + 班级编号 + 三位序号」，班级没编号时
+      //   在页面上新增学生会直接被拦（「还没有班级编号，学号无法生成」）。
+      //   这里用班名当编号（G104/G105/J106/G107），三部门内不重复。
+      class_code: c.code,
       stage: c.stage,
       head_teacher_id: c.head[0],
       head_teacher_name: c.head[1],

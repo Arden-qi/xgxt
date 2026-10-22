@@ -1790,6 +1790,9 @@ export interface DormRow {
   ownerName: string | null;
   /** 所属班级（只有初高有） */
   className: string | null;
+  /** ★ 2026-10-22：该房间分派给哪个班 / 该班状态（1 开放 / 2 封班） */
+  assignedClassName?: string | null;
+  assignedClassStatus?: number | null;
   remark: string | null;
 }
 

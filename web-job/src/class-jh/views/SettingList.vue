@@ -2,45 +2,23 @@
 /**
  * 系统设置页
  *
- * 四个页签：系统设置（KV）/ 楼栋设置 / 阶段方案 / 操作日志。
+ * 两个页签：系统设置（KV）/ 操作日志。
  *
- * ★ 楼栋设置（2026-10-16 新增）：宿舍楼栋字典，和「教学管理 → 宿舍管理」
- *   的楼栋下拉是同一份数据（sms_common.t_dorm_building）。
- *   这里加一栋 → 宿舍管理的楼栋下拉立刻多一项，不需要改任何代码。
+ * ★ 2026-10-22：「楼栋设置」页签已下线 —— 搬到「教学管理 → 宿舍管理」
+ *   （宿舍管理第 4 个页签）。楼栋字典仍是同一份（sms_common.t_dorm_building），
+ *   在宿舍管理里加一栋，宿舍房间/班级分派的楼栋下拉立刻多一项。
+ *   楼栋面板组件保留：`@/class-jh/components/setting/BuildingSettingPanel.vue`。
  *
- * ★ 2026-10-20 楼栋设置抽成公共面板 `BuildingSettingPanel.vue`：
- *   独立的「教学管理 → 楼栋设置」页（/class-jh/building，单独授权给教务老师）
- *   与本页页签渲染**同一个组件**，不再复制两份逻辑。
- *
- * ★ 阶段方案（2026-10-16 由「阶段字典」升级）：
- *   一个方案 = 方案名称 + 所属部门 + N 个阶段（阶段名称 + 学制月数）；
- *   例：方案一 → 一阶段 学制2月 / 二阶段 学制2月 / 三阶段 学制2月。
- *   班级新增/编辑里的「阶段方案 / 阶段」两个下拉即取这里的数据。
- *
- * ★ 2026-10-20 去重：本页原先调 /api/class-jh/stage-scheme/*（t_class_stage_scheme
- *   那套表从未建过，进来就报「数据表不存在」）。现在改调
- *   /api/class-jh/stage/plan/*（t_class_stage_plan + t_class_stage）——
- *   与班级 / 学生表单共用同一份「阶段方案」，只有这一套实现。
+ * ★ 2026-10-22：原「阶段方案」页签已迁到「班级管理 → 阶段方案设计」弹窗
+ *   （组件 web-job/src/teaching/components/StageSchemePanel.vue），本页不再保留。
  */
 
 import { ref, reactive, onMounted } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Delete, Edit, Search, Refresh, SetUp } from '@element-plus/icons-vue';
-import { DEPT_NAME } from 'shared-types/class-jh';
+import { ElMessage } from 'element-plus';
+import { Search, Refresh, SetUp } from '@element-plus/icons-vue';
 import type { ClassSetting, OpLog, OpLogListQuery } from 'shared-types/class-jh';
-import type { StagePlan, StagePlanSavePayload } from '@/class-jh/api/setting';
-import {
-  fetchSettingDetail,
-  updateSetting,
-  fetchStagePlanList,
-  addStagePlan,
-  updateStagePlan,
-  deleteStagePlan,
-  fetchOpLogList,
-} from '@/class-jh/api/setting';
+import { fetchSettingDetail, updateSetting, fetchOpLogList } from '@/class-jh/api/setting';
 import { dash, formatDateTime } from '@/class-jh/utils/format';
-/** ★ 2026-10-20：楼栋设置抽成公共面板，系统设置页与独立「楼栋设置」页共用 */
-import BuildingSettingPanel from '@/class-jh/components/setting/BuildingSettingPanel.vue';
 
 const activeTab = ref('setting');
 
@@ -102,142 +80,6 @@ async function saveSettings() {
   }
 }
 
-/* ================= 阶段方案 ================= */
-const planLoading = ref(false);
-const planData = ref<StagePlan[]>([]);
-
-async function loadPlans() {
-  planLoading.value = true;
-  try {
-    planData.value = await fetchStagePlanList();
-  } catch {
-    /* 错误已统一处理 */
-  } finally {
-    planLoading.value = false;
-  }
-}
-
-/** 弹窗里的一行阶段明细（学制未填时为 undefined，提交前校验） */
-interface PlanPhaseRow {
-  stageName: string;
-  studyMonths: number | undefined;
-}
-
-const planVisible = ref(false);
-const planSubmitting = ref(false);
-const planForm = reactive<{
-  id: string | undefined;
-  planName: string;
-  deptCode: number;
-  phases: PlanPhaseRow[];
-}>({
-  id: undefined,
-  planName: '',
-  deptCode: 1,
-  phases: [],
-});
-
-/** 打开弹窗：传 row = 编辑（回填方案与阶段明细），不传 = 新增 */
-function openPlanDialog(row?: StagePlan) {
-  if (row) {
-    planForm.id = row.id;
-    planForm.planName = row.planName;
-    planForm.deptCode = row.deptCode;
-    planForm.phases = row.phases.length
-      ? row.phases.map((s) => ({ stageName: s.stageName, studyMonths: s.studyMonths ?? undefined }))
-      : [{ stageName: '', studyMonths: undefined }];
-  } else {
-    planForm.id = undefined;
-    planForm.planName = '';
-    planForm.deptCode = 1;
-    planForm.phases = [{ stageName: '', studyMonths: undefined }];
-  }
-  planVisible.value = true;
-}
-
-/** 「添加阶段名称」：一个方案可以挂多个阶段 */
-function addPlanPhase() {
-  planForm.phases.push({ stageName: '', studyMonths: undefined });
-}
-
-function removePlanPhase(index: number) {
-  if (planForm.phases.length <= 1) return;
-  planForm.phases.splice(index, 1);
-}
-
-async function submitPlan() {
-  const planName = planForm.planName.trim();
-  if (!planName) {
-    ElMessage.warning('请填写方案名称');
-    return;
-  }
-  if (!planForm.deptCode) {
-    ElMessage.warning('请选择所属部门');
-    return;
-  }
-  if (!planForm.phases.length) {
-    ElMessage.warning('请至少添加一个阶段');
-    return;
-  }
-  for (let i = 0; i < planForm.phases.length; i++) {
-    const s = planForm.phases[i];
-    if (!s.stageName?.trim()) {
-      ElMessage.warning(`请填写第 ${i + 1} 个阶段的阶段名称`);
-      return;
-    }
-    if (!s.studyMonths || s.studyMonths <= 0) {
-      ElMessage.warning(`请填写第 ${i + 1} 个阶段的学制（月）`);
-      return;
-    }
-  }
-
-  const payload: StagePlanSavePayload = {
-    planName,
-    deptCode: planForm.deptCode,
-    phases: planForm.phases.map((s) => ({ stageName: s.stageName.trim(), studyMonths: Number(s.studyMonths) })),
-  };
-
-  planSubmitting.value = true;
-  try {
-    if (planForm.id) {
-      await updateStagePlan({ ...payload, id: planForm.id });
-      ElMessage.success('保存成功');
-    } else {
-      await addStagePlan(payload);
-      ElMessage.success('新增成功');
-    }
-    planVisible.value = false;
-    loadPlans();
-  } catch {
-    /* 错误已统一处理 */
-  } finally {
-    planSubmitting.value = false;
-  }
-}
-
-async function handleDeletePlan(row: StagePlan) {
-  try {
-    await ElMessageBox.confirm(
-      `确定删除方案「${row.planName}」吗？（方案下已有班级 / 学生正在使用的阶段不可删）`,
-      '删除确认',
-      {
-        type: 'warning',
-        confirmButtonText: '确定删除',
-        cancelButtonText: '取消',
-      },
-    );
-  } catch {
-    return;
-  }
-  try {
-    await deleteStagePlan(row.id);
-    ElMessage.success('删除成功');
-    loadPlans();
-  } catch {
-    /* 错误已统一处理 */
-  }
-}
-
 /* ================= 操作日志 ================= */
 const opLogLoading = ref(false);
 const opLogData = ref<OpLog[]>([]);
@@ -274,7 +116,6 @@ function resetOpLogQuery() {
 
 onMounted(() => {
   loadSettings();
-  loadPlans();
   loadOpLog();
 });
 </script>
@@ -307,31 +148,10 @@ onMounted(() => {
         </div>
       </el-tab-pane>
 
-      <!-- 楼栋设置（公共面板：与独立「楼栋设置」页完全相同） -->
-      <el-tab-pane label="楼栋设置" name="building">
-        <BuildingSettingPanel />
-      </el-tab-pane>
+      <!-- ★ 2026-10-22：「楼栋设置」页签已下线 —— 搬到「教学管理 → 宿舍管理」里
+           （第四个页签，与宿舍管理共用同一份楼栋字典） -->
 
-      <!-- 阶段方案（★ 2026-10-16 由「阶段字典」升级：一个方案可含多个阶段） -->
-      <el-tab-pane label="阶段方案" name="stagePlan">
-        <div class="toolbar">
-          <el-button v-readonly-hide type="primary" :icon="Plus" @click="openPlanDialog()">新增方案</el-button>
-        </div>
-        <el-table v-loading="planLoading" :data="planData" border stripe empty-text="暂无方案">
-          <el-table-column type="index" label="序号" width="60" align="center" />
-          <el-table-column prop="planName" label="方案名称" min-width="180" />
-          <el-table-column label="所属部门" width="140">
-            <template #default="{ row }">{{ DEPT_NAME[row.deptCode] || dash(row.deptCode) }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="150" align="center" fixed="right">
-            <template #default="{ row }">
-              <el-button v-readonly-hide link type="primary" size="small" :icon="Edit" @click="openPlanDialog(row)">编辑</el-button>
-              <el-button v-readonly-hide link type="danger" size="small" :icon="Delete" @click="handleDeletePlan(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
-
+      <!-- ★ 2026-10-22：「阶段方案」页签已迁到「班级管理 → 阶段方案设计」弹窗，此处删除 -->
       <!-- 操作日志 -->
       <el-tab-pane label="操作日志" name="opLog">
         <el-form :model="opLogQuery" inline class="mb12">
@@ -377,52 +197,6 @@ onMounted(() => {
       </el-tab-pane>
     </el-tabs>
 
-    <!-- 新增 / 编辑方案（★ 一个方案可挂多个阶段） -->
-    <el-dialog v-model="planVisible" :title="planForm.id ? '编辑方案' : '新增方案'" width="640px">
-      <el-form :model="planForm" label-width="90px">
-        <el-form-item label="方案名称" required>
-          <el-input v-model="planForm.planName" maxlength="50" placeholder="如 方案一" />
-        </el-form-item>
-        <el-form-item label="所属部门" required>
-          <el-select v-model="planForm.deptCode" style="width: 100%">
-            <el-option v-for="(name, value) in DEPT_NAME" :key="value" :label="name" :value="Number(value)" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="阶段明细" required>
-          <div class="plan-phases">
-            <div v-for="(s, i) in planForm.phases" :key="i" class="plan-phase-row">
-              <span class="plan-phase-row__no">{{ i + 1 }}</span>
-              <el-input v-model="s.stageName" maxlength="50" placeholder="阶段名称，如 一阶段" class="plan-phase-row__name" />
-              <el-input-number
-                v-model="s.studyMonths"
-                :min="1"
-                :max="120"
-                controls-position="right"
-                class="plan-phase-row__months"
-              />
-              <span class="plan-phase-row__unit">月</span>
-              <el-button
-                link
-                type="danger"
-                :icon="Delete"
-                :disabled="planForm.phases.length <= 1"
-                @click="removePlanPhase(i)"
-              >
-                删除
-              </el-button>
-            </div>
-            <el-button link type="primary" :icon="Plus" @click="addPlanPhase">添加阶段名称</el-button>
-            <div class="plan-phases__tip">
-              一个方案可包含多个阶段，例：方案一 → 一阶段 · 学制2月 / 二阶段 · 学制2月 / 三阶段 · 学制2月
-            </div>
-          </div>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="planVisible = false">取消</el-button>
-        <el-button v-readonly-hide type="primary" :loading="planSubmitting" @click="submitPlan">确定</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -456,40 +230,4 @@ onMounted(() => {
   color: #303133;
 }
 
-/* 新增/编辑方案弹窗里的「阶段明细」 */
-.plan-phases {
-  width: 100%;
-}
-.plan-phase-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.plan-phase-row__no {
-  width: 20px;
-  height: 20px;
-  line-height: 20px;
-  text-align: center;
-  border-radius: 50%;
-  background: #ecf5ff;
-  color: #409eff;
-  font-size: 12px;
-  flex: none;
-}
-.plan-phase-row__name {
-  width: 220px;
-}
-.plan-phase-row__months {
-  width: 130px;
-}
-.plan-phase-row__unit {
-  color: #909399;
-}
-.plan-phases__tip {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #909399;
-  line-height: 1.6;
-}
 </style>

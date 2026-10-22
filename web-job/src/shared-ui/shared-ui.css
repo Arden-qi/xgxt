@@ -448,6 +448,28 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","
 .tb.tb-role td:nth-child(5){text-align:center}
 .tb.tb-role td:nth-child(2){overflow-wrap:anywhere}
 
+/* ---- 权限总览「最近操作动态」表（Overview）列宽 ----
+   2026-10-22（用户圈出「结果」列要求往左移、让页面更协调）：
+   【问题】原来只有「时间 150px / 结果 70px」两个写死的 px，其余留 auto。
+     实测 1096 视口（表宽 858）：150 / 175 / 106 / 72 / **285** / 70。
+     「对象」列吃掉全部富余（内容只有 180px，格子里空 105px），
+     于是「结果」被挤到最右 —— 徽标离卡片右边缘只剩 19px，
+     中间却挂着 119px 的空洞，整张表右重左轻、看着不齐。
+   【口径】改 fixed + 百分比（合计 100）：对象列按内容比例收窄，
+     省下的空间一半还给「结果」列做右边距（实测 69px），一半分给
+     时间/操作人/模块/操作 —— 六列拿到相近的呼吸空间，
+     徽标不再贴边，「结果」列整体左移 51px（1017 → 966），
+     对象文字到徽标的空档也从 119px 收到 100px，
+     且徽标大致落在「对象文字～卡片右边缘」这段的中点，看着不再右重左轻。
+   实测（1096 视口）：154 / 146 / 94 / 77 / 266 / 120（表宽 858）。
+   min-width 840 = 日期（146px 不折行）+ 操作人胶囊（139px 不折行）
+   + 对象列还留得下 200px 文案的下限，更窄就横向滚动。
+   （⚠️ 一开始写 880，结果 1096 视口下卡片里只有 858px —— 表被撑到 880
+     反而在卡片内出现横向滚动条，实测发现后降到 840。）
+   对象列是唯一长度不可控的一列，允许任意位置折行，避免撑破 fixed 布局。 */
+.tb.tb-overview{table-layout:fixed;min-width:840px}
+.tb.tb-overview td:nth-child(5){overflow-wrap:anywhere}
+
 /* ---- 输入（原型 .inp → 设计系统口径） ---- */
 .inp,.main select.inp,.main textarea.inp{padding:6px 11px;border:1px solid #E2D7D1;border-radius:7px;background:#fff;font-size:12.5px;color:#5F5350;outline:none;transition:.15s;min-width:0;height:32px}
 textarea.inp{height:auto;padding:9px 11px;line-height:1.6}

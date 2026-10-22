@@ -29,6 +29,27 @@ const CODE = {
 };
 
 /**
+ * ★ 2026-10-22 新增：`silent` —— 后台静默请求
+ *
+ * 【为什么加】
+ *   登录后前端会顺手预取一些「不关键」的数据（侧栏催费红点、表单下拉字典…）。
+ *   这些请求如果打在账号没授权的模块上，后端会返 403 / 40302，
+ *   拦截器照样弹一条红字「您没有该操作的权限」—— 用户一脸懵：
+ *   我明明能正常用，为什么一登录就报没权限？（2026-10-22 用户报障）
+ *
+ * 【口径】
+ *   · 调用方显式传 `{ silent: true }` 的请求 = 预取类，
+ *     失败**不弹提示**（只在控制台留一行 warn），由调用方自己决定降级；
+ *   · 用户真正点的动作（查询/保存/审批）不要传 silent —— 该报错还是要报。
+ *   · 401（未登录/过期）仍然照常跳登录页，silent 不掩盖登录态问题。
+ */
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    silent?: boolean;
+  }
+}
+
+/**
  * 当前用户是不是「只读」（系统管理员 / 学管主任）
  *
  *   · 系统管理员 —— 纯只读（连审批都不能）
@@ -127,12 +148,15 @@ instance.interceptors.response.use(
 
     // ---- 无权限 → 只弹提示，不跳登录页！ ----
     if (body.code === CODE.NO_PERMISSION || body.code === CODE.NO_OPERATION_PERMISSION) {
-      ElMessage.warning(body.message || '您没有该操作的权限');
+      // ★ silent（后台预取）：账号无权拿这块数据是「意料之中」，不打扰用户
+      if (!response.config.silent) ElMessage.warning(body.message || '您没有该操作的权限');
+      else console.warn('[静默请求被拒]', response.config.url, body.message);
       return Promise.reject(body);
     }
 
     // ---- 其他业务错误 → 红色提示 ----
-    ElMessage.error(body.message || '操作失败');
+    if (!response.config.silent) ElMessage.error(body.message || '操作失败');
+    else console.warn('[静默请求失败]', response.config.url, body.message);
     return Promise.reject(body);
   },
 
@@ -153,6 +177,12 @@ instance.interceptors.response.use(
       }
     } else if (error.request) {
       msg = '无法连接到服务器，请检查后端服务是否启动';
+    }
+
+    // ★ silent（后台预取）：403/网络抖动这类失败不弹窗，只留控制台线索
+    if (error.config?.silent) {
+      console.warn('[静默请求失败]', error.config?.method?.toUpperCase(), error.config?.url, msg);
+      return Promise.reject(error);
     }
 
     ElMessage.error(msg);

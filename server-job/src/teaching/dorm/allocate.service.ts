@@ -34,6 +34,14 @@ import { BizCode } from 'shared-types';
 import { bedNoText } from 'shared-types/class';
 import { BizError } from '../../middleware/errorHandler';
 import { db } from '../../utils/db';
+import { resolveMyClasses } from './myClasses';
+import {
+  CLASS_STATUS_CLOSED,
+  CLASS_STATUS_NAME,
+  CLASS_STATUS_OPEN,
+  isLockedByClassStatus,
+  loadClassStatuses,
+} from './classStatus';
 
 /** 宿舍房间 / 床位 / 学生（合并宿舍管理实际在用的三张表） */
 const ROOM = 'sms_job.t_job_dorm';
@@ -71,6 +79,9 @@ export interface AllocateClassRow {
   /** 已选中床位数（按房间额定人数累加，仅作展示参考） */
   maleBeds: number;
   femaleBeds: number;
+  /** ★ 班级状态：1 开放 / 2 封班（查不到为 null） */
+  classStatus: number | null;
+  classStatusName: string | null;
   /** 该班暂无学生 → 前端按 100 床上限分派 */
   noStudents: boolean;
 }
@@ -93,6 +104,8 @@ interface ClassBase {
   maleCount: number;
   femaleCount: number;
   stage: string;
+  /** 1 开放 / 2 封班 / null 未知 */
+  classStatus: number | null;
 }
 
 /** 三学段班级表（班级管理的权威来源） */
@@ -109,7 +122,7 @@ async function teachingClasses(): Promise<ClassBase[]> {
     try {
       classes = await db(s.cls)
         .where({ is_deleted: false })
-        .select('id', 'class_name', 'head_teacher_name');
+        .select('id', 'class_name', 'head_teacher_name', 'class_status');
     } catch {
       // 表不存在（环境没迁移）→ 跳过该学段，不阻塞另外两个
       continue;
@@ -140,6 +153,7 @@ async function teachingClasses(): Promise<ClassBase[]> {
         maleCount: int(cnt?.m),
         femaleCount: int(cnt?.f),
         stage: s.stage,
+        classStatus: Number(c.class_status) > 0 ? Number(c.class_status) : null,
       });
     }
   }
@@ -183,6 +197,7 @@ async function groupStudentsByClass(table: string, stage: string): Promise<Class
         maleCount: int(r.m),
         femaleCount: int(r.f),
         stage,
+        classStatus: null,
       }))
       .filter((r) => !!r.className);
   } catch {
@@ -242,7 +257,10 @@ async function assignmentRows(): Promise<any[]> {
  * 班级列表
  * ============================================================ */
 
-export async function listAllocateClasses(keyword?: string): Promise<AllocateClassRow[]> {
+export async function listAllocateClasses(
+  keyword?: string,
+  user?: any,
+): Promise<AllocateClassRow[]> {
   const [teaching, edu, perm, assigns] = await Promise.all([
     teachingClasses().catch(() => [] as ClassBase[]),
     eduClasses().catch(() => [] as ClassBase[]),
@@ -254,12 +272,25 @@ export async function listAllocateClasses(keyword?: string): Promise<AllocateCla
    * 去重：班级表优先，教务/门户学生表的同名班级只用来补缺。
    * 名次按「初高 → 大学 → 实训 → 教务」稳定排列，前端列表不会跳来跳去。
    */
-  const merged: ClassBase[] = [];
+  let merged: ClassBase[] = [];
   const seen = new Set<string>();
   for (const c of [...teaching, ...edu, ...perm]) {
     if (seen.has(c.className)) continue;
     seen.add(c.className);
     merged.push(c);
+  }
+
+  /**
+   * ★ 2026-10-22：班主任只能看到**自己名下**的班
+   *   调宿/退宿弹窗的「班级」下拉原来列全站班级，班主任能选到别人的班。
+   *   教务 / 校长 / 学管主任 / 管理员不受限。
+   */
+  if (user) {
+    const mine = await resolveMyClasses(user);
+    if (!mine.privileged) {
+      const allow = new Set(mine.names);
+      merged = merged.filter((c) => allow.has(c.className));
+    }
   }
 
   // 班级 → 已分派房间
@@ -297,6 +328,9 @@ export async function listAllocateClasses(keyword?: string): Promise<AllocateCla
         maleBeds: maleRooms.reduce((s, r) => s + r.capacity, 0),
         femaleBeds: femaleRooms.reduce((s, r) => s + r.capacity, 0),
         noStudents: c.maleCount + c.femaleCount === 0,
+        classStatus: c.classStatus,
+        classStatusName:
+          c.classStatus === CLASS_STATUS_OPEN ? '开放' : c.classStatus === CLASS_STATUS_CLOSED ? '封班' : null,
       };
     })
     .sort((a, b) => a.className.localeCompare(b.className, 'zh-Hans-CN'));
@@ -353,6 +387,11 @@ export interface AllocateRoomRow {
   full: boolean;
   /** 已分派给哪个班（空 = 未分派） */
   assignedTo: string | null;
+  /** ★ 该班当前状态：1 开放 / 2 封班（未分派为 null） */
+  assignedStatus: number | null;
+  assignedStatusName: string | null;
+  /** ★ 是否锁定：已分派且该班是开放（封班 → 空床交回教务，可继续调配） */
+  locked: boolean;
   /** ★ 空闲床位（调宿时可选到具体床位） */
   freeBeds: AllocateBedRef[];
 }
@@ -414,6 +453,13 @@ export async function listAllocateRooms(
   const assignMap = new Map(assigned.map((a) => [str(a.room_id), str(a.class_name)]));
 
   /**
+   * ★ 2026-10-22：归属班的「状态」决定房间是否锁定
+   *   开放 → 锁定（别的班不能再分这间）；
+   *   封班 → 解锁（空床位交回教务，可继续调配）。
+   */
+  const statusMap = await loadClassStatuses([...assignMap.values()]);
+
+  /**
    * ★ 空闲床位明细（调宿弹窗要选到「几号床」）
    *   bed_status: 1 空闲 / 2 已住 / 3 停用 —— 只把 1 的列出来。
    */
@@ -440,6 +486,10 @@ export async function listAllocateRooms(
     const id = str(r.id);
     const st = stats.get(id) || { capacity: int(r.bed_count), occupied: 0 };
     const remaining = Math.max(st.capacity - st.occupied, 0);
+    const assignedTo = assignMap.get(id) || null;
+    const assignedStatus = assignedTo ? (statusMap.get(assignedTo) ?? null) : null;
+    // 未分派 → 不锁；已分派且封班 → 解锁；其余（开放/查不到）→ 锁定
+    const locked = !!assignedTo && isLockedByClassStatus(assignedStatus);
     return {
       roomId: id,
       building: str(r.building),
@@ -449,7 +499,17 @@ export async function listAllocateRooms(
       occupied: st.occupied,
       remaining,
       full: remaining <= 0,
-      assignedTo: assignMap.get(id) || null,
+      assignedTo,
+      assignedStatus,
+      assignedStatusName: assignedStatus ? CLASS_STATUS_NAME[assignedStatus] || null : null,
+      locked,
+      /**
+       * ★ 空床位照常下发，是否可选由调用方按 `locked` + 学生班级判断：
+       *   · 本班自己的房间 → 可以调进来（班主任换床）；
+       *   · 别的开放班 → 前端禁选、后端 changeCreate/assign 也会拒绝；
+       *   · 封班 → 空床交回教务，可选。
+       *   （早期版本直接清空 freeBeds，导致班主任在自己班里反而选不到床）
+       */
       freeBeds: freeMap.get(id) || [],
     };
   });
@@ -691,8 +751,11 @@ export async function saveAllocate(body: {
   }
 
   /**
-   * 一间宿舍同一时间只能归一个班 —— 但**允许从别的班手里接管**（教务重新划分）。
-   * 这里只记录被接管的班，保存时把它们原有的分派行软删（界面上会提示「原属 X 班」）。
+   * 一间宿舍同一时间只能归一个班。
+   *
+   * ★ 2026-10-22 收紧：只有**封班**的班才允许被接管；
+   *   分派给「开放」班的房间是锁定的，不能分给别的班
+   *   （封班的空床位才交回教务，可以继续调配）。
    */
   const conflicts = allIds.length
     ? ((await db(ASSIGN)
@@ -701,6 +764,20 @@ export async function saveAllocate(body: {
         .whereNot('class_name', className)
         .select('room_id', 'class_name')) as any[])
     : [];
+
+  if (conflicts.length) {
+    const conflictStatus = await loadClassStatuses(conflicts.map((c) => str(c.class_name)));
+    const blocked = conflicts.find((c) =>
+      isLockedByClassStatus(conflictStatus.get(str(c.class_name))),
+    );
+    if (blocked) {
+      const room = roomMap.get(str(blocked.room_id));
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        `宿舍 ${str(room?.building)} ${str(room?.room_no)} 已分派给开放中的 ${str(blocked.class_name)} 班，不能再分给其他班；该班封班后空床位才可继续调配`,
+      );
+    }
+  }
 
   const existing = (await db(ASSIGN)
     .where({ class_name: className, is_deleted: false })

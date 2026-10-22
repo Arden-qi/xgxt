@@ -711,13 +711,7 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8">
-            <el-form-item label="阶段">
-              <el-select v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
-                <el-option v-for="p in formPhaseOptions" :key="p.value" :label="p.label" :value="p.value" />
-              </el-select>
-            </el-form-item>
-          </el-col>
+          <!-- ★ 2026-10-22 用户口径：不再手选阶段，学生阶段跟随所在班级自动带出 -->
           <el-col :span="8">
             <el-form-item label="状态">
               <!-- ★ 2026-10-21 批注：下拉不再提供「已就业」（改由列表【已就业】按钮写入）；
@@ -770,26 +764,13 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="宿舍号">
-              <!-- 2026-10-15 改版：同步「宿舍管理」的宿舍号，下拉选择 -->
-              <el-select
-                v-model="form.dormId"
-                clearable
-                filterable
-                placeholder="同步宿舍管理，请选择"
-                :loading="dormLoading"
-                style="width: 100%"
-                @change="onFormDormChange"
-              >
-                <el-option v-for="r in dormRoomOptions" :key="r.roomId" :label="r.label" :value="r.roomId" />
-              </el-select>
+              <!-- ★ 2026-10-22：只读展示。宿舍只能通过「宿舍管理 → 办理入住/调宿」变更 -->
+              <el-input :model-value="form.dormNo || ''" placeholder="办理入住后自动带出" disabled />
             </el-form-item>
           </el-col>
           <el-col :span="8" v-if="showBed">
             <el-form-item label="床位号">
-              <!-- 2026-10-15 改版：根据所选宿舍号同步「宿舍管理」的床位号 -->
-              <el-select v-model="form.bedNo" clearable placeholder="请先选择宿舍号" style="width: 100%" :disabled="!form.dormId">
-                <el-option v-for="b in formBedOptions" :key="b.value" :label="b.label" :value="b.value" />
-              </el-select>
+              <el-input :model-value="formBedLabel" placeholder="办理入住后自动带出" disabled />
             </el-form-item>
           </el-col>
           <!-- 2026-10-16 按批注：删除「上网账号 / 初始密码」两个输入框（红字「删除框选内容」）。
@@ -931,11 +912,16 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { DEPT_NAME, DeptCode, StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
-import type { DormRoomItem } from 'shared-types/edu';
+import { DEPT_NAME, DeptCode, EDUCATION_OPTIONS, StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
 import { isReadOnlyUser } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
-import { fetchDormList } from '@/api/edu/dorm';
+/**
+ * ★ 2026-10-22：宿舍下拉改用「宿舍管理」的合并房间接口
+ *   原来是 /api/edu/dorm/list（旧教务宿舍，班主任还没有 edu:dorm:view → 403），
+ *   选项为空时宿舍号既显示不了、也改不了。
+ */
+import { getDormBeds } from '@/teaching/api/dorm';
+import type { DormBedRow, DormStage } from '@/teaching/api/dorm';
 import {
   listStudents,
   getStudentDetail,
@@ -1334,10 +1320,7 @@ const agePreview = computed<number | ''>(() => {
 
 /* ============ 2026-10-15 表单改版：部门驱动学段 / 阶段 / 学历 ============ */
 
-/** 初高部可选阶段：初中部1期 ~ 高中部3期（批注口径，不含预科与大学阶段码） */
-const JH_PHASE_CODES = [102, 103, 104, 105, 106, 107];
-/** 学历下拉选项（2026-10-15 三次调整：固定选项，不随部门联动，单独选择） */
-const EDUCATION_OPTIONS = ['初中', '高中', '专科', '本科', '研究生'];
+/** 学历下拉选项：★ 2026-10-22 改由 shared-types 统一提供（与待接收同一份，避免两处对不上） */
 
 /** ★ 2026-10-16 全部阶段方案（来自后端 meta；两个部门的方案都在里面） */
 const planOptionsAll = computed<StagePlanOption[]>(
@@ -1353,8 +1336,8 @@ function onFormDeptChange(v: number | undefined) {
   else if (v === DeptCode.EMPLOYMENT && form.stage !== 'emp') {
     form.stage = 'emp';
   }
-  // 学段变了：阶段 / 班级按新学段重选
-  if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
+  // 学段变了：班级要重选，阶段跟着班级走（先清空，选班后再带出）
+  form.phaseCode = undefined;
   if (!formClassOptions.value.some((c) => c.id === form.classId)) {
     form.classId = '';
     form.className = '';
@@ -1363,57 +1346,32 @@ function onFormDeptChange(v: number | undefined) {
 
 /* ============ 2026-10-15 表单改版：宿舍号 / 床位号同步宿舍管理 ============ */
 
-const dormLoading = ref(false);
-const dormRooms = ref<DormRoomItem[]>([]);
+/**
+ * ★ 2026-10-22：宿舍号 / 床位号改为**只读展示**
+ *
+ * 用户口径：宿舍只能通过「宿舍管理 → 办理入住 / 调宿 / 退宿」变更，
+ * 编辑学生弹窗里这两个字段只展示当前值，保存时原值回传、不会被清掉。
+ * 床位的中文标签（1-上）仍按需拉一次，只为显示好看。
+ */
+const formBedList = ref<DormBedRow[]>([]);
 
-async function loadDormRooms() {
-  dormLoading.value = true;
+async function loadFormBeds(roomId: string) {
+  formBedList.value = [];
+  if (!roomId) return;
   try {
-    // ⚠️ /api/edu/dorm/list 的 size 上限是 200（zod 校验），一次拉 500 会被
-    //   「参数 size 超出允许范围」400 拒掉 —— 这里按 200/页自动翻页拉全量
-    const out: DormRoomItem[] = [];
-    const size = 200;
-    const first = await fetchDormList({ page: 1, size });
-    out.push(...(first.list || []));
-    const pages = Math.ceil((first.total || 0) / size);
-    for (let p = 2; p <= Math.min(pages, 10); p++) {
-      const d = await fetchDormList({ page: p, size });
-      out.push(...(d.list || []));
-    }
-    dormRooms.value = out;
+    const r = await getDormBeds((form.stage || 'jh') as DormStage, roomId);
+    formBedList.value = r.beds || [];
   } catch {
-    dormRooms.value = [];
-  } finally {
-    dormLoading.value = false;
+    formBedList.value = [];
   }
 }
 
-const dormRoomOptions = computed(() =>
-  dormRooms.value.map((r) => ({
-    roomId: r.roomId,
-    label: r.building ? `${r.building}-${r.room}` : r.room,
-  })),
-);
-
-/** 床位下拉：取所选宿舍的床位；老数据只有床位号没匹配到宿舍时，兜底展示原值 */
-const formBedOptions = computed(() => {
-  const room = dormRooms.value.find((r) => r.roomId === form.dormId);
-  if (room) {
-    return room.beds.map((b) => ({
-      value: b.bedNo,
-      label: b.studentName ? `${b.bedNo}（${b.studentName}）` : b.bedNo,
-    }));
-  }
-  return form.bedNo ? [{ value: form.bedNo, label: form.bedNo }] : [];
+/** 床位号展示文案：能匹配到中文标签就用标签（1-上），否则原样 */
+const formBedLabel = computed(() => {
+  if (!form.bedNo) return '';
+  const hit = formBedList.value.find((b) => b.bedNo === form.bedNo);
+  return hit?.bedLabel || form.bedNo;
 });
-
-function onFormDormChange(roomId: string) {
-  const r = dormRooms.value.find((x) => x.roomId === roomId);
-  // ★ 2026-10-20：清空宿舍时要连 dorm_no 一起清（原来只清床位号，导致
-  //   「移出宿舍」实际上把旧房号又存回去，也让保存前的变更清单漏掉这一项）
-  form.dormNo = r ? (r.building ? `${r.building}-${r.room}` : r.room) : '';
-  form.bedNo = '';
-}
 
 /**
  * 床位号入库口径：
@@ -1423,11 +1381,7 @@ function onFormDormChange(roomId: string) {
 function normalizeBedNo(): string | null {
   const bed = (form.bedNo || '').trim();
   if (!bed) return null;
-  if (form.stage === 'class' && !/^\d+$/.test(bed)) {
-    const room = dormRooms.value.find((x) => x.roomId === form.dormId);
-    const b = room?.beds.find((x) => x.bedNo === bed);
-    if (b) return String(b.bedIndex);
-  }
+  // 大学表是整数列：老数据里若是「1-上」这种字符串，取不到序号就原样存（保持历史值）
   return bed;
 }
 
@@ -1435,46 +1389,11 @@ function normalizeBedNo(): string | null {
 const formClassOptions = computed(() =>
   classOptions.value.filter((c) => c.stage === form.stage),
 );
-/** 表单里阶段下拉：★ 2026-10-16 改为「阶段方案驱动」——
- *   有方案数据时用方案里的阶段（按部门过滤），否则回落到 meta 的阶段清单
- *   （回落时初高仍按旧口径过滤掉预科）。
- *   ★ 2026-10-19：就业部（含实训，部门都是 3）也走方案，不再写死一/二/三阶段。 */
-const formPhaseOptions = computed(() => {
-  // 就业部覆盖「实训 / 就业部」两个学段，部门编码都是 3
-  const dept =
-    form.deptCode ??
-    (form.stage === 'jh' ? 1 : form.stage === 'class' ? 2 : 3);
-  const seen = new Map<number, string>();
-  for (const pl of planOptionsAll.value) {
-    if (dept && pl.deptCode !== dept) continue;
-    for (const ph of pl.phases) if (!seen.has(ph.value)) seen.set(ph.value, ph.label);
-  }
-  let list: Array<{ value: number; label: string }>;
-  if (seen.size) {
-    list = [...seen].map(([value, label]) => ({ value, label }));
-  } else {
-    const base = meta.value.find((m) => m.stage === form.stage)?.phaseOptions || [];
-    list = form.stage === 'jh' ? base.filter((p) => JH_PHASE_CODES.includes(p.value)) : base;
-  }
-  // 兜底：老学生的阶段码可能不在当前方案里（如方案只配了 201~203，学生是 206），
-  // 不补一条的话阶段下拉会显示成裸数字 206。只补显示，不改数据。
-  const cur = Number(form.phaseCode);
-  if (cur && !list.some((p) => p.value === cur)) {
-    let label = '';
-    for (const pl of planOptionsAll.value) {
-      const p = pl.phases.find((x) => x.value === cur);
-      if (p) { label = p.label; break; }
-    }
-    if (!label) {
-      for (const m of meta.value) {
-        const p = m.phaseOptions.find((x) => x.value === cur);
-        if (p) { label = p.label; break; }
-      }
-    }
-    if (label) list = [...list, { value: cur, label }];
-  }
-  return list;
-});
+/**
+ * ★ 2026-10-22 用户口径：学生不再手选阶段，阶段跟随所在班级。
+ *   「阶段」下拉已删除；选班级时把该班的阶段码同步到 form.phaseCode，
+ *   后端保存时还会按班级再兜一次（前端传什么都不算数）。
+ */
 /** 表单里状态下拉：按该学段允许的状态
  *  ★ 2026-10-16 按批注：去掉「预在读」（截图红框 + 红字「删除这个选择」）——
  *    新增 / 编辑学生时不再提供这个选项。
@@ -1560,7 +1479,8 @@ async function openEdit(row: StudentRow) {
     recruitTeacherPhone: d.market.recruitTeacherPhone || '',
     consultTeacherName: d.market.consultTeacherName || '',
     consultTeacherPhone: d.market.consultTeacherPhone || '',
-    dormId: b.dormId || dormRoomOptions.value.find((r) => r.label === b.dormNo)?.roomId || '',
+    // 宿舍只读展示：宿舍号/床位号直接取详情同步来的值， dormId 仅用于拉床位标签
+    dormId: b.dormId || '',
     dormNo: b.dormNo || '',
     bedNo: b.bedNo || '',
     netAccount: d.net?.netAccount || '',
@@ -1571,16 +1491,18 @@ async function openEdit(row: StudentRow) {
   // ★ 2026-10-20：留一份原始快照，保存时用它算「改了哪些内容」
   editOrigin.value = { ...form };
   editVisible.value = true;
+  // 只读展示用：拉一次当前宿舍的床位，方便显示「1-上」这种中文标签
+  void loadFormBeds(form.dormId);
 }
 
 function onFormClassChange(id: string) {
   const c = formClassOptions.value.find((x) => x.id === id);
   form.className = c?.name || '';
-  // ★ 2026-10-16「学生档案的阶段、部门跟随学生所在班级」：
-  //   选了班级就自动带出该班的部门与阶段（仍可在下拉里手动改，覆盖自动值）
+  // ★ 2026-10-22 用户口径：学生阶段**跟随所在班级**，不再手选
+  //   选了班级就带出该班的部门与阶段；班级没配阶段则清空（不留上一次的脏值）
   if (c) {
     if (c.deptCode) form.deptCode = c.deptCode;
-    if (c.phaseCode) form.phaseCode = c.phaseCode;
+    form.phaseCode = c.phaseCode ?? undefined;
   }
 }
 
@@ -1998,7 +1920,6 @@ async function refreshMeta() {
 onMounted(async () => {
   await loadAux();
   // 宿舍号/床位号下拉的数据源（宿舍管理）；失败不阻塞页面
-  loadDormRooms();
   await load(1);
 });
 
