@@ -359,7 +359,14 @@ async function submitTransfer() {
       reason: xferReason.value.trim() || null,
       examId: row.examId,
     });
-    ElMessage.success(`${row.studentName} 已${label}转入「${r?.toClassName || target?.name || ''}」`);
+    /**
+     * ★ 2026-10-22：末班/升班改成「待接收」流程 ——
+     *   这里只生成一张待接收单，**学生还没转班**；
+     *   要等目标班班主任在「教学管理 → 待接收学员」点「接收」后才真正入班。
+     */
+    ElMessage.success(
+      `${row.studentName} 的${label}申请已提交，等待「${r?.toClassName || target?.name || ''}」班主任接收`,
+    );
     xferVisible.value = false;
     await Promise.all([loadList(), loadSummary()]);
   } finally {
@@ -650,6 +657,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           (xferMode === 'repeat'
             ? '末班：成绩不达标，转到进度相同或更慢的班重修（进度 = 班级阶段码）'
             : '升班：成绩达标，跳到进度更快的班') +
+          '。提交后生成待接收单，**需目标班班主任在「待接收学员」点接收后才入班**' +
           '，换班后立即生效、不需对方接收。'
         "
         style="margin-bottom: 12px"

@@ -143,9 +143,14 @@ async function cleanup() {
   for (const [dbName, table] of order) {
     for (const [fdb, ftable, id] of fixtures) {
       if (fdb !== dbName || ftable !== table) continue;
-      const c = conn(fdb);
+      /* ★ 2026-10-22：老表已 DROP，清理必须走统一表名 ——
+         原来拿老表名（t_class_consult_push 等）去查，查不到 → catch 吞掉 →
+         自检数据一直留在库里（今天累计攒了 133 条待接收单，
+         把后续套件的列表顶到分页上限，classdorm 因此挂了 3 条）。 */
+      const [tdb, ttable] = regTarget(fdb, ftable);
+      const c = conn(tdb);
       // 物理删（自检数据不进软删池，避免占唯一索引）
-      await c(ftable).where({ id }).del().catch(() => {});
+      await c(ttable).where({ id }).del().catch(() => {});
       await c.destroy();
     }
   }

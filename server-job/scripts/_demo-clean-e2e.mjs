@@ -63,6 +63,14 @@ const plan = [
     [...classIds, ...stuIds],
   ],
   ['t_uni_repeat', `student_id in (${inList(stuIds)}) or ${S} or from_class_name like '自检%' or to_class_name like '自检%'`, stuIds],
+  // ★ 2026-10-22：待接收单（末班/升班/咨询/升学推送）也要清 ——
+  //   漏了它，自检单据会一直堆着，把后续套件的列表顶到分页上限。
+  [
+    't_uni_consult_push',
+    `student_name like 'E2E%' or student_name like '自检%' or student_name like '【自检】%' or origin_student_id in (${inList(stuIds)}) or student_no in (${inList(stuIds)}) or consult_no like 'E2E%' or consult_no like 'LB%'`,
+    // ⚠️ 绑定要给两份：where 里有 origin_student_id / student_no 两个 IN
+    [...stuIds, ...stuIds],
+  ],
   ['t_uni_class_transfer', `student_id in (${inList(stuIds)}) or ${S} or from_class_name like '自检%' or to_class_name like '自检%'`, stuIds],
   ['t_uni_approval', `student_id in (${inList(stuIds)}) or ${S}`, stuIds],
   ['t_uni_refund', `student_id in (${inList(stuIds)}) or ${S}`, stuIds],
