@@ -1155,9 +1155,16 @@ async function openEdit(row: ClassRow) {
   editVisible.value = true;
 }
 
-/** ★ 表单切学段：编号 / 交棒 / 备注字段要跟着清（否则会带着上一个学段的脏值提交） */
+/** ★ 表单切学段：编号 / 交棒 / 备注字段要跟着清（否则会带着上一个学段的脏值提交）
+ *
+ * ⚠️ 2026-10-22 修：这里原来只保住 id / className，
+ *    结果用户「先填班级编号、再选部门」时，onFormDeptChange → 本函数
+ *    → Object.assign(form, emptyForm(...)) 把刚填的 classCode 一起抹掉了
+ *    （用户反馈：填完班级编号去选部门，编号自动清空）。
+ *    班级编号是三个部门通用、与学段无关的字段，必须原样保留。
+ */
 function onFormStageChange() {
-  const keep = { id: form.id, className: form.className };
+  const keep = { id: form.id, className: form.className, classCode: form.classCode };
   Object.assign(form, emptyForm(form.stage), keep);
 }
 
