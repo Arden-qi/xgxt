@@ -2,15 +2,12 @@
 /**
  * 系统设置页
  *
- * 三个页签：系统设置（KV）/ 楼栋设置 / 操作日志。
+ * 两个页签：系统设置（KV）/ 操作日志。
  *
- * ★ 楼栋设置（2026-10-16 新增）：宿舍楼栋字典，和「教学管理 → 宿舍管理」
- *   的楼栋下拉是同一份数据（sms_common.t_dorm_building）。
- *   这里加一栋 → 宿舍管理的楼栋下拉立刻多一项，不需要改任何代码。
- *
- * ★ 2026-10-20 楼栋设置抽成公共面板 `BuildingSettingPanel.vue`：
- *   独立的「教学管理 → 楼栋设置」页（/class-jh/building，单独授权给教务老师）
- *   与本页页签渲染**同一个组件**，不再复制两份逻辑。
+ * ★ 2026-10-22：「楼栋设置」页签已下线 —— 搬到「教学管理 → 宿舍管理」
+ *   （宿舍管理第 4 个页签）。楼栋字典仍是同一份（sms_common.t_dorm_building），
+ *   在宿舍管理里加一栋，宿舍房间/班级分派的楼栋下拉立刻多一项。
+ *   楼栋面板组件保留：`@/class-jh/components/setting/BuildingSettingPanel.vue`。
  *
  * ★ 2026-10-22：原「阶段方案」页签已迁到「班级管理 → 阶段方案设计」弹窗
  *   （组件 web-job/src/teaching/components/StageSchemePanel.vue），本页不再保留。
@@ -22,8 +19,6 @@ import { Search, Refresh, SetUp } from '@element-plus/icons-vue';
 import type { ClassSetting, OpLog, OpLogListQuery } from 'shared-types/class-jh';
 import { fetchSettingDetail, updateSetting, fetchOpLogList } from '@/class-jh/api/setting';
 import { dash, formatDateTime } from '@/class-jh/utils/format';
-/** ★ 2026-10-20：楼栋设置抽成公共面板，系统设置页与独立「楼栋设置」页共用 */
-import BuildingSettingPanel from '@/class-jh/components/setting/BuildingSettingPanel.vue';
 
 const activeTab = ref('setting');
 
@@ -153,10 +148,8 @@ onMounted(() => {
         </div>
       </el-tab-pane>
 
-      <!-- 楼栋设置（公共面板：与独立「楼栋设置」页完全相同） -->
-      <el-tab-pane label="楼栋设置" name="building">
-        <BuildingSettingPanel />
-      </el-tab-pane>
+      <!-- ★ 2026-10-22：「楼栋设置」页签已下线 —— 搬到「教学管理 → 宿舍管理」里
+           （第四个页签，与宿舍管理共用同一份楼栋字典） -->
 
       <!-- ★ 2026-10-22：「阶段方案」页签已迁到「班级管理 → 阶段方案设计」弹窗，此处删除 -->
       <!-- 操作日志 -->

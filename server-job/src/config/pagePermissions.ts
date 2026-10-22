@@ -361,13 +361,6 @@ export const PAGE_PERMISSIONS: PagePermissionDef[] = [
     group: '教学管理（初高）',
     desc: '出勤达标线与统计口径、催费提醒天数、学习阶段字典',
   },
-  {
-    code: 'classjh:building:view',
-    name: '楼栋设置（初高）',
-    path: '/class-jh/building',
-    group: '教学管理（初高）',
-    desc: '宿舍楼栋字典，与宿舍管理的楼栋下拉实时一致（可独立授权给教务）',
-  },
 ];
 
 /** 按权限码查定义 */

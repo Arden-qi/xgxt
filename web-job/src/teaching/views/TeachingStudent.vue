@@ -749,26 +749,13 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="宿舍号">
-              <!-- 2026-10-15 改版：同步「宿舍管理」的宿舍号，下拉选择 -->
-              <el-select
-                v-model="form.dormId"
-                clearable
-                filterable
-                placeholder="同步宿舍管理，请选择"
-                :loading="dormLoading"
-                style="width: 100%"
-                @change="onFormDormChange"
-              >
-                <el-option v-for="r in dormRoomOptions" :key="r.roomId" :label="r.label" :value="r.roomId" />
-              </el-select>
+              <!-- ★ 2026-10-22：只读展示。宿舍只能通过「宿舍管理 → 办理入住/调宿」变更 -->
+              <el-input :model-value="form.dormNo || ''" placeholder="办理入住后自动带出" disabled />
             </el-form-item>
           </el-col>
           <el-col :span="8" v-if="showBed">
             <el-form-item label="床位号">
-              <!-- 2026-10-15 改版：根据所选宿舍号同步「宿舍管理」的床位号 -->
-              <el-select v-model="form.bedNo" clearable placeholder="请先选择宿舍号" style="width: 100%" :disabled="!form.dormId">
-                <el-option v-for="b in formBedOptions" :key="b.value" :label="b.label" :value="b.value" />
-              </el-select>
+              <el-input :model-value="formBedLabel" placeholder="办理入住后自动带出" disabled />
             </el-form-item>
           </el-col>
           <!-- 2026-10-16 按批注：删除「上网账号 / 初始密码」两个输入框（红字「删除框选内容」）。
@@ -900,11 +887,15 @@ import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { DEPT_NAME, DeptCode, EDUCATION_OPTIONS, StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
-import type { DormRoomItem } from 'shared-types/edu';
 import { isReadOnlyUser } from '@/store/permission';
-import { moduleAllowed } from '@/store/modules';
 import { visibleStageOptions } from '@/teaching/access';
-import { fetchDormList } from '@/api/edu/dorm';
+/**
+ * ★ 2026-10-22：宿舍下拉改用「宿舍管理」的合并房间接口
+ *   原来是 /api/edu/dorm/list（旧教务宿舍，班主任还没有 edu:dorm:view → 403），
+ *   选项为空时宿舍号既显示不了、也改不了。
+ */
+import { getDormBeds } from '@/teaching/api/dorm';
+import type { DormBedRow, DormStage } from '@/teaching/api/dorm';
 import {
   listStudents,
   getStudentDetail,
@@ -1328,66 +1319,32 @@ function onFormDeptChange(v: number | undefined) {
 
 /* ============ 2026-10-15 表单改版：宿舍号 / 床位号同步宿舍管理 ============ */
 
-const dormLoading = ref(false);
-const dormRooms = ref<DormRoomItem[]>([]);
+/**
+ * ★ 2026-10-22：宿舍号 / 床位号改为**只读展示**
+ *
+ * 用户口径：宿舍只能通过「宿舍管理 → 办理入住 / 调宿 / 退宿」变更，
+ * 编辑学生弹窗里这两个字段只展示当前值，保存时原值回传、不会被清掉。
+ * 床位的中文标签（1-上）仍按需拉一次，只为显示好看。
+ */
+const formBedList = ref<DormBedRow[]>([]);
 
-async function loadDormRooms() {
-  /* ★ 2026-10-22：宿舍字典在「教务」板块（/api/edu/dorm/list），
-   *   初高 / 大学 / 就业账号都没有这个板块 —— 原来无条件预取，
-   *   一进学生档案就吃一条「该模块未授权给当前账号」的红字（用户报障：登录就弹无权限）。
-   *   现在没教务板块直接跳过；有教务板块的账号才拉，且失败不弹提示。 */
-  if (!moduleAllowed('edu')) {
-    dormRooms.value = [];
-    return;
-  }
-  dormLoading.value = true;
+async function loadFormBeds(roomId: string) {
+  formBedList.value = [];
+  if (!roomId) return;
   try {
-    // ⚠️ /api/edu/dorm/list 的 size 上限是 200（zod 校验），一次拉 500 会被
-    //   「参数 size 超出允许范围」400 拒掉 —— 这里按 200/页自动翻页拉全量
-    const out: DormRoomItem[] = [];
-    const size = 200;
-    const silent = { silent: true };
-    const first = await fetchDormList({ page: 1, size }, silent);
-    out.push(...(first.list || []));
-    const pages = Math.ceil((first.total || 0) / size);
-    for (let p = 2; p <= Math.min(pages, 10); p++) {
-      const d = await fetchDormList({ page: p, size }, silent);
-      out.push(...(d.list || []));
-    }
-    dormRooms.value = out;
+    const r = await getDormBeds((form.stage || 'jh') as DormStage, roomId);
+    formBedList.value = r.beds || [];
   } catch {
-    dormRooms.value = [];
-  } finally {
-    dormLoading.value = false;
+    formBedList.value = [];
   }
 }
 
-const dormRoomOptions = computed(() =>
-  dormRooms.value.map((r) => ({
-    roomId: r.roomId,
-    label: r.building ? `${r.building}-${r.room}` : r.room,
-  })),
-);
-
-/** 床位下拉：取所选宿舍的床位；老数据只有床位号没匹配到宿舍时，兜底展示原值 */
-const formBedOptions = computed(() => {
-  const room = dormRooms.value.find((r) => r.roomId === form.dormId);
-  if (room) {
-    return room.beds.map((b) => ({
-      value: b.bedNo,
-      label: b.studentName ? `${b.bedNo}（${b.studentName}）` : b.bedNo,
-    }));
-  }
-  return form.bedNo ? [{ value: form.bedNo, label: form.bedNo }] : [];
+/** 床位号展示文案：能匹配到中文标签就用标签（1-上），否则原样 */
+const formBedLabel = computed(() => {
+  if (!form.bedNo) return '';
+  const hit = formBedList.value.find((b) => b.bedNo === form.bedNo);
+  return hit?.bedLabel || form.bedNo;
 });
-
-function onFormDormChange(roomId: string) {
-  const r = dormRooms.value.find((x) => x.roomId === roomId);
-  // ★ 2026-10-20：清空宿舍时要连 dorm_no 一起清（原来只清床位号，导致
-  //   「移出宿舍」实际上把旧房号又存回去，也让保存前的变更清单漏掉这一项）
-  form.dormNo = r ? (r.building ? `${r.building}-${r.room}` : r.room) : '';
-  form.bedNo = '';
-}
 
 /**
  * 床位号入库口径：
@@ -1397,11 +1354,7 @@ function onFormDormChange(roomId: string) {
 function normalizeBedNo(): string | null {
   const bed = (form.bedNo || '').trim();
   if (!bed) return null;
-  if (form.stage === 'class' && !/^\d+$/.test(bed)) {
-    const room = dormRooms.value.find((x) => x.roomId === form.dormId);
-    const b = room?.beds.find((x) => x.bedNo === bed);
-    if (b) return String(b.bedIndex);
-  }
+  // 大学表是整数列：老数据里若是「1-上」这种字符串，取不到序号就原样存（保持历史值）
   return bed;
 }
 
@@ -1476,7 +1429,8 @@ async function openEdit(row: StudentRow) {
     recruitTeacherPhone: d.market.recruitTeacherPhone || '',
     consultTeacherName: d.market.consultTeacherName || '',
     consultTeacherPhone: d.market.consultTeacherPhone || '',
-    dormId: b.dormId || dormRoomOptions.value.find((r) => r.label === b.dormNo)?.roomId || '',
+    // 宿舍只读展示：宿舍号/床位号直接取详情同步来的值， dormId 仅用于拉床位标签
+    dormId: b.dormId || '',
     dormNo: b.dormNo || '',
     bedNo: b.bedNo || '',
     netAccount: d.net?.netAccount || '',
@@ -1487,6 +1441,8 @@ async function openEdit(row: StudentRow) {
   // ★ 2026-10-20：留一份原始快照，保存时用它算「改了哪些内容」
   editOrigin.value = { ...form };
   editVisible.value = true;
+  // 只读展示用：拉一次当前宿舍的床位，方便显示「1-上」这种中文标签
+  void loadFormBeds(form.dormId);
 }
 
 function onFormClassChange(id: string) {
@@ -1873,7 +1829,6 @@ async function refreshMeta() {
 onMounted(async () => {
   await loadAux();
   // 宿舍号/床位号下拉的数据源（宿舍管理）；失败不阻塞页面
-  loadDormRooms();
   await load(1);
 });
 

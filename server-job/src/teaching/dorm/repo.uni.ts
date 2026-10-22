@@ -62,6 +62,9 @@ import { hasRole, RoleCode, StudentStatus } from 'shared-types';
 import { tbl, tblIns, upd, uniDb } from '../shared/uniTable';
 import { visibleClassIds } from '../shared/dataScope';
 import { listBuildingNames as listDormBuildingNames } from './building.service';
+import { loadClassStatus, loadClassStatuses } from './classStatus';
+import { resolveMyClasses } from './myClasses';
+import { syncStudentDorm } from './studentDormSync';
 
 const DORM_T = 't_job_dorm';
 const BED_T = 't_job_dorm_bed';
@@ -158,101 +161,30 @@ const CLASS_SOURCES = [
 ];
 
 /**
- * ★ 2026-10-21：解析「我的班」—— 同时兼容三种存法，别只认一种
- *
- * 现实里同一件事有三种数据：
- *   ① 班级表 `t_class_info.head_teacher_id` = 权限库用户 id（U008…）；
- *   ② 门户学生表 `t_student_base.head_teacher_id` = **门户账号 UUID**（token 里的 userId）；
- *   ③ 演示库干脆只填了 `head_teacher_name = '孙敏'`，id 列是 '123456' 这种脏值。
- * 只按 ① 查 → 班主任的班一个都找不到（宿舍页恒空、入住候选为空）。
- * → 这里把 id（业务 id / 门户 id）和姓名都作为命中条件，能查到哪种算哪种。
- *
- * ⚠️ 还要**跨学段**查班级表：合并页里「大学的班主任」也可能被安排带初高的班
- *   （实测 Q30 的班主任是 zhanght，但 Q30 在 sms_class_jh.t_class_info 里）。
- *   只查当前 stage 的班级表 → 分派给该班的房间永远看不到。
+ * ★ 2026-10-21：各学段「班级管理」的班级表（办理入住弹窗的班级下拉按学段取这里）
+ *   班级下拉必须是**本学段**的班 —— 往初高宿舍里塞大学班的学生没有意义。
  */
-async function myClasses(user: any): Promise<{ privileged: boolean; names: string[]; ids: string[] }> {
-    const roles: string[] = user?.roles ?? [];
-    const privileged =
-      hasRole(roles, RoleCode.RM_PRINCIPAL) ||
-      hasRole(roles, RoleCode.ACAD_STAFF) ||
-      hasRole(roles, RoleCode.TEACH_DEAN) ||
-      hasRole(roles, RoleCode.SYS_ADMIN);
-    if (privileged) return { privileged: true, names: [], ids: [] };
+const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
+  jh: 'sms_class_jh.t_class_info',
+  class: 'sms_class.t_class_info',
+  job: 'sms_job.t_job_class',
+};
 
-    const portalUid = String(user?.businessUserId || user?.userId || user?.id || '');
-    const userName = String(user?.userName || user?.name || '').trim();
-
-    // 权限库业务 id（U008）：token 没带就按账号查一次
-    let permUid = String(user?.businessUserId || '');
-    if (!permUid && user?.account) {
-      try {
-        const u = (await db('sms_perm.t_perm_user').where({ account: String(user.account) }).first()) as any;
-        permUid = u?.id ? String(u.id) : '';
-      } catch {
-        permUid = '';
-      }
-    }
-
-    const names = new Set<string>();
-    const ids = new Set<string>();
-
-    const collect = (rows: any[]) => {
-      for (const r of rows) {
-        if (str(r.class_name)) names.add(String(r.class_name));
-        if (r.id && str(r.class_name)) ids.add(String(r.id));
-      }
-    };
-
-    // ① 班级表：班主任/教师/助理（业务 id 或姓名）—— **三学段班级表都查**
-    for (const table of CLASS_SOURCES) {
-      try {
-        const rows = (await db(table)
-          .where({ is_deleted: false })
-          .andWhere((b: any) => {
-            if (permUid) b.where('head_teacher_id', permUid).orWhere('teacher_id', permUid).orWhere('assistant_id', permUid);
-            if (userName) {
-              b.orWhere('head_teacher_name', userName).orWhere('teacher_name', userName).orWhere('assistant_name', userName);
-            }
-          })
-          .select('id', 'class_name')) as any[];
-        collect(rows);
-      } catch {
-        /* 表/列不存在 → 跳过 */
-      }
-    }
-
-    // ② 门户学生表（活数据）：head_teacher_id 存的是门户 UUID
+  /**
+   * ★ 2026-10-22：房间归属哪个班、该班是否封班
+   *
+   * 规则：分派给**开放**班的房间是锁定的 —— 别的班学生不能住进来；
+   *      该班封班后空床位交回教务，可以继续调配。
+   */
+  async function roomOwner(roomId: string): Promise<{ className: string; status?: number } | null> {
     try {
-      const rows = (await db(PERM_STUDENT)
-        .where({ is_deleted: false })
-        .whereNotNull('class_name')
-        .andWhere((b: any) => {
-          if (portalUid) b.where('head_teacher_id', portalUid).orWhere('teacher_id', portalUid).orWhere('assistant_id', portalUid);
-          if (userName) b.orWhere('head_teacher_name', userName);
-        })
-        .distinct('class_name')) as any[];
-      collect(rows);
+      const a = await db(ASSIGN_T).where({ room_id: String(roomId), is_deleted: false }).first();
+      const name = str(a?.class_name);
+      if (!name) return null;
+      return { className: name, status: await loadClassStatus(name) };
     } catch {
-      /* 跳过 */
+      return null;
     }
-
-    // ③ 本学段学生表（老数据）
-    try {
-      const rows = (await tbl(db, SRC_DB, STUDENT_T, stage)
-        .where({ is_deleted: false })
-        .whereNotNull('class_name')
-        .andWhere((b: any) => {
-          if (portalUid) b.where('head_teacher_id', portalUid).orWhere('teacher_id', portalUid).orWhere('assistant_id', portalUid);
-          if (userName) b.orWhere('head_teacher_name', userName);
-        })
-        .distinct('class_name', 'class_id')) as any[];
-      collect(rows);
-    } catch {
-      /* 跳过 */
-    }
-
-    return { privileged: false, names: [...names], ids: [...ids] };
   }
 
   /**
@@ -318,6 +250,22 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       }
     }
     return [...ids];
+  }
+
+  /**
+   * ★ 2026-10-22：单个房间的可见性校验（床位 / 入住 / 调宿都用它）
+   *
+   * 班主任的数据范围 = 分派给本班的房间 ∪ 本班学生已入住的房间。
+   * 关键场景：班主任把学生调到**非本班分派**的宿舍，教务通过后，
+   * 该学生新房子的 dorm_id 会写进学生主档 → 房间自动进入班主任范围，
+   * 她就能看到这间房与床位；反过来说，跟她完全无关的房间仍然打不开。
+   */
+  async function assertRoomInScope(dormId: string, user: any): Promise<void> {
+    const scope = await scopedDormIds(user);
+    if (scope === null) return; // 校长/教务/学管/管理员：不限制
+    if (!scope.includes(String(dormId))) {
+      throw new BizError(BizCode.NO_OPERATION_PERMISSION, '该宿舍不在你的数据范围内');
+    }
   }
   
   /** 房间列表 + 实时已住（数 t_job_dorm_bed 里 bed_status=2 的条数） */
@@ -411,9 +359,80 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
     });
   
     if (q.onlyVacant) rows = rows.filter((r: DormRow) => r.occupiedCount < r.bedCount);
+
+    /**
+     * ★ 2026-10-22：带出「房间归哪个班 / 该班状态」
+     *   班主任据此判断还能不能往房间里填学生：
+     *   开放 → 可以；封班 → 空床分配权已交回教务，前端不再给「入住」。
+     */
+    if (rows.length) {
+      const roomIds = rows.map((r: DormRow) => r.dormId);
+      const assignRows = (await db(ASSIGN_T)
+        .whereIn('room_id', roomIds)
+        .where({ is_deleted: false })
+        .select('room_id', 'class_name')) as any[];
+      const ownerNames = assignRows.map((a: any) => str(a.class_name)).filter((n): n is string => !!n);
+      const ownerStatus = await loadClassStatuses(ownerNames);
+      const byRoom = new Map<string, { className: string; status: number | null }>();
+      for (const a of assignRows) {
+        const rid = str(a.room_id);
+        const cn = str(a.class_name);
+        if (!rid || !cn) continue;
+        byRoom.set(rid, { className: cn, status: ownerStatus.get(cn) ?? null });
+      }
+      rows = rows.map((r: DormRow) => ({
+        ...r,
+        assignedClassName: byRoom.get(r.dormId)?.className ?? null,
+        assignedClassStatus: byRoom.get(r.dormId)?.status ?? null,
+      }));
+    }
     return rows;
   }
-  
+
+  /**
+   * ★ 2026-10-21：床位表没有班级快照列 → 按学生 id / 学号反查班级
+   *   查本学段学生表 + 门户学生表，id、学号两个键都记（有的行只有其一）。
+   *   beds()（在住名单）与 residents()（跨房间名单）共用。
+   */
+  async function studentClassMap(rows: Array<Record<string, any>>) {
+    const ids = [...new Set(rows.map((b) => str(b.student_id)).filter(Boolean) as string[])];
+    const nos = [...new Set(rows.map((b) => str(b.student_no)).filter(Boolean) as string[])];
+    const byId = new Map<string, { classId: string | null; className: string }>();
+    const byNo = new Map<string, { classId: string | null; className: string }>();
+    if (!ids.length && !nos.length) return { byId, byNo };
+    for (const table of ['stage', PERM_STUDENT]) {
+      try {
+        const base = table === PERM_STUDENT ? db(PERM_STUDENT) : tbl(db, SRC_DB, STUDENT_T, stage);
+        const qb = base
+          .where({ is_deleted: false })
+          .select('id', 'student_no', 'class_id', 'class_name');
+        qb.andWhere((b: any) => {
+          if (ids.length) b.whereIn('id', ids);
+          if (nos.length) b.orWhereIn('student_no', nos);
+        });
+        for (const r of (await qb) as any[]) {
+          const cn = str(r.class_name);
+          if (!cn) continue;
+          const val = { classId: str(r.class_id), className: cn };
+          if (str(r.id)) byId.set(String(r.id), val);
+          if (str(r.student_no)) byNo.set(String(r.student_no), val);
+        }
+      } catch {
+        /* 表不存在 → 跳过 */
+      }
+    }
+    return { byId, byNo };
+  }
+
+  /** 按床位行取班级（先按学生 id，再按学号兜底） */
+  function classOfBed(b: Record<string, any>, cls: Awaited<ReturnType<typeof studentClassMap>>) {
+    return (
+      (str(b.student_id) ? cls.byId.get(String(b.student_id)) : undefined) ??
+      cls.byNo.get(str(b.student_no) || '') ??
+      null
+    );
+  }
+
   const repo: DormRepo = {
     stage,
     meta: () => meta(stage),
@@ -622,11 +641,14 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       }
       return { created, revived, skipped };
     },
-  
-    async beds(dormId) {
+
+    async beds(dormId, user) {
+      // ★ 2026-10-22：班主任只能开自己范围内的房间（范围含「本班学生调宿过去的新房」）
+      await assertRoomInScope(String(dormId), user);
       const list = await T_BED()
         .where({ dorm_id: String(dormId), is_deleted: false })
         .orderBy('bed_no', 'asc');
+      const cls = await studentClassMap(list);
       return list.map((b: any) => {
         const st = Number(b.bed_status ?? 1);
         return {
@@ -635,13 +657,13 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
           bedLabel: bedNoText(b.bed_no),
           bedStatus: st,
           bedStatusName: DORM_BED_STATUS_NAME[st] ?? '空闲',
-          // ★ 床位表自带快照，不用 join
+          // ★ 床位表自带学生快照（没有班级列，班级按学生反查），不用 join
           studentId: str(b.student_id),
           studentNo: str(b.student_no),
           studentName: str(b.student_name),
           gender: numOrNull(b.student_gender),
           checkInDate: fmtDate(b.check_in_date),
-          className: null,
+          className: classOfBed(b, cls),
         };
       });
     },
@@ -650,6 +672,7 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       const rows = await roomRows({ ...q, page: 1, size: 9999 }, user);
       const byId = new Map(rows.map((r) => [r.dormId, r]));
       const beds = await T_BED().where({ is_deleted: false, bed_status: 2 });
+      const cls = await studentClassMap(beds);
       const out: DormResidentRow[] = [];
       for (const b of beds) {
         const room = byId.get(String(b.dorm_id));
@@ -668,11 +691,77 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
           bedNo: String(b.bed_no ?? ''),
           bedLabel: bedNoText(b.bed_no),
           checkInDate: fmtDate(b.check_in_date),
-          classId: null,
-          className: null,
+          classId: classOfBed(b, cls)?.classId ?? null,
+          className: classOfBed(b, cls)?.className ?? null,
         });
       }
       return out;
+    },
+
+    /**
+     * ★ 2026-10-21：办理入住弹窗的「班级」下拉
+     *
+     * · privileged（校长/教务/学管/管理员）→ 本学段「班级管理」的全部班级；
+     * · 班主任/教员/助教 → 只返回名下班级。取数与 candidates 同口径：
+     *   先从学生表（本学段 + 门户）distinct 出「我班学生的班级」，
+     *   保证下拉的 classId/className 与学生行的 class_id/class_name 必然对得上，
+     *   联动过滤不会因为「班级表 id 和学生快照 id 不一致」而漏人；
+     *   学生表里查不到的（班还没招学生）→ 再从班级表把「我的班」补出来。
+     */
+    async checkinClasses(user): Promise<Array<{ classId: string | null; className: string }>> {
+      const mine = await resolveMyClasses(user);
+      const out = new Map<string, { classId: string | null; className: string }>();
+      const add = (id: any, name: any) => {
+        const cn = str(name);
+        if (!cn) return;
+        const key = str(id) ? `id:${String(id)}` : `name:${cn}`;
+        if (!out.has(key)) out.set(key, { classId: str(id), className: cn });
+      };
+
+      if (mine.privileged) {
+        try {
+          const rows = (await db(STAGE_CLASS_TABLE[stage])
+            .where({ is_deleted: false })
+            .select('id', 'class_name')
+            .orderBy('class_name', 'asc')) as any[];
+          for (const r of rows) add(r.id, r.class_name);
+        } catch {
+          /* 表不存在 → 跳过 */
+        }
+        return [...out.values()];
+      }
+
+      if (!mine.names.length && !mine.ids.length) return [];
+
+      for (const table of ['stage', PERM_STUDENT]) {
+        try {
+          const base = table === PERM_STUDENT ? db(PERM_STUDENT) : tbl(db, SRC_DB, STUDENT_T, stage);
+          const rows = (await base
+            .where({ is_deleted: false })
+            .andWhere((b: any) => {
+              if (mine.ids.length) b.whereIn('class_id', mine.ids);
+              if (mine.names.length) b.orWhereIn('class_name', mine.names);
+            })
+            .distinct('class_id', 'class_name')) as any[];
+          for (const r of rows) add(r.class_id, r.class_name);
+        } catch {
+          /* 跳过 */
+        }
+      }
+      try {
+        const rows = (await db(STAGE_CLASS_TABLE[stage])
+          .where({ is_deleted: false })
+          .andWhere((b: any) => {
+            if (mine.ids.length) b.whereIn('id', mine.ids);
+            if (mine.names.length) b.orWhereIn('class_name', mine.names);
+          })
+          .select('id', 'class_name')
+          .orderBy('class_name', 'asc')) as any[];
+        for (const r of rows) add(r.id, r.class_name);
+      } catch {
+        /* 跳过 */
+      }
+      return [...out.values()].sort((a, b) => a.className.localeCompare(b.className, 'zh'));
     },
   
     /**
@@ -687,7 +776,7 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
      * 取数：本学段学生表 + 门户学生表（演示库只有后者有活数据），按学号去重。
      */
     async candidates(q, user): Promise<DormCandidateRow[]> {
-      const mine = await myClasses(user);
+      const mine = await resolveMyClasses(user);
       if (!mine.privileged && !mine.names.length && !mine.ids.length) return [];
 
       const kw = str(q.keyword)?.trim();
@@ -709,6 +798,19 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
               if (mine.ids.length) b.whereIn('class_id', mine.ids);
               if (mine.names.length) b.orWhereIn('class_name', mine.names);
             });
+          }
+          // ★ 2026-10-21 班级-学生联动：弹窗选了班级 → 候选只出该班学生
+          //   id 精确匹配为主，姓名兜底（演示数据里学生快照可能只存了班名）
+          if (q.classId || q.className) {
+            qb.andWhere((b: any) => {
+              if (q.classId) b.where('class_id', String(q.classId));
+              if (q.className) b.orWhere('class_name', String(q.className));
+            });
+          }
+          // ★ 2026-10-22：房间性别过滤（男寝只出男生 / 女寝只出女生）
+          const wantGender = numOrNull(q.gender) ?? 0;
+          if (wantGender === 1 || wantGender === 2) {
+            qb.andWhere("gender", wantGender);
           }
           if (kw) {
             qb.andWhere((b: any) =>
@@ -769,7 +871,9 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
         });
     },
 
-    async assign(body: DormAssignBody, userId: string) {
+    async assign(body: DormAssignBody, user: any) {
+      // userId 只用于留痕；user 还要拿来做班主任房间范围校验
+      const userId = str(user?.userId) || 'sys';
       /**
        * ★ 2026-10-21：学生主档兜底（与本文件 changeCreate 同口径）
        *   部分环境（演示库 / 门户投影）里本学段学生表没有在读学生，
@@ -791,6 +895,15 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       const dorm = await T_DORM().where({ id: String(body.dormId), is_deleted: false }).first();
       if (!dorm) throw new Error('宿舍不存在');
       if (Number(dorm.dorm_status) === 2) throw new Error('该宿舍已停用，不能入住');
+      // ★ 2026-10-22：班主任只能往自己范围内的房间填学生
+      await assertRoomInScope(String(dorm.id), user);
+
+      // ★ 2026-10-22：开放班的分派房间锁定，别的班学生不能入住
+      const owner = await roomOwner(String(dorm.id));
+      const stuClass = str(st.class_name);
+      if (owner && stuClass && owner.className !== stuClass && Number(owner.status) !== 2) {
+        throw new Error(`该宿舍已分派给开放中的 ${owner.className} 班，不能给其他班学生入住`);
+      }
   
       const bed = await T_BED().where({ id: String(body.bedId), is_deleted: false }).first();
       if (!bed) throw new Error('床位不存在');
@@ -846,6 +959,18 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
           dorm_no: dorm.dorm_no,
         });
       }
+
+      /**
+       * ★ 2026-10-22：按学号同步到「所有学生投影表」
+       *   学生档案用的是 JHS- 开头的 id，宿舍域操作的是 PSB-，
+       *   不同步的话「学生档案 → 宿舍」永远是空的。
+       */
+      await syncStudentDorm(
+        str(st.student_no) || '',
+        String(dorm.id),
+        str(dorm.dorm_no) || null,
+        str(bed.bed_no) || null,
+      );
       void genderName;
     },
   
@@ -855,6 +980,7 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       if (Number(bed.bed_status) !== 2) throw new Error('该床位没有学生入住');
   
       const sid = bed.student_id;
+      const sno = str(bed.student_no) || '';
       await T_BED().where({ id: String(bedId) }).update({
         bed_status: 1,
         student_id: null,
@@ -873,6 +999,8 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
           await db(PERM_STUDENT).where({ id: String(sid) }).update({ dorm_id: null, dorm_no: null });
         }
       }
+      // ★ 2026-10-22：退宿也要按学号清掉所有投影表的宿舍（学生档案同步清空）
+      await syncStudentDorm(sno, null, null, null);
       await refreshUsedCount(String(dormId));
     },
   
@@ -1006,6 +1134,18 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       let newDorm: any = null;
       if (body.oldDormId) oldDorm = await T_DORM().where({ id: String(body.oldDormId) }).first();
       if (body.newDormId) newDorm = await T_DORM().where({ id: String(body.newDormId) }).first();
+
+      /**
+       * ★ 2026-10-22：调宿目标同样受「开放班锁定」约束
+       *   目标房间属于别的开放班 → 不能把本班学生调进去；封班房间放行。
+       */
+      if (!isCheckout && newDorm) {
+        const owner = await roomOwner(String(newDorm.id));
+        const stuClass = str(st.class_name);
+        if (owner && stuClass && owner.className !== stuClass && Number(owner.status) !== 2) {
+          throw new Error(`目标宿舍已分派给开放中的 ${owner.className} 班，不能调入其他班学生`);
+        }
+      }
   
       // 目标床位必须空闲（退宿不需要）
       if (!isCheckout && body.newBedId) {
@@ -1139,6 +1279,16 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
           dorm_no: a.new_dorm_no ?? null,
         });
       }
+      /**
+       * ★ 2026-10-22：审批通过后按学号同步所有投影表
+       *   （学生档案读 JHS- 那张，不同步 → 档案里的宿舍永远是空的）
+       */
+      await syncStudentDorm(
+        str(a.student_no) || '',
+        a.new_dorm_id ? String(a.new_dorm_id) : null,
+        str(a.new_dorm_no) || null,
+        str(a.new_bed_no) || null,
+      );
       // ④ 两端 used_count 重算
       if (a.old_dorm_id) await refreshUsedCount(String(a.old_dorm_id));
       if (a.new_dorm_id) await refreshUsedCount(String(a.new_dorm_id));

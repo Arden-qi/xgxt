@@ -246,12 +246,15 @@ const CLASS_JH_STAFF_PAGES: string[] = [
   'classjh:dorm:view',
 ];
 
-/** 教务老师：本模块只负责宿舍（调宿审批）与审批中心、楼栋字典 */
+/**
+ * 教务老师：本模块只负责宿舍（调宿审批）
+ *
+ * ★ 2026-10-22：按用户要求去掉「休学/退学审批」——
+ *   `classjh:approval:view` 不再给教务，左侧菜单的「休学 / 退学审批」随之消失。
+ */
 const CLASS_JH_ACAD_PAGES: string[] = [
   'classjh:dashboard:view',
   'classjh:dorm:view',
-  'classjh:approval:view',
-  'classjh:building:view',
 ];
 
 const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
@@ -407,9 +410,6 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
   [RoleCode.ACAD_STAFF]: [
     'edu:student:view',
     'edu:dorm:view',
-    'edu:fee:view',
-    // ★ 2026-10-05：教务发起催费的入口（见上方说明）
-    'job:feeCall:view',
     // ★★ 2026-10-08 修复「宿舍审批死结」：
     //   实训侧「就业管理 → 宿舍管理」（job:dorm:view）**本来就是班主任/教务共用页**——
     //   班主任只能「发起 + 撤回」，教务**只负责审批**（见 api/dorm.ts 头部说明、
@@ -420,7 +420,7 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
     //   与「教务管理 → 宿舍管理」是两套独立宿舍（实训基地 / 教务基地），互不影响。
     'job:dorm:view',
     // ★ 2026-10-05：教学管理（初高）—— 教务在该模块负责【调宿审批】，
-    //   所以给宿舍页与审批中心（其余页面属班主任/经理，不给他）
+    //   所以给宿舍页（其余页面属班主任/经理，不给他）
     ...CLASS_JH_ACAD_PAGES,
   ],
 

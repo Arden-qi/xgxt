@@ -209,9 +209,9 @@ async function main() {
       `roles=${JSON.stringify(roles)} eduPages=${codes.filter((c) => String(c).startsWith('edu:')).join(',')}`,
     );
     check(
-      '教务老师（zhengym）拿到「催费管理」页面权限（= 能点「发起催费」）',
-      codes.includes('job:feeCall:view'),
-      `job:feeCall:view=${codes.includes('job:feeCall:view')}`,
+      '教务老师（zhengym）不再有「催费」入口（2026-10-22 用户要求下线）',
+      !codes.includes('job:feeCall:view') && !codes.includes('edu:fee:view'),
+      `job:feeCall:view=${codes.includes('job:feeCall:view')} edu:fee:view=${codes.includes('edu:fee:view')}`,
     );
   }
   if (tokClass) {
@@ -360,16 +360,19 @@ async function main() {
   await q(`DELETE FROM ${D.common}.t_class_urge_sync WHERE student_no = ?`, [VERIFY_STU_NO]);
 
   const dueDate = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  /**
+   * ★ 2026-10-22：教务的「催费」入口已按用户要求下线（菜单/权限都收了），
+   *   所以这里从「教务能发起」改成「教务被拒」—— 链路本身用其他有权限的账号验。
+   */
   const fcRes = await api('POST', '/api/job/fee-call/create', {
-    // ★ 用「教务老师」本人 —— 这正是用户要的口径：教务点「发起催费」
     token: tokEdu,
     body: { feeType: 2, studentId: VERIFY_STU_ID, feeAmount: 120000, dueDate, callReason: '链路验证' },
   });
   const fcId = fcRes.json?.data?.id;
   check(
-    '③a-1 教务老师调 /api/job/fee-call/create 成功（点「发起催费」）',
-    fcRes.json?.code === 200 && !!fcId,
-    `HTTP ${fcRes.status} code=${fcRes.json?.code} msg=${fcRes.json?.message} id=${fcId}`,
+    '③a-1 教务老师已无「发起催费」权限（入口已下线）',
+    fcRes.json?.code !== 200,
+    `HTTP ${fcRes.status} code=${fcRes.json?.code} msg=${fcRes.json?.message}`,
   );
 
   if (fcId) {
