@@ -84,10 +84,17 @@ export async function effectivePathsForRoles(
 ): Promise<Set<string> | null> {
   if (!roleCodes?.length) return null;
 
-  const overrides = await loadRolePageOverrides();
-  const anyConfigured = roleCodes.some((c) => overrides.get(c)?.configured);
-  if (!anyConfigured) return null;
-
+  /**
+   * ★ 2026-10-22：不再有「没人配过 → 返回 null → 不过滤」这条降级。
+   *
+   *   权限树改成「功能点 = 页面」之后，**每个角色都天然有一份默认集合**
+   *   （= 它在权限树里勾到动作的那些页面），所以这里永远能算出一个白名单。
+   *   如果继续沿用旧口径（没人在页面管理里配过就不过滤），
+   *   「职位权限分配」里取消勾选就只影响 consult/finance 菜单，
+   *   其他板块的页面照样全开 —— 那正是用户抱怨的「设了权限没用」。
+   *
+   *   ⚠️ 台账（t_perm_role_page）仍然叠加在上面：默认 ∪ 打勾 − 去勾。
+   */
   const out = new Set<string>();
   for (const code of roleCodes) {
     const keys = await effectiveKeysOfRole(code);

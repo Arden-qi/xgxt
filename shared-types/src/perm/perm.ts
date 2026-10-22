@@ -539,6 +539,17 @@ export interface PermLog extends BaseEntity {
   ip: string;
   /** 结果 */
   result: LogResult;
+  /* ---- ★ 2026-10-22 全系统留痕新增（权限板块内部的老日志为空）---- */
+  /** 访问的接口路径，如 /api/consult/student/add */
+  apiPath?: string;
+  /** HTTP 方法 */
+  httpMethod?: string;
+  /** HTTP 状态码 */
+  statusCode?: number | null;
+  /** 处理耗时（毫秒） */
+  durationMs?: number | null;
+  /** 设备 / 浏览器，如 Chrome / Windows 10/11 */
+  userAgent?: string;
 }
 
 /** 日志查询参数 */

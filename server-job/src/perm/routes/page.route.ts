@@ -106,7 +106,7 @@ const saveSchema = z.object({
 
 pageRouter.put(
   '/save',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:页面管理:edit'),
   validate(saveSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as { moduleKey: string; enabledPaths: string[] };
@@ -142,7 +142,7 @@ pageRouter.put(
 
 pageRouter.post(
   '/reset',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:页面管理:edit'),
   wrap(async (req, res) => {
     await ensurePageTable();
     const affected = await resetAllPages({ id: req.user?.userId, name: req.user?.userName });
@@ -219,7 +219,7 @@ const roleSaveSchema = z.object({
 
 pageRouter.put(
   '/role-save',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:页面管理:edit'),
   validate(roleSaveSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as {
@@ -267,7 +267,7 @@ const roleResetSchema = z.object({ roleId: z.string().min(1, '必须传 roleId')
 
 pageRouter.post(
   '/role-reset',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:页面管理:edit'),
   validate(roleResetSchema),
   wrap(async (req, res) => {
     const { roleId } = (req as any).validated as { roleId: string };
