@@ -23,12 +23,12 @@ import type {
   PermModule,
   PermRoleDetail,
   PermTreeStats,
-  PermUserListItem,
   RolePermMap,
 } from 'shared-types/perm';
-import { assignApi, roleApi, userApi } from '@/perm/api/perm';
+import { assignApi, roleApi } from '@/perm/api/perm';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
 import ProtoConfirm from '@/perm/components/ProtoConfirm.vue';
+import PermItemDialog from '@/perm/components/PermItemDialog.vue';
 import { toast } from '@/perm/utils/toast';
 
 /* ============================================================
@@ -277,6 +277,46 @@ onMounted(async () => {
 });
 
 /* ============================================================
+ * 3.5 新增 / 管理权限点（★ 2026-10-19）
+ *
+ * 【要解决的事】预置权限树是「系统能力清单」，新部门（招生部）＋新职位
+ *   （招生老师）常常需要清单里没有的功能点。这个弹窗让管理员自己加，
+ *   加的格式与预置完全一致（板块 → 功能点 → 动作），存完立刻能勾选。
+ *
+ * ⚠️ 保存后必须重取权限树：模块里多了一个功能点，
+ *    `treeRows` / 草稿的 key 集合都变了。
+ * ⚠️ 如果权限树弹窗还开着（2026-10-20 起底栏的「新增权限」已删，
+ *    但页头 / 工具条两个入口在权限树开着时仍点得到），
+ *    要保留用户已经勾好的草稿，只给新功能点补空数组。
+ * ============================================================ */
+
+const itemAdminOpen = ref(false);
+
+async function onItemSaved(): Promise<void> {
+  if (!currentRoleId.value) return;
+  const draftBefore = treeOpen.value ? { ...draft.value } : null;
+  try {
+    const res = await assignApi.tree(currentRoleId.value);
+    modules.value = res.modules;
+    perms.value = { ...res.perms };
+    treeStats.value = res.stats;
+    if (treeOpen.value && draftBefore) {
+      const next: Record<string, string[]> = {};
+      modules.value.forEach((m) =>
+        m.items.forEach((it) => {
+          const k = keyOf(m.moduleKey, it.itemName);
+          next[k] = k in draftBefore ? [...draftBefore[k]] : [...(perms.value[k] || [])];
+        }),
+      );
+      setDraft(next);
+    }
+    await loadRoles();
+  } catch {
+    /* 已提示 */
+  }
+}
+
+/* ============================================================
  * 4. 权限树弹窗（原型 TREE_DRAFT / renderPermTree / treeAct / treeItem / treeMod）
  * ============================================================ */
 
@@ -390,10 +430,13 @@ function onChildChange(row: TreeRow, c: PermItem, e: Event): void {
   setDraft({ ...draft.value, [childKey(row, c)]: on ? codesOf(c) : [] });
 }
 
-/** 原型 treeMod()：模块整行勾选 */
-function onModChange(mr: ModuleRow, e: Event): void {
+/**
+ * 原型 treeMod()：模块整行勾选（on=true 全勾 / false 全清）
+ * ★ 2026-10-20：原来是绑在模块左侧方块上的 `@change`（要靠 `e.target.checked`），
+ *   用户删掉方块改成右侧文字之后就没有 checkbox 事件了，改成直接收一个布尔值。
+ */
+function setModAll(mr: ModuleRow, on: boolean): void {
   if (treeView.value) return;
-  const on = (e.target as HTMLInputElement).checked;
   const next = { ...draft.value };
   mr.rows.forEach((row) => {
     next[row.key] = on ? codesOf(row.item) : [];
@@ -402,18 +445,28 @@ function onModChange(mr: ModuleRow, e: Event): void {
   setDraft(next);
 }
 
-/** 原型 treeSelectAll() */
-function treeSelectAll(on: boolean): void {
+/** ◆ 模块行右侧「全选 / 取消全选」文字：按当前状态切换本模块的全部动作 */
+function toggleModAll(mr: ModuleRow): void {
+  setModAll(mr, !modOn(mr));
+}
+
+/**
+ * 原型 treeSelectAll()：底部「全选」——把树里全部模块的动作一次勾满。
+ * ★ 2026-10-20：底部那个叫「取消」的按钮（treeSelectAll(false)，取消全部勾选）
+ *   已按用户要求删掉 —— 它和「一键清空」功能重复，还和右侧真正关闭弹窗的
+ *   「取消」撞名，一屏两个「取消」让人分不清。清空请走「一键清空」（带二次确认）。
+ */
+function treeSelectAll(): void {
   if (treeView.value) return;
   const next = { ...draft.value };
   treeRows.value.forEach((mr) =>
     mr.rows.forEach((row) => {
-      next[row.key] = on ? codesOf(row.item) : [];
-      row.children.forEach((c) => (next[childKey(row, c)] = on ? codesOf(c) : []));
+      next[row.key] = codesOf(row.item);
+      row.children.forEach((c) => (next[childKey(row, c)] = codesOf(c)));
     }),
   );
   setDraft(next);
-  toast(on ? '已全选全部权限' : '已取消全部勾选', 'warn');
+  toast('已全选全部权限', 'warn');
 }
 
 /* ---- 一键清空（原型 treeClear：先确认，再清空草稿，仍需点保存才生效） ---- */
@@ -440,7 +493,7 @@ function treeSaveAsk(): void {
 }
 
 const saveDetail = computed<{ k: string; v: string }[]>(() => [
-  { k: '职位', v: `${esc(currentRoleName.value)} <span class="desc">${esc(currentRole.value?.roleCode || '')}</span>` },
+  { k: '职位', v: esc(currentRoleName.value) },
   { k: '勾选动作', v: `<b>${treeStat.value.n}</b> 项` },
   { k: '影响账号', v: `<b>${userCount.value}</b> 个账号` },
 ]);
@@ -546,29 +599,11 @@ async function doReset(): Promise<void> {
   }
 }
 
-/* ============================================================
- * 7. 查看账号（原型 openRoleUsers）
- * ============================================================ */
-
-const usersOpen = ref(false);
-const usersLoading = ref(false);
-const roleUsers = ref<PermUserListItem[]>([]);
-
-const usersTitle = computed(() => `职位下人员 · <span class="em">${esc(currentRoleName.value)}</span>`);
-
-async function openRoleUsers(): Promise<void> {
-  if (!currentRoleId.value) return;
-  usersOpen.value = true;
-  usersLoading.value = true;
-  try {
-    const page = await userApi.list({ roleId: currentRoleId.value, page: 1, size: 100 });
-    roleUsers.value = page.list || [];
-  } catch {
-    roleUsers.value = [];
-  } finally {
-    usersLoading.value = false;
-  }
-}
+/* ★ 2026-10-20 按用户要求删除「查看账号」入口：
+     本页是"配置职位权限"的地方，看这个职位下有哪些账号属于「部门管理 / 账号管理」的职责，
+     夹在「配置权限 / 从其他职位复制」旁边容易被误点。
+     入口、弹窗、状态、openRoleUsers() 一并删除（无其他调用方）。
+     关联账号数仍在职位信息行「{{ currentRole.deptName }} · 关联账号 {{ userCount }} 人」展示。 */
 </script>
 
 <template>
@@ -581,6 +616,7 @@ async function openRoleUsers(): Promise<void> {
           <span class="desc">左侧选择职位 → 右侧勾选权限 → 保存生效</span>
           <button class="btn" type="button" @click="openTree('view')">全屏查看</button>
           <button class="btn" type="button" @click="resetOpen = true">重置为预置</button>
+          <button class="btn wn" type="button" @click="itemAdminOpen = true">＋ 新增权限</button>
           <button class="btn pri" type="button" @click="openTree('edit')">编辑该职位权限</button>
         </div>
       </div>
@@ -639,7 +675,7 @@ async function openRoleUsers(): Promise<void> {
                 </div>
                 <div>
                   <div style="font-weight: 600; font-size: 14px">
-                    {{ currentRole.roleName }} <span class="tag n">{{ currentRole.roleCode }}</span>
+                    {{ currentRole.roleName }}
                     <span v-if="currentRole.isSys" class="tag p">预置</span>
                     <span v-else class="tag g">自建</span>
                   </div>
@@ -656,7 +692,9 @@ async function openRoleUsers(): Promise<void> {
               <div class="perm-tools">
                 <button class="btn xs" type="button" @click="openTree('edit')">＋ 配置权限</button>
                 <button class="btn xs" type="button" @click="openCopy">从其他职位复制</button>
-                <button class="btn xs" type="button" @click="openRoleUsers">查看账号（{{ userCount }}）</button>
+                <!-- ★ 2026-10-20 按用户要求删掉这里的「查看账号」按钮；
+                     同轮删掉「＋ 新增权限」：本页顶部工具条（重置为预置 / ＋ 新增权限 / 编辑该职位权限）已有入口，
+                     这个位置离「配置权限」太近，容易点错成"加权限点"而不是"配权限"。 -->
                 <span class="cl">共 {{ treeStats.modCount }} 个模块 / {{ treeStats.actionCount }} 个权限点</span>
               </div>
 
@@ -742,14 +780,19 @@ async function openRoleUsers(): Promise<void> {
               <span class="cx" @click="toggleMod(mr.mod.moduleKey)">
                 {{ collapsed[mr.mod.moduleKey] ? '▸' : '▾' }}
               </span>
-              <input
-                type="checkbox"
-                :checked="modOn(mr)"
-                :style="roStyle"
-                @change="onModChange(mr, $event)"
-              />
               <span class="nm" @click="toggleMod(mr.mod.moduleKey)">
                 {{ mr.mod.moduleIcon }} {{ mr.mod.moduleName }}
+              </span>
+              <!-- ★ 2026-10-20 按用户要求：模块标题左侧那个「整模块全选」方块已删除，
+                   改成右侧的文字「全选 / 取消全选」（点一下切换本模块的全部动作）。
+                   只读模式（查看权限）下不渲染 —— 点了也不能改，摆着只会误导。 -->
+              <span
+                v-if="!treeView"
+                class="mod-all"
+                :class="{ on: modOn(mr) }"
+                @click="toggleModAll(mr)"
+              >
+                {{ modOn(mr) ? '取消全选' : '全选' }}
               </span>
               <span class="cnt">{{ modGot(mr) }}/{{ modAll(mr) }}</span>
             </div>
@@ -764,6 +807,7 @@ async function openRoleUsers(): Promise<void> {
                     @change="onItemChange(row, $event)"
                   />
                   <span class="nm">{{ row.item.itemName }}</span>
+                  <span v-if="row.item.isCustom" class="tag b" style="flex: none; margin-left: 4px">自建</span>
                   <span class="cnt">{{ rowSel(row).length }}/{{ row.codes.length }}</span>
                 </div>
 
@@ -822,8 +866,13 @@ async function openRoleUsers(): Promise<void> {
           <b style="color: var(--brand)">{{ treeStat.m }}</b> 个模块
         </div>
         <template v-if="!treeView">
-          <button class="btn" type="button" @click="treeSelectAll(true)">全选</button>
-          <button class="btn" type="button" @click="treeSelectAll(false)">取消</button>
+          <!-- ★ 2026-10-20 按用户要求，底栏从 6 个按钮收敛到 4 个：
+               · 删掉「＋ 新增权限」—— 页头/工具条已有同一入口，弹窗里再放一个容易
+                 在半勾选状态下误开另一个弹窗，改权限点的场景也不该发生在配权限时。
+               · 删掉原来那个叫「取消」的（treeSelectAll(false)，取消全部勾选）——
+                 它和「一键清空」功能重复，又和右侧真正关闭弹窗的「取消」撞名。
+               现在：全选 / 一键清空 / 取消（关弹窗）/ 保存权限 -->
+          <button class="btn" type="button" @click="treeSelectAll()">全选</button>
           <button class="btn" type="button" @click="treeClearAsk">一键清空</button>
           <button class="btn" type="button" @click="treeOpen = false">取消</button>
           <button class="btn pri" type="button" :disabled="saving" @click="treeSaveAsk">保存权限</button>
@@ -838,7 +887,7 @@ async function openRoleUsers(): Promise<void> {
       <div style="border: 1px solid var(--line); border-radius: 9px; padding: 9px; max-height: 320px; overflow-y: auto">
         <div v-for="r in copyCandidates" :key="r.id" class="rl-item" @click="pickCopySource(r.id)">
           <span>{{ roleIcon(r.id) }} {{ r.roleName }}</span>
-          <span class="cnt">{{ r.roleType }} · {{ r.permCount }} 项权限</span>
+          <span class="cnt">{{ r.permCount }} 项权限</span>
         </div>
         <div v-if="!copyCandidates.length" class="empty">
           <div class="ic">🎭</div>
@@ -852,43 +901,7 @@ async function openRoleUsers(): Promise<void> {
       </template>
     </ProtoDialog>
 
-    <!-- ==================== 查看账号（原型 openRoleUsers） ==================== -->
-    <ProtoDialog v-model="usersOpen" :title="usersTitle" size="md">
-      <div class="notice i mb12">
-        ℹ<div>共 <b>{{ roleUsers.length }}</b> 个账号。</div>
-      </div>
-      <div v-if="usersLoading" class="empty">
-        <div class="ic">⏳</div>
-        加载中…
-      </div>
-      <table v-else-if="roleUsers.length" class="tb">
-        <thead>
-          <tr>
-            <th>姓名</th>
-            <th>部门</th>
-            <th>状态</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="u in roleUsers" :key="u.id">
-            <td><b>{{ u.userName }}</b></td>
-            <td>{{ u.deptName }}</td>
-            <td>
-              <span v-if="String(u.userStatus) === '正常'" class="tag g">正常</span>
-              <span v-else class="tag gy">{{ u.userStatus }}</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty">
-        <div class="ic">👤</div>
-        该职位下暂无账号
-      </div>
-
-      <template #footer>
-        <button class="btn" type="button" @click="usersOpen = false">关闭</button>
-      </template>
-    </ProtoDialog>
+    <!-- ★ 2026-10-20 「查看账号」弹窗整块删除（入口已删，无其他调用方） -->
 
     <!-- ==================== 确认框（原型 confirmDlg） ==================== -->
     <ProtoConfirm
@@ -939,5 +952,8 @@ async function openRoleUsers(): Promise<void> {
       ok-text="确认保存"
       @ok="doSaveTree"
     />
+
+    <!-- ==================== 新增/维护权限点（自建权限） ==================== -->
+    <PermItemDialog v-model="itemAdminOpen" @saved="onItemSaved" />
   </div>
 </template>

@@ -2,9 +2,17 @@
 /**
  * 系统设置页
  *
- * 三个页签：系统设置（KV）/ 阶段方案 / 操作日志。
+ * 四个页签：系统设置（KV）/ 楼栋设置 / 阶段方案 / 操作日志。
  *
- * ★ 2026-10-16：「阶段字典」升级为「阶段方案」——
+ * ★ 楼栋设置（2026-10-16 新增）：宿舍楼栋字典，和「教学管理 → 宿舍管理」
+ *   的楼栋下拉是同一份数据（sms_common.t_dorm_building）。
+ *   这里加一栋 → 宿舍管理的楼栋下拉立刻多一项，不需要改任何代码。
+ *
+ * ★ 2026-10-20 楼栋设置抽成公共面板 `BuildingSettingPanel.vue`：
+ *   独立的「教学管理 → 楼栋设置」页（/class-jh/building，单独授权给教务老师）
+ *   与本页页签渲染**同一个组件**，不再复制两份逻辑。
+ *
+ * ★ 阶段方案（2026-10-16 由「阶段字典」升级）：
  *   一个方案 = 方案名称 + 所属部门 + N 个阶段（阶段名称 + 学制月数）；
  *   例：方案一 → 一阶段 学制2月 / 二阶段 学制2月 / 三阶段 学制2月。
  *   班级新增/编辑里的「阶段方案 / 阶段」两个下拉即取这里的数据。
@@ -25,6 +33,8 @@ import {
   fetchOpLogList,
 } from '@/class-jh/api/setting';
 import { dash, formatDateTime } from '@/class-jh/utils/format';
+/** ★ 2026-10-20：楼栋设置抽成公共面板，系统设置页与独立「楼栋设置」页共用 */
+import BuildingSettingPanel from '@/class-jh/components/setting/BuildingSettingPanel.vue';
 
 const activeTab = ref('setting');
 
@@ -291,6 +301,11 @@ onMounted(() => {
         </div>
       </el-tab-pane>
 
+      <!-- 楼栋设置（公共面板：与独立「楼栋设置」页完全相同） -->
+      <el-tab-pane label="楼栋设置" name="building">
+        <BuildingSettingPanel />
+      </el-tab-pane>
+
       <!-- 阶段方案（★ 2026-10-16 由「阶段字典」升级：一个方案可含多个阶段） -->
       <el-tab-pane label="阶段方案" name="stageScheme">
         <div class="toolbar">
@@ -427,6 +442,14 @@ onMounted(() => {
 .toolbar {
   margin-bottom: 12px;
 }
+/* 楼栋列表里「未配置 / 0」的弱化显示 */
+.muted {
+  color: #c0c4cc;
+}
+.ok {
+  color: #303133;
+}
+
 /* 新增/编辑方案弹窗里的「阶段明细」 */
 .scheme-stages {
   width: 100%;

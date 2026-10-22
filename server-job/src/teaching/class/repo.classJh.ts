@@ -21,6 +21,8 @@
 
 import { randomUUID } from 'crypto';
 import { db } from '../../class-jh/utils/db';
+// ★ 2026-10-21 班号：建班时按学部组顺序分配（学号 = LZ + J/T + 班号 + 班内序号）
+import { nextClassNo } from '../../class-jh/utils/classNo';
 import {
   CLASS_STATUS,
   CLASS_STATUS_NAME,
@@ -317,13 +319,17 @@ export const repo: ClassRepo = {
     if (dupName) throw new Error(`该部门下已有班级叫「${className}」`);
 
     const id = randomUUID();
+    // ★ 2026-10-21 班号：按学部组（J=预科+初中 / T=高中）顺序分配，101 起；
+    //   学号 = LZ + J/T + 班号(3位) + 班内序号(3位, 每班从001独立)，见 classNo.ts
+    const stage = body.phaseCode ?? Number(Object.keys(PHASE_NAME)[0]);
     await tblIns(db, 'sms_class_jh', T, STAGE, {
       id,
       class_code: classCode,
       class_name: className, // ★ create 时名称可能被自动占位（见上）
+      class_no: await nextClassNo(db, stage),
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时给兜底值
-      [phaseCodeCol()]: body.phaseCode ?? Number(Object.keys(PHASE_NAME)[0]),
+      [phaseCodeCol()]: stage,
       dept_code: body.deptCode ?? 1,
       student_count: 0,
       is_deleted: false,

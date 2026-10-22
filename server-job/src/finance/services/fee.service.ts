@@ -21,6 +21,8 @@ import {
   FEE_SOURCE_MODULE,
   VOUCHER_REUSABLE_FEE_TYPES,
 } from 'shared-types/finance';
+// ★ 2026-10-21 财务核对后要回写咨询侧收款单状态（跨库同进程，全限定名更新）
+import { ConsultFeeStatus } from 'shared-types/consult';
 import { db, knexRaw } from '../utils/db';
 import { BizError } from '../middleware/errorHandler';
 import { nextBillNoForPay } from '../utils/orderNo';
@@ -554,6 +556,26 @@ export async function verifyFee(
       update_by: operator.userId,
     });
 
+    /**
+     * ★ 2026-10-21 回写咨询侧收款单（财务核对 → 咨询「已到账」）
+     *
+     * 背景（E2E 实测发现的 P0 缺陷）：核对成功只改了财务侧，
+     *   咨询侧收款单永远停在「待财务确认」→ 分班入档的前置校验
+     *   （consult 单 status=ARRIVED）永远不满足，「缴费→分班」主链路断裂。
+     *
+     * 做法：两个库在同一个服务进程、同一个 MySQL 实例、同一个连接里，
+     *   直接用全限定名更新 sms_consult（与教务 sms_edu 跨库同一套路）。
+     *   按 finance_fee_id 反查（不是 consult_student_id）—— 一张财务单
+     *   只对应一张咨询单，反查最准；查不到（非咨询来源）时静默跳过。
+     */
+    await t('sms_consult.t_consult_fee_order')
+      .where({ finance_fee_id: id })
+      .update({
+        status: ConsultFeeStatus.ARRIVED,
+        update_time: now,
+        update_by: operator.userId,
+      });
+
     return billNo;
   };
 
@@ -587,6 +609,11 @@ export async function rejectFee(
     update_time: new Date(),
     update_by: operator.userId,
   });
+
+  // ★ 2026-10-21 同步咨询侧为「已驳回」（与 verifyFee 的回写对称，非咨询来源时静默跳过）
+  await db('sms_consult.t_consult_fee_order')
+    .where({ finance_fee_id: id })
+    .update({ status: ConsultFeeStatus.REJECTED, update_time: new Date(), update_by: operator.userId });
 }
 
 /**

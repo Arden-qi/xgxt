@@ -160,7 +160,12 @@ export interface PermRoleQuery extends PageQuery {
 export interface PermRoleSavePayload {
   id?: string;
   roleName: string;
-  roleCode: string;
+  /**
+   * ★ 2026-10-19：界面已去掉「职位编码」——改为可选。
+   *   不传由后端自动生成（t_perm_role.role_code 是 NOT NULL + 唯一索引，
+   *   且是跨模块鉴权连接键，所以列与字段必须保留，只是不再由用户填写）。
+   */
+  roleCode?: string;
   deptId?: string;
   roleType?: RoleType;
   /** ★ 2026-10-08：等价的内置职位码，见 PermRole.equivRoleCode */
@@ -351,6 +356,88 @@ export interface PermItem {
   remark?: string;
   /** 该职位在此功能点下已勾选的动作名（职位权限详情接口返回） */
   checked?: string[];
+  /**
+   * ★ 2026-10-19 新增：是否用户自建
+   *
+   * true  = 在「新增权限」里自己加的（可改可删）
+   * false / 未传 = 系统预置（不可改删，改动会破坏业务代码里的权限串）
+   */
+  isCustom?: boolean;
+}
+
+/* ============================================================
+ * 三之二、权限点维护（用户自建权限点）
+ *
+ * 【背景】系统预置 8 个板块 / 55 个功能点是「系统能力清单」，
+ *   新加的部门（如招生部）与职位（如招生老师）往往需要一批
+ *   「预置清单里没有」的功能点。这一组类型就是那条维护通道的契约：
+ *   新增后与预置权限**格式完全一致**（模块 → 功能点 → 动作），
+ *   直接进入权限树，可以在「职位权限分配」里勾选给任何职位。
+ * ============================================================ */
+
+/** 自建权限点里的一个动作（提交用） */
+export interface PermItemActionSavePayload {
+  /** 动作编码，如 view / add / followUp；留空时后端按基类自动生成 */
+  actionCode?: string;
+  /** 动作中文名，如 查看 / 新建 / 跟进 */
+  actionName: string;
+  /** 动作基类 1查看 2新增 3编辑 4删除 5审批 6导出 */
+  baseAction: number;
+  remark?: string;
+}
+
+/** 自建权限点的新增 / 编辑参数 */
+export interface PermItemSavePayload {
+  /** 编辑时必传 */
+  id?: string;
+  /** 所属板块 key；传 __new__ 或留空 = 新建板块 */
+  moduleKey: string;
+  /** 板块名称（新建板块时必填） */
+  moduleName?: string;
+  /** 板块图标 emoji */
+  moduleIcon?: string;
+  /** 板块排序（不传则排到最后） */
+  moduleSort?: number;
+  /** 功能点名称 */
+  itemName: string;
+  /** 上级功能点名称（做二级功能点时用，可空） */
+  parentItemName?: string | null;
+  /** 备注 */
+  remark?: string;
+  /** 该功能点下的动作，至少 1 个 */
+  actions: PermItemActionSavePayload[];
+}
+
+/** 权限点维护列表项（「新增权限」弹窗左侧列表用） */
+export interface PermMenuItemAdmin {
+  /** 功能点 id（t_perm_menu.id） */
+  id: string;
+  moduleKey: string;
+  moduleName: string;
+  moduleIcon: string;
+  moduleSort: number;
+  itemName: string;
+  parentItemName?: string;
+  itemSort: number;
+  remark?: string;
+  /** 是否用户自建 */
+  isCustom: boolean;
+  /** 动作清单 */
+  actions: PermActionItem[];
+  /** 有多少个职位勾选了它（删前提示用） */
+  grantedRoleCount: number;
+}
+
+/** 权限点新增 / 编辑结果 */
+export interface PermItemSaveResult {
+  id: string;
+  moduleKey: string;
+  moduleName: string;
+  itemName: string;
+  /** 落库的动作数 */
+  actionCount: number;
+  /** true = 本次新建，false = 本次修改 */
+  created: boolean;
 }
 
 /** 权限模块（一级节点） */

@@ -36,6 +36,8 @@ import { BizError } from '../middleware/errorHandler';
 import { financeClient } from './finance.client';
 import { formatTime, findStudent, addHistory } from './student.service';
 import { changeState } from './state.service';
+// ★ 2026-10-20 试学闭环：补费到账转正后，把班级学籍从「试学中」改成「正式在读」
+import { classSync } from '../../utils/classSync';
 
 export const FEE_ORDER_TABLE = 't_consult_fee_order';
 
@@ -961,6 +963,176 @@ export async function createFees(
 }
 
 /* ============================================================
+ * ★ 2026-10-20 补费：试学转正补缴尾款 / 差额补收（金额自定义）
+ *
+ * 用户口径：「交了试学费的，后边在收款与缴费管理那儿操作里面
+ *            添加一个补费功能，补费金额自定义。」
+ *
+ * 与 createFees 的差别（别硬套那条链）：
+ *   · 补费不是「按费用标准收费」，金额老师手填 → 不走「实缴 ≤ 应缴」校验；
+ *   · 只对「已缴过试学费」的学生开放（试学 → 转正补尾款）；
+ *   · 落库类型固定 FeeType.SUPPLEMENT(8)，列表一眼能看出是补费单，
+ *     不会污染「学费」的已缴判定（否则全款口径会算错）。
+ * ============================================================ */
+export async function createSupplementFee(
+  consultStudentId: string,
+  amount: number,
+  operator: { name: string; title?: string },
+  opts: {
+    /** ★ 只要缴费就要有凭证 —— 与发起收费同一铁律 */
+    voucherUrl: string;
+    voucherNo?: string;
+    payMethod?: string;
+    /** 补费说明（如「试学转正补尾款」「补差价」），写进单据备注与跟进历史 */
+    remark?: string;
+  },
+): Promise<{ orderId: string; orderNo: string; amount: number; message: string }> {
+  const stu = await findStudent(consultStudentId);
+  if (!stu) {
+    throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new BizError(BizCode.PARAM_ERROR, '补费金额必须大于 0');
+  }
+  if (!opts.voucherUrl) {
+    throw new BizError(BizCode.PARAM_ERROR, '请先上传缴费凭证截图');
+  }
+
+  /* ---------- 门槛 1：必须已经缴过试学费 ---------- */
+  //
+  // 用户口径是「交了试学费的」才有补费入口。前端按钮按行显示（试学费单已到账），
+  // 但接口不能只靠前端 —— 直接调接口绕过按钮的情况必须挡住。
+  const trialPaid = await db(FEE_ORDER_TABLE)
+    .where({ consult_student_id: consultStudentId, is_deleted: false })
+    .where('fee_type', FeeType.TRIAL_FEE)
+    .where('status', CFS.ARRIVED)
+    .first();
+  if (!trialPaid) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `「${stu.student_name}」还没有已到账的试学费，补费只对已缴试学费的学生开放（首笔请走「发起收费」）`,
+    );
+  }
+
+  /**
+   * ---------- 门槛 2：同学生同时只允许一笔「在途补费」 ----------
+   *
+   * 补费金额是手填的，重复点两次就会建两张单 → 到账后多收一笔钱，
+   * 学生档案里也会出现两条补费。这里直接拦，让他等财务核对结果。
+   */
+  const inFlight = await db(FEE_ORDER_TABLE)
+    .where({ consult_student_id: consultStudentId, is_deleted: false })
+    .where('fee_type', FeeType.SUPPLEMENT)
+    .where('status', CFS.PENDING)
+    .first();
+  if (inFlight) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `该学生已有一笔补费 ¥${centToYuan(Number(inFlight.amount))}（${inFlight.order_no}）正在等财务确认，请先等核对结果，不要重复发起`,
+    );
+  }
+
+  const deptCode: DeptCode = stu.dept_code || DeptCode.JUNIOR_SENIOR;
+  const studentNo = stu.student_no || tempStudentNo(consultStudentId);
+  const feeTypeName = nameOf(FEE_TYPE_NAME, FeeType.SUPPLEMENT);
+  const remark = (opts.remark || '').trim() || '试学转正补缴尾款';
+
+  /* ---------- 1. 先让财务建单（金额直接传，不让财务按标准取） ---------- */
+  const financeRes = await financeClient.addFee({
+    studentId: consultStudentId,
+    studentNo,
+    studentName: stu.student_name,
+    feeType: FeeType.SUPPLEMENT,
+    deptCode,
+    classId: stu.class_id || undefined,
+    className: stu.class_name || undefined,
+    sourceModule: SourceModule.CONSULT,
+    payMethod: opts.payMethod,
+    amount,
+    voucherUrl: opts.voucherUrl,
+    voucherNo: opts.voucherNo,
+    remark: `咨询模块补费（${operator.name}）：${remark}`,
+  });
+
+  /* ---------- 2. 本地落库 ---------- */
+  const orderId = randomUUID();
+  const orderNo = await nextOrderNo();
+  await db(FEE_ORDER_TABLE).insert({
+    id: orderId,
+    order_no: orderNo,
+    finance_fee_id: financeRes.id,
+    consult_student_id: consultStudentId,
+    student_name: stu.student_name,
+    student_no: studentNo,
+    class_name: stu.class_name || null,
+    dept_code: deptCode,
+    fee_type: FeeType.SUPPLEMENT,
+    amount,
+    // 建单即带凭证 → 待财务确认（与发起收费同一口径）
+    status: CFS.PENDING,
+    voucher_url: opts.voucherUrl,
+    voucher_no: opts.voucherNo || null,
+    voucher_by: operator.name,
+    pay_method: opts.payMethod || null,
+    batch_no: Date.now(),
+    item_detail: JSON.stringify([
+      {
+        feeType: FeeType.SUPPLEMENT,
+        feeTypeName,
+        amount,
+        /** 补费没有「标准价」，应缴就是老师填的数，优惠恒为 0 */
+        standardAmount: amount,
+        discount: 0,
+      },
+    ]),
+    create_time: new Date(),
+    create_by: operator.name,
+    create_by_name: operator.name,
+    is_deleted: false,
+  });
+
+  /* ---------- 3. 跟进历史 ---------- */
+  await addHistory(
+    consultStudentId,
+    operator.name,
+    `发起补费 ¥${centToYuan(amount)}（${remark}），凭证已随单上传，等待财务确认到账`,
+    operator.title,
+    'SUPPLEMENT',
+  );
+
+  /**
+   * ---------- 4. 状态推进：试学中 → 缴费中·待确认 ----------
+   *
+   * ⚠️ 三种状态分开处理，别一把梭：
+   *   · TRIAL(5 试学中)       → FULL_FEE_PENDING(6)：试学结束补尾款，等钱到账转正式
+   *   · TRIAL_FEE_PENDING(3)  → FULL_FEE_PENDING(6)：试学费还没确认就到补费（少见但合法）
+   *   · TRIAL_WAIT_CLASS(4)   → 不动：他正等分班，改成「缴费中」会把「分配班级」入口弄没
+   *   · FORMAL(7)             → 不动：正式在读的补收属于正常追加，不改变身份
+   */
+  const cur = stu.consult_state as ConsultState;
+  if (cur === ConsultState.TRIAL || cur === ConsultState.TRIAL_FEE_PENDING) {
+    try {
+      await changeState(consultStudentId, ConsultState.FULL_FEE_PENDING, {
+        byName: operator.name,
+        byTitle: operator.title,
+        action: 'FEE_SUPPLEMENT',
+        historyText: `发起补费 ¥${centToYuan(amount)}（${remark}），待财务确认到账后转正式在读`,
+      });
+    } catch (e: any) {
+      // 状态没推进不影响单据本身：钱和单已经落库，财务核对后到账逻辑还会兜一次
+      console.warn('[createSupplementFee] 状态推进失败', e?.message);
+    }
+  }
+
+  return {
+    orderId,
+    orderNo,
+    amount,
+    message: `补费 ¥${centToYuan(amount)} 已发起，凭证已上传，等待财务确认到账`,
+  };
+}
+
+/* ============================================================
  * 凭证上传 / 重新提交
  * ============================================================ */
 
@@ -1230,7 +1402,9 @@ async function syncArrivedStudentStates(): Promise<void> {
  *
  * 流转规则（只在学生处于对应前置状态时才动，幂等可重试）：
  *    · 试学费到账  → TRIAL_FEE_PENDING（咨询中）→ TRIAL_WAIT_CLASS（待分班）
- *    · 学费（全款）到账 → 当前所有全款费用单都到账后 → FORMAL（正式学员）
+ *    · 学费（全款）到账 → 当前所有全款费用单都到账后 → TRIAL_WAIT_CLASS（待分班）
+ *      ★ 2026-10-20 用户口径「交完试学费或学费就分配班级」：
+ *        学费到账同样先进「待分班」，分完班才落「正式在读」，不再直接跳 FORMAL。
  *      （转正式会一次发 4 笔 FULL_FEE_TYPES，必须等全到，不能到一笔就转）
  */
 async function advanceStudentStateOnArrival(row: any): Promise<void> {
@@ -1252,6 +1426,29 @@ async function advanceStudentStateOnArrival(row: any): Promise<void> {
   const cur = stu.consult_state as ConsultState;
   let target: ConsultState | null = null;
   let gate = '';
+
+  /**
+   * ★ 2026-10-20 试学闭环：转「正式在读」后，把班级学籍一并改成「正式在读(5)」
+   *
+   * 用户口径：试学结束由班主任发起补费，补缴到账就转正式。
+   * 钱和咨询状态在本模块，学籍在班级模块，只改一边会出现
+   * 「咨询侧已是正式在读，班主任花名册还挂试学中」的割裂状态。
+   *
+   * ⚠️ 认人键 = 咨询侧学号（班级建档时写入 source_id）。
+   * ⚠️ 失败只记日志：钱已经到账、状态已经推进，不能因为班级模块抖一下就把整笔到账回滚。
+   */
+  const syncClassOnFormal = async (next: ConsultState): Promise<void> => {
+    if (next !== ConsultState.FORMAL) return;
+    try {
+      const consultNo = String(stu.student_no || stu.id);
+      const r = await classSync.studentStatusSync(consultNo, 5 /* StudentStatus.STUDYING */);
+      if (!r.ok) {
+        console.warn(`[advanceStudentStateOnArrival] 班级学籍同步失败：${r.message}`);
+      }
+    } catch (e: any) {
+      console.warn('[advanceStudentStateOnArrival] 班级学籍同步异常', e?.message);
+    }
+  };
 
   /* ---------- ★ 2026-10-16 分期口径：首付到账即可推进 ---------- */
   //
@@ -1278,15 +1475,22 @@ async function advanceStudentStateOnArrival(row: any): Promise<void> {
         gate = '分期首付已到账';
       }
     } else if (
+      cur === ConsultState.TRIAL_FEE_PENDING ||
       cur === ConsultState.FULL_FEE_PENDING ||
       cur === ConsultState.TRIAL_WAIT_CLASS ||
       cur === ConsultState.TRIAL
     ) {
-      target = ConsultState.FORMAL;
-      gate = '分期首付已到账';
+      // ★ 2026-10-20 同口径：还没分班 → 先「待分班」，分完班再落正式
+      if (!stu.class_id) {
+        target = ConsultState.TRIAL_WAIT_CLASS;
+        gate = '分期首付已到账，待分配班级';
+      } else {
+        target = ConsultState.FORMAL;
+        gate = '分期首付已到账';
+      }
     }
 
-    if (target) {
+    if (target && target !== cur) {
       await changeState(row.consult_student_id, target, {
         byName: '财务模块',
         byTitle: '系统',
@@ -1295,6 +1499,8 @@ async function advanceStudentStateOnArrival(row: any): Promise<void> {
           Number(plans[0].pending_amount) > 0 ? `，待缴 ¥${pendingYuan} 继续收取` : ''
         }`,
       });
+      // 分期首付到账也算转正 → 学籍一起走
+      await syncClassOnFormal(target);
     }
     return; // 分期走自己的口径，不再走下面「全部到账」的判断
   }
@@ -1304,26 +1510,65 @@ async function advanceStudentStateOnArrival(row: any): Promise<void> {
       target = ConsultState.TRIAL_WAIT_CLASS;
       gate = '试学费已到账';
     }
-  } else if (FULL_FEE_TYPES.includes(row.fee_type)) {
+  } else if (Number(row.fee_type) === FeeType.SUPPLEMENT) {
+    /**
+     * ★ 2026-10-20 补费到账 → 试学转正
+     *
+     * 用户口径：试学结束由班主任（或咨询老师）发起补费，补缴到账就转正式。
+     * 补费单不属于 FULL_FEE_TYPES，所以不能走下面「全款全部到齐」的判断
+     * （那样会永远不成立，钱到了状态不动）。
+     *
+     * 落点与学费到账同口径：没分班先「待分班」，有班直接「正式在读」。
+     */
     if (
+      cur === ConsultState.TRIAL_FEE_PENDING ||
       cur === ConsultState.FULL_FEE_PENDING ||
       cur === ConsultState.TRIAL_WAIT_CLASS ||
       cur === ConsultState.TRIAL
     ) {
-      // 全款口径：该学生所有全款费用单全部到账才转「正式学员」
+      if (!stu.class_id) {
+        target = ConsultState.TRIAL_WAIT_CLASS;
+        gate = '补费已到账，待分配班级';
+      } else {
+        target = ConsultState.FORMAL;
+        gate = '补费已到账';
+      }
+    }
+  } else if (FULL_FEE_TYPES.includes(row.fee_type)) {
+    if (
+      // ★ 2026-10-20 用户口径「交完试学费或学费就分配班级」：
+      //   学生可能不交试学费、直接一次性交正式学费（此时还在「咨询中」），
+      //   原来漏了这一档，钱到了状态却不动。现在一并纳入。
+      cur === ConsultState.TRIAL_FEE_PENDING ||
+      cur === ConsultState.FULL_FEE_PENDING ||
+      cur === ConsultState.TRIAL_WAIT_CLASS ||
+      cur === ConsultState.TRIAL
+    ) {
+      // 全款口径：该学生所有全款费用单全部到账才往下走
       const rows = await db(FEE_ORDER_TABLE)
         .where({ consult_student_id: row.consult_student_id, is_deleted: false })
         .whereIn('fee_type', FULL_FEE_TYPES)
         .whereNotIn('status', [CFS.ARRIVED]);
       const unpaidLeft = rows.filter((r: any) => r.id !== row.id).length;
       if (unpaidLeft === 0) {
-        target = ConsultState.FORMAL;
-        gate = '全款费用已全部到账';
+        /* ★ 2026-10-20 交完学费先分班，再转正式
+         *
+         *   用户口径：「交完试学费或学费就分配班级」——学费到账后学生同样要
+         *   走「待分班」，分完班才落「正式在读」。原来直接跳 FORMAL，
+         *   会出现「正式在读但没班」的脏状态（分配班级按钮还得靠兜底显示）。
+         */
+        if (!stu.class_id) {
+          target = ConsultState.TRIAL_WAIT_CLASS;
+          gate = '全款费用已全部到账，待分配班级';
+        } else {
+          target = ConsultState.FORMAL;
+          gate = '全款费用已全部到账';
+        }
       }
     }
   }
 
-  if (!target) return;
+  if (!target || target === cur) return;
 
   await changeState(row.consult_student_id, target, {
     byName: '财务模块',
@@ -1331,6 +1576,9 @@ async function advanceStudentStateOnArrival(row: any): Promise<void> {
     action: 'FEE_ARRIVED_STATE',
     historyText: `${gate}，学生状态流转为「${nameOf(CONSULT_STATE_NAME, target)}」（由收款单 ${row.order_no} 触发）`,
   });
+
+  // ★ 2026-10-20 试学闭环：补费到账转正式 → 班级学籍同步为「正式在读」
+  await syncClassOnFormal(target);
 }
 
 /* ============================================================
@@ -1449,6 +1697,35 @@ export async function checkFullFeeArrived(
   const arrivedTypes = new Set(rows.map((r) => r.fee_type));
   const missing = fullFeeTypes.filter((t) => !arrivedTypes.has(t));
   return { allArrived: missing.length === 0, missing };
+}
+
+/**
+ * 全款（学费 / 住宿 / 餐费 / 保险）是否已缴清
+ *
+ * ★ 2026-10-20：班主任接收建档时，学籍落「试学中」还是「正式在读」要看钱交到哪一步。
+ *   - 只交试学费            → 试学中
+ *   - 学费等全款已到账      → 正式在读（不用再点「转正式」）
+ *   - 分期（计划含非试学费项）→ 按「首付到账即可」口径，视为已缴清
+ *     （与 `advanceStudentStateOnArrival` 的到账流转判断保持一致）
+ *
+ * ⚠️ 不能直接用 `checkFullFeeArrived` —— 它要求 4 类费用全齐，
+ *    只交了学费（住宿/餐费还没收）的学生会永远返回 false。
+ */
+export async function isFullFeeSettled(consultStudentId: string): Promise<boolean> {
+  const plan: any = await db('t_consult_installment_plan')
+    .where({ consult_student_id: consultStudentId, is_deleted: false })
+    .whereNot('status', 3) // 3 = TERMINATED
+    .first();
+  if (plan) {
+    const detail = parseOrderItemDetail(plan.item_detail);
+    if (detail.some((d: any) => Number(d.feeType) !== FeeType.TRIAL_FEE)) return true;
+  }
+
+  const rows: any[] = await db(FEE_ORDER_TABLE)
+    .where({ consult_student_id: consultStudentId, is_deleted: false })
+    .whereIn('fee_type', FULL_FEE_TYPES);
+  if (!rows.length) return false;
+  return rows.every((r) => Number(r.status) === CFS.ARRIVED);
 }
 
 /* ============================================================

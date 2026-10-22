@@ -1608,6 +1608,76 @@ export const DORM_GENDER_NAME: Record<number, string> = {
   2: '女生宿舍',
 };
 
+/**
+ * ★「类别」的**展示口径**：1 男寝 / 2 女寝（2026-10-18）
+ *
+ * 【为什么不能直接用上面的 DORM_GENDER_NAME】
+ *   DORM_GENDER_NAME 是**底层枚举全集**，且被老路由（dorm.route.ts /
+ *   classInfo.route.ts）复用着，改它会连带改掉老页面的文案。
+ *   而宿舍管理列表现在统一显示「男寝 / 女寝」（见前端 DORM_CATEGORY_NAME）。
+ *
+ * 【为什么搜索必须用它】
+ *   关键字匹配取的是「列表上显示出来的值」（见 service.searchTextOf）。
+ *   若这里用「男生宿舍」，用户看着列表上的「男寝」去搜「男寝」就会搜不到 ——
+ *   「屏幕上看得见、搜索框里搜不出来」正是这次要根治的问题。
+ *   → 0「不限」不在新口径内 → 返回 undefined，由调用方回退到 dormTypeName。
+ */
+export const DORM_CATEGORY_NAME: Record<number, string> = {
+  1: '男寝',
+  2: '女寝',
+};
+
+/* ============================================================
+ * ★ 楼栋「楼层 / 每层房间数 / 每间床位数」的硬边界（2026-10-19）
+ *
+ * 【口径（2026-10-19 改：三项统一封顶 50）】
+ *   楼层数 / 每层房间数 / 每间床位数 **一律 ≤ 50**，由产品口径定，不是格式决定。
+ *   楼层 ≤ 50 之后，房号不再是固定 3 位 —— 见下面 `dormRoomNo()`：
+ *     ≤ 9 层  → 3 位（1 楼第 8 间 = 108）
+ *     ≥ 10 层 → 4 位（10 楼第 8 间 = 1008、50 楼第 12 间 = 5012）
+ *   → 房号长度跟着楼层位数走，现有的 3 位房号一个都不用改。
+ *
+ * 【★ 为什么放在 dto 而不是某个 service 里】
+ *   building.service（楼栋设置）和 dorm/service（房间生成）**两边都要用同一套边界**，
+ *   而它们之间已经有 repo.uni → building.service 的依赖链，互相 import 会成环。
+ *   → 放在 dto（谁都不依赖它），两边各自 import，天然无环且口径只有一份。
+ * ============================================================ */
+
+/** 楼层数上限 */
+export const DORM_FLOOR_MAX = 50;
+/** 每层房间数上限 */
+export const DORM_ROOMS_PER_FLOOR_MAX = 50;
+/** 每间床位数上限（与「新增房间」的床位数口径一致） */
+export const DORM_BED_PER_ROOM_MAX = 50;
+/** 每间床位数默认值 */
+export const DORM_BED_PER_ROOM_DEFAULT = 4;
+/**
+ * ★ 单次生成房间数上限
+ *   生成是「逐间 insert + 逐床 insert」，填错一次就是几千次写库。
+ *   300 间（≈1200 次写）已是宽松值，正常楼栋配置远达不到。
+ */
+export const DORM_GEN_ROOM_MAX = 300;
+
+/**
+ * ★★ 房号编排：楼层 + 两位序号（2026-10-19 支持 10 层以上）
+ *
+ * 【规则】`楼层` 拼 `两位序号`：
+ *   1 楼第 8 间 → `1` + `08` = 108（3 位）
+ *   10 楼第 8 间 → `10` + `08` = 1008（4 位）
+ *   50 楼第 12 间 → `50` + `12` = 5012（4 位）
+ *   → 楼层是一位数就是 3 位房号、两位数就是 4 位房号，**自适应、无需配置**。
+ *
+ * 【为什么序号固定两位】楼层数放宽到 50 之后，房号长度不再固定。
+ *   序号仍补零到两位，是为了「同层内房号等长」（101/102…112 而不是 101/102…1012），
+ *   列表排序和人工核对都不会乱。
+ */
+export function dormRoomNo(floor: number, seq: number): string {
+  return `${Math.floor(floor)}${String(Math.floor(seq)).padStart(2, '0')}`;
+}
+
+/** 房号合法格式：3 位（≤9 层）或 4 位（≥10 层）纯数字 */
+export const DORM_ROOM_NO_ANY_RE = /^\d{3,4}$/;
+
 /** 调宿 / 退宿 业务类型（复用 shared-types 的 DormChangeBizType 口径） */
 export const DORM_CHANGE_NAME: Record<number, string> = {
   1: '调换宿舍',
@@ -1623,8 +1693,27 @@ export interface DormListQuery {
   dormType?: number;
   /** 统一房间状态 */
   roomStatus?: number;
-  /** 关键字：房间号 / 楼栋 / 负责人 */
+  /**
+   * ★ 关键字：匹配**列表上能看到的所有内容**（2026-10-18 改）
+   *
+   * 旧口径只在 SQL 里 like 了 room_no / building / dorm_no / facility 四个字段，
+   * 于是「搜备注里的‘向阳’」「搜‘男寝’」「搜‘停用’」都搜不到 ——
+   * 用户看到列表上有这个字，却搜不出来，是最典型的一类投诉。
+   *
+   * 现在改成在**服务层内存匹配**：等三学段合并成 DormRow 之后再过滤，
+   * 这样 dormType→「男寝」、roomStatus→「停用」这类「int 码要翻译成文字才能搜」
+   * 的字段也能一起命中，且**三学段口径完全一致**（不用每个 repo 各写一遍 like）。
+   *
+   * 匹配范围 = 列表全部列：类别 / 楼栋 / 宿舍号 / 已住·床位 / 入住率 / 状态 / 备注
+   */
   keyword?: string;
+  /**
+   * ★ 入住率（整数百分比，精确匹配，如 50 表示 50%）
+   *
+   * 入住率是**算出来的**（已住/床位），表里没有这一列 → 只能内存过滤，不能进 SQL。
+   * 可选项由 /occupancy-rates 实时从当前数据里取，不写死 0/25/50/75/100。
+   */
+  occupancyRate?: number;
   /** 只看有空床位的 */
   onlyVacant?: boolean;
   page: number;

@@ -28,6 +28,7 @@ import { wrap } from '../utils/wrap';
 import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
+import { resolveLogRoleLabels } from '../services/perm.service';
 import {
   addLog,
   clientIp,
@@ -88,8 +89,10 @@ async function fetchDept(page?: number, size?: number, all = false): Promise<She
 }
 
 async function fetchRole(page?: number, size?: number, all = false): Promise<Sheet> {
+  // ★ 2026-10-19：用户要求全系统去掉「职位编码」→ 导出表也不再带这一列
+  // ★ 2026-10-20：同理去掉「职位类型」（界面上已无此列，导出也别带看不见的字段）
   const columns = [
-    '职位名称', '职位编码', '所属部门', '职位类型', '状态', '权限点数', '关联账号数', '是否预置', '描述',
+    '职位名称', '所属部门', '状态', '权限点数', '关联账号数', '是否预置', '描述',
   ];
   const query = db('t_perm_role').where('is_deleted', false);
   if (!all && page && size) query.limit(size).offset((page - 1) * size);
@@ -108,9 +111,7 @@ async function fetchRole(page?: number, size?: number, all = false): Promise<She
     columns,
     rows: rows.map((r: any) => ({
       职位名称: r.role_name,
-      职位编码: r.role_code,
       所属部门: deptMap.get(r.dept_id) || '—',
-      职位类型: r.role_type,
       状态: r.role_status,
       权限点数: Number(r.perm_count || 0),
       关联账号数: userMap.get(r.id) || 0,
@@ -193,13 +194,16 @@ async function fetchLog(
 
   const rows = await query.clone().select('*').orderBy('log_time', 'desc');
 
+  // ★ 2026-10-20：导出的「职位」列同样要中文（库里可能存的是 SYS_STAFF / 空）
+  const roleLabels = await resolveLogRoleLabels(rows as any[]);
+
   return {
     title: '操作日志',
     columns,
-    rows: rows.map((r: any) => ({
+    rows: rows.map((r: any, i: number) => ({
       操作时间: fmt(r.log_time),
       操作人: r.operator_name,
-      职位: r.operator_role || '',
+      职位: roleLabels[i] ?? r.operator_role ?? '',
       所属模块: r.module_name,
       操作类型: r.action_type,
       操作对象: r.target_obj || '',

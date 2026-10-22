@@ -48,6 +48,31 @@ export function changeMyPassword(data: {
   return http.post<{ synced: boolean }>('/api/portal/account/change-password', data);
 }
 
+/**
+ * ★ 2026-10-19 新增：取【当前生效的密码策略】
+ *
+ * 背景：改密弹窗原来把规则写死在两处（提示文案 + 前端校验），后端还有第三套，
+ *      三份口径迟早漂移 —— 于是出现「规则要求大写字母、但全小写也能改成功」。
+ *      现在规则由后端一处给出，前端只照着提示 + 预校验，
+ *      最终把关仍在后端 assertPwdStrength。
+ */
+export interface PwdPolicy {
+  /** 最小长度 */
+  min: number;
+  /** 需包含大写字母 */
+  upper: boolean;
+  /** 需包含数字 */
+  digit: boolean;
+  /** 需包含特殊符号 */
+  symbol: boolean;
+  /** 人话版规则文案，例：不少于 8 位，且需包含大写字母、数字 */
+  tip: string;
+}
+
+export function fetchPwdPolicy(): Promise<PwdPolicy> {
+  return http.get<PwdPolicy>('/api/portal/account/pwd-policy');
+}
+
 /* ---- 账号管理（管理员） ----
  *
  * ⚠️⚠️ 2026-10-03 用户指令：

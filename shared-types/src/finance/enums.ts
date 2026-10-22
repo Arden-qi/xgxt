@@ -12,11 +12,26 @@ export enum Gender {
   FEMALE = 2,  // 女
 }
 
-/** 部门 */
+/**
+ * 部门
+ *
+ * ★ 2026-10-20：「初高部」拆成「初中部」+「高中部」，1 沿用旧值改名、4 新增高中部（3 已给就业部）
+ *   （与 consult/enums.ts 保持一致，五份副本必须同步）
+ */
 export enum DeptCode {
-  JUNIOR_SENIOR = 1,  // 初高部
+  JUNIOR_SENIOR = 1,  // 初中部（历史命名，值不变）
   UNIVERSITY = 2,     // 大学部
+  /** ★ 2026-10-19：就业部（独立学段，与 enums.ts 保持一致） */
+  EMPLOYMENT = 3,     // 就业部
+  SENIOR = 4,         // 高中部
 }
+
+/** 部门下拉顺序（初中部 → 高中部 → 大学部） */
+export const DEPT_OPTIONS: number[] = [
+  DeptCode.JUNIOR_SENIOR,
+  DeptCode.SENIOR,
+  DeptCode.UNIVERSITY,
+];
 
 /** 学生状态（全系统最重要的字段） */
 export enum StudentStatus {
@@ -52,6 +67,8 @@ export enum FeeType {
   DEPOSIT = 6,       // 押金
   /** 校服（★ 2026-10-15 新增，与公共字典 enums.ts 同步） */
   UNIFORM = 7,       // 校服
+  /** 补费（★ 2026-10-20 新增：试学转正尾款 / 差额补收，金额由老师自定义） */
+  SUPPLEMENT = 8,    // 补费
 }
 
 /** 缴费状态 */
@@ -210,8 +227,10 @@ export const GENDER_NAME: Record<number, string> = {
 };
 
 export const DEPT_NAME: Record<number, string> = {
-  [DeptCode.JUNIOR_SENIOR]: '初高部',
+  [DeptCode.JUNIOR_SENIOR]: '初中部',
+  [DeptCode.SENIOR]: '高中部',
   [DeptCode.UNIVERSITY]: '大学部',
+  [DeptCode.EMPLOYMENT]: '就业部',
 };
 
 export const STUDENT_STATUS_NAME: Record<number, string> = {
@@ -241,6 +260,7 @@ export const FEE_TYPE_NAME: Record<number, string> = {
   [FeeType.MEAL]: '餐费',
   [FeeType.INSURANCE]: '保险费',
   [FeeType.TRIAL_FEE]: '试学费',
+  [FeeType.SUPPLEMENT]: '补费',
   [FeeType.DEPOSIT]: '押金',
   [FeeType.UNIFORM]: '校服',
 };
