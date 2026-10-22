@@ -22,7 +22,8 @@ import {
   tblTrx,
   tblIns,
   tblInsTrx,
-  USE_UNI_TABLE,
+  phaseCodeCol,
+  readPhaseCode,
 } from '../../../teaching/shared/uniTable';
 // ★ 2026-10-19：初高也走「待接收」—— 接收初高的推送单要调初高的建档口
 import classSync from '../../../utils/classSync';
@@ -30,6 +31,8 @@ import classSync from '../../../utils/classSync';
 import { db as jhDb } from '../../../class-jh/utils/db';
 // ★ 2026-10-20：接收后要回写咨询侧状态（班主任 token 在咨询侧不认，走内部令牌通道）
 import { consultClient } from '../../lib/consultClient';
+// ★ 2026-10-22 方案A：建档生成学号后回填财务单据并重推缴费台账（同进程直调，非阻断）
+import { syncStudentNoFromTeaching } from '../../../finance/services/student-no-sync.service';
 
 /**
  * 咨询推送（需求 v1.2）
@@ -489,12 +492,20 @@ async function consultReceivePlan(consultNo: string): Promise<number | null> {
   return Number.isFinite(v) && v > 0 ? v : null;
 }
 
-/** 建档成功后回写咨询侧状态（幂等；失败只记日志——人已经入班了，不能因此回滚） */
+/**
+ * 建档成功后回写咨询侧状态（幂等；失败只记日志——人已经入班了，不能因此回滚）
+ *
+ * ★ 2026-10-22 增加 `studentNo`：把刚生成的学号一并回写咨询学生表。
+ *   不回写的话，咨询学生表永远没有学号，后续「补费」建单时会走
+ *   `stu.student_no || tempStudentNo(id)` 兜出 `ZX...` 临时号，
+ *   于是同一学生的补费单学号和已入班单据不一致，补费单还推不进教学侧台账。
+ */
 async function consultReceiveAck(
   consultNo: string,
   className: string | null,
   operatorName: string,
   operatorTitle = '班主任',
+  studentNo?: string,
 ): Promise<void> {
   if (!consultNo) return;
   const r = await consultClient.receiveAck({
@@ -502,6 +513,7 @@ async function consultReceiveAck(
     className,
     operatorName,
     operatorTitle,
+    studentNo: studentNo || undefined,
   });
   if (!r.ok) {
     console.warn(`[consult receive] 回写咨询状态失败（${consultNo}）：${r.message}`);
@@ -526,6 +538,31 @@ async function doReceive(
     if (Number(push.apply_status) === ConsultStatus.REJECTED) {
       throw Errors.param('该咨询单已驳回，不能直接接收');
     }
+
+    /**
+     * ★ 2026-10-22 方案A：把刚生成的学号回填到财务单据（非阻断）
+     *
+     * 财务缴费单的 student_id 存的是「咨询学生 id」，与教学库学生 id 不是一套，
+     * 学号是两边唯一关联键。不回填会断两件事：
+     *   ① 缴费单/账单学号永远为空，按学号对不了账
+     *   ② 财务推缴费台账前要用学号回查教学学生，为空直接跳过 → 这张单永远进不了台账
+     *
+     * ⚠️ 失败只记日志：学籍建档不能因为财务侧问题回滚。
+     */
+    const syncFinanceStudentNo = async (no: string): Promise<void> => {
+      const consultNo = String(push.consult_no || '');
+      if (!consultNo || !no) return;
+      try {
+        const r = await syncStudentNoFromTeaching(consultNo, no);
+        // eslint-disable-next-line no-console
+        console.log(
+          `[教学→财务] 学号 ${no}（咨询单 ${consultNo}）回填：缴费单 ${r.feeUpdated} 条 / 账单 ${r.billUpdated} 条 / 重推台账 ${r.pushed} 条`,
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[教学→财务] 学号回填失败（不影响建档）：${(e as Error).message}`);
+      }
+    };
 
     // ★ 2026-10-06：接收权限 = 本班班主任 / 校长 / 学管（用户拍板）
     // ★ 2026-10-20：分班即入班走内部入口时，操作人是咨询老师，不做班主任归属校验
@@ -610,7 +647,11 @@ async function doReceive(
         (push.intend_class_name as string) ?? null,
         user.userName,
         opts.internal ? '系统' : '班主任',
+        String(sno),
       );
+
+      /* ★ 2026-10-22 方案A：学号已生成/已存在 → 回填财务单据并重推台账 */
+      await syncFinanceStudentNo(String(sno));
 
       return ok(
         res,
@@ -689,7 +730,7 @@ async function doReceive(
           ...baseUpdate(user),
         };
         if (isRepeatIn) patch.repeat_count = nextRepeat;
-        if (stage !== null && stage !== undefined) patch.stage = stage;
+        if (stage !== null && stage !== undefined) patch[phaseCodeCol()] = stage;
         if (b.studentStatus) patch.student_status = b.studentStatus;
         if (b.dormId) {
           patch.dorm_id = b.dormId;
@@ -808,7 +849,7 @@ async function doReceive(
         age: (b.age as number) ?? ((push.age as number) ?? null),
         dept_code: deptCode,
         student_status: b.studentStatus ?? planStatus ?? StudentStatus.TRIAL,
-        stage,
+        [phaseCodeCol()]: stage,
         phone: b.phone ?? ((push.phone as string) ?? null),
         parent_phone: b.parentPhone ?? ((push.parent_phone as string) ?? null),
         education: b.education ?? ((push.education as string) ?? null),
@@ -852,7 +893,11 @@ async function doReceive(
       className,
       user.userName,
       opts.internal ? '系统' : '班主任',
+      studentNo,
     );
+
+    /* ★ 2026-10-22 方案A：学号已生成 → 回填财务单据并重推台账 */
+    await syncFinanceStudentNo(studentNo);
 
     return ok(
       res,

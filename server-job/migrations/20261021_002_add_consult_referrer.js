@@ -22,6 +22,9 @@
  * @param { import("knex").Knex } knex
  */
 exports.up = async function (knex) {
+  /* ★ P8 之后这批老表已 DROP（统一表是 t_uni_*）：表不在就跳过，
+     否则 npm run migrate 会断在 hasColumn 上。 */
+  if (!(await knex.schema.hasTable('t_consult_student'))) return;
   const hasName = await knex.schema.hasColumn('t_consult_student', 'referrer_name');
   const hasPhone = await knex.schema.hasColumn('t_consult_student', 'referrer_phone');
   if (!hasName || !hasPhone) {

@@ -42,6 +42,7 @@ import { loadSchemeStagesForStage } from '../shared/stageSchemes';
 import { db } from '../../utils/db';
 import { StudentStatus } from 'shared-types';
 import type { StudentRepo, StudentStat } from './types';
+import { assertStudentsInScope } from '../shared/dataScope';
 import { randomUUID } from 'crypto';
 import { db as classDb } from '../../class/db';
 import { db as jhDb } from '../../class-jh/utils/db';
@@ -62,9 +63,10 @@ const REPOS: Record<StudentStage, StudentRepo> = {
 };
 
 /** 各学段学生档案页的权限码（= 合并前各学段原页面的权限码，一个都没改） */
-const CODES: Record<StudentStage, string> = {
+const CODES: Record<StudentStage, string | string[]> = {
   jh: 'classjh:student:view',
   class: 'class:student:view',
+
   emp: 'job:empArchive:view',
 };
 
@@ -223,6 +225,8 @@ export async function getStudentDetail(
   user: any,
 ): Promise<StudentDetail> {
   await assertStageView(user, stage);
+  // ★ 2026-10-22：学生档案收成三学段（jh/class/emp）后，三个都是带班概念，一律过范围
+  await assertStudentsInScope(stage, [id], user, '该学生');
   const d = await REPOS[stage].detail(id, user);
   if (!d) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或没有访问权限');
   // ★ 2026-10-21：详情「阶段」也要显示方案阶段名（与列表同一口径）

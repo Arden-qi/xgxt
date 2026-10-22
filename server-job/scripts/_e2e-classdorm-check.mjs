@@ -143,6 +143,15 @@ async function cleanup() {
       await c.destroy();
     }
   }
+  /* ★ 2026-10-19 修：上面只按老表清单删，`mirrorToUni` 登记的 **统一表镜像行**（db='sms_common'）
+       从来没被删过 → 每跑一轮就在 t_uni_student / t_uni_class 里留一批「自检住宿xxx」。
+       这里按登记顺序倒着补删一遍（先子后主）。 */
+  for (const [fdb, ftable, id] of [...fixtures].reverse()) {
+    if (fdb !== 'sms_common') continue;
+    const c = conn(fdb);
+    await c(ftable).where({ id }).del().catch(() => {});
+    await c.destroy();
+  }
 }
 
 /* ============================================================
@@ -512,7 +521,12 @@ async function main() {
     const uk = (idx[0] || []).find((r) => r.name === 'uk_dorm_room');
     // ★ ADD INDEX ≠ ADD UNIQUE INDEX：必须查 NON_UNIQUE 复核，否则一条重复都拦不住
     check('uk_dorm_room 确为唯一索引（NON_UNIQUE=0）', uk && Number(uk.nu) === 0, `NON_UNIQUE=${uk?.nu}`);
-    check('uk_dorm_room 已加宽为(room_no,dorm_no,edu_stage)', String(uk?.cols) === 'room_no,dorm_no,edu_stage', `实际=${uk?.cols}`);
+    // ★ P5 迁移 011 再加宽：jh 两栋楼各有 '2-01' 房 → 必须含 building_id（老表 uk_building_room_no 口径）
+    check(
+      'uk_dorm_room 已加宽为(building_id,dorm_no,room_no,edu_stage)（迁移 011）',
+      String(uk?.cols) === 'building_id,dorm_no,room_no,edu_stage',
+      `实际=${uk?.cols}`,
+    );
   }
 
   /* ---------- 收尾 ---------- */

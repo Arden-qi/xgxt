@@ -16,6 +16,7 @@
  */
 
 import { http } from '@/api/request';
+import type { TeachingStage } from './attendance';
 
 export type ClassStage = 'jh' | 'class' | 'job' | 'emp';
 
@@ -388,3 +389,37 @@ export const DEPT_OPTIONS = [
   // ★ 2026-10-19 批注：新增就业部（独立学段，班级/学生共用 sms_job）
   { value: 3, label: '就业部' },
 ];
+
+/* ============================================================
+ * 学生换班（末班 / 升班）· 成绩管理行操作用
+ *   末班：成绩不达标 → 转到进度相同或更慢的班重修
+ *   升班：成绩达标   → 跳到进度更快的班
+ *   进度 = 班级阶段码 stage_code
+ * ============================================================ */
+
+export interface TransferTarget {
+  id: string;
+  name: string;
+  stageCode: number | null;
+  headTeacherName: string | null;
+}
+
+export function listTransferTargets(p: {
+  stage: TeachingStage;
+  fromClassId: string;
+  mode: 'repeat' | 'promote';
+}) {
+  return http.get<TransferTarget[]>('/api/teaching/class-transfer/targets', p);
+}
+
+export function transferStudentToClass(body: {
+  stage: TeachingStage;
+  studentId: string;
+  fromClassId: string;
+  toClassId: string;
+  mode: 'repeat' | 'promote';
+  reason?: string | null;
+  examId?: string | null;
+}) {
+  return http.post<{ ok: true; toClassName: string }>('/api/teaching/class-transfer/do', body);
+}

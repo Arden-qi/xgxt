@@ -29,6 +29,8 @@ import type {
   ClassSummary,
 } from '../shared/dto';
 import { CLASS_STAGES, CLASS_STAGE_NAME, isClassStage } from '../shared/dto';
+import { assertClassInScope } from '../shared/dataScope';
+import { uniDb } from '../shared/uniTable';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 /* ★ 2026-10-22：教职员工下拉直接读权限库的用户表（与本模块其它跨库查询同款，
@@ -154,6 +156,7 @@ export async function getClassDetail(
   user: any,
 ): Promise<ClassDetail | null> {
   await assertStageView(user, stage);
+  await assertClassInScope(stage, id, user, '该班级');
   return pick(stage).detail(id, user);
 }
 
@@ -174,12 +177,28 @@ export async function saveClass(body: ClassSaveBody, user: any): Promise<{ id: s
 /** 删除 */
 export async function removeClass(stage: ClassStage, id: string, user: any): Promise<void> {
   await assertStageView(user, stage);
+
+  /* ★ 2026-10-21：班内还有学生就**不许删班**。
+     之前直接软删班级，学生档案/考试成绩还挂着这个 class_id →
+     成绩页会出现「幽灵行」，点末班报「班级不存在」（实测过）。
+     要删班请先把学生转出或删除。 */
+  const [{ c: stuCount }] = (await uniDb('t_uni_student')
+    .where({ class_id: id, edu_stage: stage, is_deleted: 0 })
+    .count({ c: '*' })) as Array<{ c: number }>;
+  if (Number(stuCount) > 0) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `班内还有 ${stuCount} 名学生，请先把学生转出或删除，再删班级`,
+    );
+  }
+
   await pick(stage).remove(id, user?.userId || '');
 }
 
 /** 花名册 */
 export async function listClassRoster(stage: ClassStage, id: string, user: any) {
   await assertStageView(user, stage);
+  await assertClassInScope(stage, id, user, '该班级花名册');
   return pick(stage).roster(id, user);
 }
 
