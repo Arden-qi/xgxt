@@ -102,7 +102,18 @@ async function upsertRows(db, rows) {
       /feeUrgeWindowDays[\s\S]{0,200}?窗口/.test(settingUtil) && /feeRemindDays[\s\S]{0,80}?标红/.test(settingUtil),
     );
     check('① 设置项有中文名（设置页直接展示）', /feeUrgeWindowDays:\s*'催费列表窗口天数/.test(settingRoute));
-    check('② 前端设置页按数字编辑该键', /NUMBER_KEYS\s*=\s*\[[^\]]*'feeUrgeWindowDays'/.test(settingPage));
+    /*
+     * ★ 2026-10-22 设置页的「系统设置 / 操作日志」两个页签已删除，页面上不再有设置表单，
+     *   所以这里改成校验「页面确实没有表单了」+「后端默认值兜底仍在」，
+     *   避免以后有人以为删漏了又把表单加回去。
+     */
+    check(
+      '② 设置页已移除系统设置表单，窗口天数只走后端默认值（20 天）',
+      !/NUMBER_KEYS/.test(settingPage) &&
+        !/label="系统设置"/.test(settingPage) &&
+        !/label="操作日志"/.test(settingPage) &&
+        /label="阶段方案"/.test(settingPage),
+    );
 
     const listBlock = /feeRouter\.get\(\s*'\/list'[\s\S]*?res\.json\(\{ \.\.\.page/.exec(feeRoute)?.[0] || '';
     const exportBlock = /feeRouter\.get\(\s*'\/export'[\s\S]*?res\.json\(ok\(withContact\)\)/.exec(feeRoute)?.[0] || '';
