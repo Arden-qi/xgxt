@@ -560,6 +560,70 @@ async function ensureDatabases() {
     else warn(`${db} 导入失败（不影响其它模块，可稍后手动导入）`);
   }
 
+  // 5e) ★ 权限树版本自检（2026-10-22）
+  //
+  // 【为什么要有这一步】
+  //   权限树已从「8 板块 55 功能点」重建为「5 板块 32 页面 146 动作」。
+  //   而 5d 的导入是「库里有表就不导」，所以**已经有库的机器永远不会更新权限树**；
+  //   新代码用新页面名去旧权限树里找 → 一个都匹配不上 →
+  //   除工作台外全部页面不可见。用户看到的现象就是「登录后丢了好多个板块」。
+  //   这一步检测到旧树就用代码里的页面登记表重建，不再让每个人手工跑脚本。
+  await ensurePermTree();
+
+  async function ensurePermTree() {
+    const mysql2Path3 = path.join(ROOT, 'server-job', 'node_modules', 'mysql2', 'promise.js');
+    const permDb = 'sms_perm';
+    let c;
+    let byBoard = null;
+    try {
+      const m = (await import('file://' + mysql2Path3.replace(/\\/g, '/'))).default;
+      c = await m.createConnection({
+        host, port, user, password, charset: 'utf8mb4', timezone: '+08:00', connectTimeout: 8000,
+      });
+      const [rows] = await c.query(
+        `SELECT module_key, COUNT(*) AS n FROM \`${permDb}\`.\`t_perm_menu\`
+          WHERE is_deleted = 0 GROUP BY module_key`,
+      );
+      byBoard = new Map(rows.map((r) => [r.module_key, Number(r.n)]));
+    } catch (e) {
+      warn(`权限树自检跳过（${String(e.message).split('\n')[0]}）—— 若登录后看不到板块，见 README「丢板块」一节`);
+      return;
+    } finally {
+      if (c) await c.end().catch(() => {});
+    }
+
+    // 旧树的板块键（出现任意一个 = 没迁移）；新树必须有 workbench
+    const LEGACY = ['market', 'fin', 'train', 'acad', 'approve'];
+    const legacyHit = LEGACY.filter((k) => byBoard.has(k));
+    const hasNew = byBoard.has('workbench') && byBoard.has('consult') && byBoard.has('finance');
+
+    if (!legacyHit.length && hasNew) {
+      const detail = ['workbench', 'consult', 'finance', 'perm', 'teach']
+        .map((k) => `${k}:${byBoard.get(k) || 0}`)
+        .join(' ');
+      ok(`权限树是新版（${detail}）`);
+      return;
+    }
+
+    warn('检测到权限树是旧版 —— 这正是「登录后丢了好多个板块」的原因');
+    if (legacyHit.length) console.log(`      旧板块键：${legacyHit.join(', ')}`);
+    console.log('    正在按当前代码的页面登记表重建权限树 + 各职位初始授权 ...');
+    console.log('    （会覆盖你在界面上手工调过的职位授权，重建后可重新勾选）');
+
+    const seeded = await runNpm(
+      path.join(ROOT, 'server-job'),
+      ['exec', '--', 'tsx', 'scripts/seed-perm-tree.ts', '--apply'],
+      'seed-perm-tree',
+    );
+    if (seeded) {
+      ok('权限树已重建为 5 板块 32 页面（重启后端后生效）');
+    } else {
+      warn('权限树重建失败。手动执行：');
+      console.log('      cd server-job');
+      console.log('      npx tsx scripts/seed-perm-tree.ts --apply');
+    }
+  }
+
   async function tableCount(db) {
     const mysql2Path2 = path.join(ROOT, 'server-job', 'node_modules', 'mysql2', 'promise.js');
     const m = (await import('file://' + mysql2Path2.replace(/\\/g, '/'))).default;

@@ -68,6 +68,12 @@ const REQUIRED = [
   { db: DB.common, table: 't_uni_student', cols: ['student_no'] },
   { db: DB.common, table: 't_uni_class', cols: ['class_name'] },
   { db: DB.consult, table: 't_consult_student', cols: ['referrer_name', 'referrer_phone'] },
+  // ★ 2026-10-22：操作日志改成「全系统留痕」后加了这 5 列，老库不补会写日志失败
+  {
+    db: DB.perm,
+    table: 't_perm_log',
+    cols: ['api_path', 'http_method', 'status_code', 'duration_ms', 'user_agent'],
+  },
 ];
 
 /** 「班级编号为空」的统计：为空 = 该班学生无法生成学号 */
@@ -178,6 +184,67 @@ const CLASS_CODE_TABLES = [
     }
   }
 
+  // ---------- D. 权限树版本 ----------
+  // ★ 2026-10-22 新增：权限树从「8 板块 55 功能点」重建为「5 板块 32 页面 146 动作」。
+  //   老库（或旧的 sql/init/sms_perm.sql）里的树还是旧的，新代码用新页面名去旧树里找，
+  //   匹配不上 → 除工作台外全部页面不可见 → 用户看到的就是「登录后丢了好多个板块」。
+  console.log(C.bold('\n▶ D. 权限树版本（旧树 → 登录后只看到工作台，丢板块）'));
+  if (!alive.has(DB.perm)) {
+    console.log(`  ${C.dim('—')} ${DB.perm} 不存在，跳过`);
+  } else {
+    try {
+      const [rows] = await conn.query(
+        `SELECT module_key, COUNT(*) AS n
+           FROM \`${DB.perm}\`.\`t_perm_menu\`
+          WHERE is_deleted = 0
+          GROUP BY module_key`,
+      );
+      const byBoard = new Map(rows.map((r) => [r.module_key, Number(r.n)]));
+      const total = [...byBoard.values()].reduce((a, b) => a + b, 0);
+
+      // 新树（pageRegistry 单一来源）应有的板块与页面数
+      const EXPECT = { workbench: 1, consult: 5, finance: 6, perm: 7, teach: 13 };
+      // 旧树的板块键，只要出现任意一个就是没迁移
+      const LEGACY_KEYS = ['market', 'fin', 'train', 'acad', 'approve'];
+
+      const legacyHit = LEGACY_KEYS.filter((k) => byBoard.has(k));
+      const missingNew = Object.keys(EXPECT).filter((k) => !byBoard.has(k));
+
+      if (legacyHit.length || missingNew.includes('workbench')) {
+        problems++;
+        console.log(`  ${C.bad('✗')} 权限树是旧版（当前 ${total} 个功能点）`);
+        if (legacyHit.length) console.log(`     ${C.dim('检测到旧板块键：' + legacyHit.join(', '))}`);
+        if (missingNew.length) console.log(`     ${C.dim('缺少新板块键：' + missingNew.join(', '))}`);
+        console.log(`     ${C.bad('这就是「登录后丢了好多个板块」的原因')}`);
+      } else {
+        const detail = Object.keys(EXPECT)
+          .map((k) => `${k}:${byBoard.get(k) || 0}`)
+          .join(' ');
+        const wrongCount = Object.entries(EXPECT).filter(([k, v]) => (byBoard.get(k) || 0) !== v);
+        if (wrongCount.length) {
+          console.log(`  ${C.warn('!')} 权限树是新版，但页面数与登记表不一致：${detail}`);
+          console.log(`     ${C.dim('若你手工增删过权限点可忽略；否则跑一次 seed 脚本还原')}`);
+        } else {
+          console.log(`  ${C.ok('✓')} 权限树是新版  ${C.dim(`${total} 个功能点 · ${detail}`)}`);
+        }
+      }
+
+      // 顺带看各职位拿到的授权行数，全是 0 也会导致「进不去任何板块」
+      const [[rp]] = await conn.query(
+        `SELECT COUNT(*) AS n FROM \`${DB.perm}\`.\`t_perm_role_perm\` WHERE is_deleted = 0`,
+      );
+      const permRows = Number(rp.n) || 0;
+      if (!permRows) {
+        problems++;
+        console.log(`  ${C.bad('✗')} t_perm_role_perm 一条授权都没有 → 所有职位进不去任何页面`);
+      } else {
+        console.log(`  ${C.ok('✓')} 职位授权 ${permRows} 行`);
+      }
+    } catch (e) {
+      console.log(`  ${C.dim('—')} 跳过：${String(e.message).split('\n')[0]}`);
+    }
+  }
+
   await conn.end().catch(() => {});
 
   // ---------- 结论 ----------
@@ -191,6 +258,9 @@ const CLASS_CODE_TABLES = [
     console.log('  班级没编号   →  进「班级管理」给这些班补上班级编号');
     console.log('                 学号规则是 LZ + 班级编号 + 三位序号，');
     console.log('                 班级没编号时新增学生会直接报错，这是设计如此。');
+    console.log('  权限树是旧版 →  npx tsx scripts/seed-perm-tree.ts --apply');
+    console.log('                 （用当前代码里的页面登记表重建权限树 + 各职位授权，');
+    console.log('                   会覆盖手工调过的授权；跑完重启后端）');
     console.log(C.dim('\n  修完再跑一次 npm run db:check 复检。\n'));
     process.exitCode = 1;
   }
