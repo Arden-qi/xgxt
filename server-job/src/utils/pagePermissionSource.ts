@@ -36,7 +36,7 @@ import {
   overlayActionCodes,
   PERM_POINT_TO_ACTION_CODES,
 } from './roleActionOverlay';
-import { extraPageCodesFromModuleItems, isBuiltinRoleCode } from './permPointToPages';
+import { pageCodesFromModuleItems, removeCodesOfRevokedPages } from './permPointToPages';
 import { getRoleModuleItems } from './roleModuleItems';
 
 /**
@@ -547,11 +547,24 @@ export async function getUserPagePermissions(roles: string[]): Promise<string[]>
      *    · 内置角色 → merged 恒等于 base，行为与改造前逐字一致（零回归）
      *    · 自建角色 → 用权限库功能点推导出它该有哪些页面
      */
+    /**
+     * ★ 2026-10-22：权限树的功能点已经**就是页面**，所以这里改成
+     *   「凡是该角色在权限树里勾到动作的页面，都补上它的页面码」。
+     *
+     *   与旧版的区别：旧版只在「自建角色（静态表查无此人）」时启用，
+     *   因为那时功能点是模块粗粒度、会误伤内置角色。
+     *   现在功能点=页面、且每个页面的 pageCodes 写在定义里，
+     *   再配合 `pageCodesFromModuleItems(items, base)` 的「学段前缀挑选」，
+     *   内置角色只会拿到它本来就有的码（不扩学段），自建角色也能正常拿到页面。
+     */
     let merged = base;
-    if (!isBuiltinRoleCode(role) && base.length === 0) {
+    {
       const items = await getRoleModuleItems(role);
-      const extra = extraPageCodesFromModuleItems(items);
-      if (extra.length) merged = Array.from(new Set(extra));
+      const extra = pageCodesFromModuleItems(items, base);
+      if (extra.length) merged = Array.from(new Set([...base, ...extra]));
+      // ★ 收回：权限树里一个动作都没勾的页面 → 它的页面码要被剔掉，
+      //   这样「取消勾选」对页面级接口是真拦截（不只是菜单不显示）
+      merged = removeCodesOfRevokedPages(merged, items);
     }
 
     // ★ 角色 → 页面 台账：增/删该角色在本轮被显式调整过的页面（优先于上面两层）
