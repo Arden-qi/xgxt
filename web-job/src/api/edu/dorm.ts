@@ -25,9 +25,17 @@ import type {
   DormAssignPayload,
 } from 'shared-types/edu';
 
-/** 宿舍列表（按「间」分页，每间含 8 个床位） */
-export function fetchDormList(query: DormQuery): Promise<PageData<DormRoomItem>> {
-  return http.get<PageData<DormRoomItem>>('/api/edu/dorm/list', query as any);
+/**
+ * 宿舍列表（按「间」分页，每间含 8 个床位）
+ *
+ * ★ 2026-10-22：补了可选 config —— 学生档案页只是拿宿舍号/床位号下拉的候选，
+ *   属于「后台预取」，调用方传 { silent: true }，账号没有教务板块时就不会弹无权限提示。
+ */
+export function fetchDormList(
+  query: DormQuery,
+  config?: { silent?: boolean },
+): Promise<PageData<DormRoomItem>> {
+  return http.get<PageData<DormRoomItem>>('/api/edu/dorm/list', query as any, config);
 }
 
 /** 宿舍总名单 Tab 的统计数字 */

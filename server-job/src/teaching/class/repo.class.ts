@@ -3,7 +3,8 @@
  * ============================================================
  *
  * 【与实训的四处结构差异（本段特有的坑）】
- *   ① **没有 `class_code` 列** → 统一 `classCode` 恒为 null，前端隐藏编号输入框
+ *   ① 班级编号 `class_code`：★ 2026-10-21 已补列（三部门统一必填 + 唯一），
+ *      不再是「只有实训有」
  *   ② **没有 `close_date` 列** → 统一 `closeDate` 恒为 null
  *   ③ 教室列名是 **`room`**（不是 classroom）→ 写入和读取都要翻译
  *   ④ **没有 `remark` 列** → 统一 `remark` 恒为 null（不是漏映射）
@@ -18,6 +19,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../../class/db';
 import { applyDataScope } from '../../class/middleware/dataScope';
+import { assertClassCodeAvailable } from '../shared/classCode';
 import { CLASS_STATUS, CLASS_STATUS_NAME, canTransitClassStatus } from '../shared/dto';
 import type {
   ClassListQuery,
@@ -28,6 +30,8 @@ import type {
 import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
+import { resolvePhaseCodeFromScheme } from '../shared/stageSchemes';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -56,6 +60,22 @@ const PHASE_NAME: Record<number, string> = {
   13: '实训',
 };
 
+/**
+ * ★ 2026-10-22：建班时 phaseCode 的兜底值
+ *
+ * 必须是**显式常量**，不能靠 `Object.keys(PHASE_NAME)[0]`：
+ * 上面 PHASE_NAME 里 13（实训）比 201 小，数值键升序后排在第一位，
+ * 取「第一个键」会静默拿到「实训」（真实踩坑，见 create() 里的注释）。
+ */
+const UNIVERSITY_FIRST_PHASE = 201;
+
+/*
+ * ★ 2026-10-22 阶段码推导：见 shared/stageSchemes.ts 的 resolvePhaseCodeFromScheme
+ *   （建班表单选了「阶段方案阶段」时只提交 schemeStageId，不提交 phaseCode，
+ *     必须按方案阶段的 sort_no 推导，否则会落到兜底值 13（实训））。
+ */
+
+
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
 const GENDER: Record<number, string> = { 0: '未知', 1: '男', 2: '女' };
 
@@ -69,6 +89,17 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * ★ 2026-10-21：班级编号唯一性校验 → ★ 2026-10-22 改为**三部门全局唯一**
+ *
+ * 学号 = LZ + 班级编号 + 序号，两个部门用同一个编号会生成同一串学号
+ * （学号是跨学段唯一标识：档案「全部」按它去重、缴费记录按它归集）。
+ * 具体查询见 shared/classCode.ts。
+ */
+async function assertClassCodeUnique(code: string, excludeId?: string): Promise<void> {
+  await assertClassCodeAvailable(code, { stage: STAGE, id: excludeId });
+}
+
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
   const status = Number(r.class_status ?? CLASS_STATUS.OPEN);
   const phase = readPhaseCode(r);
@@ -77,8 +108,7 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     stageName: STAGE_NAME,
     classId: String(r.id),
     className: String(r.class_name ?? ''),
-    // ★ 这张表没 class_code 列
-    classCode: null,
+    classCode: str(r.class_code),
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
@@ -166,7 +196,7 @@ export const repo: ClassRepo = {
     return {
       stage: STAGE,
       stageName: STAGE_NAME,
-      hasClassCode: false,
+      hasClassCode: true,
       hasCloseDate: false,
       hasSealAction: true,
       classroomLabel: '教室',
@@ -179,6 +209,8 @@ export const repo: ClassRepo = {
 
   async list(q, user) {
     const qb = buildBase(q, user);
+    /* ★ 数据范围：班主任只看自己带的班（老 applyDataScope 只到「部门」粒度） */
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) return [];
     const rows = (await qb.orderBy('create_time', 'desc')) as Array<Record<string, any>>;
     const counts = await countStudents(rows.map((r) => String(r.id)));
     return rows.map((r) => mapRow(r, counts.get(String(r.id)) ?? 0));
@@ -209,7 +241,16 @@ export const repo: ClassRepo = {
     };
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
-    set(phaseCodeCol(), body.phaseCode);
+    /**
+     * ★ 2026-10-22 阶段码：显式传了 phaseCode 就用它；
+     *   只选了「阶段方案阶段」时按方案阶段的 sort_no 推导（见 resolvePhaseCodeFromScheme）。
+     *
+     * 之前这里是 `set(phaseCodeCol(), body.phaseCode)`：表单选方案时 phaseCode 是 undefined
+     * → 编辑不写阶段码（勉强没事），新建则落到 `create` 的兜底
+     * → 兜底取到 13（实训），建出来的班阶段全是错的。
+     */
+    const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
+    set(phaseCodeCol(), body.phaseCode ?? derivedPhaseCode);
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
     set('scheme_id', body.schemeId);
     set('scheme_stage_id', body.schemeStageId);
@@ -228,8 +269,23 @@ export const repo: ClassRepo = {
     // ★ 写入列名是 room
     set('room', body.classroom);
     set('open_date', body.openDate);
-    // ★ 这张表没 class_code / close_date / remark
+    // ★ 2026-10-21：班级编号（三部门统一必填 + 同表唯一）
+    set('class_code', body.classCode === undefined ? undefined : String(body.classCode ?? '').trim());
+    // ★ 这张表没 close_date / remark
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
+
+    /**
+     * ★ 2026-10-22 修：只在**表单传了编号**时才校验
+     *
+     * 原来这里无条件要求「编辑必填」，但班级交接（service.ts handover）也走 save()，
+     * 它的 saveBody 不带 classCode → 交接会被「班级编号必填」拦死。
+     * 表单提交时空串被 route 转成 null（不是 undefined），所以「清空编号再保存」仍会报必填。
+     */
+    if (body.classCode !== undefined) {
+      const code = String(body.classCode ?? '').trim();
+      if (!code) throw new Error('班级编号必填');
+      await assertClassCodeUnique(code, body.id);
+    }
 
     if (body.id) {
       if (body.classStatus !== undefined) {
@@ -248,8 +304,12 @@ export const repo: ClassRepo = {
       return { id: body.id };
     }
 
-    // 同部门内名称不重复（与实训一致的口径；但**没有编号唯一性检查** —— 那张表没编号列）
+    // 同部门内名称不重复（与实训一致的口径）+ 编号唯一
     const deptCode = Number(body.deptCode ?? 2);
+    // ★ 班级编号（class_code）三部门统一必填 + 跨部门唯一（shared/classCode.ts）
+    const classCode = String(body.classCode ?? '').trim();
+    if (!classCode) throw new Error('班级编号必填');
+    await assertClassCodeAvailable(classCode);
     const dupName = (await tbl(db, 'sms_class', T, STAGE)
       .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
@@ -258,11 +318,19 @@ export const repo: ClassRepo = {
     const id = randomUUID();
     await tblIns(db, 'sms_class', T, STAGE, {
       id,
+      class_code: classCode,
       class_name: className, // ★ create 时名称可能被自动占位（见上）
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时必须给兜底值，
-      //   否则 insert 直接报 ER_BAD_NULL_ERROR。取第一个可选阶段码更贴近业务。
-      [phaseCodeCol()]: body.phaseCode ?? Number(Object.keys(PHASE_NAME)[0]),
+      //   否则 insert 直接报 ER_BAD_NULL_ERROR。
+      //
+      // ⚠️ 2026-10-22 修：兜底值必须写死 201（一阶段），不能用
+      //   `Number(Object.keys(PHASE_NAME)[0])` —— JS 对象里数字键按**数值升序**排列，
+      //   PHASE_NAME 含 { 201..206, 13 }，13 最小排最前 → 兜底取到 13（实训）。
+      //   于是「按阶段方案建班」（表单只传 schemeStageId/schemeStageName，不带 phaseCode）
+      //   建出来的班 stage_code 全落成 13：班级管理列表按方案名显示「一阶段」看不出问题，
+      //   但咨询侧「分配班级」下拉读的是 stageName → 显示成「运维（实训）」。
+      [phaseCodeCol()]: body.phaseCode ?? UNIVERSITY_FIRST_PHASE,
       dept_code: body.deptCode ?? 2,
       student_count: 0,
       is_deleted: false,
@@ -329,6 +397,9 @@ export const repo: ClassRepo = {
 
   async summary(q, user) {
     const qb = buildBase(q, user);
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) {
+      return { stage: STAGE, stageName: STAGE_NAME, total: 0, openCount: 0, closedCount: 0, graduatingCount: 0, graduatedCount: 0, studentCount: 0 };
+    }
     const rows = (await qb.select('id', 'class_status')) as Array<Record<string, any>>;
     const counts = await countStudents(rows.map((r) => String(r.id)));
     let studentCount = 0;

@@ -36,7 +36,7 @@ import {
   overlayActionCodes,
   PERM_POINT_TO_ACTION_CODES,
 } from './roleActionOverlay';
-import { extraPageCodesFromModuleItems, isBuiltinRoleCode } from './permPointToPages';
+import { pageCodesFromModuleItems, removeCodesOfRevokedPages } from './permPointToPages';
 import { getRoleModuleItems } from './roleModuleItems';
 
 /**
@@ -124,6 +124,19 @@ const PROJECT_MANAGER_PAGES: string[] = [
   // 实训阶段带班日常
   'job:class:view',
   'job:classStudent:view',
+  /* ============================================================
+   * ★ 2026-10-22：项目经理要能看到「学生档案」
+   *
+   *   学生档案 2026-10-21 收成三学段（初高 / 大学 / 就业部），实训学生
+   *   已并入就业部（dept_code=3）——项目经理带的班就在这里。
+   *   而就业部页签的权限码是 `job:empArchive:view`（原属就业老师），
+   *   项目经理没有 → 学生档案整体进不去（连菜单都看不到）。
+   *
+   *   业务依据：「项目经理 = 实训阶段班主任」，他必须能看到自己带的学员。
+   *   数据范围不会因此放宽：repo.emp 的 PROJECT_MANAGER 分支只放
+   *   「project_manager_id = 自己 且未结业」的班，别人班的学员看不到。
+   * ============================================================ */
+  'job:empArchive:view',
   'job:classTransfer:view',   // ★ 能看班级交接记录（但不能执行交接）
   'job:attendance:view',
   'job:examScore:view',
@@ -534,11 +547,24 @@ export async function getUserPagePermissions(roles: string[]): Promise<string[]>
      *    · 内置角色 → merged 恒等于 base，行为与改造前逐字一致（零回归）
      *    · 自建角色 → 用权限库功能点推导出它该有哪些页面
      */
+    /**
+     * ★ 2026-10-22：权限树的功能点已经**就是页面**，所以这里改成
+     *   「凡是该角色在权限树里勾到动作的页面，都补上它的页面码」。
+     *
+     *   与旧版的区别：旧版只在「自建角色（静态表查无此人）」时启用，
+     *   因为那时功能点是模块粗粒度、会误伤内置角色。
+     *   现在功能点=页面、且每个页面的 pageCodes 写在定义里，
+     *   再配合 `pageCodesFromModuleItems(items, base)` 的「学段前缀挑选」，
+     *   内置角色只会拿到它本来就有的码（不扩学段），自建角色也能正常拿到页面。
+     */
     let merged = base;
-    if (!isBuiltinRoleCode(role) && base.length === 0) {
+    {
       const items = await getRoleModuleItems(role);
-      const extra = extraPageCodesFromModuleItems(items);
-      if (extra.length) merged = Array.from(new Set(extra));
+      const extra = pageCodesFromModuleItems(items, base);
+      if (extra.length) merged = Array.from(new Set([...base, ...extra]));
+      // ★ 收回：权限树里一个动作都没勾的页面 → 它的页面码要被剔掉，
+      //   这样「取消勾选」对页面级接口是真拦截（不只是菜单不显示）
+      merged = removeCodesOfRevokedPages(merged, items);
     }
 
     // ★ 角色 → 页面 台账：增/删该角色在本轮被显式调整过的页面（优先于上面两层）

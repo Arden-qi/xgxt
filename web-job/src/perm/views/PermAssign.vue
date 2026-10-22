@@ -26,6 +26,7 @@ import type {
   RolePermMap,
 } from 'shared-types/perm';
 import { assignApi, roleApi } from '@/perm/api/perm';
+import { useUserStore } from '@/perm/stores/user';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
 import ProtoConfirm from '@/perm/components/ProtoConfirm.vue';
 import PermItemDialog from '@/perm/components/PermItemDialog.vue';
@@ -98,6 +99,23 @@ function union(...groups: string[][]): string[] {
 
 const loading = ref(false);
 const saving = ref(false);
+
+/**
+ * ⭐ 2026-10-22：本页按钮按「职位权限分配」这个页面在各职位下被勾选的动作来显隐
+ *
+ *   perm:职位权限分配:editPerm     → 编辑该职位权限 / ＋ 配置权限
+ *   perm:职位权限分配:copy         → 从其他职位复制
+ *   perm:职位权限分配:resetPrefab  → 重置为预置
+ *   perm:职位权限分配:addItem      → ＋ 新增权限
+ *
+ * 口径：系统管理员恒有（store 里给通配 perm:*）；其余职位看管理员勾了什么。
+ *      —— 没勾的按钮**不渲染**；就算绕过前端调接口，后端用同一个码再拦一次（403）。
+ */
+const permUser = useUserStore();
+const canEditPerm = computed(() => permUser.can('perm:职位权限分配:editPerm'));
+const canCopy = computed(() => permUser.can('perm:职位权限分配:copy'));
+const canResetPrefab = computed(() => permUser.can('perm:职位权限分配:resetPrefab'));
+const canAddItem = computed(() => permUser.can('perm:职位权限分配:addItem'));
 
 const roles = ref<AssignRoleItem[]>([]);
 const currentRoleId = ref('');
@@ -269,6 +287,11 @@ async function refresh(): Promise<void> {
 }
 
 onMounted(async () => {
+  // ⭐ 按钮判权依赖 store 里的 permissions，先确保拉过一次
+  //   （路由守卫通常已拉过，这里只在缺权限时补一次，不会重复请求）
+  if (!permUser.permissions.length) {
+    await permUser.fetchProfile();
+  }
   await loadRoles();
   if (roles.value.length) {
     currentRoleId.value = roles.value[0].id;
@@ -615,9 +638,16 @@ async function doReset(): Promise<void> {
         <div class="r">
           <span class="desc">左侧选择职位 → 右侧勾选权限 → 保存生效</span>
           <button class="btn" type="button" @click="openTree('view')">全屏查看</button>
-          <button class="btn" type="button" @click="resetOpen = true">重置为预置</button>
-          <button class="btn wn" type="button" @click="itemAdminOpen = true">＋ 新增权限</button>
-          <button class="btn pri" type="button" @click="openTree('edit')">编辑该职位权限</button>
+          <!-- ⭐ 2026-10-22：以下三个按钮按「职位权限分配」页被勾选的动作显隐 -->
+          <button v-if="canResetPrefab" class="btn" type="button" @click="resetOpen = true">
+            重置为预置
+          </button>
+          <button v-if="canAddItem" class="btn wn" type="button" @click="itemAdminOpen = true">
+            ＋ 新增权限
+          </button>
+          <button v-if="canEditPerm" class="btn pri" type="button" @click="openTree('edit')">
+            编辑该职位权限
+          </button>
         </div>
       </div>
 
@@ -690,8 +720,12 @@ async function doReset(): Promise<void> {
               </div>
 
               <div class="perm-tools">
-                <button class="btn xs" type="button" @click="openTree('edit')">＋ 配置权限</button>
-                <button class="btn xs" type="button" @click="openCopy">从其他职位复制</button>
+                <button v-if="canEditPerm" class="btn xs" type="button" @click="openTree('edit')">
+                  ＋ 配置权限
+                </button>
+                <button v-if="canCopy" class="btn xs" type="button" @click="openCopy">
+                  从其他职位复制
+                </button>
                 <!-- ★ 2026-10-20 按用户要求删掉这里的「查看账号」按钮；
                      同轮删掉「＋ 新增权限」：本页顶部工具条（重置为预置 / ＋ 新增权限 / 编辑该职位权限）已有入口，
                      这个位置离「配置权限」太近，容易点错成"加权限点"而不是"配权限"。 -->
@@ -717,7 +751,9 @@ async function doReset(): Promise<void> {
                     <span style="font-size: 13px">{{ m.icon }}</span>
                     <b style="font-size: 12.5px">{{ m.name }}</b>
                     <span class="tag" :class="m.tagClass">{{ m.hit }}/{{ m.total }}</span>
-                    <span class="lk" style="margin-left: auto" @click="openTree('edit')">编辑</span>
+                    <span class="lk" style="margin-left: auto" @click="openTree(canEditPerm ? 'edit' : 'view')">
+                      {{ canEditPerm ? '编辑' : '查看' }}
+                    </span>
                   </div>
                   <div style="padding: 9px 11px">
                     <div

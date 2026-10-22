@@ -12,6 +12,14 @@ import { errorHandler } from './middleware/errorHandler';
 import { authMiddleware } from './middleware/auth';
 import { requirePage, requireAnyPage } from './middleware/pagePermission';
 import { denyApprovalOnlyWrite } from './middleware/approvalOnly';
+/**
+ * ★ 2026-10-22 全系统操作留痕
+ *
+ *   把「谁在哪个模块做了什么」统一记进 sms_perm.t_perm_log，
+ *   供「权限管理 → 操作日志」查看。挂在最外层，新增接口自动覆盖。
+ *   记录范围与排除项见文件头注释（普通 GET 不记、/api/perm 已有精细日志不重复记）。
+ */
+import { auditLog } from './middleware/auditLog';
 import { jobPermGate, eduPermGate } from './middleware/boardPermGate';
 import { RoleCode, BizCode } from 'shared-types';
 import { examRouter } from './routes/exam.route';
@@ -73,6 +81,7 @@ import { teachingRefundRouter } from './teaching/refund/route';
 import { teachingLeaveRouter } from './teaching/leave/route';
 import { teachingStudentRouter } from './teaching/student/route';
 import { teachingClassRouter } from './teaching/class/route';
+import { teachingTransferRouter } from './teaching/class/transfer.route';
 import { teachingDormRouter } from './teaching/dorm/route';
 import { teachingDormAllocateRouter } from './teaching/dorm/allocate.route';
 // ★ 宿舍楼栋设置（系统设置页与宿舍管理共用的楼栋字典）
@@ -163,6 +172,22 @@ app.use((req, _res, next) => {
   }
   next();
 });
+
+/**
+ * ★★ 2026-10-22：全系统操作留痕（审计日志）
+ *
+ * 【为什么挂在这里】
+ *   ① 在 express.json 之后 —— 要读 req.body 才能记「改成了什么」；
+ *   ② 在所有业务路由之前 —— 新增模块/接口不需要再改这个文件，自动被覆盖；
+ *   ③ 用 res.on('finish') 收集 —— 用户请求早就返回了，写库是异步批量做的，
+ *      不会给任何接口增加响应延迟。
+ *
+ * 【为什么不用 authMiddleware】
+ *   各模块的鉴权中间件不是同一套（咨询/财务/权限/初高/班级各有各的），
+ *   挂死在某一个上会漏掉别的模块。这里不鉴权，只在 finish 时读 `req.user`
+ *   —— 那个字段是下游中间件填好的，谁填的都认。
+ */
+app.use(auditLog);
 
 // ============================================================
 // 健康检查（不鉴权，用于快速确认服务活着）
@@ -616,12 +641,27 @@ app.use(
 );
 
 // ★ 考试管理（第二个合并的业务域）—— 结构完全同构
+//   ★ 2026-10-15 补 `job:examScore:view`：
+//     成绩管理页（/teaching/score）要给「考试下拉」读考试列表，调的是本域
+//     `GET /api/teaching/exam/list`。但项目经理/班主任/教员/助教手里只有**成绩码**
+//     `job:examScore:view`，没有**考试管理码** `job:exam:view`（那个是校长专用）——
+//     于是他们一进成绩管理页就弹「您没有该操作的权限」（实测）。
+//     这与 examScore.route.ts 头部记载的历史坑**完全同源**（当年靠单开 exam-options 规避，
+//     第 2 期统一接口后规避失效，老 bug 复现）。
+//     业务上「能看成绩 → 就必须能读到该学段的考试列表来选考试」，故把成绩码并入白名单。
+//     ⚠️ 这只是放宽「进本域」；真正的数据范围仍由 service.ts 的 visibleStages/assertStageView
+//        按学段再校验一次，读不到非本学段的考试。
 app.use(
   '/api/teaching/exam',
   authMiddleware,
   denyReadOnlyAdmin,
   denyApprovalOnlyWrite,
-  requireAnyPage(['classjh:exam:view', 'class:exam:view', 'job:exam:view']),
+  requireAnyPage([
+    'classjh:exam:view',
+    'class:exam:view',
+    'job:exam:view',
+    'job:examScore:view',
+  ]),
   teachingExamRouter,
 );
 
@@ -661,19 +701,16 @@ app.use(
   teachingLeaveRouter,
 );
 
-// ★ 学生档案（第六个合并的业务域）—— ★ 唯一有 **4 个学段** 的域（多一个「教务」）
-//   权限码：classjh:student:view / class:student:view / job:empArchive:view / edu:student:view
+// ★ 学生档案（第六个合并的业务域）—— 三个学段：初高 / 大学 / 就业部
+//   ★ 2026-10-21 用户口径：学生档案界面删除「就业」「教务」两个入口
+//     （edu:student:view 从这里摘掉 —— 教务模块自己的页面还在，只是不再进学生档案）
+//   权限码：classjh:student:view / class:student:view / job:empArchive:view
 app.use(
   '/api/teaching/student',
   authMiddleware,
   denyReadOnlyAdmin,
   denyApprovalOnlyWrite,
-  requireAnyPage([
-    'classjh:student:view',
-    'class:student:view',
-    'job:empArchive:view',
-    'edu:student:view',
-  ]),
+  requireAnyPage(['classjh:student:view', 'class:student:view', 'job:empArchive:view']),
   teachingStudentRouter,
 );
 
@@ -688,6 +725,26 @@ app.use(
   denyApprovalOnlyWrite,
   requireAnyPage(['classjh:classInfo:view', 'class:info:view', 'job:class:view']),
   teachingClassRouter,
+);
+
+// ★ 学生换班（末班 / 升班）
+//   ⚠️ 入口在「成绩管理」页，如果挂在 /api/teaching/class 下，
+//      只有成绩权限（class:grade:view）的老师会被班级查看权限拦成 403。
+//      这里单独一个前缀，两组权限码都放行。
+app.use(
+  '/api/teaching/class-transfer',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage([
+    'classjh:score:view',
+    'class:grade:view',
+    'job:examScore:view',
+    'classjh:classInfo:view',
+    'class:info:view',
+    'job:class:view',
+  ]),
+  teachingTransferRouter,
 );
 
   /**

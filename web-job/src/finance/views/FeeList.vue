@@ -2,10 +2,10 @@
   <div class="page-container">
     <!-- ============ 表格区（原型是「一个卡片」装下 Tab + 条件 + 表格 + 分页）============ -->
     <el-card shadow="never" class="table-card card-flush">
-      <!-- 部门二级 Tab（原型 .dept-tabs：二三期 / 大学部） -->
+      <!-- 部门二级 Tab（原型 .dept-tabs：初高部 / 大学部） -->
       <div class="dept-tabs">
         <b :class="{ on: dept === 'all' }" @click="handleDept('all')">全部部门</b>
-        <b :class="{ on: dept === '二三期' }" @click="handleDept('二三期')">二三期</b>
+        <b :class="{ on: dept === '初高部' }" @click="handleDept('初高部')">初高部</b>
         <b :class="{ on: dept === '大学部' }" @click="handleDept('大学部')">大学部</b>
       </div>
 
@@ -127,7 +127,14 @@
       >
         <!-- 只有可核对的才能勾选，避免财务误操作 -->
         <el-table-column type="selection" width="46" :selectable="isSelectable" />
-        <el-table-column prop="studentNo" label="学号" width="120" />
+        <!--
+          ★ 2026-10-22 用户口径：未分班（咨询阶段交的试学费 / 正式学费）没有学号，
+            财务这里显示「—」，分班建档后才显示真实学号。
+            后端已把 ZX 临时号视为空值返回（toFeeListItem.isTempStudentNo）。
+        -->
+        <el-table-column label="学号" width="120">
+          <template #default="{ row }">{{ dash(row.studentNo) }}</template>
+        </el-table-column>
         <el-table-column prop="studentName" label="姓名" width="90" />
         <el-table-column prop="className" label="班级" width="100">
           <template #default="{ row }">{{ dash(row.className) }}</template>
@@ -247,7 +254,7 @@
     <!-- ============ 详情弹窗 ============ -->
     <el-dialog v-model="detailVisible" title="缴费单详情" width="720px" top="6vh">
       <el-descriptions v-if="detail" :column="2" border size="small">
-        <el-descriptions-item label="学号">{{ detail.studentNo }}</el-descriptions-item>
+        <el-descriptions-item label="学号">{{ dash(detail.studentNo) }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ detail.studentName }}</el-descriptions-item>
         <el-descriptions-item label="班级">{{ dash(detail.className) }}</el-descriptions-item>
         <el-descriptions-item label="部门">{{ dash(detail.deptName) }}</el-descriptions-item>
@@ -419,7 +426,7 @@
                   effect="plain"
                   class="shared-tag"
                 >
-                  {{ s.studentName }}（{{ s.studentNo }}）· {{ s.feeTypeName }}
+                  {{ s.studentName }}（{{ s.studentNo || '—' }}）· {{ s.feeTypeName }}
                 </el-tag>
               </span>
             </div>
@@ -527,19 +534,19 @@ const total = ref(0);
 const selectedRows = ref<FeeListItem[]>([]);
 
 /**
- * 部门二级筛选（原型 .dept-tabs：二三期 / 大学部）。
+ * 部门二级筛选（原型 .dept-tabs：初高部 / 大学部）。
  *
  * ⭐ 2026-10-03 用户指令后已升级为【服务端筛选】：
  *    直接传 deptCode 给 _list 接口，分页统计才准，
  *    也不会再出现「第 1 页有大学部、翻页就没了」的情况。
  */
-const dept = ref<'all' | '二三期' | '大学部'>('all');
+const dept = ref<'all' | '初高部' | '大学部'>('all');
 const className = ref<string | undefined>(undefined);
 
 /** 部门 Tab → deptCode（'all' → undefined 表示不传该条件） */
 const DEPT_CODE: Record<string, number | undefined> = {
   all: undefined,
-  二三期: DeptCode.JUNIOR_SENIOR,
+  初高部: DeptCode.JUNIOR_SENIOR,
   大学部: DeptCode.UNIVERSITY,
 };
 
@@ -583,7 +590,7 @@ const classOptionsRaw = ref<FeeClassOption[]>([]);
 
 /**
  * 下拉里展示的班级：
- *   - 选了「二三期 / 大学部」→ 只看该部门的班级（与 Tab 联动）
+ *   - 选了「初高部 / 大学部」→ 只看该部门的班级（与 Tab 联动）
  *   - 选「全部部门」→ 所有班级
  */
 const classOptions = computed(() => {
@@ -717,7 +724,7 @@ function handleSearch() {
  * 切换部门 Tab。
  * ⭐ 与原来不同：现在会真的重新请求（服务端筛选），并同步刷新班级下拉。
  */
-async function handleDept(d: 'all' | '二三期' | '大学部') {
+async function handleDept(d: 'all' | '初高部' | '大学部') {
   if (dept.value === d) return;
   dept.value = d;
   // 部门变了，原来选的班级可能不属于新部门，必须清掉

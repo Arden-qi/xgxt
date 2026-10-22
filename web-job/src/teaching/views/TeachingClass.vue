@@ -64,8 +64,18 @@
         <el-button type="primary" @click="load(1)">查询</el-button>
         <el-button @click="reset">重置</el-button>
         <el-button v-if="!isReadOnlyUser" type="success" @click="openCreate">新增班级</el-button>
+        <!-- ★ 2026-10-22：阶段方案设计从「系统设置」搬到这里，只给校长 / 学管主任 -->
+        <el-button v-if="canDesignScheme" :icon="SetUp" @click="schemeVisible = true">阶段方案设计</el-button>
       </el-form-item>
     </el-form>
+
+    <!-- 阶段方案设计（弹窗；组件与原来系统设置里的方案页是同一套逻辑） -->
+    <el-dialog v-model="schemeVisible" title="阶段方案设计" width="900px" top="6vh" destroy-on-close>
+      <StageSchemePanel />
+      <template #footer>
+        <el-button @click="schemeVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 列表 -->
     <!-- ★ 列宽纪律：内容大多只有 2~4 个字，一律用 min-width 让浏览器按需收缩/伸展，
@@ -274,14 +284,11 @@
               <el-input v-model="form.className" maxlength="50" placeholder="留空自动生成占位名" />
             </el-form-item>
           </el-col>
-          <!-- ★ 只有实训有班级编号（而且必填 + 唯一） -->
-          <el-col v-if="curMeta?.hasClassCode" :span="8">
-            <el-form-item label="班级编号" required>
-              <el-input v-model="form.classCode" maxlength="32" placeholder="如 SX20260001">
-                <template #append>
-                  <el-link type="primary" @click="doGenCode">生成</el-link>
-                </template>
-              </el-input>
+          <!-- ★ 2026-10-21 用户口径：班级编号三部门统一（初高部/大学部/就业部），必填 -->
+          <!-- ★ 2026-10-22 用户口径：去掉「生成」按钮，一律由相关人员手工填写 -->
+          <el-col :span="8">
+            <el-form-item label="班级编号" prop="classCode">
+              <el-input v-model="form.classCode" maxlength="32" placeholder="Q17/J101/T101" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -684,10 +691,13 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { isReadOnlyUser } from '@/store/permission';
+import { SetUp } from '@element-plus/icons-vue';
+import { isReadOnlyUser, myRoles } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
+import { http } from '@/api/request';
+// ★ 2026-10-22：阶段方案设计从「系统设置」搬进班级管理，以弹窗呈现
+import StageSchemePanel from '@/teaching/components/StageSchemePanel.vue';
 import { DeptCode } from 'shared-types';
-import { userApi } from '@/perm/api/perm';
 import type { PermUserListItem } from 'shared-types/perm';
 import {
   listClasses,
@@ -697,7 +707,6 @@ import {
   getClassMeta,
   getClassSummary,
   getSchemeOptions,
-  genClassCode,
   listClassHandovers,
   doClassHandover,
   upgradeClassToTraining,
@@ -726,10 +735,21 @@ import {
 } from '@/teaching/classroom';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
+/**
+ * 阶段方案设计：★ 2026-10-22 用户口径「只给校长 / 学管主任」
+ *   后端 /api/class-jh/stage-scheme/* 也加了同样的角色限制，这里只管入口显隐。
+ */
+const canDesignScheme = computed(() =>
+  ['RM_PRINCIPAL', 'TEACH_DEAN', 'SYS_ADMIN'].some((r) => myRoles.value.includes(r)),
+);
+const schemeVisible = ref(false);
+
+// ★ 2026-10-22 部门口径统一：对外只有「初高中 / 大学部 / 就业部」三个部门。
+//   「实训」是就业部下的一个阶段（班级 dept_code=3），不是并列部门。
 const STAGE_LABEL: Record<ClassStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
   // ★ 2026-10-19 批注：就业部（独立学段）
   emp: '就业部',
 };
@@ -868,6 +888,17 @@ const isTrainPhase = computed(() => Number(form.phaseCode) === TRAIN_PHASE_CODE)
  *   规则写成 computed，切换阶段后红星与校验会立刻跟着变。
  */
 const rules = computed<FormRules>(() => ({
+  // ★ 2026-10-21：班级编号三部门统一必填（历史班级留空，首次编辑时补）
+  classCode: [
+    { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        if (String(value ?? '').trim()) callback();
+        else callback(new Error('请填写班级编号，如 Q17 / J101 / T101'));
+      },
+      trigger: 'submit',
+    },
+  ],
   projectManagerName: isTrainPhase.value
     ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
     : [],
@@ -989,17 +1020,20 @@ const staffOptions = ref<PermUserListItem[]>([]);
 async function loadStaff() {
   staffLoading.value = true;
   try {
-    // ⚠️ /api/perm/user/list 的 size 上限 100 —— 按 100/页自动翻页拉全量（≤5 页封顶）
-    const out: PermUserListItem[] = [];
-    const size = 100;
-    const first = await userApi.list({ page: 1, size });
-    out.push(...(first.list || []));
-    const pages = Math.ceil((first.total || 0) / size);
-    for (let p = 2; p <= Math.min(pages, 5); p++) {
-      const d = await userApi.list({ page: p, size });
-      out.push(...(d.list || []));
-    }
-    staffOptions.value = out;
+    /* ★ 2026-10-22：改走教学侧接口 /api/teaching/class/staff-options
+     *
+     * 【为什么换】原来直连 /api/perm/user/list（挂 permAuth，要求账号 modules 含 perm）——
+     *   初高 / 大学 / 就业账号一进班级管理就 403：
+     *   ① 拦截器弹「您没有该操作的权限」（用户报障：每个账号登录都弹没有权限）；
+     *   ② 更实际的问题：staffOptions 被清空 → 新建班级选不了班主任/教员/助教。
+     *   新接口跟着班级页面权限走，只返回 id + 姓名，够下拉用。
+     *   拉取仍带 silent：万一以后某个账号连班级页面权限都没有，也只是下拉空着，不弹窗。 */
+    const rows = await http.get<Array<{ id: string; userName: string }>>(
+      '/api/teaching/class/staff-options',
+      undefined,
+      { silent: true },
+    );
+    staffOptions.value = (rows || []) as unknown as PermUserListItem[];
   } catch {
     staffOptions.value = [];
   } finally {
@@ -1126,16 +1160,17 @@ async function openEdit(row: ClassRow) {
   editVisible.value = true;
 }
 
-/** ★ 表单切学段：编号 / 交棒 / 备注字段要跟着清（否则会带着上一个学段的脏值提交） */
+/** ★ 表单切学段：编号 / 交棒 / 备注字段要跟着清（否则会带着上一个学段的脏值提交）
+ *
+ * ⚠️ 2026-10-22 修：这里原来只保住 id / className，
+ *    结果用户「先填班级编号、再选部门」时，onFormDeptChange → 本函数
+ *    → Object.assign(form, emptyForm(...)) 把刚填的 classCode 一起抹掉了
+ *    （用户反馈：填完班级编号去选部门，编号自动清空）。
+ *    班级编号是三个部门通用、与学段无关的字段，必须原样保留。
+ */
 function onFormStageChange() {
-  const keep = { id: form.id, className: form.className };
+  const keep = { id: form.id, className: form.className, classCode: form.classCode };
   Object.assign(form, emptyForm(form.stage), keep);
-}
-
-async function doGenCode() {
-  const r = await genClassCode(form.stage);
-  if (r?.classCode) form.classCode = r.classCode;
-  else ElMessage.info('该部门没有班级编号（只有实训有）');
 }
 
 async function doSave() {

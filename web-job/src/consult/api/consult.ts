@@ -159,6 +159,8 @@ export interface OpenClassItem {
   className: string;
   stage?: number;
   stageName?: string;
+  /** ★ 2026-10-22 阶段方案名（「一阶段」~「六阶段」），优先于 stageName 显示 */
+  schemeStageName?: string | null;
   classStatusName?: string;
   headTeacherName?: string | null;
   studentCount?: number;
@@ -511,7 +513,17 @@ export function syncRefund(id: string): Promise<{ status: number; statusName: st
 /** 退费预填（算试学天数和已到账金额） */
 export function fetchRefundPrefill(
   consultStudentId: string,
-): Promise<ConsultRefundCalcResult & { incomeAmount: number; trialStart?: string }> {
+): Promise<
+  ConsultRefundCalcResult & {
+    incomeAmount: number;
+    trialStart?: string;
+    /**
+     * ★ 2026-10-22 试学期间最早可选日（= 进班试学日 `trial_start`）
+     * null / 没有值时表示该生没有进班记录，前端不设下限
+     */
+    earliestTrialStart?: string | null;
+  }
+> {
   return http.get('/api/consult/refund/prefill', { consultStudentId });
 }
 

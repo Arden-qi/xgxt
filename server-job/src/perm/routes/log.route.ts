@@ -51,6 +51,13 @@ function toLogItem(r: any, roleLabel?: string) {
     afterValue: r.after_value,
     ip: r.ip,
     result: r.result,
+    /* ★ 2026-10-22 全系统留痕新增：接口 / 方法 / 状态 / 耗时 / 设备
+     *   权限板块内部的老日志这几列是 NULL，前端按空值降级显示 */
+    apiPath: r.api_path || '',
+    httpMethod: r.http_method || '',
+    statusCode: r.status_code ?? null,
+    durationMs: r.duration_ms ?? null,
+    userAgent: r.user_agent || '',
     createTime: r.create_time,
     createBy: r.create_by,
     isDeleted: !!r.is_deleted,
@@ -71,7 +78,11 @@ function applyFilters(q: any) {
     query.andWhere((qb: any) => {
       qb.where('operator_name', 'like', `%${q.keyword}%`)
         .orWhere('target_obj', 'like', `%${q.keyword}%`)
-        .orWhere('ip', 'like', `%${q.keyword}%`);
+        .orWhere('ip', 'like', `%${q.keyword}%`)
+        // ★ 2026-10-22：全系统留痕后，同一模块里的操作长得都很像，
+        //   按接口路径搜是排障最快的方式（例如搜 refund/approve）
+        .orWhere('api_path', 'like', `%${q.keyword}%`)
+        .orWhere('operator_role', 'like', `%${q.keyword}%`);
     });
   }
   if (q.moduleName) query.andWhere('module_name', q.moduleName);
@@ -161,6 +172,39 @@ logRouter.get(
         loginTotal: Number(login[0]?.n || 0),
         approveTotal: Number(approve[0]?.n || 0),
       }),
+    );
+  }),
+);
+
+/* ============================================================
+ * 3.5 操作人字典（全系统留痕后必须补）
+ *    GET /api/perm/log/operators
+ *
+ * 【为什么需要】
+ *   以前日志只有权限板块自己产生，一页 10 条里操作人基本就那么几个，
+ *   前端用「当前页去重」凑下拉就够了。
+ *   现在全系统每个账号的写操作都进来，一页 10 条可能 10 个不同的人，
+ *   下拉里选不到「上周那个财务」，筛选就形同虚设。
+ *   这里按操作次数倒序给出全部操作人，一次查询、前端缓存。
+ * ============================================================ */
+
+logRouter.get(
+  '/operators',
+  wrap(async (_req, res) => {
+    const rows = (await db(TABLE)
+      .where('is_deleted', false)
+      .select('operator_name')
+      .count({ n: '*' })
+      .groupBy('operator_name')
+      .orderBy('n', 'desc')
+      .limit(300)) as { operator_name: string; n: number | string }[];
+
+    res.json(
+      ok(
+        rows
+          .filter((r) => r.operator_name)
+          .map((r) => ({ name: r.operator_name, count: Number(r.n) })),
+      ),
     );
   }),
 );

@@ -15,37 +15,25 @@ export enum Gender {
 /**
  * 部门
  *
- * ★ 2026-10-20 用户口径：「初中部和高中部分开，换成初中部、高中部、大学部」
- *   → 原「初高部」拆成「初中部」+「高中部」，下拉顺序按 初中 → 高中 → 大学。
+ * ★ 2026-10-22 用户口径：「部门选择由现在的初中部、高中部改为原来的合并的初高部」（全系统）
+ *   → 撤掉 2026-10-20 的「初中部 / 高中部」拆分，恢复为「初高部 / 大学部 / 就业部」三项。
+ *   → 原高中部编码 4 一并删除：全库没有任何 dept_code=4 的学生 / 班级 / 费用标准，
+ *     不需要洗数据；保留一个没人用的枚举只会让下拉和校验继续分叉。
  *
- * ⚠️ 编码策略（值不动，避免洗数据）：
- *    1 沿用旧「初高部」的值，只改名成「初中部」——存量 dept_code=1 的学生直接落到初中部；
- *    4 新增「高中部」——刻意不占 2，否则大学部 dept_code=2 的历史数据（学生/班级/费用标准/账单）
- *      全都要迁移，风险和收益不匹配；也不能占 3，3 已经给了就业部（见下）。
- *
- * ⚠️ 编号不连续是刻意的：部门编码只要求唯一，**下拉顺序由 DEPT_OPTIONS 决定**，
- *    不靠编号大小排序，所以「初中1 → 高中4 → 大学2」完全正常。
+ * ⚠️ 编码仍保持不变（1 初高部 / 2 大学部 / 3 就业部），存量数据零影响。
  */
 export enum DeptCode {
-  JUNIOR_SENIOR = 1,  // 初中部（成员名是历史命名，值不变以兼容存量数据）
+  JUNIOR_SENIOR = 1,  // 初高部（成员名是历史命名，值不变以兼容存量数据）
   UNIVERSITY = 2,     // 大学部
   /** ★ 2026-10-19 批注新增：就业部（独立学段「就业」，班级/学生同表按部门隔离） */
   EMPLOYMENT = 3,     // 就业部
-  /**
-   * ★ 2026-10-20 新增：高中部
-   *
-   * ⚠️ 2026-10-20 合并 PR#8 时与「就业部」撞号：两边都想用 3。
-   *    处理结果：就业部保留 3（已合入 main 的公共契约不动），高中部改用 4，
-   *    避免同一份字典里一个数字对应两个部门。
-   */
-  SENIOR = 4,         // 高中部
 }
 
-/** 部门下拉顺序（初中部 → 高中部 → 大学部） */
+/** 部门下拉顺序（初高部 → 大学部 → 就业部） */
 export const DEPT_OPTIONS: number[] = [
   DeptCode.JUNIOR_SENIOR,
-  DeptCode.SENIOR,
   DeptCode.UNIVERSITY,
+  DeptCode.EMPLOYMENT,
 ];
 
 /** 学生状态（全系统最重要的字段） */
@@ -89,7 +77,7 @@ export enum FeeType {
   /** 校服（同上，2026-10-15 新增） */
   UNIFORM = 7,       // 校服
   /** 补费（★ 2026-10-20 新增：试学转正尾款 / 差额补收，金额由老师自定义） */
-  SUPPLEMENT = 8,    // 补费
+  SUPPLEMENT = 8,    // 补学费（操作入口叫「补费」）
 }
 
 /** 缴费状态 */
@@ -264,11 +252,18 @@ export const ROLE_CODE_NAME: Record<string, string> = {
 };
 
 export const DEPT_NAME: Record<number, string> = {
-  [DeptCode.JUNIOR_SENIOR]: '初中部',
-  [DeptCode.SENIOR]: '高中部',
+  [DeptCode.JUNIOR_SENIOR]: '初高部',
   [DeptCode.UNIVERSITY]: '大学部',
   [DeptCode.EMPLOYMENT]: '就业部',
 };
+
+/**
+ * 学历（★ 2026-10-22 用户口径：学生档案新增 / 待接收接收 两处统一为这五项）
+ *   原来两处各写一套（学生档案是 初中/高中/专科/本科/研究生，
+ *   待接收是 初中/高中/中专/大专/本科在读/本科/硕士），选项对不上；
+ *   现在收口到公共字典，前端两处都引用它。
+ */
+export const EDUCATION_OPTIONS: string[] = ['初中', '高中', '专科', '本科', '研究生'];
 
 export const STUDENT_STATUS_NAME: Record<number, string> = {
   [StudentStatus.WAIT_CONSULT]: '待咨询',
@@ -297,7 +292,8 @@ export const FEE_TYPE_NAME: Record<number, string> = {
   [FeeType.MEAL]: '餐费',
   [FeeType.INSURANCE]: '保险费',
   [FeeType.TRIAL_FEE]: '试学费',
-  [FeeType.SUPPLEMENT]: '补费',
+  // ★ 2026-10-22 单据显示名改为「补学费」（操作按钮仍叫「补费」）
+  [FeeType.SUPPLEMENT]: '补学费',
   [FeeType.DEPOSIT]: '押金',
   [FeeType.UNIFORM]: '校服',
 };

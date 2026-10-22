@@ -282,7 +282,8 @@ const newForm = ref({
   studentName: '',
   gender: 1,
   phone: '',
-  deptCode: 1,
+  /** ★ 2026-10-22 用户口径：「部门」换成「年龄」（部门在分配班级时才定） */
+  age: undefined as number | undefined,
   sourceChannel: 1,
   sourceRemark: '',
   /** ★ 2026-10-15 来源=转介绍时填写的招生老师信息 */
@@ -297,7 +298,7 @@ function openNew() {
     studentName: '',
     gender: 1,
     phone: '',
-    deptCode: 1,
+    age: undefined,
     sourceChannel: 1,
     sourceRemark: '',
     referrerName: '',
@@ -323,7 +324,8 @@ async function submitNew() {
     studentName: f.studentName.trim(),
     gender: f.gender,
     phone: f.phone || undefined,
-    deptCode: f.deptCode,
+    // ★ 2026-10-22：「部门」换成「年龄」（部门改为分配班级时选学部）
+    age: f.age ?? undefined,
     sourceChannel: f.sourceChannel,
     sourceRemark: f.sourceRemark || undefined,
     referrerName: f.sourceChannel === 3 ? f.referrerName.trim() || undefined : undefined,
@@ -481,12 +483,28 @@ async function loadAssignStatus() {
 
 /** 当前行还能不能分配班级（没查到状态时不误伤） */
 function canEnrollOf(row: ConsultStudentListItem | ConsultStudent): boolean {
+  /**
+   * ★ 2026-10-22 用户口径：**已经入班的学生一律不可再分配**
+   *
+   * 试学中(5) / 缴费中·待确认(6) / 正式在读(7) 说明人已经在班里了。
+   * 后端 `assignBlockReason` 会拦，但按钮留着可点仍会误导（用户实测：张三已入班还能点）。
+   *
+   * 先按本地状态兜一层，不依赖 assignStatus 接口 —— 接口失败/未返回时，
+   * `canEnrollOf` 原来的兜底是「按可点展示」，会把按钮又放出来。
+   */
+  const st = Number((row as any).consultState);
+  if ([CS.TRIAL, CS.FULL_FEE_PENDING, CS.FORMAL].includes(st)) return false;
+
   const s = assignStatus.value[(row as any).consultStudentId || (row as any).id];
   return s ? s.canAssign : true;
 }
 
 /** 按钮禁用原因 */
 function enrollTipOf(row: ConsultStudentListItem | ConsultStudent): string {
+  const st = Number((row as any).consultState);
+  if ([CS.TRIAL, CS.FULL_FEE_PENDING, CS.FORMAL].includes(st)) {
+    return '该学生已入班，不能再分配班级；如需换班请联系学管';
+  }
   const s = assignStatus.value[(row as any).consultStudentId || (row as any).id];
   return s ? s.label : '选择学部与开放班级后，推送给该班班主任接收';
 }
@@ -497,7 +515,14 @@ const enrollClassOptions = computed(() => {
   return (list || [])
     .map((c) => ({
       value: String(c.classId ?? c.id ?? ''),
-      label: c.className + (c.stageName ? `（${c.stageName}）` : ''),
+      /**
+       * ★ 2026-10-22 括号里的阶段名以「阶段方案」为准
+       *
+       * 新表单建班选的是方案阶段（一阶段~六阶段），班级的 stage 码只是兼容列。
+       * 历史数据里 stage 码被写成 13（实训）时，只看 stageName 会显示成
+       * 「运维（实训）」——用户反馈的正是这个。方案名存在就用方案名。
+       */
+      label: c.className + ((c.schemeStageName || c.stageName) ? `（${c.schemeStageName || c.stageName}）` : ''),
     }))
     .filter((o) => o.value);
 });
@@ -1533,11 +1558,17 @@ onMounted(load);
         <el-form-item label="手机号">
           <el-input v-model="newForm.phone" placeholder="学生本人手机号" />
         </el-form-item>
-        <el-form-item label="部门">
-          <el-select v-model="newForm.deptCode" style="width: 100%">
-            <!-- ★ 2026-10-20 初中部 / 高中部 / 大学部 -->
-            <el-option v-for="d in DEPT_OPTIONS" :key="d" :value="d" :label="DEPT_NAME[d]" />
-          </el-select>
+        <el-form-item label="年龄">
+          <!-- ★ 2026-10-22 用户口径：原来的「部门」在这里没有意义（部门是分配班级时才选的学部），
+               改成录入时就能掌握的「年龄」；不填也可以，接收入班时班主任能补 -->
+          <el-input-number
+            v-model="newForm.age"
+            :min="1"
+            :max="100"
+            :controls="false"
+            placeholder="学生年龄"
+            style="width: 140px"
+          />
         </el-form-item>
         <el-form-item label="来源">
           <el-select v-model="newForm.sourceChannel" style="width: 100%">

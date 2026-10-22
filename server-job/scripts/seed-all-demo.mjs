@@ -36,6 +36,7 @@
 
 import { readFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mysql from 'mysql2/promise';
@@ -172,6 +173,61 @@ const PORTAL_FALLBACK = {
 /** 运行时实际使用的门户 id（启动时由 resolvePortalIds 校准） */
 const PORTAL = { ...PORTAL_FALLBACK };
 
+/**
+ * ★★★ 权限库用户 id（`U004` / `U_sunjl` …）—— **业务表责任人列必须用这个**
+ *
+ * 【为什么必须用 permUserId 而不是门户 UUID】
+ *   后端 `src/middleware/auth.ts` 的注释写得很明确：
+ *     `businessUserId` (= permUserId) —— 「业务表责任人列用它做『我带的班』过滤」
+ *   即数据权限过滤走的是：
+ *     `user.businessUserId || user.userId`  → 与业务表的 head_teacher_id 比较
+ *   而 permUserId 是**优先值**。如果业务表里填门户 UUID，权限库又查得到账号
+ *   （businessUserId 非空 = U004），比较时 `U004 ≠ 85a47f05-…` → 永远匹配不上
+ *   → 班主任/项目经理登录后「我带的班」查空 → 页面 0 条。
+ *
+ *   （实测：本机能正常显示的机器，数据里就是 `U004`；而本脚本原先填的是门户 UUID。）
+ *
+ * 【为什么不能把编号写死】
+ *   权限库里编号格式并不统一：老账号是 `U001`~`U021`，
+ *   后建的是 `U_sunjl` / `U_chenxf` / `U_zhaomx`（带账号名）。
+ *   → 只能**按 account 实时查**。
+ */
+const PERMID = {};
+
+/** 从 sms_perm.t_perm_user 按 account 查权限库 id，并回填 S.<key>.id */
+async function resolvePermIds(conn) {
+  const permDb = ENV.DB_NAME_PERM || 'sms_perm';
+  try {
+    const [rows] = await conn.query(
+      `SELECT account, id FROM \`${permDb}\`.t_perm_user WHERE is_deleted = 0`,
+    );
+    const byAcc = new Map(rows.map((r) => [String(r.account), String(r.id)]));
+
+    const missing = [];
+    for (const acc of Object.values(STAFF_ACCOUNT)) {
+      const real = byAcc.get(acc);
+      if (!real) {
+        missing.push(acc);
+        continue;
+      }
+      PERMID[acc] = real;
+    }
+
+    // ★ 回填 S（岗位 → 权限库 id）—— 业务表责任字段全部用它
+    for (const [key, acc] of Object.entries(STAFF_ACCOUNT)) {
+      if (S[key] && PERMID[acc]) S[key].id = PERMID[acc];
+    }
+
+    const filled = Object.keys(PERMID).length;
+    say(`  业务责任人 ID 校准：${filled} 个岗位已按 ${permDb}.t_perm_user 取到权限库 id（如 ${STAFF_ACCOUNT.headU}=${PERMID[STAFF_ACCOUNT.headU] || '?'}）`);
+    if (missing.length) {
+      say(`  ⚠️ ${permDb}.t_perm_user 里找不到：${missing.join(', ')} —— 相关责任人字段会为空。`);
+    }
+  } catch (e) {
+    say(`  ⚠️ 权限库 id 校准失败（业务责任人列会挂空，班主任将看不到数据）：${e.message}`);
+  }
+}
+
 /** S 里每个岗位对应哪个门户账号 —— 校准时回填 S.<key>.id 用 */
 const STAFF_ACCOUNT = {
   principal: 'qiansy',
@@ -180,6 +236,11 @@ const STAFF_ACCOUNT = {
   headJ: 'sunmin',
   acad: 'zhengym',
   job: 'zhouj',
+  /* ★ 2026-10-15 新增：项目经理（孙建龙）。
+   *   业务上「项目经理 = 实训阶段的班主任」（斌哥 2026-10-15 明确），
+   *   所以实训班的 head_teacher_id / project_manager_id 都挂他，
+   *   他登录后才能在「学生档案 / 班级管理」里看到自己带的班。 */
+  pm: 'sunjl',
   finMgr: 'zhoum',
   finStaff: 'liukj',
 };
@@ -192,6 +253,11 @@ const CONSULT_ACCT = {
   lilx: 'a964420e-2f15-4eea-a565-75b58a0eb626',
 };
 
+/**
+ * 岗位 → 责任人（id 会在运行时被 resolvePermIds 覆盖成**权限库 id**）
+ *   ⚠️ 这里的 `PORTAL.xxx` 只是占位；真正写进业务表的是 permUserId（U004…），
+ *      否则班主任/项目经理的「我带的班」过滤会匹配不上（详见 PERMID 注释）。
+ */
 const S = {
   principal: { id: PORTAL.qiansy, name: '钱守义' },   // 校长
   dean: { id: PORTAL.congym, name: '丛玉梅' },        // 学管主任
@@ -199,6 +265,9 @@ const S = {
   headJ: { id: PORTAL.sunmin, name: '孙敏' },         // 初高班主任
   acad: { id: PORTAL.zhengym, name: '郑一鸣' },       // 教务老师
   job: { id: PORTAL.zhouj, name: '周杰' },            // 就业老师
+  /* ★ 项目经理（孙建龙）—— 业务上等同「实训阶段的班主任」，
+   *   所以实训班的班主任/项目经理解字段都挂他。id 初始为空，由 resolvePermIds 回填。 */
+  pm: { id: '', name: '孙建龙' },
   finMgr: { id: PORTAL.zhoum, name: '周铭' },     // 财务负责人
   finStaff: { id: PORTAL.liukj, name: '刘会计' },     // 财务专员
 };
@@ -239,29 +308,29 @@ const UNIV_CLASSES = [
     // ★ 2026-10-06：特意放在【六阶段（206）】且未升实训 →
     //   左侧「班级管理 → 班级管理」该行会出现「升实训」按钮，
     //   点开即演示「选项目经理 + 就业指导老师 → 交接到就业管理」的完整流程。
-    id: 'CLS-U2601', name: 'U2601', stage: 206, head: S.headU,
+    id: 'CLS-U2601', name: 'U2601', code: 'Q1', stage: 206, head: S.headU,
     room: '教学楼 A-101', students: ['U26001', 'U26002', 'U26003', 'U26004', 'U26005'],
   },
   {
     // 这台班停在三阶段，用来演示「阶段推进」逐级往上走
-    id: 'CLS-U2602', name: 'U2602', stage: 203, head: S.headU,
+    id: 'CLS-U2602', name: 'U2602', code: 'Q2', stage: 203, head: S.headU,
     room: '教学楼 A-102', students: ['U26006', 'U26007', 'U26008', 'U26009', 'U26010'],
   },
 ];
 
 const JH_CLASSES = [
   {
-    id: 'CLS-JH-G2601', name: 'G2601', stage: 102, head: S.headJ, teacher: S.headJ, room: '综合楼 201',
+    id: 'CLS-JH-G2601', name: 'G2601', code: 'J101', stage: 102, head: S.headJ, teacher: S.headJ, room: '综合楼 201',
     students: ['J26001', 'J26002', 'J26003', 'J26004', 'J26005', 'J26011', 'J26013'],
   },
   {
-    id: 'CLS-JH-J2602', name: 'J2602', stage: 105, head: S.headJ, teacher: S.headJ, room: '综合楼 202',
+    id: 'CLS-JH-J2602', name: 'J2602', code: 'J102', stage: 105, head: S.headJ, teacher: S.headJ, room: '综合楼 202',
     students: ['J26006', 'J26007', 'J26008', 'J26009', 'J26010', 'J26012', 'J26014'],
   },
 ];
 
 const JOB_CLASS = {
-  id: 'CLS-JOB-SX2601', name: 'SX2601', stage: 301, head: S.job,
+  id: 'CLS-JOB-SX2601', name: 'SX2601', code: 'T101', stage: 301, head: S.job,
   room: '实训基地 B-1', students: ['U26011', 'U26012', 'U26013', 'U26014', 'U26015'],
 };
 
@@ -754,6 +823,10 @@ function seedClass(conn) {
   // 8.1 班级
   const classes = UNIV_CLASSES.map((c) => base(c.id, {
     class_name: c.name, dept_code: E.DEPT_UNIV, stage: c.stage,
+    /* ★ 2026-10-22：班级编号必填（学号 = LZ + 班级编号 + 序号）。
+       演示数据原来没写这一列，导致新环境「新增学生」一律报
+       「还没有班级编号，学号无法生成」—— 直接卡死第一线功能。 */
+    class_code: c.code,
     head_teacher_id: c.head.id, head_teacher_name: c.head.name,
     teacher_id: null, teacher_name: null, assistant_id: null, assistant_name: null,
     room: c.room, open_date: D(-120), student_count: c.students.length,
@@ -933,6 +1006,8 @@ function seedClassJh(conn) {
   // 9.3 班级
   const classes = JH_CLASSES.map((c) => base(c.id, {
     class_name: c.name, stage: c.stage,
+    /* ★ 2026-10-22：同上，演示班级也要有编号，否则新增学生被拦 */
+    class_code: c.code,
     head_teacher_id: c.head.id, head_teacher_name: c.head.name,
     teacher_id: c.teacher.id, teacher_name: c.teacher.name,
     assistant_id: null, assistant_name: null,
@@ -1265,7 +1340,7 @@ function seedJob(conn) {
 
   // 11.1 实训班
   const classes = [base(JOB_CLASS.id, {
-    class_name: JOB_CLASS.name, class_code: JOB_CLASS.name, dept_code: E.DEPT_EMP, stage: JOB_CLASS.stage,
+    class_name: JOB_CLASS.name, class_code: JOB_CLASS.code, dept_code: E.DEPT_EMP, stage: JOB_CLASS.stage,
     stage_key: 'job',
     head_teacher_id: S.job.id, head_teacher_name: S.job.name,
     teacher_id: null, teacher_name: null, assistant_id: null, assistant_name: null,
@@ -1273,7 +1348,7 @@ function seedJob(conn) {
     student_count: jobStu.length, class_status: E.CLS_OPEN, attendance_rate: 97.0,
     remark: '由大学部 U2601/U2602 升实训交接而来',
     prev_class_status: E.CLS_TRAINING,
-    project_manager_id: S.job.id, project_manager_name: S.job.name,
+    project_manager_id: S.pm.id, project_manager_name: S.pm.name,
     employment_teacher_id: S.job.id, employment_teacher_name: S.job.name,
     university_no: 'U2601/U2602',
   })];
@@ -1543,7 +1618,17 @@ async function resolvePortalIds(conn) {
 
     const changed = [];
     const missing = [];
-    for (const acc of Object.keys(PORTAL_FALLBACK)) {
+    /* ★ 2026-10-15 修：遍历范围从「PORTAL_FALLBACK 的键」改成
+     *   「**岗位真正需要的账号**」的并集 ——
+     *   因为项目经理 sunjl 根本不在 PORTAL_FALLBACK 名单里（那份名单只有 13 个老账号），
+     *   于是 S.pm.id 永远是空串 → 实训班/实训学生的责任字段全挂空
+     *   → 项目经理登录后「我带的班」匹配不到 → 学生档案 0 条（实测踩到）。
+     *   改成按 STAFF_ACCOUNT 的值取，岗位缺谁就会出现在 missing 提示里。 */
+    const needAccounts = new Set([
+      ...Object.keys(PORTAL_FALLBACK),
+      ...Object.values(STAFF_ACCOUNT),
+    ]);
+    for (const acc of needAccounts) {
       const real = byAcc.get(acc);
       if (!real) {
         missing.push(acc);
@@ -1551,8 +1636,8 @@ async function resolvePortalIds(conn) {
       }
       if (real !== PORTAL_FALLBACK[acc]) {
         changed.push(acc);
-        PORTAL[acc] = real;
       }
+      PORTAL[acc] = real;
     }
 
     // 回填 S（岗位 → 门户账号）
@@ -1589,6 +1674,15 @@ async function main() {
   try {
     // ★ 先校准门户账号 id（否则班主任/就业老师会被挂到失效的硬编码 UUID 上）
     await resolvePortalIds(conn);
+    /* ⚠️ 2026-10-15 回滚：这里**暂不调** resolvePermIds。
+     *   原因：业务表责任人列的 ID 口径在代码里**自相矛盾**：
+     *     ·  用的是 （**门户 UUID**）
+     *     ·  的  注释说应用 permUserId（U004）
+     *   两套鉴权口径不一致，填哪种都会有一处对不上。
+     *   经测试：填 permUserId 后老接口（/job/class-info/my-class）反而变空，
+     *   说明当前实际生效的是门户 UUID 口径 → 回滚到原行为。
+     *   待鉴权口径统一后再决定数据填哪种（resolvePermIds 函数保留备用）。 */
+    // await resolvePermIds(conn);
 
     say('\n【0/7】清空业务表（保留 knex_migrations / sms_perm / sms_portal）');
     await truncateAll(conn);
@@ -1611,6 +1705,35 @@ async function main() {
 
     say('\n════════════════════════════════════════════');
     say('  ✓ 完成');
+
+    /* ★ P8（阶段 7，2026-10-19）：老表已 DROP，本脚本的写数据逻辑（按老表列）不改——
+         流程改为「临时重建老表 → 灌数据 → 搬迁进统一表 → 清除临时老表」四步闭环。
+         ① 临时重建老表（仅结构，来自 P5 备份 DDL） */
+    say('\n→ 临时重建教学域老表（node scripts/_uni-recreate-legacy.mjs）…');
+    const rec = spawnSync(process.execPath, [resolve(__dirname, '_uni-recreate-legacy.mjs')], {
+      stdio: 'inherit',
+    });
+    if (rec.status !== 0) throw new Error('临时老表重建失败（中止 seed）');
+
+    /* ③ 搬迁进统一表（幂等：先清统一表再搬） */
+    say('\n→ 同步统一表（node scripts/_uni-migrate-p5.mjs）…');
+    const mig = spawnSync(process.execPath, [resolve(__dirname, '_uni-migrate-p5.mjs')], {
+      stdio: 'inherit',
+    });
+    say(
+      mig.status === 0
+        ? '  ✓ 统一表已同步（产品读到的就是本批种子）'
+        : '  ✗ 统一表同步失败 —— 手动补跑：node scripts/_uni-migrate-p5.mjs',
+    );
+
+    /* ④ 清除临时老表，库里恢复「无老表」状态 */
+    say('\n→ 清除临时老表…');
+    const drop = spawnSync(
+      process.execPath,
+      [resolve(__dirname, '_uni-recreate-legacy.mjs'), '--drop'],
+      { stdio: 'inherit' },
+    );
+    say(drop.status === 0 ? '  ✓ 完成' : '  ✗ 清除失败（不影响数据，可手动跑 --drop）');
     say('════════════════════════════════════════════');
     say('\n【演示账号】共 16 个（密码统一 123456）');
     say('  钱守义 qiansy   校长      → ★ 全部 7 个模块（全模块展示）');

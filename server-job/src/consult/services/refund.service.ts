@@ -24,6 +24,8 @@ import {
   FeeType,
   nameOf,
 } from 'shared-types/consult';
+// ★ 2026-10-22 退费来源要用「咨询部门」，不能复用班主任那个值
+import { RefundSourceType } from 'shared-types/finance';
 import type {
   ConsultRefundOrder,
   RefundDeductItem,
@@ -444,7 +446,13 @@ async function reportToFinance(
       refundItems: [FeeType.TRIAL_FEE],
       refundAmount: row.refund_amount,
       refundReason: row.remark || '试学阶段流失退费',
-      sourceType: 1, // 1 = 咨询来源
+      /**
+       * ★ 2026-10-22 来源改成 CONSULT(3)
+       *
+       * 原来传 1（= HEAD_TEACHER「班主任提交」），财务退费列表上全是「班主任提交」，
+       * 与真实来源不符（用户反馈：单据是咨询提交的）。
+       */
+      sourceType: RefundSourceType.CONSULT,
       remark: `咨询模块退费单 ${row.refund_no}（试学 ${row.trial_days} 天，扣减 ¥${centToYuan(row.deduct_total)}）`,
     });
 

@@ -206,6 +206,17 @@ export const classSync = {
     return post('/api/class/student/internal-status', { consultNo, studentStatus });
   },
 
+  /**
+   * ★ 2026-10-22 初高学籍状态同步（与上面大学部那个配对）
+   *
+   * 初高原来没有这个接口，导致「补费到账 → 转正式」只改了大学部学籍，
+   * 初高学生仍挂「试学中」。现在两边都有，调用方两个都调一遍，
+   * 不在对应学段的那一边会返回 updated=0（不是错误）。
+   */
+  jhStudentStatusSync(consultNo: string, studentStatus: number): Promise<SyncOutcome> {
+    return post('/api/class-jh/student/internal-status', { consultNo, studentStatus });
+  },
+
   /** 缴费信息 → 班级只读副本（sms_common.t_class_fee_sync） */
   feeSync(items: Array<Record<string, unknown>>): Promise<SyncOutcome> {
     return post('/api/class/fee/sync', {

@@ -35,6 +35,8 @@ import {
 } from '../services/perm.service';
 import { clearRoleDefaultCache } from '../../utils/rolePageDefaults';
 import { clearRoleActionCache } from '../../utils/roleActionOverlay';
+import { clearRoleGrantedOpsCache } from '../../utils/roleGrantedOps';
+import { clearRoleModuleItemsCache } from '../../utils/roleModuleItems';
 
 /**
  * ★ 2026-10-07 新增：保存权限点后立刻清掉下游缓存
@@ -51,6 +53,10 @@ import { clearRoleActionCache } from '../../utils/roleActionOverlay';
 function invalidateAfterPermChange(): void {
   clearRoleDefaultCache();
   clearRoleActionCache();
+  // ★ 2026-10-22：权限模块自己的按钮判权走了「全量已授权操作码」，
+  //   这份缓存也必须清 —— 否则管理员取消勾选后，按钮要等 15 秒才消失。
+  clearRoleGrantedOpsCache();
+  clearRoleModuleItemsCache();
 }
 
 export const assignRouter = Router();
@@ -174,7 +180,7 @@ const saveSchema = z.object({
 
 assignRouter.put(
   '/save',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:职位权限分配:editPerm'),
   validate(saveSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as { roleId: string; perms: RolePermMap };
@@ -210,7 +216,7 @@ assignRouter.put(
 
 assignRouter.post(
   '/copy',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:职位权限分配:copy'),
   validate(
     z.object({
       targetRoleId: z.string().min(1, '必须传 targetRoleId'),
@@ -268,7 +274,7 @@ assignRouter.post(
 
 assignRouter.post(
   '/reset',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:职位权限分配:resetPrefab'),
   validate(
     z.object({
       roleId: z.string().min(1, '必须传 roleId'),

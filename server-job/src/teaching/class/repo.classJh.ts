@@ -3,7 +3,7 @@
  * ============================================================
  *
  * 【与实训的四处结构差异（本段特有的坑）】
- *   ① **没有 `class_code` 列** → 统一 `classCode` 恒为 null
+ *   ① 班级编号 `class_code`：★ 2026-10-21 已补列（三部门统一必填 + 唯一）
  *   ② **没有 `close_date` 列** → 统一 `closeDate` 恒为 null
  *   ③ 教室列名是 `classroom`（与实训同名，但长度 100 vs 50）
  *   ④ **没有 `project_manager_*` / `employment_teacher_*` / `university_no`**
@@ -21,6 +21,7 @@
 
 import { randomUUID } from 'crypto';
 import { db } from '../../class-jh/utils/db';
+import { assertClassCodeAvailable } from '../shared/classCode';
 import {
   CLASS_STATUS,
   CLASS_STATUS_NAME,
@@ -35,6 +36,8 @@ import type {
 import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
+import { resolvePhaseCodeFromScheme } from '../shared/stageSchemes';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -57,6 +60,8 @@ const PHASE_NAME: Record<number, string> = {
 };
 
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
+/** ★ 2026-10-22：建班 phaseCode 兜底值（显式常量，别靠 Object.keys 顺序） */
+const JH_FIRST_PHASE = 101;
 const GENDER: Record<number, string> = { 0: '未知', 1: '男', 2: '女' };
 
 /**
@@ -80,6 +85,14 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * ★ 2026-10-21：班级编号唯一性校验 → ★ 2026-10-22 改为**三部门全局唯一**
+ *   学号 = LZ + 班级编号 + 序号，跨部门重号会生成同一串学号。见 shared/classCode.ts。
+ */
+async function assertClassCodeUnique(code: string, excludeId?: string): Promise<void> {
+  await assertClassCodeAvailable(code, { stage: STAGE, id: excludeId });
+}
+
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
   const status = Number(r.class_status ?? CLASS_STATUS.OPEN);
   const phase = readPhaseCode(r);
@@ -88,7 +101,7 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     stageName: STAGE_NAME,
     classId: String(r.id),
     className: String(r.class_name ?? ''),
-    classCode: null,
+    classCode: str(r.class_code),
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
@@ -202,7 +215,7 @@ export const repo: ClassRepo = {
     return {
       stage: STAGE,
       stageName: STAGE_NAME,
-      hasClassCode: false,
+      hasClassCode: true,
       hasCloseDate: false,
       hasSealAction: true,
       classroomLabel: '教室',
@@ -215,6 +228,8 @@ export const repo: ClassRepo = {
 
   async list(q, user) {
     const qb = buildBase(q, user);
+    // ★ 统一口径：交棒模型（项目经理/就业老师看不到初高；班主任只看自己带的班）
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) return [];
     // ★ 本班级范围要叠白名单（applyScope 只处理了部门级）
     const ids = await scopedClassIds(user);
     if (ids) {
@@ -254,7 +269,10 @@ export const repo: ClassRepo = {
     };
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
-    set(phaseCodeCol(), body.phaseCode);
+    /* ★ 2026-10-22 与大学部同一口径：只选了方案阶段时按 sort_no 推导阶段码
+     *   （初高方案：预科 101 / 初中部1~3期 102~104 / 高中部1~3期 105~107） */
+    const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
+    set(phaseCodeCol(), body.phaseCode ?? derivedPhaseCode);
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
     set('scheme_id', body.schemeId);
     set('scheme_stage_id', body.schemeStageId);
@@ -268,8 +286,21 @@ export const repo: ClassRepo = {
     set('classroom', body.classroom);
     set('open_date', body.openDate);
     set('remark', body.remark);
+    // ★ 2026-10-21：班级编号（三部门统一必填 + 同表唯一）
+    set('class_code', body.classCode === undefined ? undefined : String(body.classCode ?? '').trim());
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
-    // ★ 这张表没 class_code / close_date / 交棒字段
+
+    /**
+     * ★ 2026-10-22 修：只在**表单传了编号**时才校验
+     *
+     * 原来这里无条件要求「编辑必填」，但班级交接（service.ts handover）也走 save()，
+     * 它的 saveBody 不带 classCode → 交接会被「班级编号必填」拦死。
+     */
+    if (body.classCode !== undefined) {
+      const code = String(body.classCode ?? '').trim();
+      if (!code) throw new Error('班级编号必填');
+      await assertClassCodeUnique(code, body.id);
+    }
 
     if (body.id) {
       if (body.classStatus !== undefined) {
@@ -291,18 +322,28 @@ export const repo: ClassRepo = {
     // ★ 2026-10-15 放宽：班主任/教员允许不选（列已迁改为可空），不再前置拦截。
     //   同部门内名称不重复（用占位名也能过 —— 带秒级时间戳）
     const deptCode = Number(body.deptCode ?? 1);
+    // ★ 2026-10-21：班级编号必填 + 唯一（与实训/就业部同口径）
+    const classCode = String(body.classCode ?? '').trim();
+    if (!classCode) throw new Error('班级编号必填');
+    await assertClassCodeAvailable(classCode);
     const dupName = (await tbl(db, 'sms_class_jh', T, STAGE)
       .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
     if (dupName) throw new Error(`该部门下已有班级叫「${className}」`);
 
     const id = randomUUID();
+    // ★ 2026-10-21 班号：按学部组（J=预科+初中 / T=高中）顺序分配，101 起；
+    //   学号 = LZ + J/T + 班号(3位) + 班内序号(3位, 每班从001独立)，见 classNo.ts
+    // ★ 2026-10-22：兜底值写死 101（预科），不再用 `Object.keys(PHASE_NAME)[0]` ——
+    //   数值键按升序排列，一旦这张表里出现更小的码（如 13 实训），兜底就会静默跑偏。
+    const stage = body.phaseCode ?? JH_FIRST_PHASE;
     await tblIns(db, 'sms_class_jh', T, STAGE, {
       id,
+      class_code: classCode,
       class_name: className, // ★ create 时名称可能被自动占位（见上）
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时给兜底值
-      [phaseCodeCol()]: body.phaseCode ?? Number(Object.keys(PHASE_NAME)[0]),
+      [phaseCodeCol()]: stage,
       dept_code: body.deptCode ?? 1,
       student_count: 0,
       is_deleted: false,
@@ -370,6 +411,9 @@ export const repo: ClassRepo = {
 
   async summary(q, user) {
     const qb = buildBase(q, user);
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) {
+      return { stage: STAGE, stageName: STAGE_NAME, total: 0, openCount: 0, closedCount: 0, graduatingCount: 0, graduatedCount: 0, studentCount: 0 };
+    }
     const ids = await scopedClassIds(user);
     if (ids) {
       if (!ids.length) {

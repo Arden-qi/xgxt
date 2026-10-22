@@ -566,9 +566,29 @@ const suppForm = ref({
   voucherNo: '',
 });
 
-/** 已缴试学费的行才给「补费」入口 */
+/**
+ * 该学生是否已经补过费
+ *
+ * ★ 2026-10-22 用户口径：同一学生**只能补费一次**（不是「一次在途」）。
+ *   已到账的补费也算用掉了机会，否则试学费那一行永远能点补费，学生会被反复补费。
+ *   只有被财务驳回的不算（钱没到账，允许改金额重来）。
+ *
+ * 后端 `createSupplementFee` 有同样的门槛兜底；这里只是把按钮提前藏掉。
+ */
+function alreadySupplemented(studentId: string): boolean {
+  return list.value.some(
+    (o) =>
+      String(o.consultStudentId) === String(studentId) &&
+      Number(o.feeType) === FeeType.SUPPLEMENT &&
+      o.status !== ConsultFeeStatus.REJECTED,
+  );
+}
+
+/** 已缴试学费、且还没补过费的行才给「补费」入口 */
 function canSupplement(row: ConsultFeeOrder): boolean {
-  return Number(row.feeType) === FeeType.TRIAL_FEE && row.status === ConsultFeeStatus.ARRIVED;
+  if (Number(row.feeType) !== FeeType.TRIAL_FEE) return false;
+  if (row.status !== ConsultFeeStatus.ARRIVED) return false;
+  return !alreadySupplemented(row.consultStudentId);
 }
 
 async function openSupplement(row: ConsultFeeOrder) {
@@ -1090,7 +1110,7 @@ onMounted(load);
             <!--
               ★ 2026-10-20 补费（用户口径）：
                 只对「已缴试学费」的行开放 —— 试学结束后补缴尾款 / 补差额，
-                金额老师自定义。补费单单独记「补费」，不占用学费额度。
+                金额老师自定义。补费单单独记「补学费」，不占用学费额度。
             -->
             <el-button v-if="canSupplement(row)" link type="success" @click="openSupplement(row)">
               补费
@@ -1367,7 +1387,7 @@ onMounted(load);
       <el-alert type="success" :closable="false" show-icon class="mb">
         <template #title>
           补费金额<strong>由老师自定义</strong>（按实际收到的钱填，可含优惠）。
-          补费单在列表里单独显示为「补费」，不占用学费额度；
+          补费单在列表里单独显示为「补学费」，不占用学费额度；
           财务确认到账后，试学中的学员会自动转为正式在读。
         </template>
       </el-alert>

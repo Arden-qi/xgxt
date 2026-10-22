@@ -29,7 +29,32 @@
  *     | 市场咨询 |  5  | MODULES.consult                         |
  *     | 财务管理 |  6  | MODULES.finance（顺序按菜单：冻结在退费前）  |
  *     | 权限管理 |  7  | MODULES.perm                            |
- *     | 教学管理 | 15  | MENU（五学段合并后的 15 项）               |
+ *     | 教学管理 | 13  | MENU（五学段合并后的 13 项）               |
+ *
+ * ⚠️⚠️ 2026-10-22 用户要求：「页面管理只保留侧栏菜单里有的页面，板块归属也按菜单」
+ *   上一版台账仍是 34 页，比菜单多两页，用户截图核对后指出对不上：
+ *     · 「班级交接 /class-transfer」→ 2026-10-19 就已从菜单摘掉（入口改进班级管理操作列），
+ *        台账漏删 → 本次删掉；
+ *     · 「楼栋设置 /class-jh/building」→ 用户按菜单截图确认不要（功能仍在系统设置页签里）→ 本次删掉；
+ *     · 「催费 / 缴费」标题与菜单（「催费」）不一致 → 统一成「催费」。
+ *   现在台账 = 菜单 = **5 板块 33 页**，两边逐条对得上。
+ *
+ * ⚠️⚠️ 2026-10-22（第二次核对）用户又指出「系统设置」也不在图里，要求去掉：
+ *     · 「系统设置 /class-jh/setting」（classjh:setting:view）→ 本次删掉。
+ *   台账 = **5 板块 32 页**（教学管理 13 页）。
+ *
+ *   ⚠️ 删除口径要说清（别踩反）：
+ *      · 本文件 = 「页面管理」列表的数据源，删掉这条 → 列表里不再出现该页，这是主要目的；
+ *      · **但只删这里并不会让侧栏菜单消失** —— 前端 `store/pageConfig.ts` 的
+ *        `pageEnabled()` 有条硬约定「台账里没登记过的 path 一律放行」，
+ *        删行之后 /class-jh/setting 反而变成「不受台账管」。所以
+ *        `web-job/src/config/menu.ts` 里那条菜单项也一并删了，两个文件必须同增同删；
+ *      · 路由 /#/class-jh/setting 与 /api/teaching/setting/* 保留，功能没删。
+ *
+ *   ⚠️ 连带影响（已知并接受）：楼栋设置原本是系统设置页的第 2 个页签，
+ *      现在这一页没有 UI 入口了（路由 /class-jh/building 仍在，需直链）。
+ *      页内配置项（阶段方案 / 出勤达标线 / 催费提醒天数 / 封班可转入类型）
+ *      数据与接口都保留，只是暂时无从配置。若后续需要，可把这页挪到别处做入口。
  *
  *   合并后旧的 4 个板块 key（job / edu / class / class-jh）在台账里**不再出现**
  *   —— `syncRegistry()` 会把库里多出来的行逻辑删除（不物理删，可回滚）。
@@ -184,14 +209,14 @@ const PERM: RegistryBoard = {
 /* ============================================================
  * 4. 教学管理（★ 2026-10-20 由 job / edu / class / class-jh 四板块合并）
  *
- *   侧栏现在只有一个「教学管理」分组，15 项（初高 / 大学 / 实训 / 就业 / 教务）。
+ *   侧栏现在只有一个「教学管理」分组，13 项（初高 / 大学 / 实训 / 就业 / 教务）。
  *   顺序 = `web-job/src/config/menu.ts` 的 MENU 顺序 = 用户截图里的菜单顺序。
  * ============================================================ */
 const TEACH: RegistryBoard = {
   moduleKey: 'teach',
   moduleName: '教学管理',
   moduleIcon: '🎓',
-  moduleDesc: '初高 · 大学 · 实训 · 就业 · 教务（五学段合一，15 页）',
+  moduleDesc: '初高 · 大学 · 实训 · 就业 · 教务（五学段合一，13 页）',
   legacy: true,
   sortNo: 5,
   pages: [
@@ -209,13 +234,10 @@ const TEACH: RegistryBoard = {
       pageCodes: ['classjh:classInfo:view', 'class:info:view', 'job:class:view'],
       remark: '班级主档与生命周期：建班、封班、阶段推进、师资分配',
     },
-    {
-      key: 'classTransfer',
-      title: '班级交接',
-      path: '/class-transfer',
-      pageCode: 'job:classTransfer:view',
-      remark: '换班交接：整班换负责人（班主任/教员/助教），学生不动，留快照',
-    },
+    /* ⚠️ 2026-10-22：删掉「班级交接（/class-transfer）」这一行。
+     *   它 2026-10-19 就从侧栏菜单里摘掉了（入口改进「班级管理」操作列的【交接】按钮），
+     *   但台账里一直留着 → 页面管理比菜单多出一页（用户截图里 35 页 vs 菜单 33 项）。
+     *   路由 /class-transfer 与后端 /api/job/class-transfer 都还在，功能没丢。 */
     {
       key: 'consult',
       title: '待接收学员',
@@ -253,7 +275,7 @@ const TEACH: RegistryBoard = {
     },
     {
       key: 'fee',
-      title: '催费 / 缴费',
+      title: '催费',
       path: '/teaching/fee',
       pageCodes: ['classjh:fee:view', 'class:urge:view', 'job:feeCall:view', 'edu:fee:view'],
       remark: '各学段费用催办与缴费台账',
@@ -267,7 +289,7 @@ const TEACH: RegistryBoard = {
     },
     {
       key: 'approval',
-      title: '休学 / 退学审批',
+      title: '休学/退学审批',
       path: '/teaching/approval',
       pageCodes: ['classjh:approval:view', 'class:suspend:view', 'job:suspendApproval:view'],
       remark: '休学/复学 1 步，退学 2 步（学管 → 校长）',
@@ -293,13 +315,18 @@ const TEACH: RegistryBoard = {
       pageCode: 'job:statistics:view',
       remark: '就业率 / offer 数 / 人均投递 + KPI 达成',
     },
-    {
-      key: 'setting',
-      title: '系统设置',
-      path: '/class-jh/setting',
-      pageCode: 'classjh:setting:view',
-      remark: '出勤达标线、催费提醒天数、封班可转入类型等',
-    },
+    /* ⚠️ 2026-10-22（第二次核对）：删掉「系统设置（/class-jh/setting）」。
+     *   用户指出参考图里没有这个页面，要求「不要这个」。
+     *   ⚠️ 这是一条**有副作用**的删除：页面台账是权限「三层收口」的第 ① 层
+     *      （板块有没有这个页面），删掉后该页面不再下发给任何角色，
+     *      侧栏菜单的 `pageEnabled()` 会判 false，「系统设置」入口随之隐藏。
+     *      页内配置（阶段方案 / 出勤达标线 / 催费提醒天数 / 封班可转入类型 /
+     *      楼栋设置页签）数据与后端接口都在，路由 /#/class-jh/setting 也在，
+     *      只是不再作为「页面管理」里的一项、也不再占侧栏菜单。 */
+    /* ⚠️ 2026-10-22：删掉「楼栋设置（/class-jh/building）」独立页。
+     *   用户按侧栏菜单（截图只有到「系统设置」为止）要求「只有菜单里有的页面才出现在系统里」。
+     *   功能没丢：楼栋字典仍在「系统设置 → 楼栋设置」页签里（SettingList.vue 的第 2 个页签），
+     *   路由与 /api/teaching/building/* 都保留，只是不再单独占一个菜单项 / 台账页面。 */
   ],
 };
 
@@ -316,7 +343,7 @@ export const PAGE_REGISTRY: RegistryBoard[] = [
   TEACH,
 ];
 
-/** 全部页面总数（当前 5 板块 34 页） */
+/** 全部页面总数（当前 5 板块 32 页） */
 export const PAGE_REGISTRY_TOTAL = PAGE_REGISTRY.reduce((n, b) => n + b.pages.length, 0);
 
 /** 拍平：全部页面的 path（用于「这个 path 有没有被台账管」的判定） */

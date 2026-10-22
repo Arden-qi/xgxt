@@ -21,11 +21,15 @@ import {
   FEE_SOURCE_MODULE,
   VOUCHER_REUSABLE_FEE_TYPES,
 } from 'shared-types/finance';
+// ★ 2026-10-21 财务核对后要回写咨询侧收款单状态（跨库同进程，全限定名更新）
+import { ConsultFeeStatus } from 'shared-types/consult';
 import { db, knexRaw } from '../utils/db';
 import { BizError } from '../middleware/errorHandler';
 import { nextBillNoForPay } from '../utils/orderNo';
 import { getStandard, isVoucherReusable, expectedSourceOf } from './fee-standard.service';
 import { findArchiveStudent } from './student-archive';
+// ★ 2026-10-22 核对到账后立即回推咨询侧（推进学生状态 + 同步教学学籍）
+import { remotePost } from '../../shared/http';
 
 export const FEE_TABLE = 't_finance_fee';
 export const BILL_TABLE = 't_finance_bill';
@@ -55,6 +59,24 @@ export function toTimeStr(v: any): string | undefined {
 }
 
 /**
+ * ★ 2026-10-22 咨询阶段的「临时学号」（ZX + 数字）
+ *
+ * 业务口径（用户反馈）：
+ *   学生还没分班时，交试学费 / 正式学费都还没有真实学号；
+ *   咨询侧为了让「财务建单学号必填」走得通，先塞了个 ZX 临时号占位。
+ *   但财务在缴费核对台看到的学号应该是空的（前端显示「—」），
+ *   分班建档后由 applyArchiveToFeeRows 把档案里的真实学号覆盖上来。
+ *
+ * ⚠️ 只做「展示口径」过滤，不动库里的值：
+ *   student_no 是财务侧对账 / 凭证共用的键，抹掉会连累其它判断。
+ */
+const TEMP_STUDENT_NO_RE = /^ZX\d+$/i;
+
+export function isTempStudentNo(no?: string | null): boolean {
+  return !!no && TEMP_STUDENT_NO_RE.test(String(no).trim());
+}
+
+/**
  * 缴费行 → 前端契约格式
  *
  * ⚠️ 关键约定：
@@ -66,7 +88,8 @@ export function toFeeListItem(r: any) {
   return {
     id: r.id,
     studentId: r.student_id,
-    studentNo: r.student_no,
+    // ★ 2026-10-22 未分班（只有 ZX 临时号）→ 学号留空，前端显示「—」
+    studentNo: isTempStudentNo(r.student_no) ? '' : r.student_no,
     studentName: r.student_name,
     classId: r.class_id ?? undefined,
     className: r.class_name ?? undefined,
@@ -554,11 +577,66 @@ export async function verifyFee(
       update_by: operator.userId,
     });
 
+    /**
+     * ★ 2026-10-21 回写咨询侧收款单（财务核对 → 咨询「已到账」）
+     *
+     * 背景（E2E 实测发现的 P0 缺陷）：核对成功只改了财务侧，
+     *   咨询侧收款单永远停在「待财务确认」→ 分班入档的前置校验
+     *   （consult 单 status=ARRIVED）永远不满足，「缴费→分班」主链路断裂。
+     *
+     * 做法：两个库在同一个服务进程、同一个 MySQL 实例、同一个连接里，
+     *   直接用全限定名更新 sms_consult（与教务 sms_edu 跨库同一套路）。
+     *   按 finance_fee_id 反查（不是 consult_student_id）—— 一张财务单
+     *   只对应一张咨询单，反查最准；查不到（非咨询来源）时静默跳过。
+     */
+    await t('sms_consult.t_consult_fee_order')
+      .where({ finance_fee_id: id })
+      .update({
+        status: ConsultFeeStatus.ARRIVED,
+        update_time: now,
+        update_by: operator.userId,
+      });
+
     return billNo;
   };
 
   // 支持外部传入事务（批量核对时共用一个事务）
-  return trx ? run(trx) : db.transaction(run);
+  const billNo = trx ? await run(trx) : await db.transaction(run);
+
+  /**
+   * ★ 2026-10-22 立刻回推咨询侧（推进学生状态 + 同步教学学籍）
+   *
+   * 必须放在事务【外】：咨询侧处理时会回查财务单的 pay_status，
+   * 事务还没提交的话它读到旧值，会被判成「还没核对」而不推进。
+   *
+   * 非阻断：核对已经入账成功，回推失败最多让状态晚一点推进（列表刷新会补），
+   * 不能因此把已经核好的账回滚。
+   */
+  await notifyConsultFeeArrived(id);
+
+  return billNo;
+}
+
+/**
+ * 回推咨询侧「这张缴费单已到账」
+ *
+ * 走内部令牌通道（财务侧没有咨询岗位的登录态）。
+ * 对方按 financeFeeId 反查收款单 → 推进学生状态 → 补学费时同步教学学籍为「正式在读」。
+ */
+async function notifyConsultFeeArrived(financeFeeId: string): Promise<void> {
+  try {
+    const token = String(process.env.INTERNAL_TOKEN || '');
+    if (!token) return; // 没配内部令牌就当没这回事，不要让核对报错
+    await remotePost(
+      'consult',
+      '/api/consult/student/internal/fee-arrived',
+      { financeFeeId },
+      { headers: { 'x-internal-token': token }, timeout: 8000 },
+    );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(`[finance→consult] 到账回推失败（不影响核对，列表刷新会补）：${(e as Error).message}`);
+  }
 }
 
 /** 财务打回（凭证有问题，退回班主任重新上传） */
@@ -587,6 +665,11 @@ export async function rejectFee(
     update_time: new Date(),
     update_by: operator.userId,
   });
+
+  // ★ 2026-10-21 同步咨询侧为「已驳回」（与 verifyFee 的回写对称，非咨询来源时静默跳过）
+  await db('sms_consult.t_consult_fee_order')
+    .where({ finance_fee_id: id })
+    .update({ status: ConsultFeeStatus.REJECTED, update_time: new Date(), update_by: operator.userId });
 }
 
 /**
@@ -762,7 +845,8 @@ export async function findVoucherSharers(
   return rows.map((r: any) => ({
     id: r.id,
     studentName: r.student_name,
-    studentNo: r.student_no,
+    // ★ 2026-10-22 与列表同口径：未分班的 ZX 临时号不展示（前端显示「—」）
+    studentNo: isTempStudentNo(r.student_no) ? '' : r.student_no,
     feeTypeName: FEE_TYPE_NAME[r.fee_type] || '',
   }));
 }
@@ -878,16 +962,21 @@ export async function addFee(
    * ★ 2026-10-20：学生属性以学生档案为准（档案里能查到这个人时）
    *
    * 用户口径：「学生档案有的字段按学生档案的数据走」。
-   * 上游（咨询/教务）传过来的学号/姓名/班级可能是建单那一刻的快照，
+   * 上游（咨询/教务）传过来的姓名/班级可能是建单那一刻的快照，
    * 学生后来换班或改名就会脱节。只要档案里能对上（先按 id、再按学号），
    * 落库一律用档案当前值，不信任调用方传的那几个字段。
    *
    * ⚠️ 档案里查不到时**保持原样**：报名前的咨询收费单，学生还没进学籍档案，
    *    这是正常业务状态，不能因此拒绝建单。
+   *
+   * ★ 2026-10-22 用户口径：**学号不再自动填充**
+   *   上游（咨询/教务）传什么学号就用什么，即使学生档案里能查到更新的学号，
+   *   也不覆盖。财务单据的学号必须与上游建单一致，否则「单据学号」与
+   *   「来源单学号」会对不上，对账时无法按学号回查。
+   *   传空则落库为空串（见下面 insert 的 student_no），不做任何推断。
    */
   const archived = await findArchiveStudent(body.studentId, body.studentNo);
   if (archived) {
-    if (archived.no) body.studentNo = archived.no;
     if (archived.name) body.studentName = archived.name;
     if (archived.classId) body.classId = archived.classId;
     if (archived.className) body.className = archived.className;
@@ -934,7 +1023,7 @@ export async function addFee(
     create_by: operator.userId,
     is_deleted: false,
     student_id: body.studentId,
-    student_no: body.studentNo,
+    student_no: body.studentNo ?? '',
     student_name: body.studentName,
     class_id: body.classId ?? null,
     class_name: body.className ?? null,
