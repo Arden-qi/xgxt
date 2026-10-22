@@ -2,15 +2,23 @@
 /**
  * 系统设置页
  *
- * ★ 2026-10-22：页面只剩「阶段方案」一个页签 ——
+ * ★ 2026-10-22：页面只留「楼栋设置」「阶段方案」两个页签 ——
  *   原来的「系统设置（KV）」和「操作日志」两个页签已按需求删除。
  *   · 设置项（出勤达标线、催费窗口天数等）仍保存在后端 t_class_setting 里，
  *     只是不再开界面入口；需要改值时改库或走接口 PUT /api/class-jh/setting/update。
  *   · 操作日志仍在后端写入（utils/opLog.ts → t_class_op_log），
  *     要查全局留痕请走「权限管理 · 操作日志」（/perm/log）。
  *
- * 阶段方案 = 方案名称 + 所属部门 + N 个阶段（阶段名称 + 学制月数），
- * ★ 2026-10-16 由「阶段字典」升级而来：
+ * ★ 楼栋设置（2026-10-16 新增）：宿舍楼栋字典，和「教学管理 → 宿舍管理」
+ *   的楼栋下拉是同一份数据（sms_common.t_dorm_building）。
+ *   这里加一栋 → 宿舍管理的楼栋下拉立刻多一项，不需要改任何代码。
+ *
+ * ★ 2026-10-20 楼栋设置抽成公共面板 BuildingSettingPanel.vue：
+ *   独立的「教学管理 → 楼栋设置」页（/class-jh/building，单独授权给教务老师）
+ *   与本页页签渲染同一个组件，不再复制两份逻辑。
+ *
+ * ★ 阶段方案（2026-10-16 由「阶段字典」升级）：
+ *   一个方案 = 方案名称 + 所属部门 + N 个阶段（阶段名称 + 学制月数）；
  *   例：方案一 → 一阶段 学制2月 / 二阶段 学制2月 / 三阶段 学制2月。
  *   班级新增/编辑里的「阶段方案 / 阶段」两个下拉即取这里的数据。
  */
@@ -27,6 +35,10 @@ import {
   deleteStageScheme,
 } from '@/class-jh/api/setting';
 import { dash } from '@/class-jh/utils/format';
+/** ★ 2026-10-20：楼栋设置抽成公共面板，系统设置页与独立「楼栋设置」页共用 */
+import BuildingSettingPanel from '@/class-jh/components/setting/BuildingSettingPanel.vue';
+
+const activeTab = ref('building');
 
 /* ================= 阶段方案 ================= */
 const schemeLoading = ref(false);
@@ -171,7 +183,11 @@ onMounted(() => {
 
 <template>
   <div class="page-container">
-    <el-tabs model-value="stageScheme" type="border-card">
+    <el-tabs v-model="activeTab" type="border-card">
+      <!-- 楼栋设置（公共面板：与独立「楼栋设置」页完全相同） -->
+      <el-tab-pane label="楼栋设置" name="building">
+        <BuildingSettingPanel />
+      </el-tab-pane>
       <!-- 阶段方案（★ 2026-10-16 由「阶段字典」升级：一个方案可含多个阶段） -->
       <el-tab-pane label="阶段方案" name="stageScheme">
         <div class="toolbar">
@@ -249,6 +265,14 @@ onMounted(() => {
 .toolbar {
   margin-bottom: 12px;
 }
+/* 楼栋列表里「未配置 / 0」的弱化显示 */
+.muted {
+  color: #c0c4cc;
+}
+.ok {
+  color: #303133;
+}
+
 /* 新增/编辑方案弹窗里的「阶段明细」 */
 .scheme-stages {
   width: 100%;

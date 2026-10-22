@@ -73,9 +73,13 @@ import { teachingRefundRouter } from './teaching/refund/route';
 import { teachingLeaveRouter } from './teaching/leave/route';
 import { teachingStudentRouter } from './teaching/student/route';
 import { teachingClassRouter } from './teaching/class/route';
+import { teachingTransferRouter } from './teaching/class/transfer.route';
 import { teachingDormRouter } from './teaching/dorm/route';
 // ★ 催费「批量上传到财务」（三部门统一，2026-10-22）
 import { teachingFeeRouter } from './teaching/fee/transfer.route';
+import { teachingDormAllocateRouter } from './teaching/dorm/allocate.route';
+// ★ 宿舍楼栋设置（系统设置页与宿舍管理共用的楼栋字典）
+import { teachingBuildingRouter } from './teaching/dorm/building.route';
 import { denyReadOnlyAdmin } from './teaching/shared/readOnlyGuard';
 
 /* ============================================================
@@ -104,6 +108,8 @@ import portalAccountRouter from './portal/routes/account.route';
 // ---- 市场咨询 ----
 import { authMiddleware as consultAuth, consultPermGate } from './consult/middleware/auth';
 import consultStudentRouter from './consult/routes/student.route';
+/** ★ 2026-10-20 试学闭环：咨询侧服务间内部接口（只认 x-internal-token） */
+import { consultInternalRouter } from './consult/routes/internal.route';
 import consultFeeRouter from './consult/routes/fee.route';
 /* ★ 2026-10-16 分期付款路由，挂在 /api/consult/fee/plan 下 */
 import consultInstallmentRouter from './consult/routes/installment.route';
@@ -147,8 +153,11 @@ const app = express();
 // ============================================================
 
 app.use(cors());
-app.use(express.json({ limit: '20mb' }));          // 支持 JSON 请求体
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// ★ 2026-10-16：复盘「上传录音」上限提到 50MB。
+//   音频以 base64 dataURL 走 JSON body 提交 → 50MB 文件 ≈ 66.7MB 请求体，
+//   原来 20mb 会被 body-parser 直接拒（PayloadTooLargeError）。
+app.use(express.json({ limit: '100mb' }));         // 支持 JSON 请求体
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 // 请求日志（开发阶段方便看请求有没有进来）
 app.use((req, _res, next) => {
@@ -441,6 +450,16 @@ app.use('/api/portal/account', portalAccountRouter);
  *   ⚠️ 它只对「权限树里被管理员显式撤销过的动作」生效，其余一律放行
  *      （差异存储，与班级 / 初高 / 财务三模块同一口径）。
  */
+/**
+ * ★ 2026-10-20 试学闭环：服务间内部接口（/api/consult/student/internal/*）
+ *
+ * 为什么必须挂在登录态路由【之前】：
+ *   班主任属于班级模块，他的 token 在咨询侧解不出咨询岗位，走 consultAuth 会 401。
+ *   而「试学结束由班主任发起补费」「退学通过后回写咨询状态」这两个动作必须跨模块调用。
+ *
+ * 鉴权由 internal.route.ts 自己校验 x-internal-token（见文件头注释）。
+ */
+app.use('/api/consult/student/internal', consultInternalRouter);
 app.use('/api/consult/student', consultAuth, consultPermGate, consultStudentRouter);
 app.use('/api/consult/fee', consultAuth, consultPermGate, consultFeeRouter);
 app.use('/api/consult/fee/plan', consultAuth, consultPermGate, consultInstallmentRouter);
@@ -600,12 +619,27 @@ app.use(
 );
 
 // ★ 考试管理（第二个合并的业务域）—— 结构完全同构
+//   ★ 2026-10-15 补 `job:examScore:view`：
+//     成绩管理页（/teaching/score）要给「考试下拉」读考试列表，调的是本域
+//     `GET /api/teaching/exam/list`。但项目经理/班主任/教员/助教手里只有**成绩码**
+//     `job:examScore:view`，没有**考试管理码** `job:exam:view`（那个是校长专用）——
+//     于是他们一进成绩管理页就弹「您没有该操作的权限」（实测）。
+//     这与 examScore.route.ts 头部记载的历史坑**完全同源**（当年靠单开 exam-options 规避，
+//     第 2 期统一接口后规避失效，老 bug 复现）。
+//     业务上「能看成绩 → 就必须能读到该学段的考试列表来选考试」，故把成绩码并入白名单。
+//     ⚠️ 这只是放宽「进本域」；真正的数据范围仍由 service.ts 的 visibleStages/assertStageView
+//        按学段再校验一次，读不到非本学段的考试。
 app.use(
   '/api/teaching/exam',
   authMiddleware,
   denyReadOnlyAdmin,
   denyApprovalOnlyWrite,
-  requireAnyPage(['classjh:exam:view', 'class:exam:view', 'job:exam:view']),
+  requireAnyPage([
+    'classjh:exam:view',
+    'class:exam:view',
+    'job:exam:view',
+    'job:examScore:view',
+  ]),
   teachingExamRouter,
 );
 
@@ -659,19 +693,16 @@ app.use(
   teachingLeaveRouter,
 );
 
-// ★ 学生档案（第六个合并的业务域）—— ★ 唯一有 **4 个学段** 的域（多一个「教务」）
-//   权限码：classjh:student:view / class:student:view / job:empArchive:view / edu:student:view
+// ★ 学生档案（第六个合并的业务域）—— 三个学段：初高 / 大学 / 就业部
+//   ★ 2026-10-21 用户口径：学生档案界面删除「就业」「教务」两个入口
+//     （edu:student:view 从这里摘掉 —— 教务模块自己的页面还在，只是不再进学生档案）
+//   权限码：classjh:student:view / class:student:view / job:empArchive:view
 app.use(
   '/api/teaching/student',
   authMiddleware,
   denyReadOnlyAdmin,
   denyApprovalOnlyWrite,
-  requireAnyPage([
-    'classjh:student:view',
-    'class:student:view',
-    'job:empArchive:view',
-    'edu:student:view',
-  ]),
+  requireAnyPage(['classjh:student:view', 'class:student:view', 'job:empArchive:view']),
   teachingStudentRouter,
 );
 
@@ -688,14 +719,77 @@ app.use(
   teachingClassRouter,
 );
 
+// ★ 学生换班（末班 / 升班）
+//   ⚠️ 入口在「成绩管理」页，如果挂在 /api/teaching/class 下，
+//      只有成绩权限（class:grade:view）的老师会被班级查看权限拦成 403。
+//      这里单独一个前缀，两组权限码都放行。
+app.use(
+  '/api/teaching/class-transfer',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage([
+    'classjh:score:view',
+    'class:grade:view',
+    'job:examScore:view',
+    'classjh:classInfo:view',
+    'class:info:view',
+    'job:class:view',
+  ]),
+  teachingTransferRouter,
+);
+
+  /**
+   * ★ 班级宿舍分派（宿舍管理的子页面）
+   *
+   * 必须挂在 `/api/teaching/dorm` **之前** —— 后者会把 `/allocate/*`
+   * 一并吃进 teachingDormRouter（没有匹配路由时才 next() 到后面），
+   * 提前挂载可以避免依赖 fallthrough 的隐式行为。
+   *
+   * 权限码与宿舍域完全一致（教务老师已有 classjh:dorm:view），不新增权限点。
+   */
   app.use(
-    '/api/teaching/dorm',
-    authMiddleware,
-    denyReadOnlyAdmin,
-    denyApprovalOnlyWrite,
-    requireAnyPage(['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view']),
-    teachingDormRouter,
-  );
+  '/api/teaching/dorm/allocate',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage(['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view']),
+  teachingDormAllocateRouter,
+);
+
+  app.use(
+  '/api/teaching/dorm',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage(['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view']),
+  teachingDormRouter,
+);
+
+  /**
+   * ★ 宿舍楼栋设置 · /api/teaching/building/*
+   *
+   * 【为什么权限码是 4 个而不是 dorm 那 3 个】
+   *   两个入口共用这一份字典：
+   *     ① 教学管理 → 系统设置 → 楼栋设置页签   → classjh:setting:view
+   *     ② 教学管理 → 宿舍管理 → 楼栋下拉       → classjh/class/job 的 dorm:view
+   *   只挂 ① 会让「有宿舍权限、没设置权限」的用户拉不到下拉；
+   *   只挂 ② 会让「有设置权限、没宿舍权限」的用户打不开设置页。
+   *   → 两边都放行：看得见楼栋的人就能读，写操作另有只读管理员/学管主任两道闸。
+   */
+  app.use(
+  '/api/teaching/building',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  denyApprovalOnlyWrite,
+  requireAnyPage([
+    'classjh:setting:view',
+    'classjh:dorm:view',
+    'class:dorm:view',
+    'job:dorm:view',
+  ]),
+  teachingBuildingRouter,
+);
 
 // ============================================================
 // 404 处理（放在所有路由之后）

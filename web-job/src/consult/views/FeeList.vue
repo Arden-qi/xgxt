@@ -15,6 +15,7 @@ import type {
   ConsultFeeStats,
   ConsultInstallmentPlan,
   ConsultInstallmentItem,
+  ConsultSupplementPlan,
   FinanceStandardView,
   ConsultStudentListItem,
 } from 'shared-types/consult';
@@ -36,6 +37,9 @@ import {
   cancelFeeOrders,
   fetchStandardBatch,
   fetchStudentList,
+  // ★ 2026-10-20 补费（试学转正尾款 / 差额补收）
+  createSupplementFee,
+  fetchSupplementPlan,
   // ★ 2026-10-16 分期付款
   createInstallment,
   payInstallmentStage,
@@ -538,6 +542,117 @@ async function submitCreate() {
  * 凭证随建单一起落库，不会再出现「单建了、凭证没绑上」的中间态。
  */
 
+/* ============================================================
+ * ★ 2026-10-20 补费（试学转正尾款 / 差额补收，金额自定义）
+ *
+ * 用户口径：「交了试学费的，后边在收款与缴费管理那儿操作里面
+ *            添加一个补费功能，补费金额自定义。」
+ *
+ * 入口只挂在【试学费且已到账】那一行：还没交过试学费的学生不显示。
+ * 金额默认带出「全款缺口」，老师可以改成实际收到的数（可能有优惠/只补一部分）。
+ * ============================================================ */
+
+const suppVisible = ref(false);
+const suppRow = ref<ConsultFeeOrder | null>(null);
+/** 全款缺口预览（调 /supplement-plan，失败不挡操作） */
+const suppPlan = ref<ConsultSupplementPlan | null>(null);
+const suppLoading = ref(false);
+const suppSaving = ref(false);
+const suppForm = ref({
+  amountYuan: undefined as number | undefined,
+  payMethod: '',
+  remark: '试学转正补缴尾款',
+  dataUrl: '',
+  voucherNo: '',
+});
+
+/** 已缴试学费的行才给「补费」入口 */
+function canSupplement(row: ConsultFeeOrder): boolean {
+  return Number(row.feeType) === FeeType.TRIAL_FEE && row.status === ConsultFeeStatus.ARRIVED;
+}
+
+async function openSupplement(row: ConsultFeeOrder) {
+  suppRow.value = row;
+  suppPlan.value = null;
+  suppForm.value = {
+    amountYuan: undefined,
+    payMethod: '',
+    remark: '试学转正补缴尾款',
+    dataUrl: '',
+    voucherNo: '',
+  };
+  suppVisible.value = true;
+
+  suppLoading.value = true;
+  try {
+    const plan = await fetchSupplementPlan(row.consultStudentId);
+    suppPlan.value = plan;
+    // 默认带出缺口，老师可改（缺口为 0 时留空，让他自己填）
+    const gap = Number(plan.missingAmount || 0) / 100;
+    if (gap > 0) suppForm.value.amountYuan = gap;
+  } catch {
+    // 预览失败不影响补费：金额由老师手填
+  } finally {
+    suppLoading.value = false;
+  }
+}
+
+function onSuppFileChange(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) {
+    ElMessage.error('图片不能超过 5MB');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    suppForm.value.dataUrl = String(reader.result || '');
+  };
+  reader.readAsDataURL(file);
+}
+
+async function submitSupplement() {
+  const row = suppRow.value;
+  if (!row) return;
+
+  const yuan = Number(suppForm.value.amountYuan);
+  if (!Number.isFinite(yuan) || yuan <= 0) {
+    ElMessage.warning('请填写补费金额（需大于 0）');
+    return;
+  }
+  if (!suppForm.value.payMethod) {
+    ElMessage.warning('请选择缴费方式');
+    return;
+  }
+  if (!suppForm.value.dataUrl) {
+    ElMessage.warning('请先上传缴费凭证截图');
+    return;
+  }
+
+  suppSaving.value = true;
+  try {
+    // 先传图拿 url，再建单 —— 与「发起收费」同一顺序，凭证随单落库
+    const up = await uploadFile(suppForm.value.dataUrl, 'voucher');
+    const res = await createSupplementFee({
+      consultStudentId: row.consultStudentId,
+      amount: Math.round(yuan * 100),
+      voucherUrl: up.url,
+      voucherNo: suppForm.value.voucherNo || undefined,
+      payMethod: suppForm.value.payMethod,
+      remark: suppForm.value.remark || undefined,
+    });
+
+    ElMessage.success(res ? `补费 ¥${yuan.toFixed(2)} 已发起，等待财务确认到账` : '补费已发起');
+    suppVisible.value = false;
+    load();
+  } catch (err: any) {
+    ElMessage.error(err?.message || '发起补费失败');
+  } finally {
+    suppSaving.value = false;
+  }
+}
+
 /* ---------- 上传凭证 ---------- */
 
 /**
@@ -968,10 +1083,18 @@ onMounted(load);
 
         <el-table-column prop="lastAction" label="最近操作" min-width="200" show-overflow-tooltip />
 
-        <el-table-column label="操作" width="320" fixed="right">
+        <el-table-column label="操作" width="370" fixed="right">
           <template #default="{ row }">
             <!-- ★ 2026-10-15 任何状态都能「查看」：详情里含缴费截图，点图可放大 -->
             <el-button link type="primary" @click="openDetail(row)">查看</el-button>
+            <!--
+              ★ 2026-10-20 补费（用户口径）：
+                只对「已缴试学费」的行开放 —— 试学结束后补缴尾款 / 补差额，
+                金额老师自定义。补费单单独记「补学费」，不占用学费额度。
+            -->
+            <el-button v-if="canSupplement(row)" link type="success" @click="openSupplement(row)">
+              补费
+            </el-button>
             <el-button
               v-if="row.status === ConsultFeeStatus.REJECTED"
               link
@@ -1236,6 +1359,91 @@ onMounted(load);
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
         <el-button type="primary" :loading="creating" @click="submitCreate">确认发起</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ============ ★ 2026-10-20 补费（试学转正尾款 / 差额补收，金额自定义） ============ -->
+    <el-dialog v-model="suppVisible" title="补费" width="620px">
+      <el-alert type="success" :closable="false" show-icon class="mb">
+        <template #title>
+          补费金额<strong>由老师自定义</strong>（按实际收到的钱填，可含优惠）。
+          补费单在列表里单独显示为「补学费」，不占用学费额度；
+          财务确认到账后，试学中的学员会自动转为正式在读。
+        </template>
+      </el-alert>
+
+      <el-descriptions v-if="suppRow" :column="2" border size="small" class="mb">
+        <el-descriptions-item label="学生">{{ suppRow.studentName }}</el-descriptions-item>
+        <el-descriptions-item label="班级">{{ suppRow.className || '未分班' }}</el-descriptions-item>
+        <el-descriptions-item label="已缴试学费">¥{{ suppRow.amountYuan }}</el-descriptions-item>
+        <el-descriptions-item label="试学费单号">{{ suppRow.orderNo }}</el-descriptions-item>
+        <template v-if="suppPlan">
+          <el-descriptions-item label="全款应缴">
+            ¥{{ (suppPlan.totalAmount / 100).toFixed(2) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="全款已到账">
+            ¥{{ (suppPlan.arrivedAmount / 100).toFixed(2) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="还差（参考）" :span="2">
+            <b class="amount-strong">¥{{ (suppPlan.missingAmount / 100).toFixed(2) }}</b>
+            <span v-if="suppPlan.missing.length" class="fee-note">
+              （{{ suppPlan.missing.map((t: number) => FEE_TYPE_NAME[t] || t).join('、') }}）
+            </span>
+            <span v-if="suppPlan.inFlightAmount" class="fee-note">
+              另有 ¥{{ (suppPlan.inFlightAmount / 100).toFixed(2) }} 在途，等财务确认
+            </span>
+          </el-descriptions-item>
+        </template>
+      </el-descriptions>
+      <div v-if="suppPlan" class="stu-sub" style="margin: -4px 0 12px">
+        全款 = 学费 + 住宿费 + 餐费 + 保险费；试学费单独收取、不抵扣全款。
+      </div>
+
+      <el-form v-loading="suppLoading" label-width="120px">
+        <el-form-item label="补费金额（元）" required>
+          <el-input-number
+            v-model="suppForm.amountYuan"
+            :min="0"
+            :precision="2"
+            :step="100"
+            placeholder="自定义填写"
+            style="width: 220px"
+          />
+          <span class="fee-note" style="margin-left: 8px">
+            必填，可改（默认已带出缺口，可少于缺口）
+          </span>
+        </el-form-item>
+
+        <el-form-item label="补费说明">
+          <el-input
+            v-model="suppForm.remark"
+            maxlength="200"
+            placeholder="如：试学转正补缴尾款 / 补差价"
+          />
+        </el-form-item>
+
+        <el-form-item label="缴费方式" required>
+          <el-select v-model="suppForm.payMethod" placeholder="请选择缴费方式" style="width: 100%">
+            <el-option v-for="m in PAY_METHODS" :key="m" :label="m" :value="m" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="缴费凭证" required>
+          <input type="file" accept="image/*" @change="onSuppFileChange" />
+          <div class="stu-sub mt8">必填，不超过 5MB。凭证随补费单一起落库，财务按它核对到账</div>
+          <div v-if="suppForm.dataUrl" class="preview">
+            <img :src="suppForm.dataUrl" alt="凭证预览" />
+          </div>
+        </el-form-item>
+
+        <el-form-item label="转账单号">
+          <el-input v-model="suppForm.voucherNo" placeholder="如微信/支付宝交易单号（选填）" />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="suppVisible = false">取消</el-button>
+        <el-button type="primary" :loading="suppSaving" @click="submitSupplement">确认补费</el-button>
       </template>
     </el-dialog>
 

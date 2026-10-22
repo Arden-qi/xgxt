@@ -110,10 +110,10 @@
  *                   properties:
  *                     deptTotal:
  *                       type: integer
- *                       example: 11
+ *                       example: 6
  *                     stageTotal:
  *                       type: integer
- *                       example: 3
+ *                       example: 5
  *                     roleTotal:
  *                       type: integer
  *                       example: 14

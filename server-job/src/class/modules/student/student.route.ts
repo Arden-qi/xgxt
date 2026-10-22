@@ -13,8 +13,10 @@ import { buildStudentNo, now, seqOfStudentNo, uuid } from '../../lib/ids';
 import { GenderName, StageName, StudentStatusName, stageNameOf } from '../../lib/dict';
 import { assertClassAcceptStudent, isRepeatStudent } from '../../lib/classRule';
 import { wrap } from '../../middleware/error';
-import { tbl, tblTrx, tblIns, tblInsTrx, USE_UNI_TABLE } from '../../../teaching/shared/uniTable';
+import { tbl, tblTrx, tblIns, tblInsTrx, phaseCodeCol, readPhaseCode } from '../../../teaching/shared/uniTable';
 import { TransferType } from 'shared-types';
+// ★ 2026-10-20 试学闭环：班主任发起补费 / 退学回写咨询状态，走服务间内部通道
+import { consultClient } from '../../lib/consultClient';
 
 export const studentRouter = Router();
 
@@ -49,7 +51,6 @@ const LIVE = () => tbl(commonDb, SRC_COMMON, LIVE_T, STAGE);
 function dormOf(row: Record<string, unknown> | undefined): Record<string, unknown> | null {
   if (!row) return null;
   const c = rowToCamel<Record<string, unknown>>(row);
-  if (!USE_UNI_TABLE) return c;
   return {
     ...c,
     dormId: c.roomId ?? null,
@@ -321,7 +322,7 @@ studentRouter.post(
       teacherName = (cls.teacher_name as string) ?? null;
       assistantId = (cls.assistant_id as string) ?? null;
       assistantName = (cls.assistant_name as string) ?? null;
-      if (stage === null) stage = cls.stage as number;
+      if (stage === null) stage = readPhaseCode(cls) as number | null;
     }
 
     // 学号：不传则自动生成
@@ -360,7 +361,7 @@ studentRouter.post(
       age: b.age ?? null,
       dept_code: b.deptCode,
       student_status: b.studentStatus ?? StudentStatus.STUDYING,
-      stage,
+      [phaseCodeCol()]: stage,
       id_card: b.idCard ?? null,
       phone: b.phone ?? null,
       parent_phone: b.parentPhone ?? null,
@@ -499,11 +500,11 @@ studentRouter.put(
       patch.teacher_name = cls.teacher_name ?? null;
       patch.assistant_id = cls.assistant_id ?? null;
       patch.assistant_name = cls.assistant_name ?? null;
-      if (b.stage === undefined) patch.stage = cls.stage;
+      if (b.stage === undefined) patch[phaseCodeCol()] = readPhaseCode(cls);
     }
 
     const simple: Array<[keyof typeof b, string]> = [
-      ['stage', 'stage'],
+      ['stage', phaseCodeCol()],
       ['education', 'education'],
       ['enrollDate', 'enroll_date'],
       ['idCard', 'id_card'],
@@ -593,7 +594,7 @@ const SORT_COLUMN: Record<string, string> = {
   enrollDate: 'enroll_date',
   studentStatus: 'student_status',
   repeatCount: 'repeat_count',
-  stage: 'stage',
+  stage: phaseCodeCol(),
 };
 
 /** 学生状态 → 综合素质标签（原型「综合素质」列展示用） */
@@ -612,7 +613,7 @@ function toRosterItem(row: Record<string, unknown>): Record<string, unknown> {
   const c = rowToCamel<Record<string, unknown>>(row);
   const gender = row.gender as number;
   const status = row.student_status as number;
-  const stage = row.stage as number | null;
+  const stage = readPhaseCode(row);
   return {
     studentId: c.id,
     studentNo: c.studentNo,
@@ -680,7 +681,7 @@ studentRouter.get(
     if (query.classId) base.where('class_id', query.classId);
     if (query.deptCode) base.where('dept_code', query.deptCode);
     if (query.studentStatus) base.where('student_status', query.studentStatus);
-    if (query.stage) base.where('stage', query.stage);
+    if (query.stage) base.where(phaseCodeCol(), query.stage);
     if (query.studentNo) base.where('student_no', 'like', `%${query.studentNo}%`);
     if (query.studentName) base.where('student_name', 'like', `%${query.studentName}%`);
     if (query.keyword) {
@@ -739,7 +740,7 @@ studentRouter.get(
     if (query.classId) base.where('class_id', query.classId);
     if (query.deptCode) base.where('dept_code', query.deptCode);
     if (query.studentStatus) base.where('student_status', query.studentStatus);
-    if (query.stage) base.where('stage', query.stage);
+    if (query.stage) base.where(phaseCodeCol(), query.stage);
     if (query.studentNo) base.where('student_no', 'like', `%${query.studentNo}%`);
     if (query.studentName) base.where('student_name', 'like', `%${query.studentName}%`);
     if (query.keyword) {
@@ -790,7 +791,7 @@ studentRouter.get(
       //   写死 amount 的症状是「不报错但欠费额恒为 0」：
       //   切读时 amount 变成未定义列，COALESCE 兜成 0，欠费人数直接归零。
       const FEE_T = 't_class_fee_sync';
-      const AMT = USE_UNI_TABLE ? 'fee_amount' : 'amount';
+      const AMT = 'fee_amount';
       const feeBase = tbl(commonDb, 'sms_common', FEE_T, STAGE);
       const due = await feeBase
         .where('is_deleted', 0)
@@ -873,7 +874,7 @@ studentRouter.get(
      *   前端契约不变。老表模式保持原来的两次查询不动。
      */
     const mergedXfers =
-      USE_UNI_TABLE && classId
+      classId
         ? (await notDeleted(tbl(db, SRC, 't_class_student_transfer', STAGE))
             .where(function (this: import('knex').Knex.QueryBuilder) {
               this.where('class_id', classId).orWhere('student_id', studentId);
@@ -1043,7 +1044,7 @@ studentRouter.post(
         graduate_school: (stu.graduate_school as string) ?? null,
         home_address: (stu.home_address as string) ?? null,
         intend_dept_code: (target.dept_code as number) ?? (stu.dept_code as number) ?? null,
-        intend_stage: (target.stage as number) ?? (stu.stage as number) ?? null,
+        intend_stage: (readPhaseCode(target) as number | null) ?? (readPhaseCode(stu) as number | null) ?? null,
         intend_class_id: b.targetClassId,
         intend_class_name: target.class_name as string,
         remark: b.reason?.trim() || '班级信息管理发起换班',
@@ -1195,7 +1196,7 @@ studentRouter.post(
 
           const fromClassId = (stu.class_id as string) ?? null;
           const fromClassName = (stu.class_name as string) ?? null;
-          const fromStage = (stu.stage as number) ?? (item.fromStage ?? 0);
+          const fromStage = (readPhaseCode(stu) as number | null) ?? (item.fromStage ?? 0);
           const fromDept = (stu.dept_code as number) ?? (item.fromDeptCode ?? 0);
 
           // ① 落审批记录（升学申请，状态=已接收），成绩快照随档案保存
@@ -1228,7 +1229,7 @@ studentRouter.post(
 
           // ② 更新学生档案：stage / 部门 / 班级归属
           const patch: Record<string, unknown> = {
-            stage: item.toStage,
+            [phaseCodeCol()]: item.toStage,
             dept_code: item.toDeptCode,
           };
           if (item.toClassId) {
@@ -1249,7 +1250,7 @@ studentRouter.post(
             //   统一表 t_uni_class_transfer.transfer_type 是 int，字典 1~5 +斌哥拍板新增的 6=升学转班。
             //   写死 'upgrade' 切读时会报 `Incorrect integer value: 'upgrade'`（老表模式正常，属归一差异）。
             //   → 按开关给对应值，老表行为与改写前完全一致。
-            transfer_type: USE_UNI_TABLE ? TransferType.CLASS_UPGRADE : ('upgrade' as never),
+            transfer_type: TransferType.CLASS_UPGRADE,
             from_user_id: null,
             from_user_name: fromClassName,
             to_user_id: null,
@@ -1272,5 +1273,204 @@ studentRouter.post(
 
     result.finishTime = now();
     return ok(res, result, `升学同步完成：处理 ${result.inserted + result.updated} 条，失败 ${result.failed} 条`);
+  }),
+);
+
+/* ============================================================
+ * ★ 2026-10-20 试学闭环（用户口径）
+ *
+ *   交试学费 → 分配班级 → 试学中
+ *     ├─ 试学中发现问题 ──→ 退学（走 /api/class/suspend/add 审批链，通过后回写咨询为「流失」）
+ *     └─ 试学通过      ──→ 班主任发起补费 → 补缴到账 → 正式在读
+ *
+ * 【为什么补费要跨模块】
+ *   钱和收款单都在咨询模块（t_consult_fee_order），班主任在班级模块。
+ *   铁律不许直连别人的库 → 走 consultClient（内部令牌通道）。
+ *   真正收款仍由咨询老师上传凭证、财务核对到账；到账后
+ *   consult 侧 fee-order.service 自动把状态推进到「正式在读」，
+ *   并回头调本文件的 /internal-status 把学籍从「试学中」改成「正式在读」。
+ * ============================================================ */
+
+/**
+ * 找「从咨询同步进来」的学生
+ *
+ * 认人键：`source_id` = 咨询单号（= 咨询侧 student_no），
+ * 由 doReceive 建档时写入 `source_system='consult', source_id=push.consult_no`。
+ * ⚠️ 不能用 student_no：班级侧学号是建档时新生成的 S2026xxxx，两边本来就不同。
+ */
+async function findConsultStudent(consultNo: string): Promise<Record<string, unknown> | undefined> {
+  const key = String(consultNo || '').trim();
+  if (!key) return undefined;
+  return (await notDeleted(tbl(db, SRC, 't_class_student', STAGE))
+    .where({ source_system: 'consult', source_id: key })
+    .first()) as Record<string, unknown> | undefined;
+}
+
+/**
+ * @openapi
+ * /api/class/student/trial-plan:
+ *   get:
+ *     tags: [学生信息]
+ *     summary: 5.1 试学转正 · 补费预览（班主任）
+ *     description: 返回应缴合计 / 已到账 / 还差多少 / 差哪几项，供「转正式」弹窗展示。
+ */
+studentRouter.get(
+  '/trial-plan',
+  requirePerm('student', PermAction.EDIT),
+  validate({ query: z.object({ studentId: z.string().min(1, '缺少学生ID') }) }),
+  wrap(async (req, res) => {
+    const user = req.user!;
+    const { studentId } = q<{ studentId: string }>(req);
+
+    const stu = (await notDeleted(tbl(db, SRC, 't_class_student', STAGE)).where('id', studentId).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!stu) throw Errors.studentNotFound();
+    assertClassAccess(user, stu.class_id as string | null, '该学员');
+
+    if (Number(stu.student_status) !== StudentStatus.TRIAL) {
+      throw Errors.param(
+        `「${String(stu.student_name)}」当前状态为「${StudentStatusName[Number(stu.student_status)] ?? '未知'}」，只有「试学中」的学生才能转正式`,
+      );
+    }
+
+    const consultNo = String(stu.source_id || '');
+    if (!consultNo) {
+      throw Errors.param('该学员不是从咨询同步进来的，没有对应的咨询档案，无法走补费转正');
+    }
+
+    const plan = await consultClient.trialPlan(consultNo);
+    if (!plan.ok) throw Errors.param(plan.message);
+
+    return ok(
+      res,
+      {
+        studentId,
+        studentNo: stu.student_no,
+        studentName: stu.student_name,
+        className: stu.class_name ?? null,
+        deptCode: stu.dept_code ?? null,
+        ...(plan.data || {}),
+        /** 在途金额（已发起、等财务确认）—— 前端要显示成「另有 X 元在途」，别让老师以为漏了 */
+        inFlightAmount: plan.data?.inFlightAmount ?? 0,
+      },
+      '查询成功',
+    );
+  }),
+);
+
+/**
+ * @openapi
+ * /api/class/student/trial-supplement:
+ *   post:
+ *     tags: [学生信息]
+ *     summary: 5.2 班主任发起补费（试学 → 待缴全款）
+ *     description: |
+ *       只把学生推进到「全款待缴」并留痕，**不建收费单**——
+ *       本系统「缴费必须有凭证」，真正收款由咨询老师上传缴费截图、财务核对到账。
+ *       到账后自动转「正式在读」，同时学籍从「试学中」改为「正式在读」。
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [studentId]
+ *             properties:
+ *               studentId: { type: string }
+ */
+studentRouter.post(
+  '/trial-supplement',
+  requirePerm('student', PermAction.EDIT),
+  validate({ body: z.object({ studentId: z.string().min(1, '缺少学生ID') }) }),
+  wrap(async (req, res) => {
+    const user = req.user!;
+    const b = req.body as { studentId: string };
+
+    const stu = (await notDeleted(tbl(db, SRC, 't_class_student', STAGE)).where('id', b.studentId).first()) as
+      | Record<string, unknown>
+      | undefined;
+    if (!stu) throw Errors.studentNotFound();
+    assertClassAccess(user, stu.class_id as string | null, '该学员');
+
+    if (Number(stu.student_status) !== StudentStatus.TRIAL) {
+      throw Errors.param(
+        `「${String(stu.student_name)}」当前状态为「${StudentStatusName[Number(stu.student_status)] ?? '未知'}」，只有「试学中」的学生才能发起补费转正`,
+      );
+    }
+    if (!stu.class_id) {
+      throw Errors.param('该学员还没有班级，请先分配班级再转正式');
+    }
+
+    const consultNo = String(stu.source_id || '');
+    if (!consultNo) {
+      throw Errors.param('该学员不是从咨询同步进来的，没有对应的咨询档案，无法走补费转正');
+    }
+
+    const r = await consultClient.trialSupplement({
+      consultNo,
+      operatorName: user.userName,
+      operatorTitle: '班主任',
+    });
+    if (!r.ok) throw Errors.param(r.message);
+
+    return ok(res, { studentId: b.studentId, consultNo, ...(r.data || {}) }, r.message);
+  }),
+);
+
+/**
+ * @openapi
+ * /api/class/student/internal-status:
+ *   post:
+ *     tags: [学生信息]
+ *     summary: 5.3 学籍状态同步（服务间内部接口）
+ *     description: |
+ *       咨询侧「补费到账 → 正式在读」后调用，把学籍从「试学中(3)」改为「正式在读(5)」。
+ *       ⚠️ 只接受 x-internal-token（见 middleware/auth.ts 的 authAllowSync 白名单）。
+ */
+studentRouter.post(
+  '/internal-status',
+  validate({
+    body: z.object({
+      consultNo: z.string().min(1, '缺少咨询单号'),
+      studentStatus: z.coerce.number().int(),
+    }),
+  }),
+  wrap(async (req, res) => {
+    const b = req.body as { consultNo: string; studentStatus: number };
+
+    const stu = await findConsultStudent(b.consultNo);
+    if (!stu) {
+      return ok(
+        res,
+        { updated: false, consultNo: b.consultNo },
+        `班级侧未找到咨询单「${b.consultNo}」对应的学员（可能还没分班），无需同步`,
+      );
+    }
+
+    const before = Number(stu.student_status);
+    if (before === Number(b.studentStatus)) {
+      return ok(
+        res,
+        { updated: false, studentNo: stu.student_no, before, after: before },
+        '学籍状态已是目标值，无需变更',
+      );
+    }
+
+    await tbl(db, SRC, 't_class_student', STAGE)
+      .where({ id: stu.id as string })
+      .update({ student_status: Number(b.studentStatus), ...baseUpdate() });
+
+    return ok(
+      res,
+      {
+        updated: true,
+        studentNo: stu.student_no,
+        studentName: stu.student_name,
+        before,
+        after: Number(b.studentStatus),
+      },
+      `学籍状态已同步：${StudentStatusName[before] ?? before} → ${StudentStatusName[Number(b.studentStatus)] ?? b.studentStatus}`,
+    );
   }),
 );

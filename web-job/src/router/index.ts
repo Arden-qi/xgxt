@@ -257,18 +257,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/Statistics.vue'),
     meta: { title: '数据统计', pageCode: 'job:statistics:view' },
   },
-  {
-    path: '/archive/basic-info',
-    name: 'EmpArchiveBasic',
-    component: () => import('@/views/archive/BasicInfo.vue'),
-    meta: { title: '基础信息', pageCode: 'job:empArchive:view' },
-  },
-  {
-    path: '/archive/dorm-assign',
-    name: 'EmpArchiveDorm',
-    component: () => import('@/views/archive/DormAssign.vue'),
-    meta: { title: '宿舍分配', pageCode: 'job:empDorm:view' },
-  },
+  /* ★ P7 下线（2026-10-19）：archive/BasicInfo 与 archive/DormAssign 已被
+     teaching 域 TeachingStudent / TeachingDorm 完全覆盖（数据同源 t_uni_student / t_uni_dorm_*），
+     页面文件与 api/empDorm.ts 已删除。复盘信息/就业记录（archive/ReviewInfo、EmploymentRecord）
+     无新对应，保留——见统一表归一-剩余任务清单.md §7.1。 */
   {
     path: '/archive/review-info',
     name: 'EmpArchiveReview',
@@ -338,6 +330,19 @@ const routes: RouteRecordRaw[] = [
     name: 'ClassJhSetting',
     component: () => import('@/class-jh/views/SettingList.vue'),
     meta: { title: '系统设置', pageCode: 'classjh:setting:view' },
+  },
+  {
+    /**
+     * ★ 2026-10-20 楼栋设置独立页
+     *
+     * 从「系统设置」里把楼栋页签抽出来，单独一个权限码 ——
+     * 教务老师只拿 `classjh:building:view`，不会连带看到系统设置 KV /
+     * 阶段字典 / 操作日志（那三个仍归 `classjh:setting:view`）。
+     */
+    path: '/class-jh/building',
+    name: 'ClassJhBuilding',
+    component: () => import('@/class-jh/views/BuildingList.vue'),
+    meta: { title: '楼栋设置', pageCode: 'classjh:building:view' },
   },
   // 进模块根路径 → 落到系统首页工作台（★ 2026-10-16 工作台已迁到 /）
   { path: '/class-jh', redirect: '/' },
