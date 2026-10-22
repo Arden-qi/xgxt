@@ -153,6 +153,9 @@ export interface DormRow {
   roomStatusName: string;
   ownerName: string | null;
   className: string | null;
+  /** ★ 2026-10-22：分派给哪个班 / 该班状态（1 开放 / 2 封班） */
+  assignedClassName?: string | null;
+  assignedClassStatus?: number | null;
   remark: string | null;
 }
 

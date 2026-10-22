@@ -27,6 +27,9 @@ export interface AllocateClassRow {
   femaleRooms: AllocateRoomRef[];
   maleBeds: number;
   femaleBeds: number;
+  /** ★ 班级状态：1 开放 / 2 封班 / null 未知 */
+  classStatus?: number | null;
+  classStatusName?: string | null;
 }
 
 export interface AllocateBedRef {
@@ -45,6 +48,11 @@ export interface AllocateRoomRow {
   remaining: number;
   full: boolean;
   assignedTo: string | null;
+  /** ★ 2026-10-22：归属班状态（1 开放 / 2 封班） */
+  assignedStatus?: number | null;
+  assignedStatusName?: string | null;
+  /** ★ 锁定 = 已分派且该班开放（封班后空床交回教务） */
+  locked?: boolean;
   /** ★ 空闲床位明细（调宿时选到具体床位） */
   freeBeds: AllocateBedRef[];
 }

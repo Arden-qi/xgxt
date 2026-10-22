@@ -61,6 +61,7 @@ import { bedNoText } from 'shared-types/class';
 import { hasRole, RoleCode, StudentStatus } from 'shared-types';
 import { tbl, tblIns, upd } from '../shared/uniTable';
 import { listBuildingNames as listDormBuildingNames } from './building.service';
+import { loadClassStatus, loadClassStatuses } from './classStatus';
 
 const DORM_T = 't_job_dorm';
 const BED_T = 't_job_dorm_bed';
@@ -265,6 +266,23 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
   }
 
   /**
+   * ★ 2026-10-22：房间归属哪个班、该班是否封班
+   *
+   * 规则：分派给**开放**班的房间是锁定的 —— 别的班学生不能住进来；
+   *      该班封班后空床位交回教务，可以继续调配。
+   */
+  async function roomOwner(roomId: string): Promise<{ className: string; status?: number } | null> {
+    try {
+      const a = await db(ASSIGN_T).where({ room_id: String(roomId), is_deleted: false }).first();
+      const name = str(a?.class_name);
+      if (!name) return null;
+      return { className: name, status: await loadClassStatus(name) };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * ★ 数据范围：沿用实训原有的角色判定口径
    *   校长 / 学管（学管主任·教质经理）/ 教务老师 / 系统管理员 → 全量
    *   班主任 / 教员 / 助教 → 只看自己班的宿舍（分派给本班的 + 本班学生住的）
@@ -416,6 +434,33 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
     });
   
     if (q.onlyVacant) rows = rows.filter((r: DormRow) => r.occupiedCount < r.bedCount);
+
+    /**
+     * ★ 2026-10-22：带出「房间归哪个班 / 该班状态」
+     *   班主任据此判断还能不能往房间里填学生：
+     *   开放 → 可以；封班 → 空床分配权已交回教务，前端不再给「入住」。
+     */
+    if (rows.length) {
+      const roomIds = rows.map((r: DormRow) => r.dormId);
+      const assignRows = (await db(ASSIGN_T)
+        .whereIn('room_id', roomIds)
+        .where({ is_deleted: false })
+        .select('room_id', 'class_name')) as any[];
+      const ownerNames = assignRows.map((a: any) => str(a.class_name)).filter((n): n is string => !!n);
+      const ownerStatus = await loadClassStatuses(ownerNames);
+      const byRoom = new Map<string, { className: string; status: number | null }>();
+      for (const a of assignRows) {
+        const rid = str(a.room_id);
+        const cn = str(a.class_name);
+        if (!rid || !cn) continue;
+        byRoom.set(rid, { className: cn, status: ownerStatus.get(cn) ?? null });
+      }
+      rows = rows.map((r: DormRow) => ({
+        ...r,
+        assignedClassName: byRoom.get(r.dormId)?.className ?? null,
+        assignedClassStatus: byRoom.get(r.dormId)?.status ?? null,
+      }));
+    }
     return rows;
   }
 
@@ -916,6 +961,13 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       const dorm = await T_DORM().where({ id: String(body.dormId), is_deleted: false }).first();
       if (!dorm) throw new Error('宿舍不存在');
       if (Number(dorm.dorm_status) === 2) throw new Error('该宿舍已停用，不能入住');
+
+      // ★ 2026-10-22：开放班的分派房间锁定，别的班学生不能入住
+      const owner = await roomOwner(String(dorm.id));
+      const stuClass = str(st.class_name);
+      if (owner && stuClass && owner.className !== stuClass && Number(owner.status) !== 2) {
+        throw new Error(`该宿舍已分派给开放中的 ${owner.className} 班，不能给其他班学生入住`);
+      }
   
       const bed = await T_BED().where({ id: String(body.bedId), is_deleted: false }).first();
       if (!bed) throw new Error('床位不存在');
@@ -1131,6 +1183,18 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
       let newDorm: any = null;
       if (body.oldDormId) oldDorm = await T_DORM().where({ id: String(body.oldDormId) }).first();
       if (body.newDormId) newDorm = await T_DORM().where({ id: String(body.newDormId) }).first();
+
+      /**
+       * ★ 2026-10-22：调宿目标同样受「开放班锁定」约束
+       *   目标房间属于别的开放班 → 不能把本班学生调进去；封班房间放行。
+       */
+      if (!isCheckout && newDorm) {
+        const owner = await roomOwner(String(newDorm.id));
+        const stuClass = str(st.class_name);
+        if (owner && stuClass && owner.className !== stuClass && Number(owner.status) !== 2) {
+          throw new Error(`目标宿舍已分派给开放中的 ${owner.className} 班，不能调入其他班学生`);
+        }
+      }
   
       // 目标床位必须空闲（退宿不需要）
       if (!isCheckout && body.newBedId) {

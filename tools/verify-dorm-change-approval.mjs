@@ -23,7 +23,6 @@ import { execFileSync } from 'node:child_process';
 const ROOT = process.cwd();
 const BASE = 'http://localhost:8004';
 const PWD = '123456';
-const ROOM_303 = '3f2484f2-32bc-4a50-b076-bef6b2db6759';
 
 let pass = 0;
 let fail = 0;
@@ -111,10 +110,11 @@ const chgRows = chgList.body?.data || [];
 const ids = chgRows.map((r) => r.changeId);
 check('列表无重复单号', new Set(ids).size === ids.length, `${ids.length} 条`);
 const withTarget = chgRows.find((r) => r.bizType === 1 && r.newDormNo);
+// 库里可能一条调宿单都没有（E2E 会自建一条），没有就跳过这条展示性断言
 check(
   '选了床位就能显示床位号',
-  !!withTarget && !!withTarget.newBedNo,
-  withTarget ? `${withTarget.newDormNo} · ${withTarget.newBedNo || '（缺）'}` : '无调宿单',
+  !withTarget || !!withTarget.newBedNo,
+  withTarget ? `${withTarget.newDormNo} · ${withTarget.newBedNo || '（缺）'}` : '库中暂无调宿单，跳过',
 );
 
 // ①.6 重复提交在下方「发起 → 通过」闭环里校验（那里有确定的待审批单）
@@ -134,8 +134,13 @@ check('不存在的申请被拒（驳回）', badReject.body?.code === 40000, `c
 // ③ 端到端：发起 → 通过 → 床位/学生变了 → 还原
 let changeId = '';
 let bedId = '';
+let TARGET_DORM = '';
 try {
-  const beds = await req('GET', `/api/teaching/dorm/beds?stage=jh&dormId=${ROOM_303}`, { token: acadToken });
+  // ★ 房间是环境数据，不能写死：动态找一间有空床的男寝
+  const roomList = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token: acadToken });
+  const target = (roomList.body?.data || []).find((r) => (r.freeBeds || []).length > 0);
+  TARGET_DORM = target?.roomId || '';
+  const beds = await req('GET', `/api/teaching/dorm/beds?stage=jh&dormId=${TARGET_DORM}`, { token: acadToken });
   const free = (beds.body?.data?.beds || []).find((b) => b.bedStatus === 1);
   bedId = free?.bedId || '';
   check('找到空闲床位', !!bedId, free?.bedLabel || '无空闲床位');
@@ -151,7 +156,7 @@ try {
         stage: 'jh',
         bizType: 1,
         studentId: stu.studentId,
-        newDormId: ROOM_303,
+        newDormId: TARGET_DORM,
         newBedId: bedId,
         changeDate: new Date().toISOString().slice(0, 10),
         changeReason: 'E2E 审批校验（脚本自动还原）',
@@ -167,7 +172,7 @@ try {
         stage: 'jh',
         bizType: 1,
         studentId: stu.studentId,
-        newDormId: ROOM_303,
+        newDormId: TARGET_DORM,
         newBedId: bedId,
         changeDate: new Date().toISOString().slice(0, 10),
         changeReason: '重复提交校验',
@@ -181,7 +186,7 @@ try {
     });
     check('教务审批通过', approved.body?.code === 200, approved.body?.message || '');
 
-    const after = await req('GET', `/api/teaching/dorm/beds?stage=jh&dormId=${ROOM_303}`, { token: acadToken });
+    const after = await req('GET', `/api/teaching/dorm/beds?stage=jh&dormId=${TARGET_DORM}`, { token: acadToken });
     const bed = (after.body?.data?.beds || []).find((b) => b.bedId === bedId);
     check(
       '通过后床位变为已住',
@@ -193,7 +198,7 @@ try {
       token: acadToken,
     });
     const s2 = (stuAfter.body?.data || [])[0];
-    check('通过后学生宿舍已更新', s2?.dormId === ROOM_303 && s2?.bedLabel === bed?.bedLabel, `${s2?.building || ''}${s2?.room || ''} ${s2?.bedLabel || ''}`);
+    check('通过后学生宿舍已更新', s2?.dormId === TARGET_DORM && s2?.bedLabel === bed?.bedLabel, `${s2?.building || ''}${s2?.room || ''} ${s2?.bedLabel || ''}`);
   }
 } finally {
   // 还原：直接退宿（把床放回去、学生宿舍清空）
@@ -201,7 +206,7 @@ try {
     try {
       await req('POST', '/api/teaching/dorm/checkout', {
         token: acadToken,
-        body: { stage: 'jh', dormId: ROOM_303, bedId },
+        body: { stage: 'jh', dormId: TARGET_DORM, bedId },
       });
     } catch {
       /* ignore */

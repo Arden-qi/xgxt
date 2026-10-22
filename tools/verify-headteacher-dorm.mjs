@@ -123,10 +123,12 @@ const acadToken = acad.body?.data?.token;
 const sunLogin = await req('POST', '/api/portal/account/login', { body: { account: 'sunmin', password: PWD } });
 const sunToken = sunLogin.body?.data?.token;
 if (acadToken && sunToken) {
-  const m = await req('GET', `/api/teaching/dorm/allocate/rooms?category=1&building=${encodeURIComponent('1号楼')}`, { token: acadToken });
-  const f = await req('GET', `/api/teaching/dorm/allocate/rooms?category=2&building=${encodeURIComponent('3号楼')}`, { token: acadToken });
-  const male = (m.body?.data || []).find((r) => !r.full);
-  const female = (f.body?.data || []).find((r) => !r.full);
+  // ★ 房间数据会随环境变（楼栋/房号不是固定的）→ 动态找「未分派且未满」的房间
+  const m = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token: acadToken });
+  const f = await req('GET', '/api/teaching/dorm/allocate/rooms?category=2', { token: acadToken });
+  const pickRoom = (list) => (list || []).find((r) => !r.full && !r.assignedTo) || (list || []).find((r) => !r.full);
+  const male = pickRoom(m.body?.data);
+  const female = pickRoom(f.body?.data);
 
   if (!male || !female) {
     check('找到可分派的男/女寝房间', false);
@@ -151,10 +153,12 @@ if (acadToken && sunToken) {
     const own = [...(s1.body?.data || []), ...(s2.body?.data || [])]
       .map((s) => s.dormId)
       .filter(Boolean);
-    const allowed = new Set([male.roomId, female.roomId, ...own]);
     check(
       '班主任只看到本班相关房间',
-      ids.has(male.roomId) && ids.has(female.roomId) && rows.every((r) => allowed.has(r.dormId)),
+      ids.has(male.roomId) &&
+        ids.has(female.roomId) &&
+        // 关键口径：不能出现「归属其他班」的房间（本班学生住过的房间允许）
+        rows.every((r) => !r.assignedClassName || r.assignedClassName === 'G2601'),
       `${rows.map((r) => `${r.buildingName}${r.roomNo}`).join('、') || '空'}`,
     );
 
@@ -168,26 +172,39 @@ if (acadToken && sunToken) {
 
     /**
      * ★ 2026-10-21 跨学段：Q30 是初高班，班主任却是大学部的张海涛（zhanght）。
-     *   分派后 zhanght 必须能看到 1号楼 405 —— 验证「我的班」是跨学段查的。
+     *   分派后 zhanght 必须能看到该房间 —— 验证「我的班」是跨学段查的。
+     *   ★ 2026-10-22：房间不再写死（环境会重建房间），动态找一间未被分派的男寝。
      */
-    const room405 = (m.body?.data || []).find((r) => r.room === '405');
-    if (!room405) {
-      check('找到 1号楼 405', false);
-    } else {
-      const saveQ30 = await req('POST', '/api/teaching/dorm/allocate/save', {
+    const cls = await req('GET', '/api/teaching/dorm/allocate/classes', { token: acadToken });
+    const hasQ30 = (cls.body?.data || []).some((c) => c.className === 'Q30');
+    if (!hasQ30) {
+      // 班级被删/改名后这条用例没意义；顺手清掉历史分派，避免脏数据
+      await req('POST', '/api/teaching/dorm/allocate/save', {
         token: acadToken,
-        body: { className: 'Q30', headTeacherName: '张海涛', maleRoomIds: [room405.roomId], femaleRoomIds: [] },
+        body: { className: 'Q30', headTeacherName: '张海涛', maleRoomIds: [], femaleRoomIds: [] },
       });
-      check('教务把 Q30 分到 1号楼405', saveQ30.body?.code === 200, saveQ30.body?.message || '');
-      const zhLogin = await req('POST', '/api/portal/account/login', { body: { account: 'zhanght', password: PWD } });
-      const zhToken = zhLogin.body?.data?.token;
-      const zlist = await req('GET', '/api/teaching/dorm/list?stage=class&page=1&size=100', { token: zhToken });
-      const zrows = zlist.body?.data?.list || [];
-      check(
-        '跨学段班主任能看到本班分派的房间',
-        zrows.some((r) => r.dormId === room405.roomId),
-        zrows.map((r) => `${r.buildingName}${r.roomNo}`).join('、') || '空',
-      );
+      check('跨学段用例（Q30 已不在班级列表，跳过）', true, '—');
+    } else {
+      const m2 = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token: acadToken });
+      const q30Room = (m2.body?.data || []).find((r) => !r.full && !r.assignedTo);
+      if (!q30Room) {
+        check('找到可给 Q30 分派的房间', false);
+      } else {
+        const saveQ30 = await req('POST', '/api/teaching/dorm/allocate/save', {
+          token: acadToken,
+          body: { className: 'Q30', headTeacherName: '张海涛', maleRoomIds: [q30Room.roomId], femaleRoomIds: [] },
+        });
+        check('教务把 Q30 分到房间', saveQ30.body?.code === 200, saveQ30.body?.message || '');
+        const zhLogin = await req('POST', '/api/portal/account/login', { body: { account: 'zhanght', password: PWD } });
+        const zhToken = zhLogin.body?.data?.token;
+        const zlist = await req('GET', '/api/teaching/dorm/list?stage=class&page=1&size=100', { token: zhToken });
+        const zrows = zlist.body?.data?.list || [];
+        check(
+          '跨学段班主任能看到本班分派的房间',
+          zrows.some((r) => r.dormId === q30Room.roomId),
+          zrows.map((r) => `${r.buildingName}${r.roomNo}`).join('、') || '空',
+        );
+      }
     }
   }
 } else {

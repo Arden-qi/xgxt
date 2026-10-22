@@ -127,6 +127,8 @@ function isChecked(g: Gender, roomId: string): boolean {
 /** 是否禁选：住满 / 已选够人数（无学生班级按 100 床上限） */
 function roomDisabled(g: Gender, r: AllocateRoomRow): boolean {
   if (isChecked(g, r.roomId)) return false;
+  // ★ 已分给「开放」班的房间锁定：别的班不能再来分（封班后空床交回教务，可选）
+  if (r.locked && r.assignedTo && r.assignedTo !== cur.value?.className) return true;
   if (r.full) return true;
   if (isEmptyClass.value) return totalSelectedBeds.value >= EMPTY_CLASS_MAX_BEDS;
   const target = targetOf(g);
@@ -141,7 +143,11 @@ function roomHint(g: Gender, r: AllocateRoomRow): string {
       : '已住满';
   }
   const base = `余 ${r.remaining} 床`;
-  if (r.assignedTo && r.assignedTo !== cur.value?.className) return `${base} · 原属 ${r.assignedTo}`;
+  if (r.assignedTo && r.assignedTo !== cur.value?.className) {
+    // ★ 开放班 → 锁定不可调配；封班 → 空床交回教务，可继续选
+    if (r.locked) return `已分给 ${r.assignedTo} 班（开放中，不可调配）`;
+    return `${base} · 原属 ${r.assignedTo}（已封班，可调配）`;
+  }
   return base;
 }
 
@@ -305,6 +311,20 @@ onMounted(load);
       <el-table-column prop="className" label="班级" min-width="140" />
       <el-table-column label="班主任" width="120">
         <template #default="{ row }">{{ row.headTeacherName || '—' }}</template>
+      </el-table-column>
+      <!-- ★ 2026-10-22：班级状态决定分派是否锁定（开放 → 锁；封班 → 空床交回教务） -->
+      <el-table-column label="班级状态" width="96" align="center">
+        <template #default="{ row }">
+          <el-tag
+            v-if="row.classStatus"
+            size="small"
+            effect="plain"
+            :type="row.classStatus === 2 ? 'info' : 'success'"
+          >
+            {{ row.classStatusName || (row.classStatus === 2 ? '封班' : '开放') }}
+          </el-tag>
+          <span v-else class="muted">—</span>
+        </template>
       </el-table-column>
       <el-table-column label="男生人数" width="100" align="center">
         <template #default="{ row }">{{ row.maleCount }}</template>
