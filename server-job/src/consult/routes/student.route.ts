@@ -349,6 +349,14 @@ const addSchema = z.object({
   parentContact: optionalStr(50),
   parentPhone: optionalStr(20),
   deptCode: z.coerce.number().int().min(1).max(2).optional(),
+  /**
+   * ★ 2026-10-22 用户口径：新建学生表单的「部门」换成「年龄」。
+   *
+   * 部门在咨询录入阶段没有意义（选学部是分配班级时才做的事），
+   * 年龄则是咨询期就要掌握的信息，且班主任接收建档时可以直接沿用。
+   * 保留 deptCode 只为兼容老调用方 / 历史数据。
+   */
+  age: z.coerce.number().int().min(1, '年龄需在 1~100 之间').max(100, '年龄需在 1~100 之间').optional(),
 });
 
 studentRouter.post(
@@ -383,6 +391,8 @@ studentRouter.post(
       intend_course: body.intendCourse ?? null,
       parent_contact: body.parentContact ?? null,
       parent_phone: body.parentPhone ?? null,
+      // ★ 2026-10-22 新建学生表单「年龄」；不填则为 null，接收入班时可补
+      age: body.age ?? null,
       dept_code: body.deptCode ?? DeptCode.JUNIOR_SENIOR,
       // 新学生默认「待分配」，等经理分配跟进人
       consult_state: ConsultState.WAIT_ASSIGN,
@@ -1298,6 +1308,32 @@ function consultNoOf(stu: Record<string, any>): string {
   return no || String(stu.id);
 }
 
+/**
+ * ★ 2026-10-22 查分班状态时用的「全部可能键」—— 修「已入班还能重复分配」的 BUG
+ *
+ * 【BUG 现象】学生被班主任接收、已经出现在班级花名册里了，
+ *   咨询「学生管理」里【分配班级】按钮仍是可点的，点开还能再推一次。
+ *
+ * 【根因】推送单的幂等键 `consult_no` 是**推送那一刻**的值：
+ *   学生在咨询阶段还没有学号 → `consult_no = 咨询学生 id`（UUID）。
+ *   班主任接收建档后，教学侧把新学号（如 `LZQ22001`）回写进咨询学生表
+ *   （见 internal.route.ts 的 receive-ack），于是 `consultNoOf()` 变成学号。
+ *   再查分班状态时拿学号去 `whereIn('consult_no', [学号])` ——
+ *   推送单里存的是旧 id，查不到 → 判定「未分班」→ 按钮放行、后端也放行。
+ *
+ * 【修法】认人键不唯一，就把**所有可能键**都拿去查：
+ *   学号（回写后）+ 咨询学生 id（推送时的原始键），任一命中即视为已分班。
+ *   学号为空的老数据只会返回 id，行为与改前一致。
+ */
+function consultNoKeys(stu: Record<string, any>): string[] {
+  const keys: string[] = [];
+  const no = String(stu.student_no || '').trim();
+  const id = String(stu.id || '').trim();
+  if (no) keys.push(no);
+  if (id && id !== no) keys.push(id);
+  return keys;
+}
+
 studentRouter.get(
   '/open-classes',
   wrap(async (_req, res) => {
@@ -1364,21 +1400,18 @@ studentRouter.post(
       .whereIn('id', ids)
       .select('id', 'student_no')) as Array<Record<string, any>>;
 
-    /**
-     * ★ 2026-10-22 认人键：学号 + 学生 id 两个都带上
-     *
-     * 推送单的 `consult_no` 是**分班那一刻**的值 —— 学生还没学号时等于咨询学生 id。
-     * 学号回写之后再只用学号去查，一条都命中不了 → 状态被判成 `none` →
-     * 前端「分班」按钮仍然可点（用户实测：已入班的张三还能点分配班级）。
-     * 与 `assignBlockReason` 用同一套双键口径，保证「按钮可用性」和「后端拦截」一致。
-     */
+    /* ★ 2026-10-22：一个学生可能有多个认人键（学号 + 咨询学生id），
+     *   推送单里存的是推送那一刻的键，所以要把所有键都拿去查，
+     *   否则入班后学号回写 → 用学号查不到旧推送单 → 误判「未分班」→ 重复分配。
+     *   详见 consultNoKeys 的注释。 */
     const keysOf = new Map<string, string[]>();
+    const allKeys = new Set<string>();
     for (const r of rows) {
-      const id = String(r.id);
-      const no = String(r.student_no || '').trim();
-      keysOf.set(id, Array.from(new Set([no, id].filter(Boolean))) as string[]);
+      const ks = consultNoKeys(r);
+      keysOf.set(String(r.id), ks);
+      for (const k of ks) allKeys.add(k);
     }
-    const nos = Array.from(new Set(Array.from(keysOf.values()).flat()));
+    const nos = Array.from(allKeys);
 
     // 两边并行查（任一失败都不影响另一端）
     const [univ, jh] = await Promise.all([
@@ -1388,23 +1421,16 @@ studentRouter.post(
     const univMap = (univ.ok ? univ.data : {}) as Record<string, any>;
     const jhMap = (jh.ok ? jh.data : {}) as Record<string, any>;
 
-    /** 按该学生的任意一个键在返回 map 里取值 */
-    const pickBy = (m: Record<string, any>, keys: string[]): any => {
-      for (const k of keys) {
-        if (m[k]) return m[k];
-      }
-      return null;
-    };
-
     const out: Record<string, unknown> = {};
     for (const id of ids) {
-      const keys = keysOf.get(id) || [];
-      if (!keys.length) {
+      const ks = keysOf.get(id) || [];
+      if (!ks.length) {
         out[id] = { state: 'unknown', label: ASSIGN_STATE_TEXT.unknown, canAssign: true };
         continue;
       }
-      const u = pickBy(univMap, keys);
-      const j = pickBy(jhMap, keys);
+      // 任一键命中即算命中（学号优先，其次咨询学生 id）
+      const u = ks.map((k) => univMap[k]).find(Boolean);
+      const j = ks.map((k) => jhMap[k]).find(Boolean);
 
       let state: AssignState = 'none';
       let classId: string | null = null;
@@ -1437,50 +1463,57 @@ studentRouter.post(
   }),
 );
 
-/** 后端二次拦截用的状态判定（与 /assign-status 同口径），返回阻断原因或 null */
-async function assignBlockReason(stu: Record<string, any>): Promise<string | null> {
-  /**
-   * ★ 2026-10-22 认人键必须「学号 + 学生 id」两个一起查
-   *
-   * 坑：推送单的 `consult_no` 是**分班那一刻**的值 —— 学生还没学号时等于咨询学生 id。
-   *   等班主任接收建档、学号回写到咨询学生表之后，`consultNoOf()` 返回的是**学号**，
-   *   拿它去查 `consult_no` 一条都命中不了 → 守卫失效，
-   *   已入班的学生还能再分一次班（用户实测反馈）。
-   *
-   * 所以两个键都带上，任一命中即拦。下游两个接口本来就支持批量多 key。
-   */
-  const no = consultNoOf(stu);
-  const keys = Array.from(new Set([no, String(stu.id)].filter(Boolean)));
-  const [univ, jh] = await Promise.all([classSync.consultStatus(keys), classSync.jhEnrolledStatus(keys)]);
+/**
+ * 后端二次拦截用的状态判定（与 /assign-status 同口径）
+ *
+ * ★ 2026-10-22 改为「拿全部认人键去查」，并回传命中的那个键：
+ *   - `reason` 非空 → 阻断（已推送待接收 / 已接收入班 / 初高已入班）
+ *   - `hitKey`  有值 → 说明这条推送单已经存在（可能是被驳回的单），
+ *     重新分派时要**复用它的 consult_no**，否则学号回写后再推送会用新键
+ *     另建一条推送单，同一个学生会同时挂在「已驳回」和「待接收」两行上。
+ */
+async function assignBlockReason(
+  stu: Record<string, any>,
+): Promise<{ reason: string | null; hitKey: string | null }> {
+  const keys = consultNoKeys(stu);
+  if (!keys.length) return { reason: null, hitKey: null };
 
-  /** 从返回的 map 里按任意一个键取值 */
-  const pick = (data: unknown): Record<string, any> | null => {
-    const m = (data || {}) as Record<string, any>;
-    for (const k of keys) {
-      if (m[k]) return m[k];
-    }
-    return null;
-  };
+  const [univ, jh] = await Promise.all([
+    classSync.consultStatus(keys),
+    classSync.jhEnrolledStatus(keys),
+  ]);
 
   // ★ 2026-10-19：先看推送单（初高现在也走推送，pending/received 都在这里）
-  const hit = pick(univ.ok ? univ.data : null);
+  const u = (univ.ok ? univ.data : {}) as Record<string, any>;
+  const univKey = keys.find((k) => u[k]);
+  const hit = univKey ? u[univKey] : null;
   if (hit) {
     const st = Number(hit.applyStatus);
     if (st === 2) {
-      return `「${stu.student_name}」已被班主任接收并入班「${hit.intendClassName ?? ''}」，不能再分派到其他班级；如需换班请联系学管`;
+      return {
+        reason: `「${stu.student_name}」已被班主任接收并入班「${hit.intendClassName ?? ''}」，不能再分派到其他班级；如需换班请联系学管`,
+        hitKey: univKey ?? null,
+      };
     }
     if (st === 1) {
-      return `「${stu.student_name}」已分班到「${hit.intendClassName ?? ''}」，正在等待班主任接收，不能重复分派；如要改派请先让该班班主任驳回`;
+      return {
+        reason: `「${stu.student_name}」已分班到「${hit.intendClassName ?? ''}」，正在等待班主任接收，不能重复分派；如要改派请先让该班班主任驳回`,
+        hitKey: univKey ?? null,
+      };
     }
-    // st === 3（已驳回）→ 放行，允许重新分派
+    // st === 3（已驳回）→ 放行，允许重新分派（但复用它的 consult_no）
   }
 
   // 历史上「初高直建入班」的老数据没有推送单 → 仍按初高学籍表兜底拦一次
-  const j = pick(jh.ok ? jh.data : null);
-  if (j) {
-    return `「${stu.student_name}」已进入教学管理（初高）「${j.className ?? '对应班级'}」，不能再分派到其他班级；如需换班请先在初高侧处理`;
+  const j = (jh.ok ? jh.data : {}) as Record<string, any>;
+  const jhKey = keys.find((k) => j[k]);
+  if (jhKey) {
+    return {
+      reason: `「${stu.student_name}」已进入教学管理（初高）「${j[jhKey]?.className ?? '对应班级'}」，不能再分派到其他班级；如需换班请先在初高侧处理`,
+      hitKey: jhKey,
+    };
   }
-  return null;
+  return { reason: null, hitKey: univKey ?? null };
 }
 
 /**
@@ -1531,7 +1564,11 @@ studentRouter.post(
       );
     }
 
-    const consultNo = consultNoOf(stu);
+    /* ★ 2026-10-22：分班状态的二次拦截（拿到命中键用于复用推送单号） */
+    let assignGuard: { reason: string | null; hitKey: string | null } = {
+      reason: null,
+      hitKey: null,
+    };
 
     // ---- ★ 分班模式（传了 classId）：必须已缴（至少一笔收款单「已到账」） ----
     if (classId) {
@@ -1547,9 +1584,20 @@ studentRouter.post(
 
       // ★ 2026-10-06 用户口径：分过班就不能再分派到其他班级（驳回之后可以）
       //   前端按钮会置灰，这里是**后端二次拦截** —— 防止直接调接口绕过。
-      const blocked = await assignBlockReason(stu);
-      if (blocked) throw new BizError(BizCode.INVALID_STATUS, blocked);
+      //   ★ 2026-10-22：改用「学号 + 咨询学生 id」双键查（入班后学号回写会导致旧键失配）
+      assignGuard = await assignBlockReason(stu);
+      if (assignGuard.reason) throw new BizError(BizCode.INVALID_STATUS, assignGuard.reason);
     }
+
+    /**
+     * ★ 2026-10-22 推送单号（class 侧幂等键）
+     *
+     *   优先复用已存在的推送单键（`assignGuard.hitKey`）：
+     *   被班主任驳回后重新分派时，若学生已回写学号，`consultNoOf` 会给出学号，
+     *   而旧推送单的 consult_no 还是当初的咨询学生 id → 会另建一条新推送单，
+     *   同一个学生同时挂在「已驳回」和「待接收」两行上。
+     */
+    const consultNo = assignGuard.hitKey || consultNoOf(stu);
 
     /* ---- 分流：初高 / 大学部 都推「待接收学员」，由对应学段的班主任接收 ----
      *

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>侧栏菜单结构</title>
+<style>
+  html,body{margin:0;background:#F6F4F2;font-family:"Microsoft YaHei",sans-serif}
+  iframe{width:1400px;height:1000px;border:0;display:block;background:#fff}
+  #bar{position:fixed;left:0;right:0;bottom:0;background:#0F3D2E;color:#C9F5D9;
+       font:12px/1.6 Consolas,"Microsoft YaHei",monospace;padding:8px 12px;white-space:pre-wrap;z-index:9}
+</style>
+</head>
+<body>
+<iframe id="fr"></iframe>
+<div id="bar">加载中…</div>
+<script>
+const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI5MjUwY2VmZC01NjVhLTQwOTQtOTNjMi1mMTg1ZjA4NTdlNWEiLCJyb2xlcyI6WyJTWVNfU1RBRkYiXSwicGVybWlzc2lvbnMiOlsibW9kdWxlOmNvbnN1bHQsZmluYW5jZSxwZXJtLGpvYixlZHUsY2xhc3MsY2xhc3MtamgiXSwiZGF0YVNjb3BlIjozLCJtb2R1bGVzIjpbImNvbnN1bHQiLCJmaW5hbmNlIiwicGVybSIsImpvYiIsImVkdSIsImNsYXNzIiwiY2xhc3MtamgiXSwia2luZCI6Im1vZHVsZV9vd25lciIsInVzZXJOYW1lIjoi6ZKx5a6I5LmJIiwiYWNjb3VudElkIjoiOTI1MGNlZmQtNTY1YS00MDk0LTkzYzItZjE4NWYwODU3ZTVhIiwiYWNjb3VudCI6InFpYW5zeSIsImRlZ3JhZGVkIjpmYWxzZSwiaWF0IjoxNzkyNDgwNTA5LCJleHAiOjE3OTMwODUzMDl9.GHbINX-3mDU0HLKYoTvhqmi9mdWBTO3ERmCTcHQqQd8';
+const fr = document.getElementById('fr');
+const bar = document.getElementById('bar');
+localStorage.setItem('sms_token', TOKEN);
+fr.src = '/#/perm/page';
+
+let ticks = 0;
+function dump() {
+  const d = fr.contentDocument;
+  if (!d) return false;
+  const menu = d.querySelector('.side-menu');
+  if (!menu) return false;
+  const roots = [...menu.children];
+  if (!roots.length) return false;
+
+  const out = [];
+  roots.forEach((li) => {
+    const isSub = li.classList.contains('el-sub-menu');
+    const titleEl = li.querySelector(':scope > .el-sub-menu__title .menu-title, :scope > .el-menu-item .menu-title');
+    const title = (titleEl ? titleEl.textContent : li.textContent).trim().split('\n')[0].trim();
+    if (!isSub) {
+      out.push('· ' + title + '   （单层）');
+      return;
+    }
+    const kids = [...li.querySelectorAll('.el-menu-item .child-title')].map((x) => x.textContent.trim());
+    out.push('▾ ' + title + '   （' + kids.length + '）');
+    kids.forEach((k) => out.push('    - ' + k));
+  });
+  bar.textContent = out.join('\n');
+  return true;
+}
+const timer = setInterval(() => {
+  ticks++;
+  let done = false;
+  try { done = dump(); } catch (e) { bar.textContent = 'ERR ' + e.message; }
+  if (done || ticks > 60) clearInterval(timer);
+}, 400);
+</script>
+</body>
+</html>

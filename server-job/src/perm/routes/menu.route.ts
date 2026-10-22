@@ -110,7 +110,7 @@ menuRouter.get(
 
 menuRouter.post(
   '/item',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:职位权限分配:addItem'),
   validate(itemSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated;
@@ -134,7 +134,7 @@ menuRouter.post(
 
 menuRouter.put(
   '/item',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:职位权限分配:editPerm'),
   validate(itemSchema.extend({ id: z.string().min(1, '缺少权限点 id') })),
   wrap(async (req, res) => {
     const body = (req as any).validated;
@@ -156,7 +156,7 @@ menuRouter.put(
 
 menuRouter.delete(
   '/item/:id',
-  checkPermission('perm:权限配置:editPerm'),
+  checkPermission('perm:职位权限分配:editPerm'),
   wrap(async (req, res) => {
     const id = String(req.params.id || '');
     if (!id) throw new BizError(BizCode.PARAM_ERROR, '缺少权限点 id');

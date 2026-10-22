@@ -694,10 +694,10 @@ import type { FormInstance, FormRules } from 'element-plus';
 import { SetUp } from '@element-plus/icons-vue';
 import { isReadOnlyUser, myRoles } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
+import { http } from '@/api/request';
 // ★ 2026-10-22：阶段方案设计从「系统设置」搬进班级管理，以弹窗呈现
 import StageSchemePanel from '@/teaching/components/StageSchemePanel.vue';
 import { DeptCode } from 'shared-types';
-import { userApi } from '@/perm/api/perm';
 import type { PermUserListItem } from 'shared-types/perm';
 import {
   listClasses,
@@ -1020,17 +1020,20 @@ const staffOptions = ref<PermUserListItem[]>([]);
 async function loadStaff() {
   staffLoading.value = true;
   try {
-    // ⚠️ /api/perm/user/list 的 size 上限 100 —— 按 100/页自动翻页拉全量（≤5 页封顶）
-    const out: PermUserListItem[] = [];
-    const size = 100;
-    const first = await userApi.list({ page: 1, size });
-    out.push(...(first.list || []));
-    const pages = Math.ceil((first.total || 0) / size);
-    for (let p = 2; p <= Math.min(pages, 5); p++) {
-      const d = await userApi.list({ page: p, size });
-      out.push(...(d.list || []));
-    }
-    staffOptions.value = out;
+    /* ★ 2026-10-22：改走教学侧接口 /api/teaching/class/staff-options
+     *
+     * 【为什么换】原来直连 /api/perm/user/list（挂 permAuth，要求账号 modules 含 perm）——
+     *   初高 / 大学 / 就业账号一进班级管理就 403：
+     *   ① 拦截器弹「您没有该操作的权限」（用户报障：每个账号登录都弹没有权限）；
+     *   ② 更实际的问题：staffOptions 被清空 → 新建班级选不了班主任/教员/助教。
+     *   新接口跟着班级页面权限走，只返回 id + 姓名，够下拉用。
+     *   拉取仍带 silent：万一以后某个账号连班级页面权限都没有，也只是下拉空着，不弹窗。 */
+    const rows = await http.get<Array<{ id: string; userName: string }>>(
+      '/api/teaching/class/staff-options',
+      undefined,
+      { silent: true },
+    );
+    staffOptions.value = (rows || []) as unknown as PermUserListItem[];
   } catch {
     staffOptions.value = [];
   } finally {

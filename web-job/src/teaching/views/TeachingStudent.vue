@@ -902,6 +902,7 @@ import type { FormInstance, FormRules } from 'element-plus';
 import { DEPT_NAME, DeptCode, EDUCATION_OPTIONS, StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
 import type { DormRoomItem } from 'shared-types/edu';
 import { isReadOnlyUser } from '@/store/permission';
+import { moduleAllowed } from '@/store/modules';
 import { visibleStageOptions } from '@/teaching/access';
 import { fetchDormList } from '@/api/edu/dorm';
 import {
@@ -1331,17 +1332,26 @@ const dormLoading = ref(false);
 const dormRooms = ref<DormRoomItem[]>([]);
 
 async function loadDormRooms() {
+  /* ★ 2026-10-22：宿舍字典在「教务」板块（/api/edu/dorm/list），
+   *   初高 / 大学 / 就业账号都没有这个板块 —— 原来无条件预取，
+   *   一进学生档案就吃一条「该模块未授权给当前账号」的红字（用户报障：登录就弹无权限）。
+   *   现在没教务板块直接跳过；有教务板块的账号才拉，且失败不弹提示。 */
+  if (!moduleAllowed('edu')) {
+    dormRooms.value = [];
+    return;
+  }
   dormLoading.value = true;
   try {
     // ⚠️ /api/edu/dorm/list 的 size 上限是 200（zod 校验），一次拉 500 会被
     //   「参数 size 超出允许范围」400 拒掉 —— 这里按 200/页自动翻页拉全量
     const out: DormRoomItem[] = [];
     const size = 200;
-    const first = await fetchDormList({ page: 1, size });
+    const silent = { silent: true };
+    const first = await fetchDormList({ page: 1, size }, silent);
     out.push(...(first.list || []));
     const pages = Math.ceil((first.total || 0) / size);
     for (let p = 2; p <= Math.min(pages, 10); p++) {
-      const d = await fetchDormList({ page: p, size });
+      const d = await fetchDormList({ page: p, size }, silent);
       out.push(...(d.list || []));
     }
     dormRooms.value = out;

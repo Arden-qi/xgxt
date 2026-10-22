@@ -127,15 +127,15 @@ function copyLogId(): void {
         </div>
       </div>
       <div class="card-b p0">
-        <table class="tb">
+        <table class="tb tb-overview">
           <thead>
             <tr>
-              <th style="width: 150px">时间</th>
-              <th>操作人</th>
-              <th>模块</th>
-              <th>操作</th>
-              <th>对象</th>
-              <th style="width: 70px">结果</th>
+              <th style="width: 18%">时间</th>
+              <th style="width: 17%">操作人</th>
+              <th style="width: 11%">模块</th>
+              <th style="width: 9%">操作</th>
+              <th style="width: 31%">对象</th>
+              <th style="width: 14%">结果</th>
             </tr>
           </thead>
           <tbody>

@@ -23,6 +23,13 @@ export const useUserStore = defineStore('perm-user', {
   state: () => ({
     /** 当前登录人档案（来自门户 token）；null 表示还没加载 */
     profile: null as PermProfileResp | null,
+    /**
+     * ⭐ 2026-10-22：权限管理板块内可用的操作码
+     *   （如 ['perm:职位管理:add', 'perm:职位权限分配:editPerm']）
+     *   系统管理员是通配 ['perm:*']。
+     *   页面按钮据此显隐 —— 「没勾的动作，界面上不该出现」。
+     */
+    permissions: [] as string[],
     /** 正在请求 */
     loading: false,
 
@@ -67,10 +74,15 @@ export const useUserStore = defineStore('perm-user', {
       try {
         const res = await authApi.profile();
         this.profile = res.profile;
+        // 系统管理员：无论后端下发什么，一律给通配，避免把超管自己的按钮藏掉
+        this.permissions = res.profile?.isSysAdmin
+          ? ['perm:*']
+          : (res.permissions || []);
         return this.profile;
       } catch {
         // 错误提示已由 request 拦截器统一弹出，这里只负责不阻塞界面
         this.profile = null;
+        this.permissions = [];
         return null;
       } finally {
         this.loading = false;
@@ -96,6 +108,25 @@ export const useUserStore = defineStore('perm-user', {
       return this.menuKeys.includes(key);
     },
 
+    /**
+     * ⭐ 2026-10-22：有没有某个操作码 —— 页面按钮显隐统一走这里
+     *
+     * @param code 形如 `perm:职位管理:add`（取值见 server-job/src/perm/config/permTree.ts）
+     *
+     * 语义：系统管理员（通配 `perm:*`）恒 true；
+     *      其余按「职位权限分配」里给该职位勾上的动作来。
+     *      —— 没勾的动作，界面上不渲染按钮；就算用户绕过前端直接调接口，
+     *        后端 checkPermission 用同一个码再拦一次（403）。
+     */
+    can(code: string): boolean {
+      return this.permissions.includes('perm:*') || this.permissions.includes(code);
+    },
+
+    /** 只读判定：连「编辑职位权限」都没有 → 整个板块只能看 */
+    isReadOnly(): boolean {
+      return !this.can('perm:职位权限分配:editPerm') && !this.isSysAdmin;
+    },
+
     /** 是否系统管理员 */
     isSysAdminCheck(): boolean {
       return this.isSysAdmin;
@@ -113,6 +144,7 @@ export const useUserStore = defineStore('perm-user', {
     reset(): void {
       this.profile = null;
       this.adminViewProfile = null;
+      this.permissions = [];
     },
   },
 });

@@ -37,6 +37,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 import { applyClassScope } from '../shared/dataScope';
+import { resolvePhaseCodeFromScheme } from '../shared/stageSchemes';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -59,6 +60,8 @@ const PHASE_NAME: Record<number, string> = {
 };
 
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
+/** ★ 2026-10-22：建班 phaseCode 兜底值（显式常量，别靠 Object.keys 顺序） */
+const JH_FIRST_PHASE = 101;
 const GENDER: Record<number, string> = { 0: '未知', 1: '男', 2: '女' };
 
 /**
@@ -266,7 +269,10 @@ export const repo: ClassRepo = {
     };
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
-    set(phaseCodeCol(), body.phaseCode);
+    /* ★ 2026-10-22 与大学部同一口径：只选了方案阶段时按 sort_no 推导阶段码
+     *   （初高方案：预科 101 / 初中部1~3期 102~104 / 高中部1~3期 105~107） */
+    const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
+    set(phaseCodeCol(), body.phaseCode ?? derivedPhaseCode);
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
     set('scheme_id', body.schemeId);
     set('scheme_stage_id', body.schemeStageId);
@@ -328,7 +334,9 @@ export const repo: ClassRepo = {
     const id = randomUUID();
     // ★ 2026-10-21 班号：按学部组（J=预科+初中 / T=高中）顺序分配，101 起；
     //   学号 = LZ + J/T + 班号(3位) + 班内序号(3位, 每班从001独立)，见 classNo.ts
-    const stage = body.phaseCode ?? Number(Object.keys(PHASE_NAME)[0]);
+    // ★ 2026-10-22：兜底值写死 101（预科），不再用 `Object.keys(PHASE_NAME)[0]` ——
+    //   数值键按升序排列，一旦这张表里出现更小的码（如 13 实训），兜底就会静默跑偏。
+    const stage = body.phaseCode ?? JH_FIRST_PHASE;
     await tblIns(db, 'sms_class_jh', T, STAGE, {
       id,
       class_code: classCode,

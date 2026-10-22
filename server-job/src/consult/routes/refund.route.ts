@@ -30,11 +30,41 @@ import {
   manualPay,
   syncRefundFromFinance,
 } from '../services/refund.service';
+// ★ formatDate：date 列可能被 mysql2 读成 Date 对象，必须归一成 YYYY-MM-DD 再比较
 import { findStudent, formatDate } from '../services/student.service';
 // ★ 2026-10-16 数据范围：咨询师只能给自己名下（分配给自己的）学生发起退费
 import { assertStudentIdInScope } from '../services/data-scope';
 
 export const refundRouter = Router();
+
+/**
+ * ★ 2026-10-22 试学期间下限校验（用户口径）
+ *
+ * 「试学期间的时间从分配班级进班试学开始计算，日期之前没进班或者没来之前不能选择」
+ *
+ *   · 进班试学日 = `t_student.trial_start`（班主任接收入班那一刻写入的日期）
+ *   · 试学期间不得早于它 —— 之前人还没进班，这段时间不该算试学消耗
+ *     （不拦的话可以把 8 月一直算到今天，多扣住宿餐费，退费金额被做小）
+ *   · 没有 trial_start（老数据/直接转正式的）就不设下限，只能靠人工把关
+ *
+ * 前端日历也会按同一天禁用更早的日期，这里是**后端二次拦截**，防直接调接口。
+ *
+ * ⚠️ 日期必须用 formatDate 归一成 `YYYY-MM-DD` 再比：
+ *    mysql2 在部分配置下把 date 列读成 Date 对象，`String(date).slice(0,10)`
+ *    会得到 "Thu Oct 22" 这种串，字符串比较直接失效（踩过）。
+ */
+async function assertTrialStartNotBeforeClass(consultStudentId: string, trialStart: string): Promise<void> {
+  const stu = await findStudent(consultStudentId);
+  if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
+  const min = formatDate(stu.trial_start);
+  if (!min) return;
+  if (trialStart < min) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `试学期间不能早于进班试学日期（${min}）：该学生在那之前还没进班，不计试学消耗`,
+    );
+  }
+}
 
 /* ============================================================
  * 1. 退费列表
@@ -143,6 +173,8 @@ refundRouter.post(
   validate(calcSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof calcSchema>;
+    // ★ 2026-10-22 试学期间不能早于进班试学日（试算也拦，保证显示与提交一致）
+    await assertTrialStartNotBeforeClass(body.consultStudentId, body.trialStart);
     const result = await calcRefund(
       body.consultStudentId,
       body.trialStart,
@@ -186,6 +218,9 @@ refundRouter.post(
      *   （经理不受限 —— 经理看全部、也能代发起）
      */
     await assertStudentIdInScope(body.consultStudentId, req.user);
+
+    // ★ 2026-10-22 试学期间不能早于进班试学日
+    await assertTrialStartNotBeforeClass(body.consultStudentId, body.trialStart);
 
     const result = await applyRefund(
       body.consultStudentId,
@@ -333,15 +368,14 @@ refundRouter.get(
     const { today } = await import('../services/student.service');
     const end = today();
     /**
-     * ⚠️ 必须用 formatDate，不能 `String(v).slice(0, 10)`
+     * ★ 2026-10-22 试学期间最早可选日 = 进班试学日
      *
-     * `trial_start` 从 MySQL 取回来是 **Date 对象**，
-     * `String(new Date())` 得到的是 `"Thu Oct 22 2026 17:56:43 GMT+0800 ..."`，
-     * 截前 10 位就是 `"Thu Oct 22"` —— 前端拿它去调 /refund/calc 时，
-     * 后端 schema 要求 `^\d{4}-\d{2}-\d{2}$`，直接报「参数格式不正确」，
-     * 表现为「退费弹窗一选学生就报错」。
+     * 前端日历用它禁用更早的日期（没进班之前的日期不该能选）。
+     * 与 `trialStart` 分开返回：trialStart 是「默认填入的开始日」，
+     * earliestTrialStart 是「允许的最早一天」，没有进班记录时为 null（不设下限）。
      */
-    const start = stu.trial_start ? formatDate(stu.trial_start) : end;
+    const earliest = formatDate(stu.trial_start) || null;
+    const start = earliest || end;
 
     // 用「无物品、无每日消耗」先算一次，给前端初始值（前端会按勾选立即重算）
     const calc = await calcRefund(consultStudentId, start, end, undefined, [], []);
@@ -353,6 +387,8 @@ refundRouter.get(
         className: stu.class_name,
         trialStart: start,
         trialEnd: end,
+        /** 试学期间最早可选日（= 进班试学日）；null = 没有进班记录，前端不设下限 */
+        earliestTrialStart: earliest,
         ...calc,
       }),
     );

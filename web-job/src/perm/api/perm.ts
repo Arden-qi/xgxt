@@ -152,6 +152,13 @@ export const logApi = {
   list: (params?: Record<string, any>) => http.get<PageData<PermLog>>(`${P}/log/list`, params),
   detail: (id: string) => http.get<PermLog>(`${P}/log/detail`, { id }),
   overview: () => http.get<LogOverview>(`${P}/log/overview`),
+  /**
+   * 操作人字典（按操作次数倒序）
+   *
+   * ★ 2026-10-22：全系统留痕后日志里会出现几十个账号，
+   *   前端「当前页去重」凑出来的下拉根本选不全，改由后端给全量。
+   */
+  operators: () => http.get<{ name: string; count: number }[]>(`${P}/log/operators`),
 };
 
 /* ============================================================
@@ -235,8 +242,18 @@ export interface PermProfileResp {
 }
 
 export const authApi = {
-  /** 当前登录人 + 可访问页面 */
-  profile: () => http.get<{ profile: PermProfileResp; menuKeys: string[] }>(`${P}/auth/profile`),
+  /**
+   * 当前登录人 + 可访问页面 + 可用操作码
+   *
+   * ⭐ 2026-10-22：permissions 是本轮新增的「权限管理板块内的操作码」，
+   *   形如 ['perm:职位管理:add', 'perm:职位权限分配:editPerm']，
+   *   系统管理员拿到的是通配 ['perm:*']。
+   *   页面按钮据此显隐 —— 没有的码就不渲染按钮（后端同码再拦一次）。
+   */
+  profile: () =>
+    http.get<{ profile: PermProfileResp; menuKeys: string[]; permissions?: string[] }>(
+      `${P}/auth/profile`,
+    ),
   /** 仅菜单（轻量） */
   menus: () => http.get<{ menuKeys: string[] }>(`${P}/auth/menus`),
 };

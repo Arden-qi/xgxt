@@ -86,6 +86,16 @@ const applyForm = ref({
 const calcResult = ref<ConsultRefundCalcResult | null>(null);
 const calcLoading = ref(false);
 
+/**
+ * ★ 2026-10-22 试学期间最早可选日 = 进班试学日
+ *
+ * 用户口径：「试学期间的时间从分配班级进班试学开始计算，
+ *            日期之前没进班或者没来之前不能选择」
+ *
+ * 空字符串 = 该生没有进班记录（老数据/直接转正式），此时不设下限。
+ */
+const earliestTrialStart = ref('');
+
 /** 可勾选的消耗项（住宿/餐费/保险 + 物品）
  *  ★ 2026-10-16 用户指令：取消「工具包」「宿舍门禁卡」，不再参与退费扣减 */
 const DEDUCT_OPTIONS = [
@@ -144,6 +154,7 @@ function openApply(row?: ConsultRefundOrder) {
     ? [{ consultStudentId: row.consultStudentId, studentName: row.studentName }]
     : [];
   calcResult.value = null;
+  earliestTrialStart.value = '';
   applyVisible.value = true;
   if (row?.consultStudentId) onStudentChange();
 }
@@ -151,14 +162,17 @@ function openApply(row?: ConsultRefundOrder) {
 /** 选中学生 → 自动预填试学开始日期和已到账金额 */
 async function onStudentChange() {
   if (!applyForm.value.consultStudentId) return;
+  earliestTrialStart.value = '';
   try {
     const pre = await fetchRefundPrefill(applyForm.value.consultStudentId);
+    // ★ 2026-10-22 记住「进班试学日」，日历上更早的日期一律禁选
+    earliestTrialStart.value = pre.earliestTrialStart || '';
     /**
-     * ⚠️ 只接受 YYYY-MM-DD
+     * 只接受 YYYY-MM-DD
      *
      * 后端 prefill 曾经返回过 `"Thu Oct 22"`（Date 被 String() 再截断），
      * 直接塞进 trialStart 会让 /refund/calc 报「参数格式不正确」。
-     * 后端已修，这里再兜一道：格式不对就不填，让用户自己选日期。
+     * 后端已修（formatDate），这里再兜一道：格式不对就不填，让用户自己选日期。
      */
     if (pre.trialStart && /^\d{4}-\d{2}-\d{2}$/.test(pre.trialStart)) {
       applyForm.value.trialStart = pre.trialStart;
@@ -172,6 +186,34 @@ async function onStudentChange() {
   } catch {
     /* 学生不存在或试学费未到账，后端会提示 */
   }
+}
+
+/** 今天的 00:00（结束日期不许选未来） */
+function todayStart(): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * 试学开始日期：不能早于进班试学日
+ *
+ * ★ 2026-10-22 用户口径 —— 人还没进班的那段时间不算试学，不该能选。
+ *   没有进班记录（earliestTrialStart 为空）时不设下限。
+ */
+function disabledTrialStart(d: Date): boolean {
+  if (d > todayStart()) return true;
+  if (!earliestTrialStart.value) return false;
+  const min = new Date(`${earliestTrialStart.value}T00:00:00`);
+  return d < min;
+}
+
+/** 试学结束日期：不能选未来，也不能早于开始日期 */
+function disabledTrialEnd(d: Date): boolean {
+  if (d > todayStart()) return true;
+  const s = applyForm.value.trialStart;
+  if (!s) return false;
+  return d < new Date(`${s}T00:00:00`);
 }
 
 /** 勾选的「物品」名称（住宿/餐费/保险是每日消耗项，走 dailyItems 传） */
@@ -466,6 +508,7 @@ onMounted(load);
               type="date"
               placeholder="开始日期"
               value-format="YYYY-MM-DD"
+              :disabled-date="disabledTrialStart"
               style="width: 160px"
               @change="doCalc"
             />
@@ -475,9 +518,14 @@ onMounted(load);
               type="date"
               placeholder="结束日期"
               value-format="YYYY-MM-DD"
+              :disabled-date="disabledTrialEnd"
               style="width: 160px"
               @change="doCalc"
             />
+          </div>
+          <!-- ★ 2026-10-22 口径提示：只在有进班试学日时显示，避免用户不知道为何选不了 -->
+          <div v-if="earliestTrialStart" class="date-hint">
+            试学从进班试学日 {{ earliestTrialStart }} 开始计算，更早的日期不可选
           </div>
         </el-form-item>
 
@@ -638,6 +686,14 @@ onMounted(load);
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ★ 2026-10-22 试学期间下限提示 */
+.date-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 
 .calc-box {
