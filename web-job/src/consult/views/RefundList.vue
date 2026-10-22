@@ -6,7 +6,7 @@
  * 规则：经理自审自批（自己发起直接进「待财务打款」）
  */
 
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type {
   ConsultRefundOrder,
@@ -196,6 +196,27 @@ function disabledTrialEnd(d: Date): boolean {
   if (!s) return false;
   return d < new Date(`${s}T00:00:00`);
 }
+
+/**
+ * ★ 2026-10-22 兜底：手输 / 粘贴绕过 disabled-date 时把开始日纠正回来
+ *
+ * 【为什么需要】Element Plus 的 `disabled-date` 只管**日历面板里能不能点**，
+ *   输入框仍然可以手敲（截图里就出现过 2026-08-04 手输进去、试算出 80 天）。
+ *   输入框已经加了 `:editable="false"` 收紧，这里再做一层状态纠偏：
+ *   任何来源导致 trialStart < 进班试学日，一律拉回进班试学日并提示。
+ */
+watch(
+  () => applyForm.value.trialStart,
+  (v) => {
+    if (!v || !earliestTrialStart.value) return;
+    if (v < earliestTrialStart.value) {
+      applyForm.value.trialStart = earliestTrialStart.value;
+      ElMessage.warning(
+        `试学从进班试学日 ${earliestTrialStart.value} 开始计算，更早的日期不能选，已自动调整为 ${earliestTrialStart.value}`,
+      );
+    }
+  },
+);
 
 /** 勾选的「物品」名称（住宿/餐费/保险是每日消耗项，走 dailyItems 传） */
 function checkedItemNames(): string[] {
@@ -490,6 +511,7 @@ onMounted(load);
               placeholder="开始日期"
               value-format="YYYY-MM-DD"
               :disabled-date="disabledTrialStart"
+              :editable="false"
               style="width: 160px"
               @change="doCalc"
             />
