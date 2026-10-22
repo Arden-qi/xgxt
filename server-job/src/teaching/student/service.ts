@@ -42,7 +42,8 @@ import { db as classDb } from '../../class/db';
 import { tbl, tblInsTrx, tblTrx, phaseCodeCol } from '../shared/uniTable';
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 import { insertUpgrade, listByStudentNo } from './upgrade.repo';
-import { markEmployed } from './employed.repo';
+import { getStudentStatus, markEmployed } from './employed.repo';
+import { assertStatusUnlocked, lockedStatusMessage, isStatusLocked } from '../shared/statusLock';
 import { ClassStatus, CLASS_STATUS_NAME, DeptCode } from 'shared-types';
 
 const REPOS: Record<StudentStage, StudentRepo> = {
@@ -264,6 +265,22 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
   if (body.stage !== 'jh' && !body.deptCode) {
     throw new BizError(BizCode.PARAM_ERROR, `${STUDENT_STAGE_NAME[body.stage]}学段「部门」必填`);
   }
+
+  /* ★ 2026-10-21 批注：「学生状态为【退学】的，任何操作都不可更改该状态」
+   *   编辑学生档案是唯一能直接写 `student_status` 的入口 → 在这里锁死：
+   *     ① 库里已经是退学(7) → 传上来的状态必须还是 7，想改就报错（前端下拉也已 disabled）；
+   *     ② 顺便把 payload 里的状态钉成 7，防止绕过前端改出别的值。
+   *   ⚠️ 新增（没有 id）不受影响，见 statusLock.ts 的说明。 */
+  if (body.id) {
+    const current = await getStudentStatus(body.stage, body.id);
+    if (isStatusLocked(current)) {
+      if (body.studentStatus !== undefined && Number(body.studentStatus) !== Number(current)) {
+        throw new BizError(BizCode.PARAM_ERROR, lockedStatusMessage('该学生'));
+      }
+      body = { ...body, studentStatus: Number(current) };
+    }
+  }
+
   try {
     return await REPOS[body.stage].save(body, user?.userId || 'system');
   } catch (e) {

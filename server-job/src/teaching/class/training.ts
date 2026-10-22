@@ -31,6 +31,7 @@ import { db as classDb } from '../../class/db';
 import { CLASS_STATUS } from '../shared/dto';
 import { phaseCodeCol, tbl, tblInsTrx, tblTrx } from '../shared/uniTable';
 import { loadStagePlanOptions } from '../shared/stagePlans';
+import { isStatusLocked } from '../shared/statusLock';
 import { assertStageView } from './service';
 import { genClassCode } from './repo.job';
 
@@ -176,7 +177,12 @@ export async function upgradeClassToTraining(
         teacher_name: null,
         assistant_id: null,
         assistant_name: null,
-        student_status: StudentStatus.TRAINING,
+        // ★ 2026-10-21 批注：「学生状态为【退学】的，任何操作都不可更改该状态」
+        //   整班搬迁时**照搬**退学学生的状态（人是搬过来的，档案留痕，但 7 不能被改成 8）
+        //   —— 见 shared/statusLock.ts。其余学生照旧写「实训中」。
+        student_status: isStatusLocked(s.student_status)
+          ? Number(s.student_status)
+          : StudentStatus.TRAINING,
         [phaseCodeCol()]: phaseCode,
         phone: s.phone ?? null,
         parent_name: s.parent_name ?? null,

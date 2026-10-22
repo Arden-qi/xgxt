@@ -24,6 +24,7 @@ import type {
 } from '../shared/dto';
 import { EXAM_RESULT_NAME, TEACHING_STAGE_NAME } from '../shared/dto';
 import { tbl } from '../shared/uniTable';
+import { isStatusLocked } from '../shared/statusLock';
 import {
   CLASS_STATUS_GRADUATED,
   composeRepeatReason,
@@ -279,6 +280,11 @@ export async function repeat(body: ScoreRepeatBody, userId: string): Promise<Sco
     | Record<string, any>
     | undefined;
   if (!stu) throw new Error('学生不存在或已被删除');
+  // ★ 2026-10-21 批注：退学 = 状态永久锁。末班会改写学生状态（跨学段置流失），
+  //   所以退学学生一律不允许末班（见 teaching/shared/statusLock.ts）。
+  if (isStatusLocked(stu.student_status)) {
+    throw new Error('该学生已「退学」，学生状态不可更改，不能执行末班');
+  }
 
   // 当前所在班以花名册为准（主档的 class_id 是冗余快照）
   const cur = (await db(CS)

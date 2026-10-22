@@ -25,6 +25,7 @@
 import type { Knex } from 'knex';
 import { BizCode, STUDENT_STATUS_NAME, StudentStatus } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
+import { assertStatusUnlocked } from '../shared/statusLock';
 import { db as jobDb } from '../../utils/db';
 import { db as classDb } from '../../class/db';
 import { db as classJhDb } from '../../class-jh/utils/db';
@@ -70,6 +71,8 @@ export interface MarkEmployedResult {
  * 标记为「已就业」
  *   · 学生必须存在
  *   · 已经是「已就业」→ 直接报错（终态，不可重复/不可逆）
+ *   · ★ 2026-10-21 批注：已「退学」的学生状态被永久锁死 → 也直接报错
+ *     （前端已不显示按钮，这里兜住直接调接口的情况，见 shared/statusLock.ts）
  */
 export async function markEmployed(
   stage: StudentStage,
@@ -81,6 +84,7 @@ export async function markEmployed(
   if (from === StudentStatus.EMPLOYED) {
     throw new BizError(BizCode.PARAM_ERROR, '该学生已是「已就业」，该操作不可重复');
   }
+  assertStatusUnlocked(from, '该学生');
 
   await qbOf(stage).where({ id }).update({
     student_status: StudentStatus.EMPLOYED,

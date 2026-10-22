@@ -269,9 +269,19 @@
           <!-- ★ 2026-10-21 批注：「更改同步学生档案的该学生的状态」
                → 这一列显示**学生档案里的学生状态**（实训中 / 待就业 / 已就业…），
                  不再固定显示花名册的「在班 / 已离班」。数据由后端 roster 回读学生主档下发。 -->
-          <el-table-column label="状态" width="80" align="center">
+          <el-table-column label="状态" width="100" align="center">
             <template #default="{ row }">
-              {{ row.studentStatusName || row.inClassStatusName || '—' }}
+              <!-- ★ 2026-10-21 批注（红框圈整列）：「学生状态为【退学】的，任何操作都不可更改该状态」
+                   → 退学单独打灰标签 + 锁标记，把「这一条是终态、谁也不能改」显示出来
+                     （写保护在后端 teaching/shared/statusLock.ts：编辑档案 / 升实训 / 升就业 / 末班 全拦）。 -->
+              <el-tooltip
+                v-if="isQuitStatus(row)"
+                content="已退学：状态为终态，任何操作都不会更改该状态"
+                placement="top"
+              >
+                <el-tag type="info" size="small" effect="plain">退学 · 锁定</el-tag>
+              </el-tooltip>
+              <template v-else>{{ row.studentStatusName || row.inClassStatusName || '—' }}</template>
             </template>
           </el-table-column>
         </el-table>
@@ -719,7 +729,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { isReadOnlyUser } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
-import { DeptCode } from 'shared-types';
+import { DeptCode, StudentStatus } from 'shared-types';
 import { userApi } from '@/perm/api/perm';
 import type { PermUserListItem } from 'shared-types/perm';
 import {
@@ -822,6 +832,11 @@ function rateClass(row: ClassRow): string {
 
 function tagType(s: number): string {
   return (CLASS_STATUS_TAG[s] || 'info') as never;
+}
+
+/** ★ 2026-10-21 批注：花名册「状态」列——退学(7) 是终态，任何操作都不能改（后端写保护） */
+function isQuitStatus(row: Record<string, any>): boolean {
+  return Number(row?.studentStatus) === StudentStatus.QUIT;
 }
 
 async function load(page?: number) {

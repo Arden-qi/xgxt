@@ -636,10 +636,12 @@
           <el-col :span="8">
             <el-form-item label="状态">
               <!-- ★ 2026-10-21 批注：下拉不再提供「已就业」（改由列表【已就业】按钮写入）；
-                   已经是「已就业」的学生是终态，状态字段直接锁死，不可改回其它状态。 -->
-              <el-select v-model="form.studentStatus" style="width: 100%" :disabled="isEmployedLocked">
+                   已经是「已就业」的学生是终态，状态字段直接锁死，不可改回其它状态。
+                   同批批注：「学生状态为【退学】的，任何操作都不可更改该状态」→ 退学一并锁死。 -->
+              <el-select v-model="form.studentStatus" style="width: 100%" :disabled="isStatusLocked">
                 <el-option v-for="(n, v) in formStatusOptions" :key="v" :label="n" :value="Number(v)" />
               </el-select>
+              <div v-if="statusLockTip" class="tsv-lock-tip">{{ statusLockTip }}</div>
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -1286,6 +1288,20 @@ const isEmployedLocked = computed(
   () => !!form.id && Number(form.studentStatus) === StudentStatus.EMPLOYED,
 );
 
+/** ★ 2026-10-21 批注：「学生状态为【退学】的，任何操作都不可更改该状态」
+ *  → 退学同样是终态锁，编辑弹窗里状态字段直接禁用（后端 saveStudent 也会拦）。 */
+const isQuitLocked = computed(() => !!form.id && Number(form.studentStatus) === StudentStatus.QUIT);
+
+/** 状态下拉是否锁定（退学 / 已就业） */
+const isStatusLocked = computed(() => isEmployedLocked.value || isQuitLocked.value);
+
+/** 锁定原因（给下拉旁的灰字提示用） */
+const statusLockTip = computed(() => {
+  if (isQuitLocked.value) return '已退学：状态为终态，不可更改';
+  if (isEmployedLocked.value) return '已就业：状态为终态，不可更改';
+  return '';
+});
+
 function openCreate() {
   Object.assign(form, emptyForm());
   // 表单已没有「学段」选择器：默认取筛选中的部门对应学段（就业/教务从对应来源进入仍可新增），
@@ -1816,6 +1832,13 @@ onMounted(async () => {
 }
 .muted {
   color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+/* ★ 2026-10-21：状态被锁（退学 / 已就业）时，下拉下面那行灰提示 */
+.tsv-lock-tip {
+  margin-top: 2px;
+  line-height: 1.4;
+  color: var(--el-color-warning);
   font-size: 12px;
 }
 

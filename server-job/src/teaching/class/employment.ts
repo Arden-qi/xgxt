@@ -31,6 +31,7 @@ import { BizError } from '../../middleware/errorHandler';
 import { db } from '../../utils/db';
 import { CLASS_STATUS, CLASS_STATUS_NAME } from '../shared/dto';
 import { tbl } from '../shared/uniTable';
+import { LOCKED_STUDENT_STATUSES } from '../shared/statusLock';
 import { assertStageView } from './service';
 
 const T = 't_job_class';
@@ -125,9 +126,17 @@ export async function upgradeClassToEmployment(
   if (!ids.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生');
 
   // 只动「还没到待就业/已就业」的学生
+  // ★ 2026-10-21 批注：「学生状态为【退学】的，任何操作都不可更改该状态」
+  //   退学(7) 虽然也落在 whereNotIn 里，但它是**永久锁** → 必须单独排除，
+  //   否则一次【升就业】就把退学学生改成「待就业」，花名册里那条退学记录凭空消失。
+  //   见 shared/statusLock.ts（LOCKED_STUDENT_STATUSES）。
   const updated = await tbl(db, 'sms_job', STUDENT_T, STAGE)
     .whereIn('id', ids)
-    .whereNotIn('student_status', [StudentStatus.WAIT_EMPLOY, StudentStatus.EMPLOYED])
+    .whereNotIn('student_status', [
+      StudentStatus.WAIT_EMPLOY,
+      StudentStatus.EMPLOYED,
+      ...LOCKED_STUDENT_STATUSES,
+    ])
     .update({
       student_status: StudentStatus.WAIT_EMPLOY,
       update_time: new Date(),

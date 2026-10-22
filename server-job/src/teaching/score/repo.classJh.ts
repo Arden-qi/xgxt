@@ -20,6 +20,7 @@ import type {
 } from '../shared/dto';
 import { EXAM_RESULT_NAME, TEACHING_STAGE_NAME } from '../shared/dto';
 import { tbl, phaseCodeCol } from '../shared/uniTable';
+import { isStatusLocked } from '../shared/statusLock';
 import {
   CLASS_STATUS_GRADUATED,
   composeRepeatReason,
@@ -302,6 +303,11 @@ export async function repeat(body: ScoreRepeatBody, userId: string): Promise<Sco
     .where({ id: String(row.student_id), is_deleted: 0 })
     .first()) as Record<string, any> | undefined;
   if (!stu) throw new Error('学生不存在或已被删除');
+  // ★ 2026-10-21 批注：退学 = 状态永久锁。末班会改写学生状态（跨学段置流失），
+  //   所以退学学生一律不允许末班（见 teaching/shared/statusLock.ts）。
+  if (isStatusLocked(stu.student_status)) {
+    throw new Error('该学生已「退学」，学生状态不可更改，不能执行末班');
+  }
   // ★ 防重复末班：末班成功后学生已经转走，再点同一条成绩就不该再动一次
   if (String(stu.class_id ?? '') !== String(row.class_id ?? '')) {
     throw new Error('该生已不在本场考试所在班级（可能已末班过），不能重复末班');
