@@ -25,6 +25,7 @@
     "seed:all:dry": "node scripts/seed-all-demo.mjs --dry",
     "seed:teaching": "node scripts/seed-teaching-demo.mjs",
     "seed:teaching:dry": "node scripts/seed-teaching-demo.mjs --dry",
+    "seed:fee-dept": "node scripts/seed-fee-dept-demo.mjs",
     "fix:perm": "node scripts/fix-perm-accounts.mjs",
     "seed:perm-pages": "tsx scripts/seed-perm-pages.ts",
     "check:action-overlay": "tsx scripts/check-action-overlay.ts",
