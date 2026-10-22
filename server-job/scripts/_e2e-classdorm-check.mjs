@@ -297,7 +297,13 @@ async function main() {
 
   /* ---------- ④ /room/list ---------- */
   console.log('\n-- ④ /room/list --');
-  const rl = await call('/room/list?page=1&size=50');
+  /**
+   * ★ 2026-10-22：按关键词查 + 分页给足 ——
+   *   原来写死 size=50 且不排序，库里房间一多（前面套件残留 + 演示数据），
+   *   刚同步的房间就被挤出这 50 条 → 断言「查不到刚同步的房间 / 楼栋名为空」，
+   *   实际功能是好的。用 keyword 精确查，避免依赖数据量。
+   */
+  const rl = await call(`/room/list?page=1&size=200&keyword=E2E-${rnd}`);
   check('room/list code=200', isOk(rl));
   const list = rl.json?.data?.list || [];
   check('room/list 能查到刚同步的房间', list.some((x) => x.dormNo === `E2E-${rnd}-101`), `共 ${list.length} 行`);
