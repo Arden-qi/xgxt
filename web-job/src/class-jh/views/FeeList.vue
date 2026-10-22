@@ -531,6 +531,34 @@ const transferSelected = ref<TransferRow[]>([]);
 const transferTableRef = ref<any>(null);
 /** 某个部门拉候选失败的原因（如无该部门权限）—— 不静默，弹窗里要亮出来 */
 const transferErrors = ref<Array<{ deptName: string; message: string }>>([]);
+/**
+ * 每部门取样统计（★ 2026-10-22）
+ *
+ * 「弹窗空着」有三种可能：这个部门没单 / 有单但都没登记缴费 / 查询出错。
+ * 把「共几单、其中已登记缴费几单」直接摆在弹窗顶上，谁的环境都能一眼分清。
+ */
+const transferStats = ref<Array<{ deptName: string; scanned: number; paid: number; error?: string }>>([]);
+
+/** 诊断摘要文案（三个部门各一段） */
+const transferStatText = computed(() =>
+  transferStats.value
+    .map((s) =>
+      s.error
+        ? `${s.deptName}：查询失败`
+        : `${s.deptName}：共 ${s.scanned} 单，已登记缴费 ${s.paid} 单`,
+    )
+    .join(' · '),
+);
+
+/** 表格空了的时候给一句能定位原因的话 */
+const transferEmptyText = computed(() => {
+  if (!transferStats.value.length) return '暂无已登记缴费的记录（先在操作列「上传缴费凭证」登记）';
+  const anyPaid = transferStats.value.some((s) => s.paid > 0);
+  const anyScanned = transferStats.value.some((s) => s.scanned > 0);
+  if (!anyScanned) return '这些部门都还没有催费单（先在催费列表里有数据，再登记缴费）';
+  if (!anyPaid) return '有催费单，但都还没「上传缴费凭证」→ 先在这里的列表操作列登记缴费';
+  return '暂无已登记缴费的记录';
+});
 
 /** 还没转交的条数（「只选未上传过」按钮上显示） */
 const untransferredCount = computed(() => transferRows.value.filter((r) => !r.transferred).length);
@@ -548,11 +576,18 @@ async function openTransfer() {
   transferRows.value = [];
   transferSelected.value = [];
   transferErrors.value = [];
+  transferStats.value = [];
   try {
     const res = await fetchTransferCandidatesAll(query.dept as TransferDept | 'all');
     transferErrors.value = (res.errors || []).map((e) => ({
       deptName: e.deptName,
       message: e.message,
+    }));
+    transferStats.value = (res.stats || []).map((s) => ({
+      deptName: s.deptName,
+      scanned: s.scanned,
+      paid: s.paid,
+      error: s.error,
     }));
     transferRows.value = (res.list || []).map((r) => ({
       transferKey: `${r.dept}:${r.feeId}`,
@@ -912,6 +947,9 @@ onMounted(() => {
           已选 {{ transferSelected.length }} 条 · 转交后财务在「缴费管理」里核对（已转交的会自动跳过）
         </span>
       </div>
+      <!-- ★ 2026-10-22：把「这个部门共几单 / 其中已登记缴费几单」摆在明面上。
+           否则弹窗空着时，分不清是「没单」「有单没登记缴费」还是「查询出错」。 -->
+      <div v-if="transferStatText" class="transfer-stat">{{ transferStatText }}</div>
       <!-- ★ 2026-10-22：某个部门拉不到候选（无权限等）不能只给个空表格，要把原因说出来 -->
       <el-alert
         v-for="e in transferErrors"
@@ -931,7 +969,7 @@ onMounted(() => {
         stripe
         size="small"
         height="420"
-        empty-text="暂无已登记缴费的记录（先在操作列「上传缴费凭证」登记）"
+        :empty-text="transferEmptyText"
         @selection-change="onTransferSelectionChange"
       >
         <el-table-column type="selection" width="46" />
@@ -1127,9 +1165,17 @@ onMounted(() => {
 /* 批量转交财务：顶部全选/只选未上传过 */
 .transfer-toolbar {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: center;  gap: 8px;
   margin-bottom: 10px;
+}
+/* ★ 2026-10-22：每部门「共几单 / 已登记缴费几单」的诊断摘要 */
+.transfer-stat {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--el-fill-color-lighter);
+  font-size: 12px;
+  color: var(--el-text-color-regular);
 }
 .voucher-title {
   margin: 14px 0 8px;

@@ -102,6 +102,21 @@ export interface TransferCandidateResult {
   list: TransferCandidate[];
   /** 某个部门查询失败（无权限等）的原因 —— 不静默，弹窗里要提示 */
   errors: Array<{ dept: TransferDept; deptName: string; message: string }>;
+  /**
+   * 每个部门的取样统计（★ 2026-10-22 新增）
+   *
+   * `scanned` = 该部门未删除的单据总数；`paid` = 其中已登记缴费的条数。
+   * 弹窗里显示「初高：共 12 单，已登记缴费 3 单」——
+   * 否则「弹窗空着」永远分不清是「没单」「有单但没登记缴费」还是「查询出错」。
+   */
+  stats?: Array<{
+    dept: TransferDept;
+    deptName: string;
+    scanned: number;
+    paid: number;
+    picked: number;
+    error?: string;
+  }>;
 }
 
 /** 拉转交候选：`dept` 传 all 就是三个部门一起取 */

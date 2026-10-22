@@ -187,17 +187,36 @@ function base(row: any, dept: Dept): TransferCandidate {
   };
 }
 
+/**
+ * 候选查询结果 + 诊断
+ *
+ * ★ 2026-10-22：加 `scanned`（该部门在册的未删除单据数）与 `paid`（其中已登记缴费的）
+ *   是因为「弹窗空着」有二义性 —— 到底是「这个部门一条单都没有」、
+ *   「有单但都没登记缴费」、还是「查询出错」？在本地能靠查库分清，
+ *   在别人机器上就只能靠猜。把这三个数直接返回给前端展示，谁的环境都能一眼定位。
+ */
+interface CandidateScan {
+  list: TransferCandidate[];
+  /** 该部门未删除的单据总数 */
+  scanned: number;
+  /** 其中「已登记缴费」的条数（= 候选来源） */
+  paid: number;
+}
+
 /** 初高：sms_class_jh.t_class_fee */
-async function candidatesJh(): Promise<TransferCandidate[]> {
-  const rows = await jhDb('t_class_fee')
-    .where('is_deleted', false)
+async function candidatesJh(): Promise<CandidateScan> {
+  const base0 = () => jhDb('t_class_fee').where('is_deleted', false);
+  const scanned = Number(
+    ((await base0().count({ c: '*' })) as any[])[0]?.c ?? 0,
+  );
+  const rows = await base0()
     .andWhere((qb) => {
       qb.whereNotNull('pay_method').orWhereNotNull('paid_amount');
     })
     .orderBy('pay_date', 'desc')
     .orderBy('expire_date', 'desc')
     .limit(500);
-  return rows.map((r: any) => base(r, 'jh'));
+  return { list: rows.map((r: any) => base(r, 'jh')), scanned, paid: rows.length };
 }
 
 /**
@@ -209,9 +228,13 @@ async function candidatesJh(): Promise<TransferCandidate[]> {
  *    （大学一行 `urge:`、就业一行 `call:`）—— 这是改造前就有的现象。
  *    转交这里必须收窄，否则就业的单会被按「大学部（部门码 2）」建到财务去。
  */
-async function candidatesClass(): Promise<TransferCandidate[]> {
-  const qb = tbl(commonDb, 'sms_common', 't_class_urge_sync', 'class');
-  const rows = await qb
+async function candidatesClass(): Promise<CandidateScan> {
+  const scanned = Number(
+    ((await tbl(commonDb, 'sms_common', 't_class_urge_sync', 'class')
+      .where('is_deleted', false)
+      .count({ c: '*' })) as any[])[0]?.c ?? 0,
+  );
+  const rows = await tbl(commonDb, 'sms_common', 't_class_urge_sync', 'class')
     .where('is_deleted', false)
     .andWhere((sub: any) => {
       sub.whereNotNull('pay_method').orWhereNotNull('paid_amount');
@@ -219,13 +242,17 @@ async function candidatesClass(): Promise<TransferCandidate[]> {
     .orderBy('pay_date', 'desc')
     .orderBy('expire_date', 'desc')
     .limit(500);
-  return (rows as any[]).map((r) => base(r, 'class'));
+  return { list: (rows as any[]).map((r) => base(r, 'class')), scanned, paid: (rows as any[]).length };
 }
 
 /** 就业：sms_job.t_job_fee_call */
-async function candidatesEmploy(): Promise<TransferCandidate[]> {
-  const qb = tbl(jobDb, 'sms_job', 't_job_fee_call', 'job');
-  const rows = await qb
+async function candidatesEmploy(): Promise<CandidateScan> {
+  const scanned = Number(
+    ((await tbl(jobDb, 'sms_job', 't_job_fee_call', 'job')
+      .where('is_deleted', false)
+      .count({ c: '*' })) as any[])[0]?.c ?? 0,
+  );
+  const rows = await tbl(jobDb, 'sms_job', 't_job_fee_call', 'job')
     .where('is_deleted', false)
     .andWhere((sub: any) => {
       sub.whereNotNull('pay_method').orWhereNotNull('paid_amount');
@@ -233,10 +260,10 @@ async function candidatesEmploy(): Promise<TransferCandidate[]> {
     .orderBy('pay_date', 'desc')
     .orderBy('due_date', 'desc')
     .limit(500);
-  return (rows as any[]).map((r) => base(r, 'employ'));
+  return { list: (rows as any[]).map((r) => base(r, 'employ')), scanned, paid: (rows as any[]).length };
 }
 
-const CANDIDATE_LOADERS: Record<Dept, () => Promise<TransferCandidate[]>> = {
+const CANDIDATE_LOADERS: Record<Dept, () => Promise<CandidateScan>> = {
   jh: candidatesJh,
   class: candidatesClass,
   employ: candidatesEmploy,
@@ -265,20 +292,39 @@ teachingFeeRouter.get(
      */
     const list: TransferCandidate[] = [];
     const errors: Array<{ dept: Dept; deptName: string; message: string }> = [];
+    /** 每部门「读到几条 / 其中已登记缴费几条」—— 用来区分「没单」和「有单但没登记缴费」 */
+    const stats: Array<{
+      dept: Dept;
+      deptName: string;
+      scanned: number;
+      paid: number;
+      picked: number;
+      error?: string;
+    }> = [];
 
     for (const dept of depts) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        list.push(...(await CANDIDATE_LOADERS[dept]()));
+        const scan = await CANDIDATE_LOADERS[dept]();
+        list.push(...scan.list);
+        stats.push({
+          dept,
+          deptName: DEPT_NAME[dept],
+          scanned: scan.scanned,
+          paid: scan.paid,
+          picked: scan.list.length,
+        });
       } catch (e: any) {
-        errors.push({ dept, deptName: DEPT_NAME[dept], message: e?.message || '查询失败' });
+        const message = e?.message || '查询失败';
+        errors.push({ dept, deptName: DEPT_NAME[dept], message });
+        stats.push({ dept, deptName: DEPT_NAME[dept], scanned: 0, paid: 0, picked: 0, error: message });
       }
     }
 
     // 按应缴日期倒序（没日期的排最后），与初高老接口的排序口径一致
     list.sort((a, b) => (b.expireDate || '0000').localeCompare(a.expireDate || '0000'));
 
-    res.json(ok({ list, errors }, '查询成功'));
+    res.json(ok({ list, errors, stats }, '查询成功'));
   }),
 );
 
@@ -315,7 +361,34 @@ async function loadRows(dept: Dept, ids: string[]): Promise<Map<string, any>> {
   return new Map(rows.map((r) => [String(r.id), r]));
 }
 
-/** 回写「已转交」（三部门各写自己的表） */
+/**
+ * 回写「已转交」（三部门各写自己的表）
+ *
+ * ★★ 2026-10-22 修：这里原来靠 `uniUpdCols` 过滤列，**缺列时是静默剔除的** ——
+ *   协作者拉代码后如果没跑 `npm run migrate`（少了 20261022_001 那两列），
+ *   表现会是：
+ *     · 转交「成功」，财务里也真的建了单；
+ *     · 但 `finance_fee_id` 一个字都没写进去 → 刷新后这条还是「未转交」；
+ *     · 再点一次又建一张财务单 → **财务里重复记账**。
+ *   而且从头到尾没有任何报错，最难查。
+ *
+ *   所以这里**先显式检查列存在**，缺列直接抛明确错误 ——
+ *   宁可这次转交失败（并且说清原因），也不能「钱转了、标记没写」。
+ */
+async function assertTransferColumns(conn: any, srcDb: string, table: string): Promise<void> {
+  const rows = await conn
+    .select(conn.raw('COLUMN_NAME AS name'))
+    .from(conn.raw('information_schema.COLUMNS'))
+    .whereRaw('TABLE_SCHEMA = ? AND TABLE_NAME = ?', [srcDb, table]);
+  const have = new Set(rows.map((r: any) => r.name));
+  const missing = ['finance_fee_id', 'finance_transfer_time'].filter((c) => !have.has(c));
+  if (missing.length) {
+    throw new Error(
+      `${srcDb}.${table} 缺列 ${missing.join(' / ')} —— 在 server-job 目录执行 npm run migrate 后重启后端再试`,
+    );
+  }
+}
+
 async function markTransferred(
   dept: Dept,
   id: string,
@@ -338,12 +411,14 @@ async function markTransferred(
   }
 
   const stage = DEPT_STAGE[dept];
-  const conn = dept === 'class' ? commonDb : jobDb;
+  const conn: any = dept === 'class' ? commonDb : jobDb;
   const srcDb = dept === 'class' ? 'sms_common' : 'sms_job';
   const table = dept === 'class' ? 't_class_urge_sync' : 't_job_fee_call';
 
-  // ★ 必须过 uniUpdCols：切到统一表模式时目标表的列可能不一致，
-  //   不过滤会「更新成功但列被静默丢弃」（项目铁律⑨）
+  // ★ 先确认列真的存在（见函数头注释：缺列时必须报错，不能静默丢）
+  await assertTransferColumns(conn, srcDb, table);
+
+  // 再过 uniUpdCols：切到统一表模式时目标表的列可能不一致
   const cols = await uniUpdCols(conn, srcDb, table, patch);
   await tbl(conn, srcDb, table, stage).where({ id }).update(cols as never);
 }
