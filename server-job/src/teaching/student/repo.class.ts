@@ -31,11 +31,34 @@ import type {
 import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { nextStudentNoForClass } from '../shared/studentNo';
 
 const T = 't_class_student';
+const CLASS_TABLE = 't_class_info';
 const GRADE_TABLE = 't_class_grade';
 const REPEAT_TABLE = 't_class_repeat';
 const STAGE = 'class' as const;
+
+/**
+ * ★ 2026-10-21：按「阶段方案阶段」筛选
+ *
+ * 学生表只存阶段码（int），方案阶段在**班级**上（scheme_stage_id），
+ * 只能按学生所在班级关联 —— 两套编码之间没有映射关系。
+ */
+function applySchemeFilter(qb: any, q: StudentListQuery): void {
+  const classOf = () => tbl(db, 'sms_class', CLASS_TABLE, STAGE);
+  if (q.schemeStageId) {
+    qb.whereIn('class_id', classOf().where('scheme_stage_id', q.schemeStageId).select('id'));
+  }
+  if (q.noScheme) {
+    qb.andWhere((b: any) => {
+      b.whereNull('class_id').orWhereNotIn(
+        'class_id',
+        classOf().whereNotNull('scheme_stage_id').whereNot('scheme_stage_id', '').select('id'),
+      );
+    });
+  }
+}
 
 /** 大学的学习阶段（201~206 + 13 实训） */
 const PHASE_NAME: Record<number, string> = {
@@ -80,6 +103,8 @@ function mapRow(r: Record<string, any>): StudentRow {
     className: str(r.class_name),
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    // 由 service 层按班级统一回填（见 attachSchemeStageNames）
+    schemeStageName: null,
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -125,6 +150,7 @@ function buildBase(q: StudentListQuery, user: any) {
   if (q.deptCode) qb.where('dept_code', q.deptCode);
   if (q.studentStatus) qb.where('student_status', q.studentStatus);
   if (q.phaseCode) qb.where('stage', q.phaseCode);
+  applySchemeFilter(qb, q);
   if (q.keyword) {
     const k = q.keyword;
     qb.where(function (this: any) {
@@ -274,7 +300,8 @@ export const repo: StudentRepo = {
       return { id: body.id };
     }
 
-    const studentNo = String(body.studentNo || '').trim() || (await generateStudentNo());
+    // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略前端手填值（用户口径）
+    const studentNo = await nextStudentNoForClass('class', body.classId);
     const dup = (await notDeleted(tbl(db, 'sms_class', T, STAGE)).where('student_no', studentNo).first()) as
       | Record<string, any>
       | undefined;
@@ -310,18 +337,7 @@ export const repo: StudentRepo = {
 };
 
 
-/** 学号生成：S + 年份 + 4 位流水（大学口径） */
-async function generateStudentNo(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `S${year}`;
-  const rows = (await notDeleted(tbl(db, 'sms_class', T, STAGE))
-    .where('student_no', 'like', `${prefix}%`)
-    .select('student_no')) as Array<{ student_no: string }>;
-  const max = rows.reduce((m, r) => {
-    const n = Number(String(r.student_no).slice(prefix.length));
-    return Number.isFinite(n) && n > m ? n : m;
-  }, 0);
-  return `${prefix}${String(max + 1).padStart(4, '0')}`;
-}
+/** 学号生成：见 shared/studentNo.ts（LZ + 班级编号 + 序号），旧的 S+年份 流水已停用 */
+
 
 export default repo;

@@ -255,6 +255,85 @@ export async function listBillStudents(q: any): Promise<{ rows: any[]; total: nu
 }
 
 /**
+ * ★ 2026-10-21 学生档案 · 缴费记录（只读）
+ *
+ * 【为什么按学号查，不按学生 ID】
+ *   学生在学段间流动（初高 → 大学 → 就业部）时每段的 student_id 都不一样，
+ *   但学号不变。按 id 查会漏掉「上一段缴的钱」，按学号才是「这个人的全部缴费」。
+ *
+ * 【为什么复用 BILL_GROUPS】
+ *   与财务「账单明细 · 按学员归集」用同一套分组（学费含试学费 / 餐费 / 住宿费 /
+ *   保险费），两个页面看到的金额与笔数才对得上，不会各算一套。
+ *
+ * 💡 只取 bill_type=1（缴费）。退费是另一本账，不混进「缴了多少」。
+ */
+export async function listPaymentsByStudentNo(studentNo: string) {
+  const no = String(studentNo || '').trim();
+  const emptyGroups = () =>
+    BILL_GROUPS.map((g) => ({
+      key: g.key,
+      name: g.name,
+      count: 0,
+      amount: 0,
+      latestDate: null as string | null,
+      records: [] as any[],
+    }));
+  const empty = (note: string | null) => ({
+    groups: emptyGroups(),
+    totalCount: 0,
+    totalAmount: 0,
+    latestDate: null as string | null,
+    note,
+  });
+
+  if (!no) return empty('该生没有学号，无法关联财务账单');
+
+  const bills: any[] = await db(BILL_TABLE)
+    .where({ is_deleted: false, bill_type: 1, student_no: no })
+    .orderBy('bill_date', 'desc')
+    .orderBy('bill_no', 'desc');
+
+  if (!bills.length) return empty('财务账单明细里还没有该学号的缴费记录');
+
+  const groups = emptyGroups();
+  const byKey = new Map(groups.map((g) => [g.key, g]));
+  let totalAmount = 0;
+  let latestDate: string | null = null;
+
+  for (const b of bills) {
+    const type = Number(b.fee_type);
+    const g = BILL_GROUPS.find((x) => x.types.includes(type));
+    if (!g) continue; // 押金等未归类的类型不进四类汇总（与财务账单明细同口径）
+
+    const row = byKey.get(g.key)!;
+    const amount = Number(b.amount) || 0;
+    const date = toDateStr(b.bill_date) || '';
+    row.count += 1;
+    row.amount += amount;
+    if (date && (!row.latestDate || date > row.latestDate)) row.latestDate = date;
+    row.records.push({
+      billNo: b.bill_no,
+      feeTypeName: FEE_TYPE_NAME[type] || '',
+      amount,
+      date,
+      voucherNo: b.voucher_no ?? null,
+      operatorName: b.operator_name ?? null,
+      remark: b.remark ?? null,
+    });
+    totalAmount += amount;
+    if (date && (!latestDate || date > latestDate)) latestDate = date;
+  }
+
+  return {
+    groups,
+    totalCount: bills.length,
+    totalAmount,
+    latestDate,
+    note: null as string | null,
+  };
+}
+
+/**
  * 按学员归集的可见班级字典（部门 Tab 用）
  *
  * 💡 与缴费管理的 listFeeClasses 同思路：从账单表里把出现过的班级去重。
