@@ -28,6 +28,8 @@ import { BizError } from '../middleware/errorHandler';
 import { nextBillNoForPay } from '../utils/orderNo';
 import { getStandard, isVoucherReusable, expectedSourceOf } from './fee-standard.service';
 import { findArchiveStudent } from './student-archive';
+// ★ 2026-10-22 核对到账后立即回推咨询侧（推进学生状态 + 同步教学学籍）
+import { remotePost } from '../../shared/http';
 
 export const FEE_TABLE = 't_finance_fee';
 export const BILL_TABLE = 't_finance_bill';
@@ -599,7 +601,42 @@ export async function verifyFee(
   };
 
   // 支持外部传入事务（批量核对时共用一个事务）
-  return trx ? run(trx) : db.transaction(run);
+  const billNo = trx ? await run(trx) : await db.transaction(run);
+
+  /**
+   * ★ 2026-10-22 立刻回推咨询侧（推进学生状态 + 同步教学学籍）
+   *
+   * 必须放在事务【外】：咨询侧处理时会回查财务单的 pay_status，
+   * 事务还没提交的话它读到旧值，会被判成「还没核对」而不推进。
+   *
+   * 非阻断：核对已经入账成功，回推失败最多让状态晚一点推进（列表刷新会补），
+   * 不能因此把已经核好的账回滚。
+   */
+  await notifyConsultFeeArrived(id);
+
+  return billNo;
+}
+
+/**
+ * 回推咨询侧「这张缴费单已到账」
+ *
+ * 走内部令牌通道（财务侧没有咨询岗位的登录态）。
+ * 对方按 financeFeeId 反查收款单 → 推进学生状态 → 补学费时同步教学学籍为「正式在读」。
+ */
+async function notifyConsultFeeArrived(financeFeeId: string): Promise<void> {
+  try {
+    const token = String(process.env.INTERNAL_TOKEN || '');
+    if (!token) return; // 没配内部令牌就当没这回事，不要让核对报错
+    await remotePost(
+      'consult',
+      '/api/consult/student/internal/fee-arrived',
+      { financeFeeId },
+      { headers: { 'x-internal-token': token }, timeout: 8000 },
+    );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(`[finance→consult] 到账回推失败（不影响核对，列表刷新会补）：${(e as Error).message}`);
+  }
 }
 
 /** 财务打回（凭证有问题，退回班主任重新上传） */
