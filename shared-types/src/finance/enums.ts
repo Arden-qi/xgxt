@@ -226,6 +226,7 @@ export const GENDER_NAME: Record<number, string> = {
 };
 
 export const DEPT_NAME: Record<number, string> = {
+  // ★ 2026-10-22 部门名统一叫「初高部」（原「初中部 / 二三期」两种叫法并存）
   [DeptCode.JUNIOR_SENIOR]: '初高部',
   [DeptCode.UNIVERSITY]: '大学部',
   [DeptCode.EMPLOYMENT]: '就业部',

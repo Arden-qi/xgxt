@@ -1157,6 +1157,74 @@ studentRouter.get(
 );
 
 studentRouter.post(
+  '/internal-status',
+  // 内部调用（SYSTEM_USER permissions=['*']）直接过；本接口不对外开放
+  checkPermission('class:student:edit'),
+  validate(
+    z.object({
+      consultNo: z.string().min(1, '缺少咨询单号'),
+      studentStatus: z.coerce.number().int().min(1).max(9),
+    }),
+  ),
+  wrap(async (req, res) => {
+    const body = (req as any).validated as { consultNo: string; studentStatus: number };
+
+    /**
+     * ★ 2026-10-22 学籍状态同步（服务间内部接口）
+     *
+     * 谁调：咨询侧「补学费到账 → 转正式」后调，把初高学籍从「试学中(3)」改成「正式在读(5)」。
+     *
+     * 为什么要有这个接口：大学部早就有 `/api/class/student/internal-status`，
+     *   初高一直没有 —— 结果初高学生补费转正后，咨询侧状态已经是「正式在读」，
+     *   班级花名册还挂「试学中」，两边割裂。
+     *
+     * 认人键：source_system='consult' + source_id=咨询单号
+     *   （与 from-consult 建档时写入的值同源；不能用 student_no，两边学号体系不同）
+     */
+    /**
+     * 认人键要**双条件**：`source_id` 或 `student_no`
+     *
+     * 坑：建档时写的 `source_id = push.consult_no`，而 consultNo 在「学生还没学号」时
+     *   等于咨询学生 id；等学号生成并回写后，咨询侧再拿 `stu.student_no` 来调本接口，
+     *   传的就是学号了 —— 只匹配 source_id 会一条都找不到（实测学籍停在试学中）。
+     */
+    const stu = (await db(TABLE)
+      .where({ source_system: 'consult', is_deleted: false })
+      .andWhere((q: any) => q.where('source_id', body.consultNo).orWhere('student_no', body.consultNo))
+      .first()) as Record<string, unknown> | undefined;
+
+    if (!stu) {
+      // 这个咨询学生不在初高（可能升到大学部了），不是错误
+      res.json(ok({ updated: 0 }, '该咨询单在初高没有学籍，无需同步'));
+      return;
+    }
+    if (Number(stu.student_status) === body.studentStatus) {
+      res.json(ok({ updated: 0, id: stu.id, studentNo: stu.student_no }, '学籍状态已是目标值'));
+      return;
+    }
+
+    await db(TABLE).where({ id: stu.id }).update({
+      student_status: body.studentStatus,
+      update_time: new Date(),
+      update_by: 'consult-sync',
+    });
+
+    await writeOpLog({
+      module: 'student',
+      bizType: '学籍状态同步',
+      bizId: String(stu.id),
+      studentId: String(stu.id),
+      opUserId: 'consult-sync',
+      opUserName: '市场咨询',
+      opDesc: `咨询补费到账：学籍状态 ${String(stu.student_status)} → ${body.studentStatus}`,
+      afterValue: { studentStatus: body.studentStatus },
+    });
+
+    res.json(ok({ updated: 1, id: stu.id, studentNo: stu.student_no }, '学籍状态已同步'));
+  }),
+);
+
+studentRouter.post(
   '/from-consult',
   // 内部调用（SYSTEM_USER permissions=['*']）直接过；普通用户须有建案权
   checkPermission('class:student:add'),

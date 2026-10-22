@@ -4,7 +4,7 @@
       <!-- ============ 部门二级 Tab（原型 .dept-tabs）============ -->
       <div class="dept-tabs">
         <b :class="{ on: dept === 'all' }" @click="handleDept('all')">全部部门</b>
-        <b :class="{ on: dept === '二三期' }" @click="handleDept('二三期')">二三期</b>
+        <b :class="{ on: dept === '初高部' }" @click="handleDept('初高部')">初高部</b>
         <b :class="{ on: dept === '大学部' }" @click="handleDept('大学部')">大学部</b>
       </div>
 
@@ -236,8 +236,8 @@ const tableData = ref<BillStudentRow[]>([]);
 const total = ref(0);
 const classOptions = ref<string[]>([]);
 
-/** 部门 Tab：all / 二三期(1) / 大学部(2) */
-const dept = ref<'all' | '二三期' | '大学部'>('all');
+/** 部门 Tab：all / 初高部(1) / 大学部(2) */
+const dept = ref<'all' | '初高部' | '大学部'>('all');
 const className = ref<string | undefined>(undefined);
 const dateRange = ref<[string, string] | null>(null);
 
@@ -268,7 +268,7 @@ const pageTotalCount = computed(() =>
 );
 
 const deptCodeOf = (d: typeof dept.value): DeptCode | undefined =>
-  d === '二三期' ? 1 : d === '大学部' ? 2 : undefined;
+  d === '初高部' ? 1 : d === '大学部' ? 2 : undefined;
 
 /** 班级下拉：随部门 Tab 收敛（与缴费管理同思路，保证「选了就查得到」） */
 async function loadClassOptions() {
