@@ -905,16 +905,21 @@ export async function addFee(
    * ★ 2026-10-20：学生属性以学生档案为准（档案里能查到这个人时）
    *
    * 用户口径：「学生档案有的字段按学生档案的数据走」。
-   * 上游（咨询/教务）传过来的学号/姓名/班级可能是建单那一刻的快照，
+   * 上游（咨询/教务）传过来的姓名/班级可能是建单那一刻的快照，
    * 学生后来换班或改名就会脱节。只要档案里能对上（先按 id、再按学号），
    * 落库一律用档案当前值，不信任调用方传的那几个字段。
    *
    * ⚠️ 档案里查不到时**保持原样**：报名前的咨询收费单，学生还没进学籍档案，
    *    这是正常业务状态，不能因此拒绝建单。
+   *
+   * ★ 2026-10-22 用户口径：**学号不再自动填充**
+   *   上游（咨询/教务）传什么学号就用什么，即使学生档案里能查到更新的学号，
+   *   也不覆盖。财务单据的学号必须与上游建单一致，否则「单据学号」与
+   *   「来源单学号」会对不上，对账时无法按学号回查。
+   *   传空则落库为空串（见下面 insert 的 student_no），不做任何推断。
    */
   const archived = await findArchiveStudent(body.studentId, body.studentNo);
   if (archived) {
-    if (archived.no) body.studentNo = archived.no;
     if (archived.name) body.studentName = archived.name;
     if (archived.classId) body.classId = archived.classId;
     if (archived.className) body.className = archived.className;
@@ -961,7 +966,7 @@ export async function addFee(
     create_by: operator.userId,
     is_deleted: false,
     student_id: body.studentId,
-    student_no: body.studentNo,
+    student_no: body.studentNo ?? '',
     student_name: body.studentName,
     class_id: body.classId ?? null,
     class_name: body.className ?? null,
