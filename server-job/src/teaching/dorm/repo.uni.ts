@@ -62,6 +62,7 @@ import { hasRole, RoleCode, StudentStatus } from 'shared-types';
 import { tbl, tblIns, upd } from '../shared/uniTable';
 import { listBuildingNames as listDormBuildingNames } from './building.service';
 import { loadClassStatus, loadClassStatuses } from './classStatus';
+import { resolveMyClasses } from './myClasses';
 
 const DORM_T = 't_job_dorm';
 const BED_T = 't_job_dorm_bed';
@@ -167,104 +168,6 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
   job: 'sms_job.t_job_class',
 };
 
-/**
- * ★ 2026-10-21：解析「我的班」—— 同时兼容三种存法，别只认一种
- *
- * 现实里同一件事有三种数据：
- *   ① 班级表 `t_class_info.head_teacher_id` = 权限库用户 id（U008…）；
- *   ② 门户学生表 `t_student_base.head_teacher_id` = **门户账号 UUID**（token 里的 userId）；
- *   ③ 演示库干脆只填了 `head_teacher_name = '孙敏'`，id 列是 '123456' 这种脏值。
- * 只按 ① 查 → 班主任的班一个都找不到（宿舍页恒空、入住候选为空）。
- * → 这里把 id（业务 id / 门户 id）和姓名都作为命中条件，能查到哪种算哪种。
- *
- * ⚠️ 还要**跨学段**查班级表：合并页里「大学的班主任」也可能被安排带初高的班
- *   （实测 Q30 的班主任是 zhanght，但 Q30 在 sms_class_jh.t_class_info 里）。
- *   只查当前 stage 的班级表 → 分派给该班的房间永远看不到。
- */
-async function myClasses(user: any): Promise<{ privileged: boolean; names: string[]; ids: string[] }> {
-    const roles: string[] = user?.roles ?? [];
-    const privileged =
-      hasRole(roles, RoleCode.RM_PRINCIPAL) ||
-      hasRole(roles, RoleCode.ACAD_STAFF) ||
-      hasRole(roles, RoleCode.TEACH_DEAN) ||
-      hasRole(roles, RoleCode.SYS_ADMIN);
-    if (privileged) return { privileged: true, names: [], ids: [] };
-
-    const portalUid = String(user?.businessUserId || user?.userId || user?.id || '');
-    const userName = String(user?.userName || user?.name || '').trim();
-
-    // 权限库业务 id（U008）：token 没带就按账号查一次
-    let permUid = String(user?.businessUserId || '');
-    if (!permUid && user?.account) {
-      try {
-        const u = (await db('sms_perm.t_perm_user').where({ account: String(user.account) }).first()) as any;
-        permUid = u?.id ? String(u.id) : '';
-      } catch {
-        permUid = '';
-      }
-    }
-
-    const names = new Set<string>();
-    const ids = new Set<string>();
-
-    const collect = (rows: any[]) => {
-      for (const r of rows) {
-        if (str(r.class_name)) names.add(String(r.class_name));
-        if (r.id && str(r.class_name)) ids.add(String(r.id));
-      }
-    };
-
-    // ① 班级表：班主任/教师/助理（业务 id 或姓名）—— **三学段班级表都查**
-    for (const table of CLASS_SOURCES) {
-      try {
-        const rows = (await db(table)
-          .where({ is_deleted: false })
-          .andWhere((b: any) => {
-            if (permUid) b.where('head_teacher_id', permUid).orWhere('teacher_id', permUid).orWhere('assistant_id', permUid);
-            if (userName) {
-              b.orWhere('head_teacher_name', userName).orWhere('teacher_name', userName).orWhere('assistant_name', userName);
-            }
-          })
-          .select('id', 'class_name')) as any[];
-        collect(rows);
-      } catch {
-        /* 表/列不存在 → 跳过 */
-      }
-    }
-
-    // ② 门户学生表（活数据）：head_teacher_id 存的是门户 UUID
-    try {
-      const rows = (await db(PERM_STUDENT)
-        .where({ is_deleted: false })
-        .whereNotNull('class_name')
-        .andWhere((b: any) => {
-          if (portalUid) b.where('head_teacher_id', portalUid).orWhere('teacher_id', portalUid).orWhere('assistant_id', portalUid);
-          if (userName) b.orWhere('head_teacher_name', userName);
-        })
-        .distinct('class_name')) as any[];
-      collect(rows);
-    } catch {
-      /* 跳过 */
-    }
-
-    // ③ 本学段学生表（老数据）
-    try {
-      const rows = (await tbl(db, SRC_DB, STUDENT_T, stage)
-        .where({ is_deleted: false })
-        .whereNotNull('class_name')
-        .andWhere((b: any) => {
-          if (portalUid) b.where('head_teacher_id', portalUid).orWhere('teacher_id', portalUid).orWhere('assistant_id', portalUid);
-          if (userName) b.orWhere('head_teacher_name', userName);
-        })
-        .distinct('class_name', 'class_id')) as any[];
-      collect(rows);
-    } catch {
-      /* 跳过 */
-    }
-
-    return { privileged: false, names: [...names], ids: [...ids] };
-  }
-
   /**
    * ★ 2026-10-22：房间归属哪个班、该班是否封班
    *
@@ -291,7 +194,7 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
    *   实训没有「宿舍管理员」这个角色，教务老师（ACAD_STAFF）就是宿舍口的管理者。
    */
   async function scopedDormIds(user: any): Promise<string[] | null> {
-    const mine = await myClasses(user);
+    const mine = await resolveMyClasses(user);
     if (mine.privileged) return null;
     if (!mine.names.length && !mine.ids.length) return [];
 
@@ -782,7 +685,7 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
      *   学生表里查不到的（班还没招学生）→ 再从班级表把「我的班」补出来。
      */
     async checkinClasses(user): Promise<Array<{ classId: string | null; className: string }>> {
-      const mine = await myClasses(user);
+      const mine = await resolveMyClasses(user);
       const out = new Map<string, { classId: string | null; className: string }>();
       const add = (id: any, name: any) => {
         const cn = str(name);
@@ -849,7 +752,7 @@ async function myClasses(user: any): Promise<{ privileged: boolean; names: strin
      * 取数：本学段学生表 + 门户学生表（演示库只有后者有活数据），按学号去重。
      */
     async candidates(q, user): Promise<DormCandidateRow[]> {
-      const mine = await myClasses(user);
+      const mine = await resolveMyClasses(user);
       if (!mine.privileged && !mine.names.length && !mine.ids.length) return [];
 
       const kw = str(q.keyword)?.trim();

@@ -34,6 +34,7 @@ import { BizCode } from 'shared-types';
 import { bedNoText } from 'shared-types/class';
 import { BizError } from '../../middleware/errorHandler';
 import { db } from '../../utils/db';
+import { resolveMyClasses } from './myClasses';
 import {
   CLASS_STATUS_CLOSED,
   CLASS_STATUS_NAME,
@@ -256,7 +257,10 @@ async function assignmentRows(): Promise<any[]> {
  * 班级列表
  * ============================================================ */
 
-export async function listAllocateClasses(keyword?: string): Promise<AllocateClassRow[]> {
+export async function listAllocateClasses(
+  keyword?: string,
+  user?: any,
+): Promise<AllocateClassRow[]> {
   const [teaching, edu, perm, assigns] = await Promise.all([
     teachingClasses().catch(() => [] as ClassBase[]),
     eduClasses().catch(() => [] as ClassBase[]),
@@ -268,12 +272,25 @@ export async function listAllocateClasses(keyword?: string): Promise<AllocateCla
    * 去重：班级表优先，教务/门户学生表的同名班级只用来补缺。
    * 名次按「初高 → 大学 → 实训 → 教务」稳定排列，前端列表不会跳来跳去。
    */
-  const merged: ClassBase[] = [];
+  let merged: ClassBase[] = [];
   const seen = new Set<string>();
   for (const c of [...teaching, ...edu, ...perm]) {
     if (seen.has(c.className)) continue;
     seen.add(c.className);
     merged.push(c);
+  }
+
+  /**
+   * ★ 2026-10-22：班主任只能看到**自己名下**的班
+   *   调宿/退宿弹窗的「班级」下拉原来列全站班级，班主任能选到别人的班。
+   *   教务 / 校长 / 学管主任 / 管理员不受限。
+   */
+  if (user) {
+    const mine = await resolveMyClasses(user);
+    if (!mine.privileged) {
+      const allow = new Set(mine.names);
+      merged = merged.filter((c) => allow.has(c.className));
+    }
   }
 
   // 班级 → 已分派房间

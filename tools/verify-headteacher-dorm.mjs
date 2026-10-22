@@ -75,8 +75,10 @@ check('班主任看不到房间「编辑 / 删除」', (dorm.match(/canEdit\(row
 check('入住改用「学生候选」接口', dorm.includes('listDormCandidates') && dorm.includes('remote-method="searchAssignStudents"'));
 
 const repo = read('server-job/src/teaching/dorm/repo.uni.ts');
+const myClassesSrc = read('server-job/src/teaching/dorm/myClasses.ts');
 check('房间范围含「分派给本班」', repo.includes('ASSIGN_T') && repo.includes('t_edu_dorm_assignment'));
-check('「我的班」兼容 id 与姓名', repo.includes('head_teacher_name') && repo.includes('permUid'));
+check('「我的班」兼容 id 与姓名', myClassesSrc.includes('head_teacher_name') && myClassesSrc.includes('permUid'));
+check('「我的班」跨学段查班级表', myClassesSrc.includes('sms_class_jh.t_class_info') && myClassesSrc.includes('sms_job.t_job_class'));
 check('入住候选按数据范围过滤', repo.includes('async candidates') && repo.includes('IN_SCHOOL_STATUS'));
 
 console.log('\n▶ 运行时检查');
@@ -123,6 +125,21 @@ const acadToken = acad.body?.data?.token;
 const sunLogin = await req('POST', '/api/portal/account/login', { body: { account: 'sunmin', password: PWD } });
 const sunToken = sunLogin.body?.data?.token;
 if (acadToken && sunToken) {
+  /**
+   * ★ 2026-10-22：调宿弹窗的「班级」下拉只能是班主任自己的班
+   *   （原来列全站班级，班主任能选到别人的班）。
+   */
+  const sunClasses = await req('GET', '/api/teaching/dorm/allocate/classes', { token: sunToken });
+  const sunNames = (sunClasses.body?.data || []).map((c) => c.className);
+  check(
+    '班主任班级下拉只含自己的班',
+    sunNames.length > 0 && sunNames.every((n) => ['G2601', 'J2602'].includes(n)),
+    sunNames.join('/') || '空',
+  );
+  const acadClasses = await req('GET', '/api/teaching/dorm/allocate/classes', { token: acadToken });
+  const acadNames = (acadClasses.body?.data || []).map((c) => c.className);
+  check('教务仍能看到全部班级', acadNames.length > sunNames.length, `${acadNames.length} 个`);
+
   // ★ 房间数据会随环境变（楼栋/房号不是固定的）→ 动态找「未分派且未满」的房间
   const m = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token: acadToken });
   const f = await req('GET', '/api/teaching/dorm/allocate/rooms?category=2', { token: acadToken });

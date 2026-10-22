@@ -100,8 +100,11 @@ try {
   const row = (classes.body?.data || []).find((c) => c.className === CLASS);
   check('班级列表带班级状态', row?.classStatus === 1 && row?.classStatusName === '开放', row ? `${CLASS}=${row.classStatusName}` : '未找到班级');
 
-  const rooms = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token: acadToken });
-  const owned = (rooms.body?.data || []).find((r) => r.assignedTo === CLASS);
+  // ★ 班级分到的可能是男寝也可能是女寝 → 两类都查，别写死 category=1
+  const roomsM = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token: acadToken });
+  const roomsF = await req('GET', '/api/teaching/dorm/allocate/rooms?category=2', { token: acadToken });
+  const allRooms = [...(roomsM.body?.data || []), ...(roomsF.body?.data || [])];
+  const owned = allRooms.find((r) => r.assignedTo === CLASS);
   check('分给开放班的房间标记为 locked', !!owned && owned.locked === true, owned ? `${owned.building}${owned.room}` : '无');
   check('锁定房间不暴露空床位', !!owned && owned.freeBeds.length === 0);
 
@@ -109,7 +112,12 @@ try {
   if (owned) {
     const denied = await req('POST', '/api/teaching/dorm/allocate/save', {
       token: acadToken,
-      body: { className: 'J2602', headTeacherName: '孙敏', maleRoomIds: [owned.roomId], femaleRoomIds: [] },
+      body: {
+        className: 'J2602',
+        headTeacherName: '孙敏',
+        maleRoomIds: owned.category === 1 ? [owned.roomId] : [],
+        femaleRoomIds: owned.category === 2 ? [owned.roomId] : [],
+      },
     });
     check('开放班的房间不能被其他班分派', denied.body?.code === 40000 && /开放中/.test(denied.body?.message || ''), denied.body?.message || '');
   }
@@ -120,7 +128,7 @@ try {
   const closedRow = (closedClasses.body?.data || []).find((c) => c.className === CLASS);
   check('封班后班级状态变封班', closedRow?.classStatus === 2, closedRow?.classStatusName || '');
 
-  const closedRooms = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token: acadToken });
+  const closedRooms = await req('GET', `/api/teaching/dorm/allocate/rooms?category=${owned?.category || 1}`, { token: acadToken });
   const closedOwned = (closedRooms.body?.data || []).find((r) => r.roomId === owned?.roomId);
   check('封班后房间解锁', closedOwned?.locked === false, closedOwned?.assignedStatusName || '');
   check('封班后空床位重新可选', (closedOwned?.freeBeds || []).length > 0, `${closedOwned?.freeBeds?.length || 0} 张`);
