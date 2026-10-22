@@ -6,7 +6,9 @@ import { TransferType } from 'shared-types';
 import { db } from '../../db';
 import { Errors, ok, pageData } from '../../http/response';
 import { pageQuerySchema, q, validate } from '../../lib/validate';
-import { baseInsert, baseUpdate, maxStudentNo, notDeleted, paginate } from '../../lib/repo';
+import { baseInsert, baseUpdate, notDeleted, paginate } from '../../lib/repo';
+// ★ 2026-10-22：学号统一按「LZ+班级编号+序号」生成（初高/大学两个接收入口共用）
+import { nextStudentNoForClass } from '../../../teaching/shared/studentNo';
 import { assertClassAccess } from '../../middleware/dataScope';
 import { requirePerm } from '../../lib/permGuard';
 import { isFullAccess } from '../../lib/authUser';
@@ -29,6 +31,8 @@ import classSync from '../../../utils/classSync';
 import { db as jhDb } from '../../../class-jh/utils/db';
 // ★ 2026-10-20：接收后要回写咨询侧状态（班主任 token 在咨询侧不认，走内部令牌通道）
 import { consultClient } from '../../lib/consultClient';
+// ★ 2026-10-22 方案A：建档生成学号后回填财务单据并重推缴费台账（同进程直调，非阻断）
+import { syncStudentNoFromTeaching } from '../../../finance/services/student-no-sync.service';
 
 /**
  * 咨询推送（需求 v1.2）
@@ -427,15 +431,8 @@ consultRouter.get(
 
 /* ------------------------------ 班主任接收并建档 ------------------------------ */
 
-function buildStudentNo(seq: number): string {
-  return `S${new Date().getFullYear()}${String(seq).padStart(4, '0')}`;
-}
-
-function seqOfStudentNo(no: string | null | undefined): number {
-  if (!no) return 0;
-  const m = /(\d{4})$/.exec(no);
-  return m ? Number(m[1]) : 0;
-}
+// ★ 2026-10-22：学号改由 teaching/shared/studentNo 统一生成（LZ+班级编号+序号），
+//   原来的 S+年份+4位流水（buildStudentNo/seqOfStudentNo）已停用并删除。
 
 const receiveSchema = z.object({
   id: z.string().min(1, '缺少咨询单ID'),
@@ -495,12 +492,20 @@ async function consultReceivePlan(consultNo: string): Promise<number | null> {
   return Number.isFinite(v) && v > 0 ? v : null;
 }
 
-/** 建档成功后回写咨询侧状态（幂等；失败只记日志——人已经入班了，不能因此回滚） */
+/**
+ * 建档成功后回写咨询侧状态（幂等；失败只记日志——人已经入班了，不能因此回滚）
+ *
+ * ★ 2026-10-22 增加 `studentNo`：把刚生成的学号一并回写咨询学生表。
+ *   不回写的话，咨询学生表永远没有学号，后续「补费」建单时会走
+ *   `stu.student_no || tempStudentNo(id)` 兜出 `ZX...` 临时号，
+ *   于是同一学生的补费单学号和已入班单据不一致，补费单还推不进教学侧台账。
+ */
 async function consultReceiveAck(
   consultNo: string,
   className: string | null,
   operatorName: string,
   operatorTitle = '班主任',
+  studentNo?: string,
 ): Promise<void> {
   if (!consultNo) return;
   const r = await consultClient.receiveAck({
@@ -508,6 +513,7 @@ async function consultReceiveAck(
     className,
     operatorName,
     operatorTitle,
+    studentNo: studentNo || undefined,
   });
   if (!r.ok) {
     console.warn(`[consult receive] 回写咨询状态失败（${consultNo}）：${r.message}`);
@@ -532,6 +538,31 @@ async function doReceive(
     if (Number(push.apply_status) === ConsultStatus.REJECTED) {
       throw Errors.param('该咨询单已驳回，不能直接接收');
     }
+
+    /**
+     * ★ 2026-10-22 方案A：把刚生成的学号回填到财务单据（非阻断）
+     *
+     * 财务缴费单的 student_id 存的是「咨询学生 id」，与教学库学生 id 不是一套，
+     * 学号是两边唯一关联键。不回填会断两件事：
+     *   ① 缴费单/账单学号永远为空，按学号对不了账
+     *   ② 财务推缴费台账前要用学号回查教学学生，为空直接跳过 → 这张单永远进不了台账
+     *
+     * ⚠️ 失败只记日志：学籍建档不能因为财务侧问题回滚。
+     */
+    const syncFinanceStudentNo = async (no: string): Promise<void> => {
+      const consultNo = String(push.consult_no || '');
+      if (!consultNo || !no) return;
+      try {
+        const r = await syncStudentNoFromTeaching(consultNo, no);
+        // eslint-disable-next-line no-console
+        console.log(
+          `[教学→财务] 学号 ${no}（咨询单 ${consultNo}）回填：缴费单 ${r.feeUpdated} 条 / 账单 ${r.billUpdated} 条 / 重推台账 ${r.pushed} 条`,
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[教学→财务] 学号回填失败（不影响建档）：${(e as Error).message}`);
+      }
+    };
 
     // ★ 2026-10-06：接收权限 = 本班班主任 / 校长 / 学管（用户拍板）
     // ★ 2026-10-20：分班即入班走内部入口时，操作人是咨询老师，不做班主任归属校验
@@ -588,7 +619,6 @@ async function doReceive(
         address: push.home_address ?? null,
         classId,
         remark: b.remark ?? push.remark ?? null,
-        studentNo: b.studentNo ?? null,
         education: b.education ?? push.education ?? null,
         enrollDate: b.enrollDate ?? null,
         studentStatus: b.studentStatus ?? planStatus ?? null,
@@ -617,7 +647,11 @@ async function doReceive(
         (push.intend_class_name as string) ?? null,
         user.userName,
         opts.internal ? '系统' : '班主任',
+        String(sno),
       );
+
+      /* ★ 2026-10-22 方案A：学号已生成/已存在 → 回填财务单据并重推台账 */
+      await syncFinanceStudentNo(String(sno));
 
       return ok(
         res,
@@ -784,18 +818,9 @@ async function doReceive(
       );
     }
 
-    // 学号
-    let studentNo = b.studentNo?.trim() || '';
-    if (!studentNo) {
-      // ★ 第 4 期第 3 批：`maxStudentNo` 签名改为收「已路由的 builder」，
-      //   原代码这里传的是写死的 `db('t_class_student')`（切读时会读老表 → 新建的学号
-      //   会和种子数据撞号）。第 6 批（咨询域）起改为传 `STU()`，跟着开关走。
-      const max = await maxStudentNo(STU(), `S${new Date().getFullYear()}%`);
-      studentNo = buildStudentNo(seqOfStudentNo(max) + 1);
-    } else {
-      const dup = await notDeleted(STU()).where('student_no', studentNo).first();
-      if (dup) throw Errors.studentNoExists(studentNo);
-    }
+    // 学号：★ 2026-10-22 一律按「LZ+班级编号+序号」生成，忽略接收弹窗手填的值
+    //   （初高 / 大学两个接收入口口径一致；生成后终身不变）
+    const studentNo = await nextStudentNoForClass('class', classId);
 
     // 床位占用校验
     if (b.dormId && b.bedNo) {
@@ -868,7 +893,11 @@ async function doReceive(
       className,
       user.userName,
       opts.internal ? '系统' : '班主任',
+      studentNo,
     );
+
+    /* ★ 2026-10-22 方案A：学号已生成 → 回填财务单据并重推台账 */
+    await syncFinanceStudentNo(studentNo);
 
     return ok(
       res,

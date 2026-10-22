@@ -160,7 +160,15 @@ export async function getClassDetail(
 /** 保存 */
 export async function saveClass(body: ClassSaveBody, user: any): Promise<{ id: string }> {
   await assertStageView(user, body.stage);
-  return pick(body.stage).save(body, user?.userId || '');
+  try {
+    return await pick(body.stage).save(body, user?.userId || '');
+  } catch (e) {
+    // ★ 2026-10-21：仓储抛的业务校验（编号必填 / 编号重复 / 名称重复）原来会冒成
+    //   「服务器错误：…」，前端只能看到一个 500。转成参数错误，原文照给用户看。
+    const msg = (e as Error).message || '保存失败';
+    if (/编号|必填|已有班级|已存在/.test(msg)) throw new BizError(BizCode.PARAM_ERROR, msg);
+    throw e;
+  }
 }
 
 /** 删除 */

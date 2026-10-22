@@ -677,28 +677,16 @@ app.use(
   teachingLeaveRouter,
 );
 
-// ★ 学生档案（第六个合并的业务域）—— ★ 唯一有 **4 个学段** 的域（多一个「教务」）
-//   权限码：classjh:student:view / class:student:view / job:empArchive:view / edu:student:view
-//   ★ 2026-10-15 补 `job:classStudent:view`：
-//     项目经理（RM_PROJECT，角色码 R11）手里攥的是 [`job:classStudent:view`]（实训-班级学生），
-//     而原清单只认 `job:empArchive:view`（就业信息档案，那是**就业老师**的码）——
-//     于是项目经理点「学生档案」一律 40302。
-//     业务上「**项目经理 = 实训阶段的班主任**」（斌哥 2026-10-15 明确），
-//     他必须能看自己带的班的学生 → 把实训学段的等价码补进白名单。
-//     ⚠️ 教训：合并域的权限白名单要**覆盖该域在各学段的全部等价权限码**，
-//        漏一个 = 那个学段的角色集体进不来（而且报的是「无权限」，极易误判成没数据）。
+// ★ 学生档案（第六个合并的业务域）—— 三个学段：初高 / 大学 / 就业部
+//   ★ 2026-10-21 用户口径：学生档案界面删除「就业」「教务」两个入口
+//     （edu:student:view 从这里摘掉 —— 教务模块自己的页面还在，只是不再进学生档案）
+//   权限码：classjh:student:view / class:student:view / job:empArchive:view
 app.use(
   '/api/teaching/student',
   authMiddleware,
   denyReadOnlyAdmin,
   denyApprovalOnlyWrite,
-  requireAnyPage([
-    'classjh:student:view',
-    'class:student:view',
-    'job:classStudent:view',
-    'job:empArchive:view',
-    'edu:student:view',
-  ]),
+  requireAnyPage(['classjh:student:view', 'class:student:view', 'job:empArchive:view']),
   teachingStudentRouter,
 );
 

@@ -332,12 +332,28 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     // 实训：编号唯一
     // ⚠️ 必填项（班主任 / 开班日期）要一起给全，否则会被「班主任必填」先拦下 →
     //    看着"被拦了"，其实压根没走到编号唯一性那一步（假通过）。
+    // ★ 班号新规：编号跨部门唯一。先建 A 拿到编号，再用同一编号建 B → 必须被拦
+    const dupTag = 'DC' + Math.random().toString(36).slice(2, 6).toUpperCase();
+    const dupA = await req(`${API}/save`, {
+      method: 'POST',
+      body: {
+        stage: 'job',
+        className: '自检重复编号A-' + dupTag,
+        classCode: dupTag,
+        deptCode: 2,
+        headTeacherId: 'T-X',
+        headTeacherName: '某',
+        openDate: '2026-09-01',
+      },
+      token: tQiansy,
+    });
+    if (isOk(dupA)) reg('sms_common', 't_uni_class', dupA.json?.data?.id);
     const dupCode = await req(`${API}/save`, {
       method: 'POST',
       body: {
         stage: 'job',
-        className: '自检重复编号',
-        classCode: rowJob.classCode,
+        className: '自检重复编号B-' + dupTag,
+        classCode: dupTag,
         deptCode: 2,
         headTeacherId: 'T-X',
         headTeacherName: '某',
@@ -346,15 +362,16 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       token: tQiansy,
     });
     check(
-      '★ 实训新增：班级编号重复被拦（且必须确认是被"编号已存在"拦的）',
-      isBlocked(dupCode) && /已存在/.test(dupCode.json?.message || ''),
+      '★ 实训新增：班级编号重复被拦（跨部门唯一）',
+      isBlocked(dupCode) && /占用|已存在/.test(dupCode.json?.message || ''),
       `code=${dupCode.json?.code} ${dupCode.json?.message || ''}`,
     );
 
     // 同部门内班级名重复
     const dupName = await req(`${API}/save`, {
       method: 'POST',
-      body: { stage: 'class', className: clsCls.class_name, deptCode: 2, phaseCode: 202 },
+      // ★ 班级编号必填（2026-10-21 新口径），否则被「编号必填」先拦、走不到同名检查
+      body: { stage: 'class', className: clsCls.class_name, classCode: 'C' + Math.random().toString(36).slice(2, 6).toUpperCase(), deptCode: 2, phaseCode: 202 },
       token: tQiansy,
     });
     check(
@@ -370,7 +387,7 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     const jhNoTeacher = await req(`${API}/save`, {
       method: 'POST',
       // 名字带随机后缀：这个用例以前会撞上一次运行留下的同名班
-      body: { stage: 'jh', className: '自检无班主任-' + Math.random().toString(36).slice(2, 6), deptCode: 1 },
+      body: { stage: 'jh', className: '自检无班主任-' + Math.random().toString(36).slice(2, 6), classCode: 'J' + Math.random().toString(36).slice(2, 6).toUpperCase(), deptCode: 1 },
       token: tQiansy,
     });
     check(
@@ -410,7 +427,7 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     // 大学：class_name 之外只有 dept_code/stage 必填，缺阶段码要有兜底而不是炸库
     const clsNoPhase = await req(`${API}/save`, {
       method: 'POST',
-      body: { stage: 'class', className: '自检大学无阶段', deptCode: 2 },
+      body: { stage: 'class', className: '自检大学无阶段', classCode: 'U' + Math.random().toString(36).slice(2, 6).toUpperCase(), deptCode: 2 },
       token: tQiansy,
     });
     check('★ 大学新增：不传阶段码也能建（该表 stage NOT NULL → 后端兜底）', isOk(clsNoPhase), `code=${clsNoPhase.json?.code} ${clsNoPhase.json?.message || ''}`);
@@ -441,6 +458,7 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
       body: {
         stage: 'class',
         className: '自检新建大学班',
+        classCode: 'UN' + Math.random().toString(36).slice(2, 5).toUpperCase(),
         deptCode: 2,
         phaseCode: 203,
         classroom: '新建教室A101',
@@ -481,7 +499,8 @@ async function mkStudent(db, dbName, table, classId, over = {}, stage = null) {
     const mJh = metaList.find((m) => m.stage === 'jh');
     const mCls = metaList.find((m) => m.stage === 'class');
     check('★ meta：实训 hasClassCode=true / hasCloseDate=true', mJob?.hasClassCode === true && mJob?.hasCloseDate === true);
-    check('★ meta：初高 hasClassCode=false / hasCloseDate=false', mJh?.hasClassCode === false && mJh?.hasCloseDate === false);
+    // ★ 班号新规：三部门都有班级编号字段（初高 meta 也返回 hasClassCode=true）
+    check('★ meta：初高 hasClassCode=true（班号新规）', mJh?.hasClassCode === true, `得到 ${mJh?.hasClassCode}`);
     check('★ meta：教室标签各学段不同', mJob?.classroomLabel !== mCls?.classroomLabel, `job=${mJob?.classroomLabel} class=${mCls?.classroomLabel}`);
     check('★ meta：阶段码选项按学段不同', (mJh?.phaseOptions?.length || 0) > 0 && (mJob?.phaseOptions?.length || 0) > 0);
 

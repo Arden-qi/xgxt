@@ -104,9 +104,13 @@ async function makeClass(name) {
     class_status: 1,
     student_count: 0,
   });
+  // ★ 2026-10-21 班号新规：接收咨询学生时学号 = LZ + 班级编号 + 序号，
+  //   班级没有编号会直接被拦 → 统一表镜像里必须带编号。
+  //   ⚠️ 老表 t_class_info 没有 class_code 列（该列只在统一表），别写进老表 insert。
+  const classCode = 'CC' + Math.random().toString(36).slice(2, 6).toUpperCase();
   await db(CLS_T).insert(row);
   reg(SRC, CLS_T, id);
-  if (USE_UNI) await mirrorToUni(SRC, CLS_T, { ...row, id }, STAGE, reg);
+  if (USE_UNI) await mirrorToUni(SRC, CLS_T, { ...row, id, class_code: classCode }, STAGE, reg);
   return { id, ...row };
 }
 
@@ -259,7 +263,8 @@ async function main() {
   const stuRow = await probe(db, SRC, STU_T, STAGE).where({ id: newStuId }).first();
   check('★ 新建档 source_system=consult', String(stuRow?.source_system) === 'consult', stuRow?.source_system);
   check('★ 新建档 source_id=咨询单号（溯源）', String(stuRow?.source_id ?? '') === consultNo1, stuRow?.source_id);
-  check('★ 自动学号符合 S+年份+4位', /^S\d{8}$/.test(String(newStuNo)), String(newStuNo));
+  // ★ 2026-10-22 学号新规：LZ + 班级编号 + 3 位班内序号（夹具班编号 CCxxxx → LZCCxxxx001）
+  check('★ 自动学号符合 LZ+班级编号+序号（新规）', /^LZCC[A-Z0-9]{4}\d{3}$/.test(String(newStuNo)), String(newStuNo));
   check('★ 建档后班级回填正确', String(stuRow?.class_id ?? '') === String(clsB.id), stuRow?.class_id);
 
   const clsBCount = await probe(db, SRC, CLS_T, STAGE).where({ id: clsB.id }).first();
