@@ -246,6 +246,22 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
     }
     return [...ids];
   }
+
+  /**
+   * ★ 2026-10-22：单个房间的可见性校验（床位 / 入住 / 调宿都用它）
+   *
+   * 班主任的数据范围 = 分派给本班的房间 ∪ 本班学生已入住的房间。
+   * 关键场景：班主任把学生调到**非本班分派**的宿舍，教务通过后，
+   * 该学生新房子的 dorm_id 会写进学生主档 → 房间自动进入班主任范围，
+   * 她就能看到这间房与床位；反过来说，跟她完全无关的房间仍然打不开。
+   */
+  async function assertRoomInScope(dormId: string, user: any): Promise<void> {
+    const scope = await scopedDormIds(user);
+    if (scope === null) return; // 校长/教务/学管/管理员：不限制
+    if (!scope.includes(String(dormId))) {
+      throw new BizError(BizCode.NO_OPERATION_PERMISSION, '该宿舍不在你的数据范围内');
+    }
+  }
   
   /** 房间列表 + 实时已住（数 t_job_dorm_bed 里 bed_status=2 的条数） */
   async function roomRows(q: DormListQuery, user: any): Promise<DormRow[]> {
@@ -621,7 +637,9 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
       return { created, revived, skipped };
     },
 
-    async beds(dormId) {
+    async beds(dormId, user) {
+      // ★ 2026-10-22：班主任只能开自己范围内的房间（范围含「本班学生调宿过去的新房」）
+      await assertRoomInScope(String(dormId), user);
       const list = await T_BED()
         .where({ dorm_id: String(dormId), is_deleted: false })
         .orderBy('bed_no', 'asc');
@@ -843,7 +861,9 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
         });
     },
 
-    async assign(body: DormAssignBody, userId: string) {
+    async assign(body: DormAssignBody, user: any) {
+      // userId 只用于留痕；user 还要拿来做班主任房间范围校验
+      const userId = str(user?.userId) || 'sys';
       /**
        * ★ 2026-10-21：学生主档兜底（与本文件 changeCreate 同口径）
        *   部分环境（演示库 / 门户投影）里本学段学生表没有在读学生，
@@ -865,6 +885,8 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
       const dorm = await T_DORM().where({ id: String(body.dormId), is_deleted: false }).first();
       if (!dorm) throw new Error('宿舍不存在');
       if (Number(dorm.dorm_status) === 2) throw new Error('该宿舍已停用，不能入住');
+      // ★ 2026-10-22：班主任只能往自己范围内的房间填学生
+      await assertRoomInScope(String(dorm.id), user);
 
       // ★ 2026-10-22：开放班的分派房间锁定，别的班学生不能入住
       const owner = await roomOwner(String(dorm.id));

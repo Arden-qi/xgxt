@@ -560,7 +560,7 @@ export async function assignBed(body: DormAssignBody, user: any): Promise<void> 
   await assertStageView(user, body.stage);
   // ★ 大学床位是同步来的，只能走申请
   assertWritable(body.stage);
-  return pick(body.stage).assign(body, user?.userId || '');
+  return pick(body.stage).assign(body, user);
 }
 
 export async function checkoutBed(

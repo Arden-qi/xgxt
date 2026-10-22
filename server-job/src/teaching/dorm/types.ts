@@ -96,7 +96,8 @@ export interface DormRepo {
    */
   checkinClasses(user: any): Promise<Array<{ classId: string | null; className: string }>>;
   /** 分派床位（学生入住） */
-  assign(body: DormAssignBody, userId: string): Promise<void>;
+  /** ★ 2026-10-22：user 用于班主任房间范围校验（userId 仅作操作留痕） */
+  assign(body: DormAssignBody, user: any): Promise<void>;
   /** 退宿（直接生效，管理员纠错用，不走审批） */
   checkout(dormId: string, bedId: string, userId: string): Promise<void>;
 
