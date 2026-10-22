@@ -81,6 +81,12 @@ check('「我的班」兼容 id 与姓名', myClassesSrc.includes('head_teacher_
 check('「我的班」跨学段查班级表', myClassesSrc.includes('sms_class_jh.t_class_info') && myClassesSrc.includes('sms_job.t_job_class'));
 check('入住候选按数据范围过滤', repo.includes('async candidates') && repo.includes('IN_SCHOOL_STATUS'));
 
+const teachingDorm = read('web-job/src/teaching/views/TeachingDorm.vue');
+check(
+  '入住弹窗班级下拉只留房间归属班',
+  teachingDorm.includes('assignedClassName') && /list\.filter\(\(c\) => c\.className === owner\)/.test(teachingDorm),
+);
+
 console.log('\n▶ 运行时检查');
 // ① 班主任：能进页面、能发起调宿，但（前端）不给建房间/分派宿舍
 for (const a of [

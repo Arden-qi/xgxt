@@ -1025,7 +1025,24 @@ async function loadAssignClasses() {
   if (!stage) return;
   assignClassLoading.value = true;
   try {
-    assignClasses.value = await listDormCheckinClasses(stage);
+    const list = (await listDormCheckinClasses(stage)) || [];
+    /**
+     * ★ 2026-10-22：房间已分派给某个班 → 班级下拉只留这个班
+     *
+     * 班主任可能同时带几个班，不分青红皂白列出全部班级时，
+     * 她会把学生填到「不属于本班」的房间里（后端虽会拦，但填完才报错很蠢）。
+     * → 分派给哪个班，入住弹窗就只出现哪个班，并直接预选上。
+     *   房间还没分派（如实训房间）时保持原样：列出数据范围内全部班级。
+     */
+    const owner = curDorm.value?.assignedClassName || '';
+    const scoped = owner ? list.filter((c) => c.className === owner) : list;
+    assignClasses.value = scoped.length ? scoped : list;
+
+    // 只有归属班一个选项时直接预选，省一次点击
+    if (assignClasses.value.length === 1 && !assignClassId.value) {
+      assignClassId.value = assignClasses.value[0].classId ?? assignClasses.value[0].className;
+      onAssignClassChange();
+    }
   } catch {
     assignClasses.value = [];
   } finally {
@@ -1076,7 +1093,9 @@ async function openAssign(b: DormBedRow) {
   assignClassId.value = '';
   assignDate.value = todayStr();
   assignVisible.value = true;
-  await Promise.all([loadAssignClasses(), searchAssignStudents()]);
+  // ★ 顺序执行：先定班级（房间归属班会自动预选），再按该班级拉学生候选
+  await loadAssignClasses();
+  await searchAssignStudents();
 }
 
 async function doAssign() {
