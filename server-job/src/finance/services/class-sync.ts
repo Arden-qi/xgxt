@@ -29,7 +29,7 @@ import { classSync } from '../../utils/classSync';
 // ★ P3 切读层：推给初高的两张表（`sms_class_jh.t_class_student` / `t_class_fee`）
 //   都已归一 → 读走 tbl()、写走 tblIns()。本文件 `db` 连的是 sms_job，
 //   属于**跨库**调用，`tbl()` 会自动补库名前缀（与改造前的 `db('库.表')` 一致）。
-import { tbl, tblIns } from '../../teaching/shared/uniTable';
+import { tbl, tblIns, uniUpdCols } from '../../teaching/shared/uniTable';
 
 /** 缴费单表（与 fee.service.ts 的 FEE_TABLE 一致，这里本地声明避免循环依赖） */
 const FEE_TABLE = 't_finance_fee';
@@ -225,6 +225,141 @@ export async function syncFeesToJh(feeIds: string[]): Promise<void> {
 }
 
 /* ============================================================
+ * ★ 2026-10-22 新增：财务管理 → 大学部**催费副本**
+ *   sms_common.t_class_urge_sync （统一表 t_uni_urge, edu_stage='class'）
+ *
+ * 【★ 为什么必须单独加这一路（这是「催费页缺学生」的根因）】
+ *   三部门的催费页各读各的表，而**只有大学这一路的表不是财务同步的目标**：
+ *     · 初高催费页 → sms_class_jh.t_class_fee      ← 财务同步直接写这张表 ✅
+ *     · 就业催费页 → sms_job.t_job_fee_call          ← 财务同步直接写这张表 ✅
+ *     · 大学催费页 → sms_common.t_class_urge_sync    ← ★ 财务同步写的是
+ *        t_class_fee_sync（缴费副本），两张表**不联动** ❌
+ *   结果：财务建了单、大学催费页却看不到 —— 用户反馈「缴费里有的学生，
+ *   催费页里没有」。
+ *
+ * 【为什么大学要分开两张表】
+ *   t_class_fee_sync = **缴费副本**（这学生欠多少、缴没缴）——
+ *     供「学生详情 · 缴费情况」和退费可选项目来源用。
+ *   t_class_urge_sync = **催费副本**（催了几次、催到哪一步）——
+ *     供「催费管理」页用，带 urge_count / last_urge_time / 催收流水。
+ *   两者业务含义不同，不能拿一张顶另一张（否则催费页会丢掉催收进度）。
+ *
+ * 【只推 dept_code = 2（大学部）且学号能在大学学生表回查到的单】
+ *   判据与初高、就业两条完全一致（部门对 + 学号能对上）。
+ *   ⚠️ 实测：财务大学部学号 U26001~U26018 与教务大学 U26001~U26032
+ *      **是同一套**（18/18 全匹配）→ 这一路能真正走通；
+ *      而初高财务是 J26xxx、教务初高是 S2026xxx，两套号 → 回查不到就跳过
+ *      （这是数据口径问题，不是代码问题，见 4.4 记忆）。
+ *
+ * 【幂等键】`source_system='finance' + source_id=财务单id`
+ *   ⚠️ 统一表 t_uni_urge **没有** (source_system, source_id) 唯一索引
+ *      （只有普通索引 idx_source）→ 不能靠 onConflict 兜底，
+ *      改成「先查后写」：查到就 update，查不到才 insert。
+ *      这是本文件里唯一不走 onConflict 的一条，原因见上。
+ * ============================================================ */
+
+/** 大学催费副本（老表名；切读层会自动映射到 t_uni_urge） */
+const CLASS_URGE_TABLE = 't_class_urge_sync';
+/** 大学学生表（按学号回查学生 ID / 班级 / 班主任） */
+const CLASS_STUDENT_TABLE = 't_class_student';
+/** 大学库（本文件的 `db` 连的是 sms_finance → 这两个常量让切读层补库名前缀） */
+const CLASS_DB = 'sms_class';
+/** 催费副本所在库（t_class_urge_sync 本来就住在 sms_common） */
+const URGE_DB = 'sms_common';
+/** 统一表 edu_stage 取值：大学 */
+const CLASS_STAGE = 'class' as const;
+
+/** 按学号回查大学学生（查不到返回 null；跨库异常也返回 null，不抛） */
+async function findClassStudent(studentNo: string): Promise<Record<string, any> | null> {
+  if (!studentNo) return null;
+  try {
+    const row = (await tbl(CONN, CLASS_DB, CLASS_STUDENT_TABLE, CLASS_STAGE)
+      .where({ student_no: studentNo, is_deleted: false })
+      .first()) as Record<string, any> | undefined;
+    return row || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把一张财务缴费单推送到大学部催费副本（幂等：source_system + source_id）
+ *
+ * ⚠️ 永不抛错 —— 同步失败只是大学催费页少一条数据，不该影响收款主流程。
+ */
+export async function syncFeeToClassUrge(feeId: string): Promise<void> {
+  if (!feeId) return;
+  try {
+    const row = (await db(FEE_TABLE).where({ id: feeId, is_deleted: false }).first()) as
+      | Record<string, any>
+      | undefined;
+    if (!row) return;
+
+    // 只推「大学部」的单
+    if (row.dept_code == null || Number(row.dept_code) !== 2) return;
+
+    // 学号必须是大学的学生，否则不推（避免初高/就业的单混进大学催费页）
+    const stu = await findClassStudent(String(row.student_no || ''));
+    if (!stu) return;
+
+    const now = new Date();
+    const payStatus = Number(row.pay_status ?? 1);
+
+    /** 财务侧事实（每次同步都覆盖） */
+    const payload: Record<string, any> = {
+      create_time: now,
+      create_by: 'finance-sync',
+      update_time: now,
+      update_by: 'finance-sync',
+      is_deleted: false,
+      student_id: stu.id,
+      student_no: String(row.student_no || ''),
+      student_name: String(stu.student_name || row.student_name || ''),
+      class_id: stu.class_id ?? row.class_id ?? null,
+      class_name: stu.class_name ?? row.class_name ?? null,
+      head_teacher_id: stu.head_teacher_id ?? null,
+      head_teacher_name: stu.head_teacher_name ?? null,
+      fee_type: Number(row.fee_type ?? 1),
+      amount: Number(row.amount ?? 0),
+      expire_date: dateOnly(row.expire_date),
+      pay_status: payStatus,
+      source_system: 'finance',
+      source_id: String(row.id),
+      sync_status: 2,
+    };
+
+    /**
+     * 【先查后写，而不是 onConflict】
+     *   统一表 t_uni_urge 没有 (source_system, source_id) 唯一索引
+     *   （只有普通索引 idx_source）→ knex 的 onConflict 在 MySQL 上只认**主键**
+     *   → 每次同步都会插一行新记录（催费页出现重复单）。
+     *   所以改成：先按幂等键查，查到就 update（按主键），查不到才 insert。
+     */
+    const existed = (await tbl(CONN, URGE_DB, CLASS_URGE_TABLE, CLASS_STAGE)
+      .where({ source_system: 'finance', source_id: String(row.id) })
+      .first()) as Record<string, any> | undefined;
+
+    if (existed) {
+      // update 路径必须过 uniUpdCols（列名翻译 + 剔统一表没有的列）
+      const patch = await uniUpdCols(CONN, URGE_DB, CLASS_URGE_TABLE, payload);
+      await tbl(CONN, URGE_DB, CLASS_URGE_TABLE, CLASS_STAGE)
+        .where({ id: existed.id })
+        .update(patch as never);
+    } else {
+      await tblIns(CONN, URGE_DB, CLASS_URGE_TABLE, CLASS_STAGE, {
+        id: String(row.id),
+        ...payload,
+        // 催收进度：新建时给初值（催费页要显示催收状态）
+        urge_count: 0,
+      });
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(`[finance→class-urge] 缴费单 ${feeId} 同步异常（不影响本次操作）：${(e as Error).message}`);
+  }
+}
+
+/* ============================================================
  * ★ 2026-10-22 新增：财务管理 → 就业催费单（sms_job.t_job_fee_call）
  *
  * 【为什么加】用户要求「催费单怎么来，就业同初高」——
@@ -353,6 +488,10 @@ export async function syncFeesToJob(feeIds: string[]): Promise<void> {
 export async function syncFeeToAll(feeId: string): Promise<void> {
   await syncFeeToClass(feeId);
   await syncFeeToJh(feeId);
+  // ★ 2026-10-22：大学催费页读的是催费副本表，不是缴费副本表
+  //   （缴费副本 t_class_fee_sync 供「缴费情况」详情用，催费副本 t_class_urge_sync 供催费页用）
+  //   → 缺这一路，财务建了单大学催费页也看不到（用户反馈「缴费里有、催费页里没有」）
+  await syncFeeToClassUrge(feeId);
   // ★ 2026-10-22：就业部的单同步成催费单（用户要求「就业同初高」）
   await syncFeeToJob(feeId);
 }

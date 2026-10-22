@@ -2,7 +2,7 @@
  * 演示种子数据（催费 · 大学部 / 就业部）—— 幂等、只增不删
  * ============================================================
  *
- * 执行：npm run seed:fee-dept   （等价于 node scripts/seed-fee-dept-demo.mjs）
+ * 执行：npm run seed:fee-dept   （等价于 npx tsx scripts/seed-fee-dept-demo.mts）
  *
  * 【为什么要有这个脚本】
  *   初高 `sms_class_jh.t_class_fee` 一直有演示数据（seed-class-jh-demo.js 造的
@@ -31,12 +31,36 @@
  *
  * ⚠️ 幂等：固定 id（seed-urge-U26xxx / seed-call-SX26xxx），已存在就跳过，可以重复跑。
  * ⚠️ 只增不删：不清空任何表；要清就手工按上面的 id 前缀删。
+ *
+ * ============================================================
+ * ★★ 2026-10-22 重大修正：**所有读写必须走切读层**（`tbl()` / `tblIns()`）
+ *
+ * 【原来的 bug】
+ *   本脚本原来是直接 `dbCommon('t_class_urge_sync').insert(...)` /
+ *   `dbJob('t_job_fee_call').insert(...)` —— **裸写老表**。
+ *   但教学域的读路径在 P8 之后已经默认走统一表
+ *   （`USE_UNI_TABLE = env !== '0'`，见 `src/teaching/shared/uniTable.ts`）：
+ *     `sms_common.t_class_urge_sync` → `sms_common.t_uni_urge`
+ *     `sms_job.t_job_fee_call`       → `sms_common.t_uni_fee`（edu_stage='job'）
+ *   → 脚本「执行成功」但催费页**永远看不到**，因为数据写进了没人读的那张表。
+ *   实测：大学催费副本里那 9 条 seed 数据之所以能显示，是后来手工搬进统一表的。
+ *
+ * 【为什么不再「裸写老表 + 手工搬」】
+ *   换一台机器、或别人 clone 下来跑，还会踩同一个坑；而且「写老表、读统一表」
+ *   本身就是这个项目反复出过的 bug 类别（见 uniTable.ts 里 N 处注释）。
+ *   所以这次直接改成走切读层，脚本和页面读同一张表。
+ *
+ * 【顺带修正】就业部种子原来不写 `pay_status`，只写 `call_status`。
+ *   2026-10-22 的口径已统一为「缴费状态看 pay_status（1待缴/2已缴/3已核对/4逾期/5冻结），
+ *   call_status 退化成催收进度」，所以这里按同一张场景表补上 pay_status。
+ * ============================================================
  */
 
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tbl, tblIns } from '../src/teaching/shared/uniTable';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -92,9 +116,11 @@ function dayOffset(n) {
 
 /* ============================================================
  * 场景表：同一个偏移/状态在两个部门各生成一条
- * ============================================================ */
+ * ============================================================
+ * pay  = 统一缴费状态 pay_status（1待缴 2已缴 3已核对 4逾期 5冻结）
+ * call = 就业部催收进度 call_status（1待催 2跟进中 3已结清）
+ */
 const SCENARIOS = [
-  // { off, pay(大学 pay_status), call(就业 call_status), payMethod, paidRatio }
   { off: -12, pay: 1, call: 1, note: '逾期 12 天' },
   { off: -5, pay: 1, call: 1, note: '逾期 5 天' },
   { off: -3, pay: 2, call: 3, note: '已缴（但已过应缴日）' },
@@ -130,22 +156,33 @@ const FEE_TYPES_JOB = [
 const stat = [];
 
 async function seedClassUrge() {
-  const students = await dbClass('t_class_student')
+  const students = (await tbl(dbClass, 'sms_class', 't_class_student', 'class')
     .where('is_deleted', 0)
     .where('student_no', 'like', 'U26%')
     .orderBy('student_no')
     .limit(SCENARIOS.length)
-    .select('id', 'student_no', 'student_name', 'class_id', 'class_name', 'phone', 'parent_phone');
+    .select(
+      'id',
+      'student_no',
+      'student_name',
+      'class_id',
+      'class_name',
+      'phone',
+      'parent_phone',
+    )) as Array<Record<string, any>>;
 
   if (!students.length) {
     stat.push('  ✗ 大学部：没有 U26* 的学生，先跑 npm run seed:class-job');
     return;
   }
 
-  const teachers = await dbClass('t_class_info')
+  const teachers = (await tbl(dbClass, 'sms_class', 't_class_info', 'class')
     .where('is_deleted', 0)
-    .whereIn('id', students.map((s) => s.class_id).filter(Boolean))
-    .select('id', 'head_teacher_id', 'head_teacher_name');
+    .whereIn(
+      'id',
+      students.map((s) => s.class_id).filter(Boolean),
+    )
+    .select('id', 'head_teacher_id', 'head_teacher_name')) as Array<Record<string, any>>;
   const teacherOf = new Map(teachers.map((t) => [t.id, t]));
 
   let inserted = 0;
@@ -156,14 +193,16 @@ async function seedClassUrge() {
     const id = `seed-urge-${stu.student_no}`;
 
     // eslint-disable-next-line no-await-in-loop
-    const exists = await dbCommon('t_class_urge_sync').where({ id }).first();
+    const exists = await tbl(dbCommon, 'sms_common', 't_class_urge_sync', 'class')
+      .where({ id })
+      .first();
     if (exists) continue;
 
     const paidAmount = sc.payMethod ? Math.round(ft.amount * (sc.paidRatio ?? 1)) : null;
     const t = teacherOf.get(stu.class_id) || {};
 
     // eslint-disable-next-line no-await-in-loop
-    await dbCommon('t_class_urge_sync').insert({
+    await tblIns(dbCommon, 'sms_common', 't_class_urge_sync', 'class', {
       id,
       create_time: new Date(),
       is_deleted: 0,
@@ -194,26 +233,31 @@ async function seedClassUrge() {
     });
     inserted += 1;
   }
-  stat.push(`  ✓ 大学部（t_class_urge_sync）：新增 ${inserted} 条（已有跳过）`);
+  stat.push(`  ✓ 大学部（t_class_urge_sync → t_uni_urge）：新增 ${inserted} 条（已有跳过）`);
 }
 
 async function seedJobCall() {
-  const students = await dbJob('t_student_base')
+  const students = (await tbl(dbJob, 'sms_job', 't_student_base', 'job')
     .where('is_deleted', 0)
     .where('student_no', 'like', 'SX26%')
     .orderBy('student_no')
     .limit(SCENARIOS.length)
-    .select('id', 'student_no', 'student_name', 'class_id', 'class_name', 'phone', 'parent_phone');
+    .select('id', 'student_no', 'student_name', 'class_id', 'class_name', 'phone', 'parent_phone')) as Array<
+    Record<string, any>
+  >;
 
   if (!students.length) {
     stat.push('  ✗ 就业部：没有 SX26* 的学生，先跑 npm run seed:class-job');
     return;
   }
 
-  const teachers = await dbJob('t_job_class')
+  const teachers = (await tbl(dbJob, 'sms_job', 't_job_class', 'job')
     .where('is_deleted', 0)
-    .whereIn('id', students.map((s) => s.class_id).filter(Boolean))
-    .select('id', 'head_teacher_id', 'head_teacher_name');
+    .whereIn(
+      'id',
+      students.map((s) => s.class_id).filter(Boolean),
+    )
+    .select('id', 'head_teacher_id', 'head_teacher_name')) as Array<Record<string, any>>;
   const teacherOf = new Map(teachers.map((t) => [t.id, t]));
 
   let inserted = 0;
@@ -224,14 +268,14 @@ async function seedJobCall() {
     const id = `seed-call-${stu.student_no}`;
 
     // eslint-disable-next-line no-await-in-loop
-    const exists = await dbJob('t_job_fee_call').where({ id }).first();
+    const exists = await tbl(dbJob, 'sms_job', 't_job_fee_call', 'job').where({ id }).first();
     if (exists) continue;
 
     const paidAmount = sc.payMethod ? Math.round(ft.amount * (sc.paidRatio ?? 1)) : null;
     const t = teacherOf.get(stu.class_id) || {};
 
     // eslint-disable-next-line no-await-in-loop
-    await dbJob('t_job_fee_call').insert({
+    await tblIns(dbJob, 'sms_job', 't_job_fee_call', 'job', {
       id,
       create_time: new Date(),
       create_by: 'seed',
@@ -249,6 +293,8 @@ async function seedJobCall() {
       head_teacher_name: t.head_teacher_name ?? null,
       fee_amount: ft.amount,
       due_date: dayOffset(sc.off),
+      // ★ 2026-10-22 口径：缴费状态看 pay_status；call_status 只表示催收进度
+      pay_status: sc.pay,
       call_reason: `演示数据：${sc.note}`,
       remark: null,
       call_status: sc.call,
@@ -264,7 +310,7 @@ async function seedJobCall() {
     });
     inserted += 1;
   }
-  stat.push(`  ✓ 就业部（t_job_fee_call）：新增 ${inserted} 条（已有跳过）`);
+  stat.push(`  ✓ 就业部（t_job_fee_call → t_uni_fee）：新增 ${inserted} 条（已有跳过）`);
 }
 
 async function main() {
@@ -277,14 +323,14 @@ async function main() {
     // 造完立刻按「催费窗口」算一遍，确认该显示几条 —— 免得又是「跑成功但页面还是空」
     const win = 20;
     // eslint-disable-next-line no-await-in-loop
-    const cAfter = await dbCommon('t_class_urge_sync')
+    const cAfter = (await tbl(dbCommon, 'sms_common', 't_class_urge_sync', 'class')
       .where('is_deleted', 0)
       .whereNotNull('expire_date')
-      .whereRaw('DATEDIFF(expire_date, CURDATE()) <= ?', [win]);
+      .whereRaw('DATEDIFF(expire_date, CURDATE()) <= ?', [win])) as Array<Record<string, any>>;
     // eslint-disable-next-line no-await-in-loop
-    const jAfter = await dbJob('t_job_fee_call')
+    const jAfter = (await tbl(dbJob, 'sms_job', 't_job_fee_call', 'job')
       .where('is_deleted', 0)
-      .whereRaw('DATEDIFF(due_date, CURDATE()) <= ?', [win]);
+      .whereRaw('DATEDIFF(due_date, CURDATE()) <= ?', [win])) as Array<Record<string, any>>;
 
     console.log(`\n  催费窗口（到期日距今 ≤ ${win} 天）内应显示：`);
     console.log(`    大学部 ${cAfter.length} 条 · 就业部 ${jAfter.length} 条`);
