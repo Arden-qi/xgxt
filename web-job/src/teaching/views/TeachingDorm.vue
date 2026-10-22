@@ -1286,7 +1286,14 @@ const changeBuildings = ref<string[]>([]);
 const changeRooms = ref<AllocateRoomRow[]>([]);
 const changeRoomsLoading = ref(false);
 /** 只保留还有空床位的房间，下拉里按房间分组列床位 */
-const changeRoomsWithBeds = computed(() => changeRooms.value.filter((r) => r.freeBeds.length > 0));
+const changeRoomsWithBeds = computed(() =>
+  changeRooms.value.filter(
+    (r) =>
+      r.freeBeds.length > 0 &&
+      // ★ 别的开放班的房间不能选（本班自己的、封班的都可以）
+      (!r.locked || r.assignedTo === curStudent.value?.className),
+  ),
+);
 
 /** 本地当天日期（不用 toISOString —— 那是 UTC，早上 8 点前会变成昨天） */
 function todayStr(): string {

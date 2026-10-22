@@ -63,6 +63,7 @@ import { tbl, tblIns, upd } from '../shared/uniTable';
 import { listBuildingNames as listDormBuildingNames } from './building.service';
 import { loadClassStatus, loadClassStatuses } from './classStatus';
 import { resolveMyClasses } from './myClasses';
+import { syncStudentDorm } from './studentDormSync';
 
 const DORM_T = 't_job_dorm';
 const BED_T = 't_job_dorm_bed';
@@ -926,6 +927,18 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
           dorm_no: dorm.dorm_no,
         });
       }
+
+      /**
+       * ★ 2026-10-22：按学号同步到「所有学生投影表」
+       *   学生档案用的是 JHS- 开头的 id，宿舍域操作的是 PSB-，
+       *   不同步的话「学生档案 → 宿舍」永远是空的。
+       */
+      await syncStudentDorm(
+        str(st.student_no) || '',
+        String(dorm.id),
+        str(dorm.dorm_no) || null,
+        str(bed.bed_no) || null,
+      );
       void genderName;
     },
   
@@ -935,6 +948,7 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
       if (Number(bed.bed_status) !== 2) throw new Error('该床位没有学生入住');
   
       const sid = bed.student_id;
+      const sno = str(bed.student_no) || '';
       await T_BED().where({ id: String(bedId) }).update({
         bed_status: 1,
         student_id: null,
@@ -953,6 +967,8 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
           await db(PERM_STUDENT).where({ id: String(sid) }).update({ dorm_id: null, dorm_no: null });
         }
       }
+      // ★ 2026-10-22：退宿也要按学号清掉所有投影表的宿舍（学生档案同步清空）
+      await syncStudentDorm(sno, null, null, null);
       await refreshUsedCount(String(dormId));
     },
   
@@ -1231,6 +1247,16 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
           dorm_no: a.new_dorm_no ?? null,
         });
       }
+      /**
+       * ★ 2026-10-22：审批通过后按学号同步所有投影表
+       *   （学生档案读 JHS- 那张，不同步 → 档案里的宿舍永远是空的）
+       */
+      await syncStudentDorm(
+        str(a.student_no) || '',
+        a.new_dorm_id ? String(a.new_dorm_id) : null,
+        str(a.new_dorm_no) || null,
+        str(a.new_bed_no) || null,
+      );
       // ④ 两端 used_count 重算
       if (a.old_dorm_id) await refreshUsedCount(String(a.old_dorm_id));
       if (a.new_dorm_id) await refreshUsedCount(String(a.new_dorm_id));

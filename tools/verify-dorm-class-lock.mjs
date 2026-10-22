@@ -85,7 +85,7 @@ check('有班级状态查询（跨三学段班级表）', helper.includes('loadC
 check('封班 = 解锁，其它按锁定处理', helper.includes('isLockedByClassStatus') && helper.includes('CLASS_STATUS_CLOSED'));
 check('房间返回 locked / 归属班状态', svc.includes('assignedStatus') && svc.includes('locked:') && svc.includes('assignedStatusName'));
 check('开放班的分派被拒（保存时校验）', svc.includes('已分派给开放中的') && svc.includes('不能再分给其他班'));
-check('封班房间重新给出空床位', svc.includes('freeBeds: locked ? []'));
+check('空床位照常下发、由 locked 管可选', svc.includes('freeBeds: freeMap.get(id)'));
 check('入住/调宿也受锁定约束', repo.includes('roomOwner') && repo.includes('不能给其他班学生入住') && repo.includes('不能调入其他班学生'));
 check('分派界面按 locked 禁选并提示', uiAlloc.includes('r.locked') && uiAlloc.includes('已封班，可调配'));
 check('班主任封班后看不到「入住」', uiDorm.includes('assignedClassStatus === 2') && uiDorm.includes('分配权已交回教务'));
@@ -106,7 +106,7 @@ try {
   const allRooms = [...(roomsM.body?.data || []), ...(roomsF.body?.data || [])];
   const owned = allRooms.find((r) => r.assignedTo === CLASS);
   check('分给开放班的房间标记为 locked', !!owned && owned.locked === true, owned ? `${owned.building}${owned.room}` : '无');
-  check('锁定房间不暴露空床位', !!owned && owned.freeBeds.length === 0);
+  check('锁定房间归属班是开放状态', !!owned && owned.assignedStatus === 1);
 
   // 开放状态下，别的班来抢 → 拒绝
   if (owned) {

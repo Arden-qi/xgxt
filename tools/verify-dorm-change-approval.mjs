@@ -136,18 +136,21 @@ let changeId = '';
 let bedId = '';
 let TARGET_DORM = '';
 try {
-  // ★ 房间是环境数据，不能写死：动态找一间有空床的男寝
+  // ★ 房间是环境数据，不能写死：先挑学生，再找一间「他/她所在班可用」的空房
+  //   （别的开放班的房间现在是锁定的，选它会被后端拒绝）
+  const cands = await req('GET', '/api/teaching/dorm/candidates?stage=jh', { token: sunToken });
+  const stu = (cands.body?.data || []).find((c) => c.gender === 1 && !c.dormNo);
+  check('找到未入住男生', !!stu, stu ? `${stu.studentName}(${stu.studentNo})` : '无');
+
   const roomList = await req('GET', '/api/teaching/dorm/allocate/rooms?category=1', { token: acadToken });
-  const target = (roomList.body?.data || []).find((r) => (r.freeBeds || []).length > 0);
+  const target = (roomList.body?.data || []).find(
+    (r) => (r.freeBeds || []).length > 0 && (!r.locked || r.assignedTo === stu?.className),
+  );
   TARGET_DORM = target?.roomId || '';
   const beds = await req('GET', `/api/teaching/dorm/beds?stage=jh&dormId=${TARGET_DORM}`, { token: acadToken });
   const free = (beds.body?.data?.beds || []).find((b) => b.bedStatus === 1);
   bedId = free?.bedId || '';
   check('找到空闲床位', !!bedId, free?.bedLabel || '无空闲床位');
-
-  const cands = await req('GET', '/api/teaching/dorm/candidates?stage=jh', { token: sunToken });
-  const stu = (cands.body?.data || []).find((c) => c.gender === 1 && !c.dormNo);
-  check('找到未入住男生', !!stu, stu ? `${stu.studentName}(${stu.studentNo})` : '无');
 
   if (bedId && stu) {
     const created = await req('POST', '/api/teaching/dorm/change/create', {

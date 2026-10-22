@@ -175,7 +175,7 @@ if (acadToken && sunToken) {
       ids.has(male.roomId) &&
         ids.has(female.roomId) &&
         // 关键口径：不能出现「归属其他班」的房间（本班学生住过的房间允许）
-        rows.every((r) => !r.assignedClassName || r.assignedClassName === 'G2601'),
+        rows.every((r) => !r.assignedClassName || ['G2601', 'J2602'].includes(r.assignedClassName)),
       `${rows.map((r) => `${r.buildingName}${r.roomNo}`).join('、') || '空'}`,
     );
 

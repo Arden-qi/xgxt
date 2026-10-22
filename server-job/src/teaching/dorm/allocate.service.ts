@@ -504,10 +504,13 @@ export async function listAllocateRooms(
       assignedStatusName: assignedStatus ? CLASS_STATUS_NAME[assignedStatus] || null : null,
       locked,
       /**
-       * ★ 锁定房间不往外暴露空床位（调宿/分派都选不到）；
-       *   封班房间照常给 freeBeds，教务可以继续调配。
+       * ★ 空床位照常下发，是否可选由调用方按 `locked` + 学生班级判断：
+       *   · 本班自己的房间 → 可以调进来（班主任换床）；
+       *   · 别的开放班 → 前端禁选、后端 changeCreate/assign 也会拒绝；
+       *   · 封班 → 空床交回教务，可选。
+       *   （早期版本直接清空 freeBeds，导致班主任在自己班里反而选不到床）
        */
-      freeBeds: locked ? [] : freeMap.get(id) || [],
+      freeBeds: freeMap.get(id) || [],
     };
   });
 }
