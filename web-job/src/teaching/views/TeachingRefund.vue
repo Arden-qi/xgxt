@@ -144,8 +144,9 @@
       </el-table-column>
       <!--
         ★ 结束日期（2026-10-19 用户要求新增）＝ 出款时间（退款流程完结）：
-          2026-10-21 起三个部门都有出款时间了（大学部补列，见迁移 migrations-class/20261021_001，
-          且「登记出款」按钮原来焊死不显示的 bug 一并修了），没登记过的显示 —。
+          2026-10-21 起三个部门都有出款时间了（大学部补列，见迁移 migrations-class/20261021_001）。
+          2026-10-22 起列表不再有「登记出款」按钮，这个时间只能由财务出款后自动回写，
+          没收到回写的显示 —。
       -->
       <el-table-column label="结束日期" width="105" align="center">
         <template #default="{ row }">{{ row.refundTime ? row.refundTime.slice(0, 10) : '—' }}</template>
@@ -185,17 +186,11 @@
           <el-button v-if="row.canCancel" link type="warning" size="small" @click="doCancel(row)">
             撤回
           </el-button>
-          <el-button
-            v-if="
-              row.approvalStatus === REFUND_STATUS.APPROVED && canFinanceConfirm && !row.refundTime
-            "
-            link
-            type="info"
-            size="small"
-            @click="doFinanceConfirm(row)"
-          >
-            登记出款
-          </el-button>
+          <!--
+            ★ 2026-10-22 用户要求：去掉列表操作里的「登记出款」按钮。
+              出款时间已由财务侧出款后**自动回写**（财务 payRefund → /internal/finance-paid），
+              上游再留一个手填入口只会产生两份口径，故整块下线（含 canFinanceConfirm / doFinanceConfirm）。
+          -->
         </template>
       </el-table-column>
     </el-table>
@@ -366,12 +361,13 @@
  * ★ 2026-10-19 列表：新增「结束日期」列（＝ 出款时间，大学部 2026-10-21 补列后三部门都有）；
  *   按用户要求去掉「当前处理」列与详情里的当前处理项。
  * ★ 2026-10-21 用户要求：部门「实训」改叫「就业」（REFUND_DEPARTMENTS 的 job 项）；
- *   大学部补出款时间列并真正落库（原来 setFinance 是空实现）；「登记出款」按钮原来
- *   因 canFinanceConfirm 永远 false 谁都看不见，改按门户可见模块（finance）判。
+ *   大学部补出款时间列并真正落库（原来 setFinance 是空实现）。
+ * ★ 2026-10-22 用户要求：**去掉列表操作列里的「登记出款」按钮**。出款时间改由财务侧
+ *   出款后自动回写（财务 payRefund → POST /internal/finance-paid → 写回 refund_time），
+ *   上游再留手填入口会产生两份口径。后端 finance-confirm 接口保留，仅前端入口下线。
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
-import { useAuthStore as usePortalStore } from '@/portal/stores/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   FEE_TYPE_OPTIONS,
@@ -382,7 +378,6 @@ import {
   approveRefund,
   cancelRefund,
   createRefund,
-  financeConfirm,
   getRefundDetail,
   getRefundSummary,
   listClasses,
@@ -400,7 +395,6 @@ import {
 
 const loading = ref(false);
 const saving = ref(false);
-const portal = usePortalStore();
 const rows = ref<RefundRow[]>([]);
 const total = ref(0);
 const summaries = ref<RefundSummary[]>([]);
@@ -425,18 +419,12 @@ const query = reactive({
 useBreadcrumbStageKey(() => query.stage || '');
 
 /**
- * 财务登记出款按钮：仅能看到「财务」模块的账号显示（后端有二次校验）。
- *
- * ★ 2026-10-21 修复：这个 ref 原来**永远是 false**，「登记出款」按钮对谁都不出现 ——
- *   后端 `/finance-confirm` 只要求"该部门可见 + 单据已审批通过"，并不要求财务角色，
- *   前端却把它焊死。这直接导致三件事串不起来：
- *   审批通过 → 通知财务 → **没人能登记出款** → 「结束日期（出款时间）」永远是空的
- *   （大学部连出款时间列都还没有，本次一并补了，见迁移 migrations-class/20261021_001）。
- *   现在按「门户下发的可见模块里有没有 finance」判（与财务侧 auth store 的菜单口径同源）。
+ * ★ 2026-10-22：原来这里有一个 canFinanceConfirm（按门户可见模块里有 finance 判），
+ *   控制列表操作列的「登记出款」按钮。用户要求去掉该按钮 —— 财务出款后自动回写
+ *   （财务 payRefund → POST /api/teaching/refund/internal/finance-paid），上游不需要手填。
+ *   连同 doFinanceConfirm / financeConfirm 引用一并删除；后端
+ *   `/api/teaching/refund/finance-confirm` 接口保留（演示数据脚本仍在用）。
  */
-const canFinanceConfirm = computed(() =>
-  (portal.visibleModules || []).some((m) => String(m.key) === 'finance'),
-);
 
 /**
  * ★ 学段码 → 部门名（界面上不再出现「学段」；与 TeachingLeave.deptNameOf 同一份口径）
@@ -734,21 +722,8 @@ async function doCancel(row: RefundRow) {
   }
 }
 
-async function doFinanceConfirm(row: RefundRow) {
-  try {
-    const { value } = await ElMessageBox.prompt('出款备注（可空）', '登记出款', {
-      confirmButtonText: '确认',
-      cancelButtonText: '取消',
-      inputValue: '',
-    });
-    await financeConfirm(row.stage, row.id, { financeRemark: value || undefined });
-    ElMessage.success('已登记出款');
-    await load();
-  } catch (e: any) {
-    if (e === 'cancel' || e?.message === 'cancel') return;
-    ElMessage.error(e?.response?.data?.message || e?.message || '登记失败');
-  }
-}
+/* ★ 2026-10-22：doFinanceConfirm（列表操作「登记出款」）已按用户要求删除，
+   出款时间由财务侧出款后自动回写。 */
 </script>
 
 <style scoped>

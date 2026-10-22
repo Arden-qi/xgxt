@@ -14,7 +14,7 @@
 import { db as classJhDb } from '../../class-jh/utils/db';
 import { db as classDb } from '../../class/db';
 import { db as jobDb } from '../../utils/db';
-import { tbl } from './uniTable';
+import { tbl, phaseCodeSelect } from './uniTable';
 import { visibleClassIds } from './dataScope';
 import type { TeachingStage } from './dto';
 import { TEACHING_STAGE_NAME } from './dto';
@@ -66,16 +66,24 @@ const CLASS_TABLE: Record<
 export async function listClassesByStage(
   stage: TeachingStage | 'emp',
 ): Promise<Array<{ id: string; name: string; deptCode?: number; phaseCode?: number }>> {
+  /* ★★ 2026-10-22 修：阶段码列名不能再写裸 `stage`
+   *
+   *   P8 之后 `tbl()` 一律读 `sms_common.t_uni_class`，而它**只有 `stage_code`**
+   *   （学段在 `edu_stage`，阶段码在 `stage_code`），根本没有 `stage` 列
+   *   → 三条分支全都 `ER_BAD_FIELD_ERROR`（errorHandler 翻成 50002「数据库字段不存在」）
+   *   → 退费页「班级」筛选下拉恒为空。用 phaseCodeSelect 别名回 `stage`，
+   *     `pick()` 与下游一行都不用改。 */
+  const phaseSel = phaseCodeSelect({ alias: 'stage' });
   if (stage === 'jh') {
     const rows = (await tbl(classJhDb, 'sms_class_jh', 't_class_info', stage)
       .where('is_deleted', 0)
-      .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
+      .select('id', 'class_name as name', 'dept_code', phaseSel)) as Array<{ id: string; name: string }>;
     return rows.map(pick);
   }
   if (stage === 'class') {
     const rows = (await tbl(classDb, 'sms_class', 't_class_info', stage)
       .where('is_deleted', 0)
-      .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
+      .select('id', 'class_name as name', 'dept_code', phaseSel)) as Array<{ id: string; name: string }>;
     return rows.map(pick);
   }
   // ★ 实训与就业部共用 t_job_class、dept 都是 3
@@ -90,7 +98,7 @@ export async function listClassesByStage(
     //   现存 SX2601 的 stage_key 是 'job'，按 stage_key='emp' 过滤会一个班都列不出来。
     qb.andWhere('dept_code', 3);
   }
-  const rows = (await qb.select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{
+  const rows = (await qb.select('id', 'class_name as name', 'dept_code', phaseSel)) as Array<{
     id: string;
     name: string;
   }>;

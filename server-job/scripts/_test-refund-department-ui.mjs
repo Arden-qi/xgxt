@@ -61,6 +61,19 @@ const { check, summary } = makeChecker();
     check('★ 列表有「部门」列', !!deptCol, deptCol ? '已找到' : '未找到');
     check('★ 列表有「结束日期」列（出款时间；2026-10-19 用户要求新增）', tpl.includes('label="结束日期"'));
     check('★ 「当前处理」列已去掉（2026-10-19 用户要求）', !tpl.includes('label="当前处理"'));
+    // ★ 2026-10-22 用户要求：列表操作列的「登记出款」按钮整体下线（出款时间由财务自动回写）。
+    //   断言前先剥注释 —— 源码里保留了「历史说明」，注释里的同名字样不算按钮。
+    const tplBare = tpl.replace(/<!--[\s\S]*?-->/g, '');
+    const vueBare = vue
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    check(
+      '★ 列表操作列已无「登记出款」按钮（2026-10-22 用户要求）',
+      !tplBare.includes('登记出款') &&
+        !/doFinanceConfirm|canFinanceConfirm|financeConfirm/.test(vueBare),
+      `tpl按钮=${tplBare.includes('登记出款')} 脚本残留=${/doFinanceConfirm|canFinanceConfirm|financeConfirm/.test(vueBare)}`,
+    );
     check(
       '★ 部门列不带 v-if —— 始终显示，筛选后不消失',
       !!deptCol && !/v-if/.test(deptCol[1] + deptCol[2]),
