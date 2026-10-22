@@ -73,7 +73,10 @@
         empty-text="暂无缴费账单"
         row-key="studentId"
       >
-        <el-table-column prop="studentNo" label="学号" width="110" />
+        <!-- 未分班的学生没有学号，显示「—」（与缴费核对台同口径） -->
+        <el-table-column label="学号" width="110">
+          <template #default="{ row }">{{ dash(row.studentNo) }}</template>
+        </el-table-column>
         <el-table-column prop="studentName" label="姓名" width="90" />
         <el-table-column label="班级" width="100">
           <template #default="{ row }">{{ dash(row.className) }}</template>

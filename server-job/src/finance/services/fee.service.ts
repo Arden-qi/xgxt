@@ -57,6 +57,24 @@ export function toTimeStr(v: any): string | undefined {
 }
 
 /**
+ * ★ 2026-10-22 咨询阶段的「临时学号」（ZX + 数字）
+ *
+ * 业务口径（用户反馈）：
+ *   学生还没分班时，交试学费 / 正式学费都还没有真实学号；
+ *   咨询侧为了让「财务建单学号必填」走得通，先塞了个 ZX 临时号占位。
+ *   但财务在缴费核对台看到的学号应该是空的（前端显示「—」），
+ *   分班建档后由 applyArchiveToFeeRows 把档案里的真实学号覆盖上来。
+ *
+ * ⚠️ 只做「展示口径」过滤，不动库里的值：
+ *   student_no 是财务侧对账 / 凭证共用的键，抹掉会连累其它判断。
+ */
+const TEMP_STUDENT_NO_RE = /^ZX\d+$/i;
+
+export function isTempStudentNo(no?: string | null): boolean {
+  return !!no && TEMP_STUDENT_NO_RE.test(String(no).trim());
+}
+
+/**
  * 缴费行 → 前端契约格式
  *
  * ⚠️ 关键约定：
@@ -68,7 +86,8 @@ export function toFeeListItem(r: any) {
   return {
     id: r.id,
     studentId: r.student_id,
-    studentNo: r.student_no,
+    // ★ 2026-10-22 未分班（只有 ZX 临时号）→ 学号留空，前端显示「—」
+    studentNo: isTempStudentNo(r.student_no) ? '' : r.student_no,
     studentName: r.student_name,
     classId: r.class_id ?? undefined,
     className: r.class_name ?? undefined,
@@ -789,7 +808,8 @@ export async function findVoucherSharers(
   return rows.map((r: any) => ({
     id: r.id,
     studentName: r.student_name,
-    studentNo: r.student_no,
+    // ★ 2026-10-22 与列表同口径：未分班的 ZX 临时号不展示（前端显示「—」）
+    studentNo: isTempStudentNo(r.student_no) ? '' : r.student_no,
     feeTypeName: FEE_TYPE_NAME[r.fee_type] || '',
   }));
 }
