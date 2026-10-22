@@ -36,8 +36,127 @@ import { randomUUID } from 'crypto';
 import { db } from '../src/perm/utils/db';
 import { PERM_TREE, PERM_TREE_STATS } from '../src/perm/config/permTree';
 import { deriveDefaultPaths } from '../src/utils/rolePageDefaults';
+import { ROLE_DEFAULT_PAGES } from '../src/perm/config/roleDefaultPages';
 
 const APPLY = process.argv.includes('--apply');
+
+/* ============================================================
+ * ★ 2026-10-22 新增：老库 schema 自愈
+ *
+ * 【为什么必须有】
+ *   这个脚本要跑在「别人的老库」上（一键启动 5e 自动调它）。
+ *   但老库是更早版本的 sql/init/sms_perm.sql 建的，缺后面新增的表和列。
+ *   实测（用 10-21 那份旧 SQL 建库）：跑 `--apply` 直接报
+ *     ER_BAD_FIELD_ERROR: Unknown column 'is_custom' in 'where clause'
+ *   于是「自动修复权限树」在最需要它的场景下失效 —— 别人拉完代码还是丢板块。
+ *
+ * 【缺什么（实测差异）】
+ *   表：t_perm_role_perm_baseline（差异存储的基线，缺了会把授权判错）
+ *   列：t_perm_menu.is_custom / t_perm_role.equiv_role_code
+ *       t_perm_log 的 api_path / http_method / status_code / duration_ms / user_agent
+ *
+ * 【做法】写库前先比对 information_schema，缺什么补什么（幂等，重复跑无副作用）。
+ *   dry run 只报告不执行，方便先看会改什么。
+ * ============================================================ */
+const NEED_TABLES: { name: string; ddl: string }[] = [
+  {
+    name: 't_perm_role_perm_baseline',
+    ddl: `CREATE TABLE IF NOT EXISTS \`t_perm_role_perm_baseline\` (
+  \`id\` varchar(191) NOT NULL,
+  \`role_code\` varchar(64) NOT NULL,
+  \`module_key\` varchar(32) NOT NULL,
+  \`item_name\` varchar(64) NOT NULL,
+  \`action_code\` varchar(64) NOT NULL,
+  \`create_time\` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (\`id\`),
+  KEY \`idx_role\` (\`role_code\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='职位权限基线（差异存储：只记管理员显式改过的）'`,
+  },
+];
+
+const NEED_COLUMNS: { table: string; column: string; ddl: string }[] = [
+  {
+    table: 't_perm_menu',
+    column: 'is_custom',
+    ddl: "ALTER TABLE `t_perm_menu` ADD COLUMN `is_custom` tinyint(1) NOT NULL DEFAULT 0 COMMENT '1=用户自建权限点（可改可删）'",
+  },
+  {
+    table: 't_perm_role',
+    column: 'equiv_role_code',
+    ddl: "ALTER TABLE `t_perm_role` ADD COLUMN `equiv_role_code` varchar(64) DEFAULT NULL",
+  },
+  {
+    table: 't_perm_log',
+    column: 'api_path',
+    ddl: "ALTER TABLE `t_perm_log` ADD COLUMN `api_path` varchar(255) DEFAULT NULL COMMENT '访问的接口路径'",
+  },
+  {
+    table: 't_perm_log',
+    column: 'http_method',
+    ddl: "ALTER TABLE `t_perm_log` ADD COLUMN `http_method` varchar(10) DEFAULT NULL COMMENT 'HTTP 方法'",
+  },
+  {
+    table: 't_perm_log',
+    column: 'status_code',
+    ddl: "ALTER TABLE `t_perm_log` ADD COLUMN `status_code` int DEFAULT NULL COMMENT 'HTTP 状态码'",
+  },
+  {
+    table: 't_perm_log',
+    column: 'duration_ms',
+    ddl: "ALTER TABLE `t_perm_log` ADD COLUMN `duration_ms` int DEFAULT NULL COMMENT '处理耗时（毫秒）'",
+  },
+  {
+    table: 't_perm_log',
+    column: 'user_agent',
+    ddl: "ALTER TABLE `t_perm_log` ADD COLUMN `user_agent` varchar(255) DEFAULT NULL COMMENT '设备 / 浏览器'",
+  },
+];
+
+/** 补齐老库缺失的表 / 列；返回做了什么 */
+async function ensureSchema(): Promise<string[]> {
+  const [tabRows] = (await db.raw(
+    'select table_name as t from information_schema.tables where table_schema = database()',
+  )) as unknown as [any[]];
+  const tables = new Set(tabRows.map((r) => String(r.t)));
+
+  if (!tables.has('t_perm_menu')) {
+    throw new Error(
+      '权限库还没初始化（找不到 t_perm_menu）。请先双击「一键启动.bat」，' +
+        '或导入 server-job/sql/init/sms_perm.sql 后再跑本脚本。',
+    );
+  }
+
+  const [colRows] = (await db.raw(
+    'select table_name as t, column_name as c from information_schema.columns where table_schema = database()',
+  )) as unknown as [any[]];
+  const cols = new Set(colRows.map((r) => `${r.t}.${r.c}`));
+
+  const missTables = NEED_TABLES.filter((x) => !tables.has(x.name));
+  const missCols = NEED_COLUMNS.filter((x) => !cols.has(`${x.table}.${x.column}`));
+
+  const done: string[] = [];
+  if (!missTables.length && !missCols.length) return done;
+
+  console.log('\n──── 老库结构自愈 ────');
+  for (const t of missTables) console.log(`  缺表：${t.name}`);
+  for (const c of missCols) console.log(`  缺列：${c.table}.${c.column}`);
+
+  if (!APPLY) {
+    console.log('  （dry run，未执行；加 --apply 会补上这些表和列）');
+    return done;
+  }
+
+  for (const t of missTables) {
+    await db.raw(t.ddl);
+    done.push(`建表 ${t.name}`);
+  }
+  for (const c of missCols) {
+    await db.raw(c.ddl);
+    done.push(`加列 ${c.table}.${c.column}`);
+  }
+  console.log(`  ✓ 已补 ${done.length} 项`);
+  return done;
+}
 
 /** 这些板块的页面，非系统管理员只给「查看」（权限管理是管理员的地盘） */
 const VIEW_ONLY_BOARDS = new Set(['perm']);
@@ -74,6 +193,9 @@ async function main(): Promise<void> {
   const now = new Date();
 
   console.log('════════ 权限树重建 ════════');
+  // ★ 2026-10-22：老库可能缺表/缺列，先自愈再干活
+  //   （不先补 is_custom，下面第一次查 t_perm_menu 就会 ER_BAD_FIELD_ERROR）
+  await ensureSchema();
   console.log(
     `新树规模：${PERM_TREE_STATS.modCount} 个板块 / ${PERM_TREE_STATS.itemCount} 个页面 / ${PERM_TREE_STATS.actionCount} 个动作`,
   );
@@ -174,7 +296,10 @@ async function main(): Promise<void> {
         const hit =
           visible.has(`${board.moduleKey}||${page.path}`) ||
           ALL_PAGES_ROLES.has(r.role_code) ||
-          (PAGE_FALLBACK_ROLES[pageKey] || []).includes(r.role_code);
+          (PAGE_FALLBACK_ROLES[pageKey] || []).includes(r.role_code) ||
+          // ★ 2026-10-22：兜底表（老库的功能点名与新页面名交集为 0 时靠它补齐）
+          //   只补不砍：union 语义，不会因为兜底表少了某页就把已推导出的页面砍掉
+          (ROLE_DEFAULT_PAGES[r.role_code] || []).includes(`${board.moduleKey}||${page.name}`);
         if (!hit) continue;
         // 权限管理板块：只有系统管理员 / 校长能写；其他职位只给「查看」
         const viewOnly =
