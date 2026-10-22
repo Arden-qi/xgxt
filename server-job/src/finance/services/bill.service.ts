@@ -20,7 +20,7 @@ import {
   RefundStatus,
   StudentStatus,
 } from 'shared-types/finance';
-import { toDateStr, FEE_TABLE } from './fee.service';
+import { toDateStr, FEE_TABLE, isTempStudentNo } from './fee.service';
 import { REFUND_TABLE } from './refund.service';
 import { FREEZE_TABLE } from './freeze.service';
 
@@ -36,7 +36,8 @@ export function toBillListItem(r: any) {
     sourceId: r.source_id,
     sourceNo: r.source_no ?? undefined,
     studentId: r.student_id,
-    studentNo: r.student_no,
+    // ★ 2026-10-22 未分班（只有 ZX 临时号）→ 学号留空，前端显示「—」
+    studentNo: isTempStudentNo(r.student_no) ? '' : r.student_no,
     studentName: r.student_name,
     classId: r.class_id ?? undefined,
     className: r.class_name ?? undefined,
