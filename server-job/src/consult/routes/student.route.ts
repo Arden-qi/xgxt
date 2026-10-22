@@ -1364,13 +1364,21 @@ studentRouter.post(
       .whereIn('id', ids)
       .select('id', 'student_no')) as Array<Record<string, any>>;
 
-    // 学号优先作为跨模块认人键（与 /enroll-to-class 的 consultNoOf 完全一致）
-    const noOf = new Map<string, string>();
+    /**
+     * ★ 2026-10-22 认人键：学号 + 学生 id 两个都带上
+     *
+     * 推送单的 `consult_no` 是**分班那一刻**的值 —— 学生还没学号时等于咨询学生 id。
+     * 学号回写之后再只用学号去查，一条都命中不了 → 状态被判成 `none` →
+     * 前端「分班」按钮仍然可点（用户实测：已入班的张三还能点分配班级）。
+     * 与 `assignBlockReason` 用同一套双键口径，保证「按钮可用性」和「后端拦截」一致。
+     */
+    const keysOf = new Map<string, string[]>();
     for (const r of rows) {
+      const id = String(r.id);
       const no = String(r.student_no || '').trim();
-      noOf.set(String(r.id), no || String(r.id));
+      keysOf.set(id, Array.from(new Set([no, id].filter(Boolean))) as string[]);
     }
-    const nos = Array.from(new Set(Array.from(noOf.values())));
+    const nos = Array.from(new Set(Array.from(keysOf.values()).flat()));
 
     // 两边并行查（任一失败都不影响另一端）
     const [univ, jh] = await Promise.all([
@@ -1380,15 +1388,23 @@ studentRouter.post(
     const univMap = (univ.ok ? univ.data : {}) as Record<string, any>;
     const jhMap = (jh.ok ? jh.data : {}) as Record<string, any>;
 
+    /** 按该学生的任意一个键在返回 map 里取值 */
+    const pickBy = (m: Record<string, any>, keys: string[]): any => {
+      for (const k of keys) {
+        if (m[k]) return m[k];
+      }
+      return null;
+    };
+
     const out: Record<string, unknown> = {};
     for (const id of ids) {
-      const no = noOf.get(id);
-      if (!no) {
+      const keys = keysOf.get(id) || [];
+      if (!keys.length) {
         out[id] = { state: 'unknown', label: ASSIGN_STATE_TEXT.unknown, canAssign: true };
         continue;
       }
-      const u = univMap[no];
-      const j = jhMap[no];
+      const u = pickBy(univMap, keys);
+      const j = pickBy(jhMap, keys);
 
       let state: AssignState = 'none';
       let classId: string | null = null;
@@ -1423,12 +1439,31 @@ studentRouter.post(
 
 /** 后端二次拦截用的状态判定（与 /assign-status 同口径），返回阻断原因或 null */
 async function assignBlockReason(stu: Record<string, any>): Promise<string | null> {
+  /**
+   * ★ 2026-10-22 认人键必须「学号 + 学生 id」两个一起查
+   *
+   * 坑：推送单的 `consult_no` 是**分班那一刻**的值 —— 学生还没学号时等于咨询学生 id。
+   *   等班主任接收建档、学号回写到咨询学生表之后，`consultNoOf()` 返回的是**学号**，
+   *   拿它去查 `consult_no` 一条都命中不了 → 守卫失效，
+   *   已入班的学生还能再分一次班（用户实测反馈）。
+   *
+   * 所以两个键都带上，任一命中即拦。下游两个接口本来就支持批量多 key。
+   */
   const no = consultNoOf(stu);
-  const [univ, jh] = await Promise.all([classSync.consultStatus([no]), classSync.jhEnrolledStatus([no])]);
+  const keys = Array.from(new Set([no, String(stu.id)].filter(Boolean)));
+  const [univ, jh] = await Promise.all([classSync.consultStatus(keys), classSync.jhEnrolledStatus(keys)]);
+
+  /** 从返回的 map 里按任意一个键取值 */
+  const pick = (data: unknown): Record<string, any> | null => {
+    const m = (data || {}) as Record<string, any>;
+    for (const k of keys) {
+      if (m[k]) return m[k];
+    }
+    return null;
+  };
 
   // ★ 2026-10-19：先看推送单（初高现在也走推送，pending/received 都在这里）
-  const u = (univ.ok ? univ.data : {}) as Record<string, any>;
-  const hit = u[no];
+  const hit = pick(univ.ok ? univ.data : null);
   if (hit) {
     const st = Number(hit.applyStatus);
     if (st === 2) {
@@ -1441,9 +1476,9 @@ async function assignBlockReason(stu: Record<string, any>): Promise<string | nul
   }
 
   // 历史上「初高直建入班」的老数据没有推送单 → 仍按初高学籍表兜底拦一次
-  const j = (jh.ok ? jh.data : {}) as Record<string, any>;
-  if (j[no]) {
-    return `「${stu.student_name}」已进入教学管理（初高）「${j[no].className ?? '对应班级'}」，不能再分派到其他班级；如需换班请先在初高侧处理`;
+  const j = pick(jh.ok ? jh.data : null);
+  if (j) {
+    return `「${stu.student_name}」已进入教学管理（初高）「${j.className ?? '对应班级'}」，不能再分派到其他班级；如需换班请先在初高侧处理`;
   }
   return null;
 }

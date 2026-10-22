@@ -481,12 +481,28 @@ async function loadAssignStatus() {
 
 /** 当前行还能不能分配班级（没查到状态时不误伤） */
 function canEnrollOf(row: ConsultStudentListItem | ConsultStudent): boolean {
+  /**
+   * ★ 2026-10-22 用户口径：**已经入班的学生一律不可再分配**
+   *
+   * 试学中(5) / 缴费中·待确认(6) / 正式在读(7) 说明人已经在班里了。
+   * 后端 `assignBlockReason` 会拦，但按钮留着可点仍会误导（用户实测：张三已入班还能点）。
+   *
+   * 先按本地状态兜一层，不依赖 assignStatus 接口 —— 接口失败/未返回时，
+   * `canEnrollOf` 原来的兜底是「按可点展示」，会把按钮又放出来。
+   */
+  const st = Number((row as any).consultState);
+  if ([CS.TRIAL, CS.FULL_FEE_PENDING, CS.FORMAL].includes(st)) return false;
+
   const s = assignStatus.value[(row as any).consultStudentId || (row as any).id];
   return s ? s.canAssign : true;
 }
 
 /** 按钮禁用原因 */
 function enrollTipOf(row: ConsultStudentListItem | ConsultStudent): string {
+  const st = Number((row as any).consultState);
+  if ([CS.TRIAL, CS.FULL_FEE_PENDING, CS.FORMAL].includes(st)) {
+    return '该学生已入班，不能再分配班级；如需换班请联系学管';
+  }
   const s = assignStatus.value[(row as any).consultStudentId || (row as any).id];
   return s ? s.label : '选择学部与开放班级后，推送给该班班主任接收';
 }
