@@ -1312,7 +1312,14 @@ const trainingForm = reactive({
   remark: '',
 });
 
-/** 就业部阶段方案里的阶段（deptCode = 3，只取这一套，不要混进初高/大学的阶段码） */
+/** 就业部阶段方案里的阶段（deptCode = 3，只取这一套，不要混进初高/大学的阶段码）
+ *
+ * ★ 2026-10-22：加兜底。原来只读 planOptions 里 dept=3 的 phases，
+ *   而方案阶段以前没有编码、靠名字反查字典，就业部「实训」查不到 →
+ *   phases 为空 → 升实训弹窗的阶段下拉显示「无数据」。
+ *   方案明细现在自带 stage_code，正常情况第一段就有值；
+ *   万一方案还没配阶段，再回落到 meta.phaseOptions 里的 3xx 段位。
+ */
 const trainingPhaseOptions = computed(() => {
   const plans = metaList.value.flatMap((m) => m.planOptions || []);
   const seen = new Map<number, string>();
@@ -1320,7 +1327,17 @@ const trainingPhaseOptions = computed(() => {
     if (pl.deptCode !== 3) continue;
     for (const p of pl.phases) if (!seen.has(p.value)) seen.set(p.value, p.label);
   }
-  return [...seen].map(([value, label]) => ({ value, label }));
+  if (seen.size) return [...seen].map(([value, label]) => ({ value, label }));
+
+  // 兜底：就业部（emp / job 学段）meta 里 3xx 段的阶段选项
+  const fallback = new Map<number, string>();
+  for (const m of metaList.value) {
+    if (m.stage !== 'emp' && m.stage !== 'job') continue;
+    for (const p of m.phaseOptions || []) {
+      if (p.value >= 300 && p.value < 400 && !fallback.has(p.value)) fallback.set(p.value, p.label);
+    }
+  }
+  return [...fallback].map(([value, label]) => ({ value, label }));
 });
 
 function openTraining(row: ClassRow) {

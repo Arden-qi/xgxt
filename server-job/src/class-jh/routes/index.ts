@@ -9,7 +9,7 @@ import { dormApplyRouter } from './dormApply.route';
 import { feeRouter } from './fee.route';
 import { refundRouter } from './refund.route';
 import { flowRouter, repeatRouter } from './flow.route';
-import { settingRouter, stageRouter, stageSchemeRouter, opLogRouter } from './setting.route';
+import { settingRouter, stageSchemeRouter, opLogRouter } from './setting.route';
 import { statsRouter } from './stats.route';
 import { handoverRouter } from './handover.route';
 
@@ -61,7 +61,6 @@ export function buildRouters(): MountedRouter[] {
 
     // ---------- 系统设置 / 阶段（字典 + 方案）/ 操作日志 ----------
     { path: '/api/class-jh/setting', router: settingRouter },
-    { path: '/api/class-jh/stage', router: stageRouter },
     // ★ 2026-10-16：阶段方案（阶段字典升级版）
     { path: '/api/class-jh/stage-scheme', router: stageSchemeRouter },
     { path: '/api/class-jh/opLog', router: opLogRouter },
