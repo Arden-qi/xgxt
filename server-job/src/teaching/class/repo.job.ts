@@ -76,6 +76,17 @@ function numOrNull(v: unknown): number | null {
 
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部', 3: '就业部' };
 
+/**
+ * ★ 2026-10-22：班级编号唯一性校验（同表全局唯一，与初高/大学同口径）
+ *   编辑时排除自己，否则「不动编号只改别的字段」会被自己挡住。
+ */
+async function assertClassCodeUnique(code: string, excludeId?: string): Promise<void> {
+  const q = tbl(db, 'sms_job', T, STAGE).where({ class_code: code, is_deleted: false });
+  if (excludeId) q.andWhereNot('id', excludeId);
+  const hit = (await q.first()) as Record<string, any> | undefined;
+  if (hit) throw new Error(`班级编号「${code}」已存在`);
+}
+
 /** 行 → 统一结构 */
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
   const status = Number(r.class_status ?? CLASS_STATUS.CLOSED);
@@ -258,6 +269,24 @@ export const repo: ClassRepo = {
     set('remark', body.remark);
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
 
+    /**
+     * ★ 2026-10-22 修：编辑时编号改不了
+     *
+     * 原来 `class_code` 只在**新增**分支写，编辑分支的 payload 里根本没有这一列 ——
+     * 前端把新编号传上来，SQL 里没有它，保存成功但编号没变（用户看到的就是「改不了」）。
+     *
+     * ⚠️ 只在 body.classCode !== undefined 时处理：
+     *    班级交接（service.ts handover）也走 save()，它不带编号字段；
+     *    若在这里无条件要求必填，交接会被「班级编号必填」拦死。
+     *    表单提交时 route 会把空串转成 null（= 有人清空了），null 照样报必填。
+     */
+    if (body.classCode !== undefined) {
+      const code = String(body.classCode ?? '').trim();
+      if (!code) throw new Error('班级编号必填');
+      await assertClassCodeUnique(code, body.id);
+      payload.class_code = code;
+    }
+
     if (body.id) {
       // 修改时也走状态机
       if (body.classStatus !== undefined) {
@@ -293,10 +322,7 @@ export const repo: ClassRepo = {
       String(body.className || '').trim() ||
       `未命名班级-${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
     const deptCode = Number(body.deptCode ?? 3);
-    const dupCode = (await tbl(db, 'sms_job', T, STAGE).where({ class_code: classCode, is_deleted: false }).first()) as
-      | Record<string, any>
-      | undefined;
-    if (dupCode) throw new Error(`班级编号「${classCode}」已存在`);
+    await assertClassCodeUnique(classCode);
     const dupName = (await tbl(db, 'sms_job', T, STAGE)
       .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;

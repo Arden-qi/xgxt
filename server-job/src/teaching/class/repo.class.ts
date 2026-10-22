@@ -244,11 +244,20 @@ export const repo: ClassRepo = {
     // ★ 这张表没 close_date / remark
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
 
-    if (body.id) {
-      // 编辑：也要必填 —— 历史班级第一次编辑时补上
+    /**
+     * ★ 2026-10-22 修：只在**表单传了编号**时才校验
+     *
+     * 原来这里无条件要求「编辑必填」，但班级交接（service.ts handover）也走 save()，
+     * 它的 saveBody 不带 classCode → 交接会被「班级编号必填」拦死。
+     * 表单提交时空串被 route 转成 null（不是 undefined），所以「清空编号再保存」仍会报必填。
+     */
+    if (body.classCode !== undefined) {
       const code = String(body.classCode ?? '').trim();
       if (!code) throw new Error('班级编号必填');
       await assertClassCodeUnique(code, body.id);
+    }
+
+    if (body.id) {
       if (body.classStatus !== undefined) {
         const cur = (await tbl(db, 'sms_class', T, STAGE).where({ id: body.id }).first()) as
           | Record<string, any>
