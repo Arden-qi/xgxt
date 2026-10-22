@@ -32,6 +32,15 @@ const BASE_OF_DEPT: Record<number, number> = { 1: 100, 2: 200, 3: 300 };
 
 /** 方案被哪些班级表引用（跨库） */
 const CLASS_TABLES = ['sms_class_jh.t_class_info', 'sms_class.t_class_info', 'sms_job.t_job_class'];
+/**
+ * ★ 2026-10-22：统一表也要同步
+ *
+ *   教学域默认走统一表（`TEACHING_UNI_TABLE !== '0'`，见 teaching/shared/uniTable.ts），
+ *   班级列表读的是 `sms_common.t_uni_class`。只更新三张业务表的话，
+ *   页面上还是旧阶段名 —— 用户看到的就是"方案改了、班级没变"。
+ *   注意统一表的阶段列叫 `stage_code`（业务表叫 `stage`）。
+ */
+const UNI_CLASS_TABLE = 'sms_common.t_uni_class';
 
 /* ============================================================
  * 类型
@@ -281,7 +290,66 @@ async function assignStageCodes(
   return out;
 }
 
-/** 阶段明细入库（先逻辑删旧的，再插新的 —— 修改时整体覆盖） */
+/** 某方案下的某个阶段是否已被班级引用（三张业务表 + 统一表） */
+async function stageUsedByClass(stageId: string): Promise<number> {
+  let used = 0;
+  for (const table of [...CLASS_TABLES, UNI_CLASS_TABLE]) {
+    try {
+      const rows = await db.raw(
+        `SELECT COUNT(*) AS n FROM ${table} WHERE scheme_stage_id = ? AND is_deleted = 0`,
+        [stageId],
+      );
+      const n = Number((Array.isArray(rows) && Array.isArray(rows[0]) ? rows[0][0] : null)?.n) || 0;
+      used += n;
+    } catch {
+      /* 该学段未部署 / 表不存在：跳过 */
+    }
+  }
+  return used;
+}
+
+/**
+ * 把阶段名同步到「引用了该阶段」的班级上
+ *
+ * 【为什么需要】
+ *   班级表里存了 `scheme_stage_name` 快照（列表/学生档案的阶段列读它）。
+ *   方案里把「实训」改名成「啊啊啊」之后，不同步的话班级还显示旧名字 ——
+ *   用户看到的就是"方案改了、用到方案的地方没跟着变"。
+ */
+async function syncClassStageNames(
+  schemeId: string,
+  rows: Array<{ id: string; stage_name: string; stage_code: number | null }>,
+): Promise<void> {
+  for (const r of rows) {
+    for (const table of CLASS_TABLES) {
+      try {
+        await db.raw(
+          `UPDATE ${table}
+              SET scheme_stage_name = ?
+            WHERE is_deleted = 0
+              AND (scheme_stage_id = ? OR (scheme_id = ? AND stage = ?))`,
+          [r.stage_name, r.id, schemeId, r.stage_code],
+        );
+      } catch {
+        /* 表不存在 / 列没迁移：跳过，不影响方案保存 */
+      }
+    }
+    // 统一表（班级列表实际读的那张）：阶段列叫 stage_code
+    try {
+      await db.raw(
+        `UPDATE ${UNI_CLASS_TABLE}
+            SET scheme_stage_name = ?
+          WHERE is_deleted = 0
+            AND (scheme_stage_id = ? OR (scheme_id = ? AND stage_code = ?))`,
+        [r.stage_name, r.id, schemeId, r.stage_code],
+      );
+    } catch {
+      /* 统一表未启用：跳过 */
+    }
+  }
+}
+
+/** 阶段明细入库 */
 async function replaceStages(
   schemeId: string,
   stages: StageSchemeSaveInput['stages'],
@@ -291,36 +359,103 @@ async function replaceStages(
   const now = new Date();
   const codes = await assignStageCodes(schemeId, deptCode, stages, userId);
 
-  await db(SCHEME_STAGE_TABLE).where({ scheme_id: schemeId, is_deleted: false }).update({
-    is_deleted: true,
-    update_time: now,
-    update_by: userId || 'system',
-  });
+  /**
+   * ★ 2026-10-22 改：不再「全删再全插」，改为按阶段码原地更新。
+   *
+   *   原来每次保存方案都会把明细全部软删、再用新 uuid 插入，
+   *   结果班级表里的 `scheme_stage_id` 全部指向已删除的行 ——
+   *   编辑班级时阶段下拉选不中（显示成一串 uuid），
+   *   也没法反查「这个阶段被哪些班用了」。现在同码阶段复用原 id。
+   */
+  const current = (await db(SCHEME_STAGE_TABLE)
+    .where({ scheme_id: schemeId, is_deleted: false })
+    .select('id', 'stage_name', 'stage_code')) as Array<Record<string, any>>;
 
-  const rows = stages.map((s, i) => ({
-    id: randomUUID(),
-    scheme_id: schemeId,
-    stage_name: s.stageName,
-    stage_code: codes[i] ?? null,
-    study_months: s.studyMonths ?? null,
-    sort_no: i,
-    is_deleted: false,
-    create_time: now,
-    create_by: userId || 'system',
-  }));
-  if (rows.length) await db(SCHEME_STAGE_TABLE).insert(rows);
+  const byCode = new Map<number, Record<string, any>>();
+  const byName = new Map<string, Record<string, any>>();
+  for (const c of current) {
+    const code = c.stage_code === null || c.stage_code === undefined ? null : Number(c.stage_code);
+    if (code !== null && Number.isFinite(code) && !byCode.has(code)) byCode.set(code, c);
+    const nm = String(c.stage_name ?? '').trim();
+    if (nm && !byName.has(nm)) byName.set(nm, c);
+  }
+
+  const keptIds = new Set<string>();
+  const saved: Array<{ id: string; stage_name: string; stage_code: number | null; months: number | null }> = [];
+
+  for (let i = 0; i < stages.length; i += 1) {
+    const s = stages[i];
+    const name = String(s.stageName ?? '').trim();
+    const code = codes[i] ?? null;
+
+    let hit: Record<string, any> | undefined;
+    if (code !== null) {
+      const c = byCode.get(code);
+      if (c && !keptIds.has(String(c.id))) hit = c;
+    }
+    if (!hit && name) {
+      const c = byName.get(name);
+      if (c && !keptIds.has(String(c.id))) hit = c;
+    }
+
+    const months = s.studyMonths === null || s.studyMonths === undefined ? null : Number(s.studyMonths);
+
+    if (hit) {
+      const id = String(hit.id);
+      keptIds.add(id);
+      await db(SCHEME_STAGE_TABLE).where({ id }).update({
+        stage_name: name,
+        stage_code: code,
+        study_months: months,
+        sort_no: i,
+        is_deleted: false,
+        update_time: now,
+        update_by: userId || 'system',
+      });
+      saved.push({ id, stage_name: name, stage_code: code, months });
+    } else {
+      const id = randomUUID();
+      keptIds.add(id);
+      await db(SCHEME_STAGE_TABLE).insert({
+        id,
+        scheme_id: schemeId,
+        stage_name: name,
+        stage_code: code,
+        study_months: months,
+        sort_no: i,
+        is_deleted: false,
+        create_time: now,
+        create_by: userId || 'system',
+      });
+      saved.push({ id, stage_name: name, stage_code: code, months });
+    }
+  }
+
+  // 剩下的旧阶段 = 这次被删掉的：已被班级引用就拦住，别让班级指着一条已删除的阶段
+  for (const c of current) {
+    const id = String(c.id);
+    if (keptIds.has(id)) continue;
+    const used = await stageUsedByClass(id);
+    if (used > 0) {
+      throw new BizError(
+        BizCode.BUSINESS_RULE_VIOLATION,
+        `阶段「${String(c.stage_name ?? '')}」已被 ${used} 个班级使用，不能删除 —— 请先把这些班级改到别的阶段`,
+      );
+    }
+    await db(SCHEME_STAGE_TABLE).where({ id }).update({
+      is_deleted: true,
+      update_time: now,
+      update_by: userId || 'system',
+    });
+  }
+
+  // 方案里的阶段改了名 → 引用它的班级同步改名（列表 / 学生档案的阶段列读的是班级快照）
+  await syncClassStageNames(schemeId, saved);
 
   // 新号码要能在列表里显示中文名；顺便让内存里的阶段字典跟着更新
-  for (let i = 0; i < rows.length; i += 1) {
-    const code = rows[i].stage_code;
-    if (code === null) continue;
-    await ensureDictRow(
-      deptCode,
-      code,
-      String(rows[i].stage_name ?? '').trim(),
-      rows[i].study_months === null || rows[i].study_months === undefined ? null : Number(rows[i].study_months),
-      userId,
-    );
+  for (const r of saved) {
+    if (r.stage_code === null) continue;
+    await ensureDictRow(deptCode, r.stage_code, r.stage_name, r.months, userId);
   }
   await refreshStageDict();
 }
@@ -364,9 +499,9 @@ export async function updateScheme(id: string, input: StageSchemeSaveInput, user
   return { id };
 }
 
-/** 方案是否仍被班级引用（初高 / 大学 / 实训三张班级表都查） */
+/** 方案是否仍被班级引用（三张业务表 + 统一表都查） */
 export async function schemeUsedByClass(id: string): Promise<boolean> {
-  for (const table of CLASS_TABLES) {
+  for (const table of [...CLASS_TABLES, UNI_CLASS_TABLE]) {
     try {
       const rows = await db.raw(
         `SELECT id FROM ${table} WHERE scheme_id = ? AND is_deleted = 0 LIMIT 1`,

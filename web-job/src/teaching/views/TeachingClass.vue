@@ -71,7 +71,7 @@
 
     <!-- 阶段方案设计（弹窗；组件与原来系统设置里的方案页是同一套逻辑） -->
     <el-dialog v-model="schemeVisible" title="阶段方案设计" width="900px" top="6vh" destroy-on-close>
-      <StageSchemePanel />
+      <StageSchemePanel @changed="onSchemeChanged" />
       <template #footer>
         <el-button @click="schemeVisible = false">关闭</el-button>
       </template>
@@ -809,6 +809,25 @@ function tagType(s: number): string {
   return (CLASS_STATUS_TAG[s] || 'info') as never;
 }
 
+/**
+ * ★ 2026-10-22：阶段方案改完之后要"同步"
+ *
+ * 方案名称 / 阶段名称 / 学制 改完，本页三处都依赖它：
+ *   ① 班级列表的「阶段」列（读班级上的 scheme_stage_name 快照）
+ *   ② 新增 / 编辑班级的「阶段方案 / 阶段」下拉（读 meta.planOptions）
+ *   ③ 升实训弹窗的就业部阶段下拉（同上）
+ * 班级快照由后端在保存方案时同步更新；前端只需把 meta 和列表重新拉一遍，
+ * 否则要刷新整页才看得到新名字。
+ */
+async function onSchemeChanged() {
+  try {
+    metaList.value = (await getClassMeta()) || [];
+  } catch {
+    /* meta 拉取失败不阻塞列表刷新 */
+  }
+  await load();
+}
+
 async function load(page?: number) {
   if (page) query.page = page;
   loading.value = true;
@@ -1126,6 +1145,10 @@ async function openCreate() {
 }
 
 async function openEdit(row: ClassRow) {
+  // ★ 2026-10-22：编辑弹窗也必须刷新方案选项 ——
+  //   原来只有「新增班级」会刷新，方案里改了阶段名/加了阶段后，
+  //   打开编辑还是旧选项（阶段列显示旧名字，甚至显示 uuid）。
+  await loadSchemeOptions();
   Object.assign(form, emptyForm(row.stage), {
     id: row.classId,
     className: row.className,
@@ -1152,6 +1175,24 @@ async function openEdit(row: ClassRow) {
     closeDate: row.closeDate || '',
     remark: row.remark || '',
   });
+  // ★ 2026-10-22：兜底修复「历史脏绑定」
+  //
+  //   老版本的保存方案是「全部软删 + 用新 id 重插」，班级上的
+  //   scheme_stage_id 会指向一条已删除的阶段行 —— 下拉里找不到这个 id，
+  //   el-select 就把 uuid 直接显示出来（用户看到的就是一串乱码）。
+  //   这里按「同名 → 同阶段码」在当前方案里找回真正的阶段行。
+  const curStages = schemeOptions.value.find((s) => s.id === form.schemeId)?.stages || [];
+  if (form.schemeStageId && !curStages.some((x) => x.id === form.schemeStageId)) {
+    const hit =
+      curStages.find((x) => x.stageName === row.schemeStageName) ||
+      curStages.find((x) => x.stageCode !== null && x.stageCode === row.phaseCode);
+    form.schemeStageId = hit ? hit.id : null;
+    if (hit) {
+      form.schemeStageName = hit.stageName;
+      if (hit.stageCode !== null && hit.stageCode !== undefined) form.phaseCode = hit.stageCode;
+    }
+  }
+
   // ★ 2026-10-16 反查这个阶段属于哪个方案，让「阶段方案」下拉回显；
   //   2026-10-19 批注：查不到也要默认选中本部门的方案，不能空着
   formPlanId.value = planIdOfPhase(row.phaseCode) || formPlanOptions.value[0]?.id || '';

@@ -277,6 +277,11 @@ export function getClassOptions() {
 export interface SchemeStageOption {
   id: string;
   stageName: string;
+  /**
+   * 阶段编码（★ 2026-10-22 新增）
+   * 班级 / 学生的 stage 列存的就是它；表单选阶段时用它回填 phaseCode。
+   */
+  stageCode?: number | null;
   studyMonths: number | null;
   sortNo: number;
 }
