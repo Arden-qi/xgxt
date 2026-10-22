@@ -566,9 +566,29 @@ const suppForm = ref({
   voucherNo: '',
 });
 
-/** 已缴试学费的行才给「补费」入口 */
+/**
+ * 该学生是否已经补过费
+ *
+ * ★ 2026-10-22 用户口径：同一学生**只能补费一次**（不是「一次在途」）。
+ *   已到账的补费也算用掉了机会，否则试学费那一行永远能点补费，学生会被反复补费。
+ *   只有被财务驳回的不算（钱没到账，允许改金额重来）。
+ *
+ * 后端 `createSupplementFee` 有同样的门槛兜底；这里只是把按钮提前藏掉。
+ */
+function alreadySupplemented(studentId: string): boolean {
+  return list.value.some(
+    (o) =>
+      String(o.consultStudentId) === String(studentId) &&
+      Number(o.feeType) === FeeType.SUPPLEMENT &&
+      o.status !== ConsultFeeStatus.REJECTED,
+  );
+}
+
+/** 已缴试学费、且还没补过费的行才给「补费」入口 */
 function canSupplement(row: ConsultFeeOrder): boolean {
-  return Number(row.feeType) === FeeType.TRIAL_FEE && row.status === ConsultFeeStatus.ARRIVED;
+  if (Number(row.feeType) !== FeeType.TRIAL_FEE) return false;
+  if (row.status !== ConsultFeeStatus.ARRIVED) return false;
+  return !alreadySupplemented(row.consultStudentId);
 }
 
 async function openSupplement(row: ConsultFeeOrder) {

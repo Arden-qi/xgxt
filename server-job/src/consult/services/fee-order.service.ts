@@ -1043,6 +1043,28 @@ export async function createSupplementFee(
     );
   }
 
+  /**
+   * ---------- 门槛 3：每个学生**只能补费一次** ----------
+   *
+   * ★ 2026-10-22 用户口径：同一学生只允许一次补费，不是「一次在途」。
+   *   已到账的补费单同样算「用掉了这次机会」—— 否则试学费那一行永远能点补费，
+   *   学生会被反复补费（用户实测：张三已补过一次，试学费账单还能再补）。
+   *
+   * 只有被财务驳回（REJECTED）的不算：那笔钱没到账，允许改金额重来。
+   * 作废（is_deleted）的也不算。
+   */
+  const supplemented = await db(FEE_ORDER_TABLE)
+    .where({ consult_student_id: consultStudentId, is_deleted: false })
+    .where('fee_type', FeeType.SUPPLEMENT)
+    .whereIn('status', [CFS.NO_VOUCHER, CFS.PENDING, CFS.ARRIVED])
+    .first();
+  if (supplemented) {
+    throw new BizError(
+      BizCode.INVALID_STATUS,
+      `「${stu.student_name}」已经补费过一次（单号 ${supplemented.order_no}，¥${centToYuan(Number(supplemented.amount))}），每个学生仅支持一次补费`,
+    );
+  }
+
   const deptCode: DeptCode = stu.dept_code || DeptCode.JUNIOR_SENIOR;
   const studentNo = stu.student_no || tempStudentNo(consultStudentId);
   const feeTypeName = nameOf(FEE_TYPE_NAME, FeeType.SUPPLEMENT);
