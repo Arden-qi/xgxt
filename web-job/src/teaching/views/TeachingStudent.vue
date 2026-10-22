@@ -639,8 +639,14 @@
     <el-dialog v-model="editVisible" :title="form.id ? '编辑学生' : '新增学生'" width="720px" top="5vh">      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <el-row :gutter="12">
           <el-col :span="8">
+            <!-- ★ 2026-10-22：学号由系统按「LZ+班级编号+序号」生成，不接受手填；
+                 编辑时只读展示（生成后终身不变，升云/升实训也不改） -->
             <el-form-item label="学号">
-              <el-input v-model="form.studentNo" placeholder="留空则自动生成" />
+              <el-input
+                v-model="form.studentNo"
+                disabled
+                :placeholder="form.id ? '' : '按「LZ+班级编号+序号」自动生成'"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -676,7 +682,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="班级">
+            <el-form-item label="班级" prop="classId">
               <el-select
                 v-model="form.classId"
                 clearable
@@ -1233,6 +1239,19 @@ const formAge = ref<number | null>(null);
 const rules: FormRules = {
   studentName: [{ required: true, message: '姓名必填', trigger: 'blur' }],
   gender: [{ required: true, message: '性别必填', trigger: 'change' }],
+  // ★ 2026-10-22：学号按班级编号生成，没班级就没有学号 → 新增时班级必填
+  //   （编辑历史学生时放宽：老数据可能本来就没班级，不能因此改不了别的字段）
+  classId: [
+    {
+      // required 只负责显示红星，真正的判断在 validator 里（编辑时允许为空）
+      required: true,
+      validator: (_r, v: string, cb) => {
+        if (form.id || v) cb();
+        else cb(new Error('请选择班级（学号按班级编号生成）'));
+      },
+      trigger: 'change',
+    },
+  ],
   idCard: [
     {
       validator: (_r, v: string, cb) => {

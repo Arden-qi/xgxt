@@ -46,6 +46,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { assertClassCodeAvailable } from '../shared/classCode';
 
 const T = 't_job_class';
 const ROSTER_T = 't_job_class_student';
@@ -81,14 +82,11 @@ function numOrNull(v: unknown): number | null {
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部', 3: '就业部' };
 
 /**
- * ★ 2026-10-22：班级编号唯一性校验（同表全局唯一，与初高/大学同口径）
- *   编辑时排除自己，否则「不动编号只改别的字段」会被自己挡住。
+ * ★ 2026-10-22：班级编号唯一性校验 → **三部门全局唯一**
+ *   （学号 = LZ + 班级编号 + 序号，跨部门重号会生成同一串学号）
  */
 async function assertClassCodeUnique(code: string, excludeId?: string): Promise<void> {
-  const q = tbl(db, 'sms_job', T, STAGE).where({ class_code: code, is_deleted: false });
-  if (excludeId) q.andWhereNot('id', excludeId);
-  const hit = (await q.first()) as Record<string, any> | undefined;
-  if (hit) throw new Error(`班级编号「${code}」已存在`);
+  await assertClassCodeAvailable(code, { stage: STAGE, id: excludeId });
 }
 
 /** 行 → 统一结构 */

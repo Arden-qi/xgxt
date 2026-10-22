@@ -6,7 +6,9 @@ import { TransferType } from 'shared-types';
 import { db } from '../../db';
 import { Errors, ok, pageData } from '../../http/response';
 import { pageQuerySchema, q, validate } from '../../lib/validate';
-import { baseInsert, baseUpdate, maxStudentNo, notDeleted, paginate } from '../../lib/repo';
+import { baseInsert, baseUpdate, notDeleted, paginate } from '../../lib/repo';
+// ★ 2026-10-22：学号统一按「LZ+班级编号+序号」生成（初高/大学两个接收入口共用）
+import { nextStudentNoForClass } from '../../../teaching/shared/studentNo';
 import { assertClassAccess } from '../../middleware/dataScope';
 import { requirePerm } from '../../lib/permGuard';
 import { isFullAccess } from '../../lib/authUser';
@@ -426,15 +428,8 @@ consultRouter.get(
 
 /* ------------------------------ 班主任接收并建档 ------------------------------ */
 
-function buildStudentNo(seq: number): string {
-  return `S${new Date().getFullYear()}${String(seq).padStart(4, '0')}`;
-}
-
-function seqOfStudentNo(no: string | null | undefined): number {
-  if (!no) return 0;
-  const m = /(\d{4})$/.exec(no);
-  return m ? Number(m[1]) : 0;
-}
+// ★ 2026-10-22：学号改由 teaching/shared/studentNo 统一生成（LZ+班级编号+序号），
+//   原来的 S+年份+4位流水（buildStudentNo/seqOfStudentNo）已停用并删除。
 
 const receiveSchema = z.object({
   id: z.string().min(1, '缺少咨询单ID'),
@@ -587,7 +582,6 @@ async function doReceive(
         address: push.home_address ?? null,
         classId,
         remark: b.remark ?? push.remark ?? null,
-        studentNo: b.studentNo ?? null,
         education: b.education ?? push.education ?? null,
         enrollDate: b.enrollDate ?? null,
         studentStatus: b.studentStatus ?? planStatus ?? null,
@@ -783,18 +777,9 @@ async function doReceive(
       );
     }
 
-    // 学号
-    let studentNo = b.studentNo?.trim() || '';
-    if (!studentNo) {
-      // ★ 第 4 期第 3 批：`maxStudentNo` 签名改为收「已路由的 builder」，
-      //   原代码这里传的是写死的 `db('t_class_student')`（切读时会读老表 → 新建的学号
-      //   会和种子数据撞号）。第 6 批（咨询域）起改为传 `STU()`，跟着开关走。
-      const max = await maxStudentNo(STU(), `S${new Date().getFullYear()}%`);
-      studentNo = buildStudentNo(seqOfStudentNo(max) + 1);
-    } else {
-      const dup = await notDeleted(STU()).where('student_no', studentNo).first();
-      if (dup) throw Errors.studentNoExists(studentNo);
-    }
+    // 学号：★ 2026-10-22 一律按「LZ+班级编号+序号」生成，忽略接收弹窗手填的值
+    //   （初高 / 大学两个接收入口口径一致；生成后终身不变）
+    const studentNo = await nextStudentNoForClass('class', classId);
 
     // 床位占用校验
     if (b.dormId && b.bedNo) {

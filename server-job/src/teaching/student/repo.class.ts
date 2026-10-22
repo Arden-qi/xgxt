@@ -31,6 +31,7 @@ import type {
 import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { nextStudentNoForClass } from '../shared/studentNo';
 
 const T = 't_class_student';
 const CLASS_TABLE = 't_class_info';
@@ -299,7 +300,8 @@ export const repo: StudentRepo = {
       return { id: body.id };
     }
 
-    const studentNo = String(body.studentNo || '').trim() || (await generateStudentNo());
+    // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略前端手填值（用户口径）
+    const studentNo = await nextStudentNoForClass('class', body.classId);
     const dup = (await notDeleted(tbl(db, 'sms_class', T, STAGE)).where('student_no', studentNo).first()) as
       | Record<string, any>
       | undefined;
@@ -335,18 +337,7 @@ export const repo: StudentRepo = {
 };
 
 
-/** 学号生成：S + 年份 + 4 位流水（大学口径） */
-async function generateStudentNo(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `S${year}`;
-  const rows = (await notDeleted(tbl(db, 'sms_class', T, STAGE))
-    .where('student_no', 'like', `${prefix}%`)
-    .select('student_no')) as Array<{ student_no: string }>;
-  const max = rows.reduce((m, r) => {
-    const n = Number(String(r.student_no).slice(prefix.length));
-    return Number.isFinite(n) && n > m ? n : m;
-  }, 0);
-  return `${prefix}${String(max + 1).padStart(4, '0')}`;
-}
+/** 学号生成：见 shared/studentNo.ts（LZ + 班级编号 + 序号），旧的 S+年份 流水已停用 */
+
 
 export default repo;

@@ -30,7 +30,7 @@ import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 // ★ 2026-10-21 学号新规：LZ + J/T(初/高) + 班号(3位) + 班内序号(3位, 每班从001独立)
-import { buildStudentNoForClass, legacyStudentNo } from '../../class-jh/utils/classNo';
+import { nextStudentNoForClass } from '../shared/studentNo';
 
 const T = 't_class_student';
 const CLASS_TABLE = 't_class_info';
@@ -313,7 +313,8 @@ export const repo: StudentRepo = {
       return { id: body.id };
     }
 
-    const studentNo = String(body.studentNo || '').trim() || (await generateStudentNo(body));
+    // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略前端手填值（用户口径）
+    const studentNo = await generateStudentNo(body);
     const dup = (await tbl(db, 'sms_class_jh', T, STAGE).where({ student_no: studentNo }).first()) as
       | Record<string, any>
       | undefined;
@@ -375,14 +376,12 @@ async function ensureNetAccount(studentId: string): Promise<void> {
 }
 
 /**
- * 学号生成（2026-10-21 新规，用户口径）：
- *   学号 = LZ + 学段字母 + 班号(3位) + 班内序号(3位)
- *     · 学段字母：高中(105~107)→T；预科(101)/初中(102~104)→J（按班级 stage 判定）
- *     · 班号：建班时按学部组顺序分配（101 起），班内序号每班从 001 独立重排
- *   兜底：学生没选班级 / 班级没有班号（老数据未回填）→ 旧口径 S + 年份 + 4 位全校流水
+ * 学号生成（★ 2026-10-22 用户口径，替换掉 10-21 的「LZ+学段字母+班号」版本）：
+ *   学号 = LZ + 班级编号 + 班内序号(3位)，如 LZQ17001
+ *   必须选班级、班级必须有编号；没编号直接报错（不造旧格式兜底号）
  */
 async function generateStudentNo(body: StudentSaveBody): Promise<string> {
-  return (await buildStudentNoForClass(db, body.classId)) ?? (await legacyStudentNo(db));
+  return nextStudentNoForClass('jh', body.classId);
 }
 
 export default repo;

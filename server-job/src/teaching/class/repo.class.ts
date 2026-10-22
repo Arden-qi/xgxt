@@ -19,6 +19,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../../class/db';
 import { applyDataScope } from '../../class/middleware/dataScope';
+import { assertClassCodeAvailable } from '../shared/classCode';
 import { CLASS_STATUS, CLASS_STATUS_NAME, canTransitClassStatus } from '../shared/dto';
 import type {
   ClassListQuery,
@@ -71,14 +72,14 @@ function numOrNull(v: unknown): number | null {
 }
 
 /**
- * ★ 2026-10-21：班级编号唯一性校验（同表内全局唯一，与实训/就业部同口径）
- *   编辑时排除自己，否则「不动编号只改别的字段」会被自己挡住。
+ * ★ 2026-10-21：班级编号唯一性校验 → ★ 2026-10-22 改为**三部门全局唯一**
+ *
+ * 学号 = LZ + 班级编号 + 序号，两个部门用同一个编号会生成同一串学号
+ * （学号是跨学段唯一标识：档案「全部」按它去重、缴费记录按它归集）。
+ * 具体查询见 shared/classCode.ts。
  */
 async function assertClassCodeUnique(code: string, excludeId?: string): Promise<void> {
-  const q = tbl(db, 'sms_class', T, STAGE).where({ class_code: code, is_deleted: false });
-  if (excludeId) q.andWhereNot('id', excludeId);
-  const hit = (await q.first()) as Record<string, any> | undefined;
-  if (hit) throw new Error(`班级编号「${code}」已存在`);
+  await assertClassCodeAvailable(code, { stage: STAGE, id: excludeId });
 }
 
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {

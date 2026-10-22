@@ -21,8 +21,7 @@
 
 import { randomUUID } from 'crypto';
 import { db } from '../../class-jh/utils/db';
-// ★ 2026-10-21 班号：建班时按学部组顺序分配（学号 = LZ + J/T + 班号 + 班内序号）
-import { nextClassNo } from '../../class-jh/utils/classNo';
+import { assertClassCodeAvailable } from '../shared/classCode';
 import {
   CLASS_STATUS,
   CLASS_STATUS_NAME,
@@ -83,14 +82,11 @@ function numOrNull(v: unknown): number | null {
 }
 
 /**
- * ★ 2026-10-21：班级编号唯一性校验（同表内全局唯一，与实训/就业部同口径）
- *   编辑时排除自己，否则「不动编号只改别的字段」会被自己挡住。
+ * ★ 2026-10-21：班级编号唯一性校验 → ★ 2026-10-22 改为**三部门全局唯一**
+ *   学号 = LZ + 班级编号 + 序号，跨部门重号会生成同一串学号。见 shared/classCode.ts。
  */
 async function assertClassCodeUnique(code: string, excludeId?: string): Promise<void> {
-  const q = tbl(db, 'sms_class_jh', T, STAGE).where({ class_code: code, is_deleted: false });
-  if (excludeId) q.andWhereNot('id', excludeId);
-  const hit = (await q.first()) as Record<string, any> | undefined;
-  if (hit) throw new Error(`班级编号「${code}」已存在`);
+  await assertClassCodeAvailable(code, { stage: STAGE, id: excludeId });
 }
 
 function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
@@ -334,7 +330,6 @@ export const repo: ClassRepo = {
       id,
       class_code: classCode,
       class_name: className, // ★ create 时名称可能被自动占位（见上）
-      class_no: await nextClassNo(db, stage),
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时给兜底值
       [phaseCodeCol()]: stage,

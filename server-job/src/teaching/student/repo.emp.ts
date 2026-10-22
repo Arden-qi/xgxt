@@ -43,6 +43,7 @@ import type {
 import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { nextStudentNoForClass } from '../shared/studentNo';
 // ★ 2026-10-19 就业部接入阶段方案：阶段名优先读 t_class_stage，PHASE_NAME 只兜底老数据
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 
@@ -342,7 +343,8 @@ export const repo: StudentRepo = {
       return { id: body.id };
     }
 
-    const studentNo = String(body.studentNo || '').trim() || (await generateStudentNo());
+    // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略前端手填值（用户口径）
+    const studentNo = await nextStudentNoForClass('emp', body.classId);
     // 唯一性预检必须**不带 is_deleted 过滤**（唯一索引是物理的，逻辑删除的历史行仍占号）
     const dup = (await tbl(db, 'sms_job', T, STAGE).where({ student_no: studentNo }).first()) as
       | Record<string, any>
@@ -385,18 +387,5 @@ export const repo: StudentRepo = {
 };
 
 
-/** 学号生成：J + 年份 + 4 位流水（实训口径） */
-async function generateStudentNo(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `J${year}`;
-  const rows = (await tbl(db, 'sms_job', T, STAGE).where('student_no', 'like', `${prefix}%`).select('student_no')) as Array<{
-    student_no: string;
-  }>;
-  const max = rows.reduce((m, r) => {
-    const n = Number(String(r.student_no).slice(prefix.length));
-    return Number.isFinite(n) && n > m ? n : m;
-  }, 0);
-  return `${prefix}${String(max + 1).padStart(4, '0')}`;
-}
-
+/** 学号生成：见 shared/studentNo.ts（LZ + 班级编号 + 序号），旧的 J+年份 流水已停用 */
 export default repo;

@@ -23,7 +23,7 @@ import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
 import classSync from '../../utils/classSync';
 // ★ 2026-10-21 班号：建班时按学部组顺序分配（学号 = LZ + J/T + 班号 + 班内序号）
-import { nextClassNo } from '../utils/classNo';
+
 
 export const classInfoRouter = Router();
 
@@ -263,13 +263,9 @@ classInfoRouter.post(
 
     const id = randomUUID();
     const now = new Date();
-    // ★ 2026-10-21 班号：按学部组（J=预科+初中 / T=高中）顺序分配，101 起；
-    //   学号 = LZ + J/T + 班号(3位) + 班内序号(3位, 每班从001独立)，见 utils/classNo.ts
-    const classNo = await nextClassNo(db, body.stage);
     await db(TABLE).insert({
       id,
       class_name: body.className,
-      class_no: classNo,
       stage: body.stage,
       head_teacher_id: body.headTeacherId,
       // 姓名列为 NOT NULL，可选姓名统一兜底空串（契约仍保持 optional）
