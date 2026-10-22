@@ -20,6 +20,8 @@
     "db:verify-init": "node scripts/verify-init-sql.cjs",
     "seed:perm-tree": "tsx scripts/seed-perm-tree.ts",
     "seed:perm-tree:apply": "tsx scripts/seed-perm-tree.ts --apply",
+    "export:role-defaults": "tsx scripts/export-role-defaults.ts",
+    "export:role-defaults:write": "tsx scripts/export-role-defaults.ts --write",
     "migrate:list": "knex migrate:list",
     "migrate:rollback": "knex migrate:rollback",
     "seed:demo": "node scripts/seed-demo.mjs",
