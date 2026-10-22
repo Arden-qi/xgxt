@@ -1187,8 +1187,12 @@ studentRouter.post(
      * 坑：建档时写的 `source_id = push.consult_no`，而 consultNo 在「学生还没学号」时
      *   等于咨询学生 id；等学号生成并回写后，咨询侧再拿 `stu.student_no` 来调本接口，
      *   传的就是学号了 —— 只匹配 source_id 会一条都找不到（实测学籍停在试学中）。
+     *
+     * ★ 2026-10-22 第二个坑：必须走 `tbl()` 统一表路由。
+     *   教学域老表已废弃（数据在 sms_common.t_uni_student），直接 db(TABLE)
+     *   查老表会 0 条命中，同样表现为「学籍不动」。
      */
-    const stu = (await db(TABLE)
+    const stu = (await tbl(db, DB, TABLE, STAGE)
       .where({ source_system: 'consult', is_deleted: false })
       .andWhere((q: any) => q.where('source_id', body.consultNo).orWhere('student_no', body.consultNo))
       .first()) as Record<string, unknown> | undefined;
@@ -1203,7 +1207,7 @@ studentRouter.post(
       return;
     }
 
-    await db(TABLE).where({ id: stu.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: stu.id }).update({
       student_status: body.studentStatus,
       update_time: new Date(),
       update_by: 'consult-sync',
