@@ -169,6 +169,20 @@ teachingClassRouter.get(
   }),
 );
 
+/**
+ * 3.5 教职员工下拉（建班 / 交接时选班主任、教员、助教、项目经理、就业老师）
+ *
+ * ★ 2026-10-22 新增。原来前端直接拉 /api/perm/user/list（挂 permAuth），
+ *   初高/大学/就业账号一律 403 → 用户一进班级管理就弹「您没有该操作的权限」，
+ *   而且下拉是空的。改由本接口出人，跟着班级页面权限走。
+ */
+teachingClassRouter.get(
+  '/staff-options',
+  wrap(async (_req, res) => {
+    res.json(ok(await svc.listStaffOptions(), '查询成功'));
+  }),
+);
+
 /** 4. 保存（新增 / 修改） */
 teachingClassRouter.post(
   '/save',
