@@ -45,6 +45,11 @@
 /release/
 /输出/
 /server-job/tessdata/*.traineddata.gz
+# ★ 2026-10-22：补写缺陷表时脚本会在仓库根生成临时 payload / 提交正文转储，
+#   正常跑完会自己删；中途失败留下的这几个模式别再手滑提交上去
+/.bug-*.json
+/.git-commits-dump.txt
+/.tmp-*.mjs
 
 # vite 构建时被沙箱拦住清不掉的旧产物（改名挪开的历史 dist）
 dist_old_*/
