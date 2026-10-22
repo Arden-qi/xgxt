@@ -1,16 +1,16 @@
 /**
- * 校验「楼栋设置」独立页面（教务老师可见，且不连带系统设置其它页签）
+ * 校验「楼栋设置」搬家后的状态（2026-10-22）
  * ============================================================
  *
+ * 楼栋设置现在只在「宿舍管理」第 4 个页签里（系统设置页签与独立页都已下线）。
+ *
  * 静态：
- *   ① 前端有 /class-jh/building 路由 + 菜单项（权限码 classjh:building:view）
- *   ② 后端 pagePermissions / pageRegistry 注册了该页面
- *   ③ CLASS_JH_ACAD_PAGES 含 classjh:building:view；R08 台账 KEEP 含 /class-jh/building
- *   ④ 系统设置页仍复用公共面板（没有复制两份楼栋逻辑）
+ *   ① 独立入口已彻底移除：菜单 / 路由 / 页面文件 / 后端注册 / 台账 KEEP
+ *   ② 宿舍管理仍有「楼栋设置」页签，且排在「申请审批」之后
+ *   ③ 班主任看不到该页签
  *
  * 运行时（教务老师 zhengym）：
- *   ① 持有 classjh:building:view、**不**持有 classjh:setting:view
- *   ② /api/teaching/building/list = 200（能读楼栋）
+ *   ① /api/teaching/building/list = 200（楼栋数据仍读得到）
  *
  * 用法：node tools/verify-acad-building-page.mjs
  */
@@ -71,12 +71,14 @@ const registry = read('server-job/src/perm/config/pageRegistry.ts');
 const source = read('server-job/src/utils/pagePermissionSource.ts');
 const ledger = read('server-job/scripts/perm-role-page-acad-staff.ts');
 
-check('菜单有「楼栋设置」且挂 classjh:building:view', /title:\s*'楼栋设置'/.test(menu) && menu.includes('classjh:building:view'));
-check('路由 /class-jh/building → BuildingList.vue', router.includes("path: '/class-jh/building'") && router.includes('BuildingList.vue'));
-check('pagePermissions 注册 classjh:building:view', perms.includes("code: 'classjh:building:view'"));
-check('pageRegistry 注册 /class-jh/building', registry.includes("path: '/class-jh/building'") && registry.includes('classjh:building:view'));
-check('CLASS_JH_ACAD_PAGES 含 classjh:building:view', /CLASS_JH_ACAD_PAGES[\s\S]{0,300}classjh:building:view/.test(source));
-check('R08 台账 KEEP 含 /class-jh/building', /KEEP\s*=\s*\[[^\]]*'\/class-jh\/building'/.test(ledger));
+// ★ 2026-10-22：独立入口（菜单 / 路由 / 页面 / 后端注册 / 台账）应全部下线
+check('菜单已无「楼栋设置」独立入口', !/title:\s*'楼栋设置'/.test(menu) && !menu.includes('classjh:building:view'));
+check('路由已无 /class-jh/building', !router.includes("path: '/class-jh/building'") && !router.includes('BuildingList.vue'));
+check('pagePermissions 已移除 classjh:building:view', !perms.includes("code: 'classjh:building:view'"));
+check('pageRegistry 已移除 /class-jh/building', !registry.includes("path: '/class-jh/building'"));
+check('CLASS_JH_ACAD_PAGES 已移除 classjh:building:view', !source.includes('classjh:building:view'));
+check('R08 台账 KEEP 已移除 /class-jh/building', !ledger.includes("'/class-jh/building'"));
+check('BuildingList.vue 页面文件已删除', read('web-job/src/class-jh/views/BuildingList.vue') === '');
 // ★ 2026-10-22：楼栋设置已从「系统设置」下线（搬到宿舍管理），这里断言真的没了
 check(
   '系统设置已移除楼栋设置页签',
@@ -102,8 +104,9 @@ if (login.status !== 200 || !login.body?.data?.token) {
 
   const myPages = await req('GET', '/api/job/auth/my-pages', { token });
   const list = myPages.body?.data?.permissions || myPages.body?.data?.perms || [];
-  check('持有 classjh:building:view', list.includes('classjh:building:view'));
+  check('不再持有 classjh:building:view（页面已下线）', !list.includes('classjh:building:view'));
   check('不持有 classjh:setting:view', !list.includes('classjh:setting:view'));
+  check('持有宿舍页权限 classjh:dorm:view', list.includes('classjh:dorm:view'));
 
   const buildings = await req('GET', '/api/teaching/building/list', { token });
   check('楼栋列表 200', buildings.status === 200, `共 ${(buildings.body?.data || []).length} 栋`);

@@ -238,7 +238,6 @@ const CLASS_JH_ACAD_PAGES: string[] = [
   'classjh:dashboard:view',
   'classjh:dorm:view',
   'classjh:approval:view',
-  'classjh:building:view',
 ];
 
 const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
