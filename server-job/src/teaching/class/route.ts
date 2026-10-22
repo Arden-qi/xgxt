@@ -26,7 +26,7 @@ import * as svc from './service';
 import * as trainingSvc from './training';
 // 升就业（2026-10-21 批注：实训班学生状态 → 待就业）
 import * as employmentSvc from './employment';
-import type { ClassListQuery, ClassStage } from '../shared/dto';
+import type { ClassListQuery, ClassStage, TeachingStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
 import { normalizeClassroom } from '../shared/format';
 

@@ -42,13 +42,20 @@ import type {
 } from '../shared/dto';
 import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
-import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { tbl, readPhaseCode, phaseCodeCol, tblIns, uniDb } from '../shared/uniTable';
 import { nextStudentNoForClass } from '../shared/studentNo';
 // ★ 2026-10-19 就业部接入阶段方案：阶段名优先读 t_class_stage，PHASE_NAME 只兜底老数据
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 
 const T = 't_student_base';
 const CLASS_TABLE = 't_job_class';
+
+/* ★ 2026-10-22 关键修正：就业部 = dept_code=3 的全部 sms_job 学生（job / emp 两种
+ *   edu_stage 都算）。原来 tbl(...,'emp') 会被注入 edu_stage='emp'，
+ *   实训升上来的学生（edu_stage='job'）永远查不到 —— 远端注释说「dept_code=3
+ *   两种 stage_key 都在」，但过滤根本没这么走。必须用 uniDb 直查。 */
+const empStudents = () => uniDb('t_uni_student').whereIn('edu_stage', ['job', 'emp']).andWhere('dept_code', 3);
+const empClasses = () => uniDb('t_uni_class').whereIn('edu_stage', ['job', 'emp']).andWhere('dept_code', 3);
 const STAGE = 'emp' as const;
 
 /**
@@ -58,7 +65,7 @@ const STAGE = 'emp' as const;
  * 只能按学生所在班级关联。
  */
 function applySchemeFilter(qb: any, q: StudentListQuery): void {
-  const classOf = () => tbl(db, 'sms_job', CLASS_TABLE, STAGE);
+  const classOf = () => empClasses();
   if (q.schemeStageId) {
     qb.whereIn('class_id', classOf().where('scheme_stage_id', q.schemeStageId).select('id'));
   }
@@ -183,14 +190,33 @@ function mapRow(r: Record<string, any>): StudentRow {
  */
 async function applyScope(qb: any, user: any): Promise<void> {
   const roles = user?.roles || [];
-  const uid = user?.userId || '';
+  /* ★ 2026-10-21：责任人列两种写入口径（门户 UUID / 权限库 U_xxx）都要比中 */
+  const uids = [
+    ...new Set([user?.userId, user?.businessUserId].map((x) => String(x || '')).filter(Boolean)),
+  ];
+  const uid = uids[0] || '';
   const isAdmin = hasRole(roles, RoleCode.SYS_ADMIN);
   const isDean = hasRole(roles, RoleCode.TEACH_DEAN);
   const isPrincipal = hasRole(roles, RoleCode.RM_PRINCIPAL);
   if (isAdmin || isDean || isPrincipal) return;
 
+  /* ★ 2026-10-21：就业老师按「交棒给我的就业班」隔离
+   *   原来这里没有 JOB_STAFF 分支 → 不过滤 = 看到全部就业部学生（多就业老师会串数据）。
+   *   口径与实训侧一致：只看 employment_teacher = 我 的班。
+   */
+  if (hasRole(roles, RoleCode.JOB_STAFF)) {
+    const mine = (await empClasses()
+      .where({ is_deleted: false })
+      .whereIn('employment_teacher_id', uids)
+      .select('id')) as Array<{ id: string }>;
+    const ids = mine.map((c) => c.id);
+    if (!ids.length) qb.whereRaw('1 = 0');
+    else qb.whereIn('class_id', ids);
+    return;
+  }
+
   if (hasRole(roles, RoleCode.PROJECT_MANAGER)) {
-    const mine = (await tbl(db, 'sms_job', CLASS_TABLE, STAGE)
+    const mine = (await empClasses()
       .where({ project_manager_id: uid, is_deleted: false })
       .select('id')) as Array<{ id: string }>;
     const ids = mine.map((c) => c.id);
@@ -209,8 +235,9 @@ function buildBase(q: StudentListQuery, user: any) {
   //   （他们是实训升上来的），照旧过滤会「删掉就业学段 → 人也跟着消失」。
   //   改为按 dept_code=3（就业部）取数：job / emp 两种 stage_key 都在，
   //   部门口径也更符合「就业部」这个名字。
-  const qb = tbl(db, 'sms_job', T, STAGE)
+  const qb = empStudents()
     .where('is_deleted', false)
+
     .andWhere('dept_code', 3)
     .whereIn('student_status', VISIBLE_STATUS);
   if (q.classId) qb.andWhere('class_id', q.classId);
@@ -246,12 +273,12 @@ export const repo: StudentRepo = {
   },
 
   async detail(id, user) {
-    const r = (await tbl(db, 'sms_job', T, STAGE).where({ id, is_deleted: false }).first()) as
+    const r = (await empStudents().where({ id, is_deleted: false }).first()) as
       | Record<string, any>
       | undefined;
     if (!r) return null;
     // 单条也要过范围（否则可以拿别人的 id 直查）
-    const guard = tbl(db, 'sms_job', T, STAGE).where({ id, is_deleted: false });
+    const guard = empStudents().where({ id, is_deleted: false });
     await applyScope(guard, user);
     const allowed = await guard.first();
     if (!allowed) return null;
@@ -346,7 +373,7 @@ export const repo: StudentRepo = {
     // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略前端手填值（用户口径）
     const studentNo = await nextStudentNoForClass('emp', body.classId);
     // 唯一性预检必须**不带 is_deleted 过滤**（唯一索引是物理的，逻辑删除的历史行仍占号）
-    const dup = (await tbl(db, 'sms_job', T, STAGE).where({ student_no: studentNo }).first()) as
+    const dup = (await empStudents().where({ student_no: studentNo }).first()) as
       | Record<string, any>
       | undefined;
     if (dup) {

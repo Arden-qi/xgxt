@@ -29,6 +29,7 @@ import type {
   ClassSummary,
 } from '../shared/dto';
 import { CLASS_STAGES, CLASS_STAGE_NAME, isClassStage } from '../shared/dto';
+import { assertClassInScope } from '../shared/dataScope';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import type { ClassDetail, ClassRepo } from './types';
@@ -211,6 +212,7 @@ export async function getClassDetail(
   user: any,
 ): Promise<ClassDetail | null> {
   await assertStageView(user, stage);
+  await assertClassInScope(stage, id, user, '该班级');
   return pick(stage).detail(id, user);
 }
 
@@ -244,8 +246,10 @@ export async function removeClass(stage: ClassStage, id: string, user: any): Pro
    * 【为什么用 detail 现算，不信前端传的 studentCount】
    *   前端只是提前提示；真要删的时候必须由后端复算，否则改个请求就能删掉有人的班。
    *
-   * ⚠️ 提示文案与前端弹窗标题一致（「不可删除有人的班级」），
-   *    前端拦截 + 后端兜底，两层同一句话，用户不会看到两种说法。
+   * 【合并上游时的取舍（2026-10-22）】
+   *   上游同期也加了同一道闸（直接 count t_uni_student）。两版等价，
+   *   保留本版：① 提示里带班级名与人数，和前端弹窗「不可删除有人的班级」同一句话；
+   *   ② 人数口径走各仓储的 detail()，与列表「人数」列同源（emp/job 两套表都覆盖）。
    */
   const detail = await pick(stage).detail(id, user);
   if (!detail) throw new BizError(BizCode.PARAM_ERROR, '班级不存在或无权操作');
@@ -262,6 +266,7 @@ export async function removeClass(stage: ClassStage, id: string, user: any): Pro
 /** 花名册 */
 export async function listClassRoster(stage: ClassStage, id: string, user: any) {
   await assertStageView(user, stage);
+  await assertClassInScope(stage, id, user, '该班级花名册');
   return pick(stage).roster(id, user);
 }
 

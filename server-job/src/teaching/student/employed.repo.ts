@@ -35,7 +35,15 @@ import type { StudentStage } from '../shared/dto';
 const T_STUDENT = 't_class_student';
 const T_JOB_STUDENT = 't_student_base';
 
-function qbOf(stage: StudentStage): Knex.QueryBuilder {
+/**
+ * ★ 2026-10-22 合并上游后修：`StudentStage` 已收敛为 'jh' | 'class' | 'emp'，
+ *   但本文件的分支按**数据真实所在表**写的，'job'（实训生、edu_stage='job'）
+ *   与 'edu'（教务库 sms_edu，不在统一表映射里）两条分支运行时仍可能被老调用方命中，
+ *   所以这里放宽入参类型、分支一个不删（删了会把实训生读到就业生的空集合里）。
+ */
+type StageLike = StudentStage | 'job' | 'edu';
+
+function qbOf(stage: StageLike): Knex.QueryBuilder {
   switch (stage) {
     case 'jh':
       return tbl(classJhDb, 'sms_class_jh', T_STUDENT, 'jh');

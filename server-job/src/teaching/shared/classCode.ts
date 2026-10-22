@@ -12,7 +12,7 @@
  *     编号被任何一张表占用都直接拦下。
  */
 
-import { tbl } from './uniTable';
+import { tbl, uniDb } from './uniTable';
 import { db as jhDb } from '../../class-jh/utils/db';
 import { db as classDb } from '../../class/db';
 import { db as jobDb } from '../../utils/db';
@@ -31,6 +31,16 @@ const SOURCES: Array<{ stage: 'jh' | 'class' | 'emp'; conn: any; schema: string;
  *
  * @param exclude 编辑场景：传自己的学段 + id，跳过自己那条
  */
+/**
+ * 班级编号是否可用；被占用时抛错（错误文案带上占用方的部门，便于定位）
+ *
+ * @param exclude 编辑场景：传自己的学段 + id，跳过自己那条
+ *
+ * ★ 2026-10-22 修：实训(job) 与就业部(emp) 的行在 t_uni_class 里是两种 edu_stage，
+ *   原来就业部来源按 edu_stage='emp' 查 → 实训班（edu_stage='job'）**永远查不到**，
+ *   重复编号一路放行（用例实测：重号班级连建两个都 200）。
+ *   → 就业部来源改为 edu_stage in ('job','emp') 一起查。
+ */
 export async function assertClassCodeAvailable(
   code: string,
   exclude?: { stage: ClassCodeStage; id?: string },
@@ -39,11 +49,17 @@ export async function assertClassCodeAvailable(
   if (!val) return; // 空编号不参与唯一性（历史班级允许为空）
 
   for (const s of SOURCES) {
-    const q = tbl(s.conn, s.schema, s.table, s.stage)
-      .where({ class_code: val, is_deleted: false });
+    /* ★ 就业部来源必须用 uniDb 直查：tbl(conn,'sms_job','t_job_class',stage) 会自动注入
+       edu_stage=stage 的过滤 —— 'emp' 查不到 job 行、'job' 查不到 emp 行，
+       怎么写都会漏一半（重号班级连建两个都放行，用例实测过）。
+       就业部口径 = dept_code=3 的全部行（edu_stage job / emp 都算）。 */
+    const q = s.stage === 'emp'
+      ? uniDb('t_uni_class').whereIn('edu_stage', ['job', 'emp'])
+      : tbl(s.conn, s.schema, s.table, s.stage);
+    q.where({ class_code: val, is_deleted: false });
     // 实训 / 就业部同一张表：只要学段命中其中之一就不排除自己
     const sameTable =
-      exclude && exclude.id && (s.stage === exclude.stage || (s.stage === 'emp' && exclude.stage === 'job'));
+      exclude && exclude.id && (s.stage === exclude.stage || (s.stage === 'emp' && (exclude.stage === 'job' || exclude.stage === 'emp')));
     if (sameTable) q.andWhereNot('id', exclude!.id);
     const hit = (await q.first()) as Record<string, any> | undefined;
     if (hit) {

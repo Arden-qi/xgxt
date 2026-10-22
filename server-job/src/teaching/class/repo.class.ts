@@ -31,6 +31,7 @@ import type {
 import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScope } from '../shared/dataScope';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -189,6 +190,8 @@ export const repo: ClassRepo = {
 
   async list(q, user) {
     const qb = buildBase(q, user);
+    /* ★ 数据范围：班主任只看自己带的班（老 applyDataScope 只到「部门」粒度） */
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) return [];
     const rows = (await qb.orderBy('create_time', 'desc')) as Array<Record<string, any>>;
     const counts = await countStudents(rows.map((r) => String(r.id)));
     return rows.map((r) => mapRow(r, counts.get(String(r.id)) ?? 0));
@@ -271,9 +274,10 @@ export const repo: ClassRepo = {
 
     // 同部门内名称不重复（与实训一致的口径）+ 编号唯一
     const deptCode = Number(body.deptCode ?? 2);
+    // ★ 班级编号（class_code）三部门统一必填 + 跨部门唯一（shared/classCode.ts）
     const classCode = String(body.classCode ?? '').trim();
     if (!classCode) throw new Error('班级编号必填');
-    await assertClassCodeUnique(classCode);
+    await assertClassCodeAvailable(classCode);
     const dupName = (await tbl(db, 'sms_class', T, STAGE)
       .where({ class_name: className, dept_code: deptCode, is_deleted: false })
       .first()) as Record<string, any> | undefined;
@@ -358,6 +362,9 @@ export const repo: ClassRepo = {
 
   async summary(q, user) {
     const qb = buildBase(q, user);
+    if (!(await applyClassScope(qb, 'id', STAGE, user))) {
+      return { stage: STAGE, stageName: STAGE_NAME, total: 0, openCount: 0, closedCount: 0, graduatingCount: 0, graduatedCount: 0, studentCount: 0 };
+    }
     const rows = (await qb.select('id', 'class_status')) as Array<Record<string, any>>;
     const counts = await countStudents(rows.map((r) => String(r.id)));
     let studentCount = 0;

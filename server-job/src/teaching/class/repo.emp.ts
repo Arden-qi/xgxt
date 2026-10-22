@@ -144,7 +144,7 @@ async function applyScope(qb: any, user: any): Promise<void> {
   }
   if (hasRole(roles, RoleCode.PROJECT_MANAGER)) {
     const mine = (await tbl(db, 'sms_job', T, STAGE)
-      .where({ project_manager_id: uid, is_deleted: false, stage_key: 'emp' })
+      .where({ project_manager_id: uid, is_deleted: false })
       .select('id')) as Array<{ id: string }>;
     const ids = mine.map((c) => c.id);
     if (!ids.length) qb.whereRaw('1 = 0');
@@ -159,9 +159,8 @@ async function applyScope(qb: any, user: any): Promise<void> {
 function buildBase(q: ClassListQuery) {
   // ★ 2026-10-19：就业部与实训共用 t_job_class，且两边 dept_code 都是 3（就业部），
   //   所以隔离只能靠 stage_key（'emp' / 'job'）。
-  const qb = tbl(db, 'sms_job', T, STAGE)
-    .where('is_deleted', false)
-    .andWhere('stage_key', 'emp');
+  // ★ 2026-10-21：同 repo.job —— edu_stage='emp' 已足够区分，去掉 stage_key 过滤
+  const qb = tbl(db, 'sms_job', T, STAGE).where('is_deleted', false);
   if (q.deptCode) qb.andWhere('dept_code', q.deptCode);
   if (q.classStatus) qb.andWhere('class_status', q.classStatus);
   if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
