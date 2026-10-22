@@ -42,7 +42,10 @@ import { PayStatus } from 'shared-types/class-jh';
 import { db as jobDb } from '../../utils/db';
 import { db as jhDb } from '../../class-jh/utils/db';
 import { commonDb } from '../../class/db';
-import { addFee as financeAddFee, attachVoucher as financeAttachVoucher } from '../../finance/services/fee.service';
+import {
+  addFee as financeAddFee,
+  syncPaymentFromUpstream as financeSyncPayment,
+} from '../../finance/services/fee.service';
 import { wrap } from '../../utils/wrap';
 import { BizError } from '../../middleware/errorHandler';
 import { ok } from '../../utils/response';
@@ -113,10 +116,18 @@ function toDateStr(v: any): string {
  *   所以：新列 `finance_fee_id` 是三个部门唯一权威的判重依据，
  *        `source_system` 那条只是初高的**历史兼容**。
  */
-function isTransferred(row: any, dept: Dept): boolean {
-  if (row.finance_fee_id) return true;
-  if (dept === 'jh') return row.source_system === 'finance' && !!row.source_id;
-  return false;
+function isTransferred(row: any, _dept: Dept): boolean {
+  /**
+   * ★ 2026-10-22 收口：**只认 `finance_fee_id`**，不再拿 source_system 兜底。
+   *
+   * 原因：初高 `t_class_fee` 的 `source_system='finance'` 现在有**两种**含义 ——
+   *   ① 这张单是财务同步过来的（syncFeeToJh 写的）；
+   *   ② 2026-10-20 那版「转交成功」时回写的标记。
+   * 两者都是 'finance' + source_id，靠它判「是否已转交」会把**所有从财务同步来的单**
+   * 都判成已转交 → 一条都转不出去。
+   * 现在三部门的单都能从财务同步，这个问题必然暴露，所以统一只看新列。
+   */
+  return !!row.finance_fee_id;
 }
 
 /** 已转交时用于展示/回填的财务单 id（`source_id` 只有初高能当兜底，理由同上） */
@@ -513,11 +524,35 @@ teachingFeeRouter.post(
          * ★ 大学部：财务里本来就有这张单 → 只补凭证，不新建
          *   见文件头「★ 大学部为什么要按财务单号判重」。
          */
+        /**
+         * 这张催费单对应的**财务原始缴费单**（有 → 回写财务，没有 → 在财务新建）
+         *
+         * ★ 2026-10-22：原来只判大学部。现在三部门的单都从财务同步
+         *   （催费单怎么来，就业同初高），所以三部门统一按 source_system/source_id 认。
+         */
         const existFinanceId =
-          dept === 'class' && row.source_system === 'finance' ? String(row.source_id || '') : '';
+          row.source_system === 'finance' && row.source_id ? String(row.source_id) : '';
 
-        if (existFinanceId && row.voucher_url) {
-          await financeAttachVoucher(existFinanceId, String(row.voucher_url), undefined, operator);
+        if (existFinanceId) {
+          /**
+           * ★ 2026-10-22：三部门统一 —— 财务里本来就有这张单，就**把登记缴费的结果回写给它**
+           *   （不在财务新建、不产生重复账）。
+           *
+           * 回写内容：凭证（有才写）+ 缴费方式 + 实缴金额 + 缴费日期。
+           *   · 原来只调 attachVoucher，只能补凭证 —— 现金收的款没有截图，那一支根本走不通；
+           *   · 现在走 syncPaymentFromUpstream，现金也能把「方式+实缴」记到财务备注里。
+           */
+          await financeSyncPayment(
+            existFinanceId,
+            {
+              voucherUrl: row.voucher_url || null,
+              payMethodName: method == null ? null : (PAY_METHOD_NAME[method] ?? ''),
+              paidAmount: Number(row.paid_amount ?? row.fee_amount ?? row.amount ?? 0) || null,
+              payDate,
+              remark: row.pay_remark || null,
+            },
+            operator,
+          );
           await markTransferred(dept, feeId, existFinanceId, operator.userId);
           voucherOnly += 1;
           success += 1;

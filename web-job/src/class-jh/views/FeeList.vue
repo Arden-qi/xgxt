@@ -106,11 +106,20 @@ const payStatusOptions = computed<Array<{ label: string; value: number }>>(() =>
 
 /**
  * 就业催费单状态（call_status）→ 统一缴费状态
- *   3 已缴清 → 2 已缴
- *   1 待催缴 / 2 催缴中：还没收到钱 → 待缴；**已过应缴日则为逾期**（2026-10-20 用户反馈
- *   「剩余 -12 天了还显示待缴」—— 逾期不在催费单状态里，只能按日期派生）
+ *
+ * ★ 2026-10-22：**改用后端下发的 `payStatus` 为主**，这个函数只做兜底。
+ *   用户要求「状态字段所有部门对齐初高」—— 就业表已经补了 `pay_status`
+ *   （1待缴 2已缴 3已核对 4逾期 5冻结，与初高同码），后端在 decorate 里按
+ *   「未缴清 + 过了应缴日 = 逾期」派生好后下发了，前端不需要再自己算一遍。
+ *   前端再算一遍的风险：后端改了派生口径，前端没跟上，两处打架。
  */
-function callStatusToPayStatus(callStatus: any, dueDate?: string | null): number {
+function callStatusToPayStatus(
+  callStatus: any,
+  dueDate?: string | null,
+  payStatus?: number | null,
+): number {
+  // 后端给了就直接用（含逾期派生结果）
+  if (payStatus != null && !Number.isNaN(Number(payStatus))) return Number(payStatus);
   const s = Number(callStatus);
   if (s === 3) return PayStatus.PAID; // 已缴清 → 已缴
   return isPastDate(dueDate) ? PayStatus.OVERDUE : PayStatus.UNPAID;
@@ -176,8 +185,10 @@ function callToRow(r: any): FeeRow {
     feeAmount: Number(r.feeAmount || 0),
     // ★ 2026-10-20：就业也按统一缴费状态展示（原催缴状态留在 callStatusName 里，列上用 title 提示）；
     //    未缴清且已过应缴日 → 逾期（催费单本身没有「逾期」这个状态）
-    payStatus: callStatusToPayStatus(r.callStatus, r.dueDate),
-    payStatusName: PAY_STATUS_NAME[callStatusToPayStatus(r.callStatus, r.dueDate)] || '',
+    // ★ 2026-10-22：优先用后端下发的 payStatus（三部门同一套码），没有再按 callStatus 折算
+    payStatus: callStatusToPayStatus(r.callStatus, r.dueDate, r.payStatus),
+    payStatusName:
+      PAY_STATUS_NAME[callStatusToPayStatus(r.callStatus, r.dueDate, r.payStatus)] || '',
     callStatusName: r.callStatusName || '',
     expireDate: r.dueDate || undefined,
     isUrgent: !!r.overdue,

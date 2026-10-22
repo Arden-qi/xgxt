@@ -981,7 +981,90 @@ export const SUSPENDED_STATUS = StudentStatus.SUSPENDED;
  * ============================================================ */
 
 /**
- * 给已存在的缴费单补传凭证
+ * ★ 2026-10-22 新增：上游「登记缴费」结果回写财务（催费页「批量上传到财务」用）
+ *
+ * 【为什么不能直接用 attachVoucher】
+ *   attachVoucher 只有凭证一个参数：
+ *     · 现金收的款**没有截图**（按业务规则可以不传），attachVoucher 没法调；
+ *     · 实缴金额可能与应缴不同（部分缴），attachVoucher 不改金额；
+ *     · 缴费方式在财务表里没有列，只能写进 remark。
+ *   用户原话：「主要就是把上传缴费凭证的人的凭证传到财务，财务更新凭证信息」——
+ *   所以要一个能同时吃「凭证 + 方式 + 实缴 + 日期」的入口。
+ *
+ * 【更新哪些字段】
+ *   voucher_url       有凭证才写（现金没截图时**不动**原凭证，不能把它清空）
+ *   voucher_by/time   有凭证才写
+ *   pay_status        未结清(待缴/逾期) → 已缴(PAID，等财务核对)；已核对/冻结不动
+ *   pay_date          传了才写
+ *   remark            追加一行「方式·实缴·缴费日」，保留原有备注（财务核对时看得出钱怎么收的）
+ *
+ * ⚠️ 与 attachVoucher 一致的两条保护：
+ *   · 已核对且已有凭证 → 拒绝改图（要改先让财务打回）；
+ *   · 同一张凭证的复用规则走 assertVoucherAvailable。
+ *
+ * @returns 更新后的财务单 id（调用方用它记「已转交」）
+ */
+export async function syncPaymentFromUpstream(
+  feeId: string,
+  body: {
+    voucherUrl?: string | null;
+    payMethodName?: string | null;
+    paidAmount?: number | null;
+    payDate?: string | null;
+    remark?: string | null;
+  },
+  operator: { userId: string; userName: string },
+): Promise<string> {
+  const row = await db(FEE_TABLE).where({ id: feeId, is_deleted: false }).first();
+  if (!row) {
+    throw new BizError(BizCode.FEE_NOT_FOUND, `缴费单 ${feeId} 不存在`);
+  }
+
+  const voucherUrl = body.voucherUrl ? String(body.voucherUrl) : '';
+
+  if (voucherUrl && row.is_verified && row.voucher_url) {
+    throw new BizError(
+      BizCode.INVALID_STATUS,
+      '该缴费单已核对通过，如需修改凭证请先在财务侧「打回」',
+    );
+  }
+  if (voucherUrl) {
+    await assertVoucherAvailable(row.fee_type, voucherUrl, feeId, row.student_no, row.student_id);
+  }
+
+  /** 「方式 · 实缴 X 元 · 缴费日 Y」——财务核对时一眼看出这笔钱怎么收的 */
+  const parts: string[] = [];
+  if (body.payMethodName) parts.push(String(body.payMethodName));
+  if (body.paidAmount != null) parts.push(`实缴 ${(Number(body.paidAmount) / 100).toFixed(2)} 元`);
+  if (body.payDate) parts.push(`缴费日 ${body.payDate}`);
+  if (body.remark) parts.push(String(body.remark));
+  const note = parts.length ? `【教学侧登记】${parts.join(' · ')}` : '';
+  const oldRemark = String(row.remark || '');
+  const remark = note ? (oldRemark ? `${oldRemark}\n${note}` : note) : oldRemark || null;
+
+  const patch: Record<string, any> = {
+    remark,
+    // 未结清 → 已缴（等财务核对）；已核对 / 冻结 不动
+    pay_status:
+      Number(row.pay_status) === PayStatus.VERIFIED || Number(row.pay_status) === PayStatus.FROZEN
+        ? Number(row.pay_status)
+        : PayStatus.PAID,
+  };
+  if (voucherUrl) {
+    patch.voucher_url = voucherUrl;
+    patch.voucher_by = operator.userId;
+    patch.voucher_time = new Date();
+    patch.is_rejected = false;
+    patch.reject_reason = null;
+  }
+  if (body.payDate) patch.pay_date = body.payDate;
+
+  await db(FEE_TABLE).where({ id: feeId }).update(patch);
+  return String(row.id);
+}
+
+/**
+ * 上游回传凭证（原接口，只传凭证、不传金额/方式）
  *
  * 业务背景：
  *   上游模块（咨询/教务）建单时往往还没拿到缴费截图，学生是「先建单 → 再交钱 → 再上传」。

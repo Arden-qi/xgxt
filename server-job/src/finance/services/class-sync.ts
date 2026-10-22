@@ -202,14 +202,136 @@ export async function syncFeesToJh(feeIds: string[]): Promise<void> {
 }
 
 /* ============================================================
+ * ★ 2026-10-22 新增：财务管理 → 就业催费单（sms_job.t_job_fee_call）
+ *
+ * 【为什么加】用户要求「催费单怎么来，就业同初高」——
+ *   初高的催费单是财务缴费单自动同步来的，就业原来是**教务人工发起**的。
+ *   从这天起就业也改成「财务建单 → 自动同步成催费单」。
+ *
+ * 【只推 dept_code = 3（就业部）且学号能在 sms_job.t_student_base 回查到的单】
+ *   和初高那条同一套判据：部门对 + 学号能对上，才说明确实是这个部门的学生。
+ *
+ * 【幂等键】`source_system='finance' + source_id=财务单id`（唯一索引 uk_job_fee_source）
+ *
+ * 【⚠️ 不覆盖本地字段】
+ *   财务侧只负责「金额 / 到期日 / 缴费状态 / 凭证 / 缴费信息」这些事实。
+ *   催收进度（call_status）、催收原因、处理备注、负责班主任是**本地业务状态**，
+ *   同步时不能覆盖 —— 否则每次财务改单都会把「催缴中」打回「待催缴」。
+ *   所以 merge 的 payload 里刻意不含这些列。
+ * ============================================================ */
+
+/** 就业催费单（跨库全限定名） */
+const JOB_FEE_TABLE = 'sms_job.t_job_fee_call';
+/** 就业学生表（按学号回查学生 ID / 班级 / 班主任） */
+const JOB_STUDENT_TABLE = 'sms_job.t_student_base';
+
+/** 按学号回查就业学生（查不到返回 null；跨库异常也返回 null，不抛） */
+async function findJobStudent(studentNo: string): Promise<Record<string, any> | null> {
+  if (!studentNo) return null;
+  try {
+    const row = (await db(JOB_STUDENT_TABLE)
+      .where({ student_no: studentNo, is_deleted: false })
+      .first()) as Record<string, any> | undefined;
+    return row || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把一张财务缴费单推送到就业催费单（幂等：按 source_system + source_id upsert）
+ *
+ * ⚠️ 永不抛错 —— 同步失败只是就业催费页少一条数据，不该影响收款主流程。
+ */
+export async function syncFeeToJob(feeId: string): Promise<void> {
+  if (!feeId) return;
+  try {
+    const row = (await db(FEE_TABLE).where({ id: feeId, is_deleted: false }).first()) as
+      | Record<string, any>
+      | undefined;
+    if (!row) return;
+
+    // 只推「就业部」的单
+    if (row.dept_code == null || Number(row.dept_code) !== 3) return;
+
+    // 学号必须是就业的学生，否则不推
+    const stu = await findJobStudent(String(row.student_no || ''));
+    if (!stu) return;
+
+    const now = new Date();
+    const payStatus = Number(row.pay_status ?? 1);
+
+    /** 财务侧事实（每次同步都覆盖） */
+    const payload: Record<string, any> = {
+      id: String(row.id),
+      create_time: now,
+      create_by: 'finance-sync',
+      update_time: now,
+      update_by: 'finance-sync',
+      is_deleted: false,
+      fee_type: Number(row.fee_type ?? 2),
+      student_id: stu.id,
+      student_no: String(row.student_no || ''),
+      student_name: String(stu.student_name || row.student_name || ''),
+      class_id: stu.class_id ?? row.class_id ?? null,
+      class_name: stu.class_name ?? row.class_name ?? null,
+      dept_code: 3,
+      head_teacher_id: stu.head_teacher_id ?? null,
+      head_teacher_name: stu.head_teacher_name ?? null,
+      fee_amount: Number(row.amount ?? 0),
+      due_date: dateOnly(row.expire_date),
+      // ★ 状态直接搬财务的（与初高同码），前端不再折算
+      pay_status: payStatus,
+      pay_method: row.pay_method ?? null,
+      paid_amount: row.paid_amount ?? null,
+      pay_date: dateOnly(row.pay_date) || null,
+      voucher_url: row.voucher_url || null,
+      pay_remark: row.remark || null,
+      source_system: 'finance',
+      source_id: String(row.id),
+    };
+
+    /**
+     * 新建时补上「催收进度」的初始值。
+     * ⚠️ 只在 insert 生效：knex 的 merge(payload) 只更新 payload 里出现的列，
+     *    下面这行如果留在 payload 里，update 时会把人工改过的催收进度冲掉。
+     */
+    const insertOnly = {
+      call_status: payStatus === 2 || payStatus === 3 ? 3 : 1,
+      call_reason: '财务缴费单同步',
+      applicant_id: 'finance-sync',
+      applicant_name: '财务同步',
+    };
+
+    await db(JOB_FEE_TABLE)
+      .insert({ ...payload, ...insertOnly })
+      .onConflict(['source_system', 'source_id'])
+      .merge(payload);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(`[finance→job] 缴费单 ${feeId} 同步异常（不影响本次操作）：${(e as Error).message}`);
+  }
+}
+
+/** 批量推送给就业 */
+export async function syncFeesToJob(feeIds: string[]): Promise<void> {
+  for (const id of feeIds) {
+    // eslint-disable-next-line no-await-in-loop
+    await syncFeeToJob(id);
+  }
+}
+
+/* ============================================================
  * 统一出口：一张缴费单推给**所有**下游
  *   路由层只调这两个，以后再加收方（比如实训）不用到处补调用。
  * ============================================================ */
 
-/** 单条：大学部（班级管理）+ 初高（教学管理） */
+/** 单条：大学部（班级管理）+ 初高（教学管理）+ 就业（催费单） */
 export async function syncFeeToAll(feeId: string): Promise<void> {
   await syncFeeToClass(feeId);
   await syncFeeToJh(feeId);
+  // ★ 2026-10-22：就业部的单同步成催费单（用户要求「就业同初高」）
+  await syncFeeToJob(feeId);
 }
 
 /** 批量：串行，避免一瞬间打爆数据库 */

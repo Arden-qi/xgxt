@@ -138,16 +138,25 @@ async function main() {
 
   const transferRoute = read('server-job/src/teaching/fee/transfer.route.ts');
   check(
-    '★ 转交判重按部门区分（大学不能用 source_system=finance 当「已转交」）',
-    transferRoute.includes('function isTransferred(row: any, dept: Dept)'),
+    '★ 转交判重只认 finance_fee_id（source_system=finance 现在是「同步来源」，不能当「已转交」）',
+    transferRoute.includes('return !!row.finance_fee_id;'),
+    '三部门的单现在都从财务同步，用 source_system 判重会把所有同步来的单判成已转交',
   );
   check(
     '★ 日期兼容 Date 对象（就业库没配 dateStrings，否则一条也转不过去）',
     transferRoute.includes('function toDateStr') && transferRoute.includes('v instanceof Date'),
   );
   check(
-    '★ 大学部「财务已有原单」只补凭证、不新建',
-    transferRoute.includes('financeAttachVoucher(') && transferRoute.includes('voucherOnly'),
+    '★ 财务已有原单 → 回写财务（凭证+方式+实缴+日期），不新建',
+    transferRoute.includes('financeSyncPayment(') && transferRoute.includes('voucherOnly'),
+    '改造前只调 attachVoucher（只能补凭证，现金无截图走不通），现在是 syncPaymentFromUpstream',
+  );
+  check(
+    '财务回写函数能带「方式/实缴/日期」，现金也能回写',
+    (() => {
+      const svc = read('server-job/src/finance/services/fee.service.ts');
+      return svc.includes('syncPaymentFromUpstream') && svc.includes('payMethodName') && svc.includes('paidAmount');
+    })(),
   );
 
   /* ============================================================

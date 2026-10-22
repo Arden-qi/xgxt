@@ -35,6 +35,9 @@ import {
   FeeCallStatus,
   FEE_CALL_STATUS_NAME,
   DEPT_NAME,
+  FEE_TYPE_NAME,
+  PAY_STATUS_NAME,
+  PayStatus,
   RoleCode,
   StudentStatus,
   ClassStatus,
@@ -107,18 +110,67 @@ function isOverdue(dueDate: any, callStatus: number): boolean {
   return !!due && due < today();
 }
 
+/**
+ * 生效的缴费状态（★ 2026-10-22 三部门统一口径）
+ *
+ * 用户原话：「逾期怎么判，所有部门：未缴清 + 过了应缴日」。
+ * 财务侧**从不写 4**（它的枚举里没有「逾期」这个值），所以：
+ *   · 库里存的是 1 待缴 + 过了应缴日 → 展示成 4 逾期（派生）；
+ *   · 库里如果本来就是 4（人工或迁移回填过）→ 保持 4；
+ *   · 已缴 2 / 已核对 3 / 冻结 5 → 一律不判逾期。
+ * 这条与初高 `effectivePayStatus()`、大学 urge.route.ts 的派生逻辑完全同源。
+ */
+function effectivePayStatus(row: any): number {
+  const raw = row.pay_status == null ? null : Number(row.pay_status);
+  // 老数据还没回填 pay_status 时，按 call_status 折算兜底
+  const base = raw ?? (Number(row.call_status) === FeeCallStatus.PAID ? PayStatus.PAID : PayStatus.UNPAID);
+  if (base === PayStatus.PAID || base === PayStatus.VERIFIED || base === PayStatus.FROZEN) return base;
+  if (base === PayStatus.OVERDUE) return PayStatus.OVERDUE;
+  // 未结清 + 过了应缴日 → 逾期
+  const due = fmtDate(row.due_date);
+  if (due && due < today()) return PayStatus.OVERDUE;
+  return PayStatus.UNPAID;
+}
+
+/**
+ * 谁能登记缴费（★ 2026-10-22 用户口径：班主任、学管、校长）
+ *
+ * 原来只有「本人是该生班主任」或系统管理员，
+ * 现在补上学管主任（TEACH_DEAN）与校长（RM_PRINCIPAL）——
+ * 与初高 / 大学的登记缴费权限对齐（那两边的写码给了班主任/学管/校长）。
+ */
+const FEE_CALL_WRITE_ROLES: string[] = [
+  RoleCode.TEACH_HEAD,
+  RoleCode.TEACH_DEAN,
+  RoleCode.RM_PRINCIPAL,
+  RoleCode.PROJECT_MANAGER,
+  RoleCode.SYS_ADMIN,
+];
+
+function canRegisterPayment(row: any, operator: { userId: string; roles: string[] }): boolean {
+  // 本人是该生班主任，或持有写角色（学管/校长/项目经理/管理员）
+  const isHeadTeacher = row.head_teacher_id === operator.userId;
+  const hasWriteRole = (operator.roles || []).some((r) => FEE_CALL_WRITE_ROLES.includes(r as RoleCode));
+  // SUPER_TEST 是测试账号，允许登记（历史上就在放行，别丢）
+  const isSuperTest = (operator.roles || []).includes('SUPER_TEST');
+  return isHeadTeacher || hasWriteRole || isSuperTest;
+}
+
 /** 催费单行 → 输出结构 */
 function decorate(row: any, operator: { userId: string; roles: string[] }): any {
-  // 班主任本人（或管理员）可以处理
-  const isHeadTeacher = row.head_teacher_id === operator.userId;
-  const isAdmin = operator.roles.includes(RoleCode.SYS_ADMIN);
-  const notFinished = row.call_status !== FeeCallStatus.PAID;
-  const canHandle = notFinished && (isHeadTeacher || isAdmin);
+  const canHandle = canRegisterPayment(row, operator);
+  const payStatus = effectivePayStatus(row);
 
   return {
     id: row.id,
     feeType: row.fee_type,
-    feeTypeName: FEE_CALL_CATEGORY_NAME[row.fee_type] || '',
+    /**
+     * ★ 2026-10-22：改用全量的 FEE_TYPE_NAME。
+     *   原来用的是就业自有的三类字典（只有住宿费/餐费/保险费），
+     *   但催费单现在从财务同步过来，财务那边有学费/试学费等 →
+     *   用三类字典会出现「缴费类型」列空白。先查全量字典，取不到再回落三类。
+     */
+    feeTypeName: FEE_TYPE_NAME[row.fee_type] || FEE_CALL_CATEGORY_NAME[row.fee_type] || '',
 
     studentId: row.student_id,
     studentNo: row.student_no || null,
@@ -141,6 +193,13 @@ function decorate(row: any, operator: { userId: string; roles: string[] }): any 
 
     callStatus: row.call_status,
     callStatusName: FEE_CALL_STATUS_NAME[row.call_status] || '',
+    /**
+     * ★ 2026-10-22：三部门统一用 payStatus（1待缴 2已缴 3已核对 4逾期 5冻结）。
+     * 前端催费页三个部门共用一套状态列/筛选，就业不再自己折算 callStatus。
+     * callStatus 仍然返回，只作为「催收进度」备查（挂 tooltip）。
+     */
+    payStatus,
+    payStatusName: PAY_STATUS_NAME[payStatus] || '',
     handleTime: fmtDateTime(row.handle_time),
     handleRemark: row.handle_remark || null,
 
@@ -232,17 +291,35 @@ feeCallRouter.get(
     }
     if (q.startDate) base.andWhere('due_date', '>=', q.startDate);
     if (q.endDate) base.andWhere('due_date', '<=', q.endDate);
-    // 统一缴费状态 → 催费单状态 + 应缴日（口径见 payStatus 注释）
+    /**
+     * 统一缴费状态筛选（★ 2026-10-22 改为直接按 `pay_status` 筛）
+     *
+     * 改造前是「把统一的缴费状态翻译成 call_status + 应缴日条件」，
+     * 因为就业库里只有催收进度、没有缴费状态。
+     * 现在 t_job_fee_call 已经有 `pay_status`（与初高同码），所以直接筛这一列；
+     * 只有「逾期」仍然要按日期派生（财务从不写 4，过了应缴日库里还是 1）。
+     */
     if (q.payStatus !== undefined) {
       const t = today();
-      if (q.payStatus === 1) base.whereIn('call_status', [1, 2]).andWhere('due_date', '>=', t);
-      else if (q.payStatus === 2) base.where('call_status', 3);
-      else if (q.payStatus === 4) base.whereIn('call_status', [1, 2]).andWhere('due_date', '<', t);
-      else base.whereRaw('1 = 0'); // 已核对 / 冻结：就业无此状态
+      if (q.payStatus === PayStatus.UNPAID) {
+        // 待缴 = 库里待缴 且 还没过期（过期的归到逾期，不然「选待缴」会带出显示成逾期的行）
+        base.andWhere('pay_status', PayStatus.UNPAID).andWhere('due_date', '>=', t);
+      } else if (q.payStatus === PayStatus.OVERDUE) {
+        // 逾期 = 库里就是 4，或者「待缴 + 已过应缴日」
+        base.andWhere((b: any) => {
+          b.where('pay_status', PayStatus.OVERDUE).orWhere((x: any) => {
+            x.where('pay_status', PayStatus.UNPAID).andWhere('due_date', '<', t);
+          });
+        });
+      } else {
+        base.andWhere('pay_status', q.payStatus);
+      }
     }
-    // 仅看逾期（= 仅看紧急）：已缴清的不算逾期，与 decorate 的 overdue 同口径
+    // 仅看逾期（= 仅看紧急）：未结清 且 已过应缴日，与 decorate 的 payStatus 派生同口径
     if (q.onlyOverdue) {
-      base.whereNot('call_status', FeeCallStatus.PAID).andWhere('due_date', '<', today());
+      base
+        .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.OVERDUE])
+        .andWhere('due_date', '<', today());
     }
 
     // ★ 班主任只看自己的班（数据范围）
@@ -536,11 +613,15 @@ feeCallRouter.post(
     const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.FEE_CALL_NOT_FOUND, '催费单不存在');
 
-    // ★ 权限：只能处理自己班的
-    const isHeadTeacher = row.head_teacher_id === operator.userId;
-    const isAdmin = operator.roles.includes(RoleCode.SYS_ADMIN);
-    if (!isHeadTeacher && !isAdmin) {
-      throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有该学生的班主任能处理此催费单');
+    /**
+     * 权限：该生班主任，或 学管主任 / 校长（★ 2026-10-22 用户口径：
+     * 「谁能登记缴费 —— 班主任、学管、校长」，三部门一致）
+     */
+    if (!canRegisterPayment(row, operator)) {
+      throw new BizError(
+        BizCode.NO_OPERATION_PERMISSION,
+        '只有该学生的班主任、学管主任或校长能处理此催费单',
+      );
     }
 
     if (row.call_status === FeeCallStatus.PAID) {
@@ -605,11 +686,12 @@ feeCallRouter.post(
     const row = await db(TABLE).where({ id: body.id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.FEE_CALL_NOT_FOUND, '催费单不存在');
 
-    // ★ 权限与 /handle 同款：该学生的班主任本人（或管理员）
-    const isHeadTeacher = row.head_teacher_id === operator.userId;
-    const isAdmin = operator.roles.includes(RoleCode.SYS_ADMIN);
-    if (!isHeadTeacher && !isAdmin && !operator.roles.includes('SUPER_TEST')) {
-      throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只有该学生的班主任能登记此催费单的缴费');
+    // 权限与 /handle 同款：该生班主任、学管主任、校长（三部门统一口径）
+    if (!canRegisterPayment(row, operator)) {
+      throw new BizError(
+        BizCode.NO_OPERATION_PERMISSION,
+        '只有该学生的班主任、学管主任或校长能登记此催费单的缴费',
+      );
     }
 
     /* ---- 截图：现金不强制，微信/支付宝必须有（与初高同规则） ---- */
@@ -627,7 +709,18 @@ feeCallRouter.post(
       paid_amount: body.paidAmount,
       pay_date: body.payDate,
       pay_remark: body.remark || null,
+      // 催收进度：已缴清（就业自有的这套仍然维护，用于「催收进度」展示）
       call_status: FeeCallStatus.PAID,
+      /**
+       * ★ 2026-10-22：缴费状态同步置「已缴」。
+       *   三部门现在统一看 pay_status（与初高同码），只改 call_status 的话
+       *   催费列表的「缴费状态」列对就业行就永远显示「待缴」。
+       *   已经是 3 已核对 / 5 冻结 的不动（那两种状态不能被登记缴费覆盖）。
+       */
+      pay_status:
+        Number(row.pay_status) === PayStatus.VERIFIED || Number(row.pay_status) === PayStatus.FROZEN
+          ? Number(row.pay_status)
+          : PayStatus.PAID,
       handle_time: new Date(),
       handle_remark: body.remark || row.handle_remark || null,
       update_time: new Date(),
@@ -647,6 +740,9 @@ feeCallRouter.post(
           id: body.id,
           voucherUrl: voucherUrl ?? (row.voucher_url || null),
           callStatus: FeeCallStatus.PAID,
+          callStatusName: FEE_CALL_STATUS_NAME[FeeCallStatus.PAID] || '',
+          payStatus: patch.pay_status,
+          payStatusName: PAY_STATUS_NAME[Number(patch.pay_status)] || '',
           payMethodName: PAY_METHOD_NAME[body.payMethod] ?? '',
         },
         '缴费登记成功',
