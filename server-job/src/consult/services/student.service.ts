@@ -131,6 +131,8 @@ export function toDetail(row: any): ConsultStudent {
     gender: row.gender,
     genderName: nameOf(GENDER_NAME, row.gender),
     age: row.age ?? undefined,
+    /** ★ 2026-10-22 学历（新建学生录入，推送班级时带给接收端） */
+    education: row.education || undefined,
     phone: row.phone || undefined,
     deptCode: row.dept_code ?? undefined,
     deptName: row.dept_code ? nameOf(DEPT_NAME, row.dept_code) : undefined,

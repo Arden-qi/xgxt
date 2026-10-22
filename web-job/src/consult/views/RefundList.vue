@@ -14,7 +14,7 @@ import type {
   ConsultRefundCalcResult,
   ConsultStudentListItem,
 } from 'shared-types/consult';
-import { ConsultState, ConsultRefundStatus as CRS, CONSULT_REFUND_STATUS_NAME } from 'shared-types/consult';
+import { ConsultRefundStatus as CRS, CONSULT_REFUND_STATUS_NAME } from 'shared-types/consult';
 import {
   fetchRefundList,
   fetchRefundStats,
@@ -117,15 +117,16 @@ async function searchStudents(keyword: string) {
   studentSearching.value = true;
   try {
     /**
-     * ★ 2026-10-22 用户口径：退费只针对「试学中」的学生，
-     *   所以下拉里只列试学中的 —— 正式在读 / 已退费 / 流失 都不出现在候选里，
-     *   避免选到不能退的人才报错。
+     * ★ 2026-10-22 用户口径：「发起退费的学生姓名要有全部的」
+     *
+     * 之前只列「试学中」，正式在读 / 待分班的学生搜不到，退不了。
+     * 现在不传状态 → 全部学生都能搜（下拉里带状态标注，方便区分）。
+     * 能不能退由后端退费规则判断（已退费 / 退费中会被拦下并给出原因）。
      */
     const res = await fetchStudentList({
       page: 1,
       size: 20,
       keyword: keyword || undefined,
-      consultState: ConsultState.TRIAL,
     });
     studentOptions.value = res.list.map((s: ConsultStudentListItem) => ({
       consultStudentId: s.consultStudentId,

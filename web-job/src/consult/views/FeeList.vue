@@ -24,6 +24,7 @@ import {
   FEE_TYPE_NAME,
   CONSULT_FEE_STATUS_NAME,
   ConsultFeeStatus,
+  ConsultState,
   PAY_METHODS,
 } from 'shared-types/consult';
 import {
@@ -176,14 +177,23 @@ const studentSearching = ref(false);
 /**
  * 远程搜索学生（按姓名/学号模糊匹配）
  *
- * ★ 状态全流转：不传 consultState，候选覆盖【全部状态】的学生 ——
- *    待面试 / 试学费·待确认 / 试学中 / 正式……都能被选中发起收费。
- *    之前「齐甜甜搜不到」就是因为旧弹窗要手输学生ID，而不是搜索范围的锅。
+ * ★ 2026-10-22 用户口径：「发起收费那里，学生姓名不允许有正式学生，
+ *    只有咨询中的学生，所有的咨询中学生可以选择」——
+ *    候选收窄为 consultState = 咨询中(3)，已分班/试学中/正式在读都不再出现在这里。
+ *
+ * ⚠️ 试用场景不受影响：从列表行内点「收款 / 补费」时由 openCreate 直接把
+ *    该学生塞进候选（见下面 openCreate），已分班学生的补费照旧能发起。
  */
 async function searchStudents(keyword: string) {
   studentSearching.value = true;
   try {
-    const res = await fetchStudentList({ page: 1, size: 20, keyword: keyword || undefined });
+    const res = await fetchStudentList({
+      page: 1,
+      size: 20,
+      keyword: keyword || undefined,
+      // ★ 只列「咨询中」——正式在读/试学中不可再发起首次收费
+      consultState: ConsultState.TRIAL_FEE_PENDING,
+    });
     studentOptions.value = res.list.map((s: ConsultStudentListItem) => ({
       consultStudentId: s.consultStudentId,
       studentName: s.studentName,
@@ -1059,24 +1069,30 @@ onMounted(load);
 
         <el-table-column label="财务侧状态" width="110">
           <template #default="{ row }">
-            <el-tag size="small" type="info">{{ row.financePayStatusName }}</el-tag>
+            <el-tag v-if="row.financePayStatusName" size="small" type="info">
+              {{ row.financePayStatusName }}
+            </el-tag>
+            <span v-else class="stu-sub">—</span>
           </template>
         </el-table-column>
 
         <!--
-          ★ 2026-10-15 用户口径：这里的操作人 / 操作时间是【咨询侧发起收费】的那个人和时间，
-            不是财务确认到账的人。财务核对人只在详情弹窗里看。
+          ★ 2026-10-22 用户口径：「财务侧状态和操作人不对」
+            操作人 / 操作时间改为随状态走：
+              · 财务已核对 → 财务核对人 + 核对时间（后端 operatorName / operatorTime）
+              · 还没核对   → 咨询发起人 + 发起时间
+            想看「发起人是谁」可以去详情弹窗，那里两个都列出来了。
         -->
         <el-table-column label="操作人" width="110">
           <template #default="{ row }">
-            <span v-if="row.createdByName">{{ row.createdByName }}</span>
+            <span v-if="row.operatorName">{{ row.operatorName }}</span>
             <span v-else class="stu-sub">—</span>
           </template>
         </el-table-column>
 
         <el-table-column label="操作时间" width="170">
           <template #default="{ row }">
-            <span v-if="row.createTime">{{ row.createTime }}</span>
+            <span v-if="row.operatorTime">{{ row.operatorTime }}</span>
             <span v-else class="stu-sub">—</span>
           </template>
         </el-table-column>
@@ -1196,7 +1212,7 @@ onMounted(load);
             reserve-keyword
             :remote-method="searchStudents"
             :loading="studentSearching"
-            placeholder="输入学生姓名搜索选择（全状态可选）"
+            placeholder="输入学生姓名搜索选择（仅咨询中学生）"
             style="width: 100%"
           >
             <el-option
@@ -1504,14 +1520,16 @@ onMounted(load);
         </el-descriptions-item>
 
         <el-descriptions-item label="班级">{{ detailRow.className || '未分班' }}</el-descriptions-item>
-        <!-- 咨询侧：发起收费的人与时间（列表「操作人 / 操作时间」列取的就是这两个） -->
-        <el-descriptions-item label="操作人">{{ detailRow.createdByName }}</el-descriptions-item>
+        <!-- ★ 2026-10-22 详情里把「发起人」和「财务核对人」分开写清楚，避免和列表的操作人口径混淆 -->
+        <el-descriptions-item label="发起人">{{ detailRow.createdByName || '—' }}</el-descriptions-item>
 
-        <el-descriptions-item label="操作时间">{{ detailRow.createTime }}</el-descriptions-item>
-        <el-descriptions-item label="财务确认时间">{{ detailRow.paidTime || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="发起时间">{{ detailRow.createTime || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="财务确认时间">
+          {{ detailRow.financeVerifiedTime || detailRow.paidTime || '—' }}
+        </el-descriptions-item>
 
         <el-descriptions-item label="财务确认人" :span="2">
-          {{ detailRow.paidByName || '—（财务尚未确认到账）' }}
+          {{ detailRow.financeVerifiedBy || detailRow.paidByName || '—（财务尚未确认到账）' }}
         </el-descriptions-item>
         <el-descriptions-item v-if="detailRow.rejectReason" label="驳回原因" :span="2">
           <span class="danger-text">{{ detailRow.rejectReason }}</span>

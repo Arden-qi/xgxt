@@ -32,6 +32,8 @@ import {
   FeeType,
   FormalPayMode as FPM,
 } from 'shared-types/consult';
+// ★ 2026-10-22 学历下拉：与班主任建档共用同一份选项（初中/高中/专科/本科/研究生）
+import { EDUCATION_OPTIONS } from 'shared-types';
 import {
   fetchStudentList,
   fetchStudentDetail,
@@ -284,6 +286,8 @@ const newForm = ref({
   phone: '',
   /** ★ 2026-10-22 用户口径：「部门」换成「年龄」（部门在分配班级时才定） */
   age: undefined as number | undefined,
+  /** ★ 2026-10-22 新增「学历」 */
+  education: '' as string,
   sourceChannel: 1,
   sourceRemark: '',
   /** ★ 2026-10-15 来源=转介绍时填写的招生老师信息 */
@@ -299,6 +303,7 @@ function openNew() {
     gender: 1,
     phone: '',
     age: undefined,
+    education: '',
     sourceChannel: 1,
     sourceRemark: '',
     referrerName: '',
@@ -326,6 +331,8 @@ async function submitNew() {
     phone: f.phone || undefined,
     // ★ 2026-10-22：「部门」换成「年龄」（部门改为分配班级时选学部）
     age: f.age ?? undefined,
+    // ★ 2026-10-22 学历（不填则不传）
+    education: f.education || undefined,
     sourceChannel: f.sourceChannel,
     sourceRemark: f.sourceRemark || undefined,
     referrerName: f.sourceChannel === 3 ? f.referrerName.trim() || undefined : undefined,
@@ -871,12 +878,19 @@ function actionsOf(row: ConsultStudentListItem | ConsultStudent) {
      * 未报名·待跟进状态 → 显示「取消未报名」。
      */
     canCancelNotEnroll: s === CS.NOT_ENROLLED,
-    /** 可记录流失：已经进入试学/缴费阶段才谈得上「流失」 */
+    /**
+     * 可记录流失：已经进入缴费/试学/在读阶段才谈得上「流失」
+     *
+     * ★ 2026-10-22 用户口径：「咨询中有流失，只要缴了费，就没有流失这个选项了」
+     *   缴费到账后学生可能直接落到「正式在读」，而原来这段没把 FORMAL 算进来，
+     *   于是钱一交，流失按钮就消失了。现在补上 FORMAL。
+     */
     canLoss: [
       CS.TRIAL_FEE_PENDING,
       CS.TRIAL_WAIT_CLASS,
       CS.TRIAL,
       CS.FULL_FEE_PENDING,
+      CS.FORMAL,
     ].includes(s),
   };
 }
@@ -1569,6 +1583,12 @@ onMounted(load);
             placeholder="学生年龄"
             style="width: 140px"
           />
+        </el-form-item>
+        <el-form-item label="学历">
+          <!-- ★ 2026-10-22 用户口径：「新建学生里边加一个学历」 -->
+          <el-select v-model="newForm.education" placeholder="请选择学历" clearable style="width: 100%">
+            <el-option v-for="e in EDUCATION_OPTIONS" :key="e" :value="e" :label="e" />
+          </el-select>
         </el-form-item>
         <el-form-item label="来源">
           <el-select v-model="newForm.sourceChannel" style="width: 100%">

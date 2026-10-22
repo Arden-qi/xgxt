@@ -99,6 +99,13 @@ export interface ConsultStudent extends BaseEntity {
   gender: Gender;
   genderName: string;
   age?: number;
+  /**
+   * ★ 2026-10-22 用户口径：「新建学生里边加一个学历」
+   *
+   * 咨询录入阶段就要掌握学生的最高学历（决定推荐课程/班型），
+   * 推送班级时一并带给接收端（class 模块的 consultPush 已支持 education）。
+   */
+  education?: string;
   phone?: string;
   deptCode?: DeptCode;
   deptName?: string;
@@ -215,6 +222,8 @@ export interface ConsultStudentSavePayload {
    * （见 /enroll-to-class 推送单里的 age 字段）。
    */
   age?: number;
+  /** ★ 2026-10-22 新建学生新增「学历」 */
+  education?: string;
 }
 
 /** 完善档案信息 */
@@ -329,6 +338,18 @@ export interface ConsultFeeOrder {
   /** 财务侧的 payStatus（3=已核对） */
   financePayStatus?: number;
   financePayStatusName?: string;
+  /**
+   * ★ 2026-10-22 用户口径：「财务侧状态和操作人不对」
+   *
+   * 财务核对人 / 核对时间（从财务模块同步回来的快照）。
+   * 财务侧核对完，列表的「操作人 / 操作时间」要显示财务这个人，而不是咨询发起人。
+   */
+  financeVerifiedBy?: string;
+  financeVerifiedTime?: string;
+  /** 列表「操作人」：已核对 → 财务核对人；未核对 → 咨询发起人 */
+  operatorName?: string;
+  /** 列表「操作时间」：已核对 → 财务核对时间；未核对 → 发起时间 */
+  operatorTime?: string;
   /** 财务打回原因 */
   rejectReason?: string;
 

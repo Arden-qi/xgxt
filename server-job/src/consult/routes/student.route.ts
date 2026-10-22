@@ -357,6 +357,8 @@ const addSchema = z.object({
    * 保留 deptCode 只为兼容老调用方 / 历史数据。
    */
   age: z.coerce.number().int().min(1, '年龄需在 1~100 之间').max(100, '年龄需在 1~100 之间').optional(),
+  /** ★ 2026-10-22 学历：与接收端建档共用 EDUCATION_OPTIONS（初中/高中/专科/本科/研究生） */
+  education: optionalStr(20),
 });
 
 studentRouter.post(
@@ -393,6 +395,8 @@ studentRouter.post(
       parent_phone: body.parentPhone ?? null,
       // ★ 2026-10-22 新建学生表单「年龄」；不填则为 null，接收入班时可补
       age: body.age ?? null,
+      /** ★ 2026-10-22 学历（不填为 null） */
+      education: body.education ?? null,
       dept_code: body.deptCode ?? DeptCode.JUNIOR_SENIOR,
       // 新学生默认「待分配」，等经理分配跟进人
       consult_state: ConsultState.WAIT_ASSIGN,
@@ -1653,7 +1657,8 @@ studentRouter.post(
         phone: stu.phone || null,
         parentPhone: stu.parent_phone || null,
         age: stu.age ?? null,
-        // 学历字段咨询侧没有，留空由班主任接收时补
+        /** ★ 2026-10-22 学历随推送单带给接收端（班主任建档时直接落库，不用再问一遍） */
+        education: stu.education ?? null,
         origin: stu.source_remark || null,
         graduateSchool: stu.school || null,
         homeAddress: stu.address || null,

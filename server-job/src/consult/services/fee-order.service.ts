@@ -271,6 +271,20 @@ export function toOrderView(row: any): ConsultFeeOrder {
     financePayStatusName: row.finance_pay_status
       ? nameOf(PAY_STATUS_NAME, row.finance_pay_status)
       : undefined,
+    /** ★ 2026-10-22 财务核对人 / 核对时间快照（由 syncFromFinance 回填） */
+    financeVerifiedBy: row.finance_verified_by || undefined,
+    financeVerifiedTime: row.finance_verified_time
+      ? formatTime(row.finance_verified_time)
+      : undefined,
+    /**
+     * ★ 2026-10-22 「操作人 / 操作时间」口径修正
+     *
+     * 用户反馈：财务侧核对完之后，列表的操作人还显示咨询发起人，对不上。
+     * 现在：财务已核对（有核对人）→ 显示财务核对人与其核对时间；
+     *       还没核对 → 显示咨询发起人与其发起时间（发起动作确实是他做的）。
+     */
+    operatorName: row.finance_verified_by || row.create_by_name || '',
+    operatorTime: formatTime(row.finance_verified_time || row.create_time),
     rejectReason: row.reject_reason || undefined,
     voucherUrl: row.voucher_url || undefined,
     voucherNo: row.voucher_no || undefined,
@@ -1331,8 +1345,29 @@ export async function syncFromFinance(orderIds?: string[]): Promise<{ updated: n
   if (orderIds?.length) {
     query = query.whereIn('id', orderIds);
   } else {
-    // 只要还没到账的（已到账/已驳回的不用再查）
-    query = query.whereIn('status', [CFS.NO_VOUCHER, CFS.PENDING]);
+    /**
+     * ★ 2026-10-22 用户口径：「财务侧状态和操作人不对」
+     *
+     * 原来只同步「未到账」的单（NO_VOUCHER / PENDING），已到账的单不再回读 →
+     * 它们的 finance_pay_status 永远停在最后一次同步时的 2（待核对），
+     * 财务核对人和核对时间更是从没落过库，列表里只能显示咨询侧发起人。
+     *
+     * 现在把「已到账但财务信息还不完整」的单也纳入同步：
+     *   status = ARRIVED 且（finance_pay_status 不是已缴 3 或 核对人/时间缺失）
+     * 只补快照，不再动状态机（到账推进有幂等守卫，但没必要多跑）。
+     */
+    query = query.whereIn('status', [CFS.NO_VOUCHER, CFS.PENDING, CFS.ARRIVED]).andWhere((qb: any) => {
+      qb.whereIn('status', [CFS.NO_VOUCHER, CFS.PENDING]).orWhere((qb2: any) => {
+        qb2
+          .where('status', CFS.ARRIVED)
+          .andWhere((qb3: any) => {
+            qb3
+              .whereNull('finance_pay_status')
+              .orWhereNot('finance_pay_status', PayStatus.VERIFIED)
+              .orWhereNull('finance_verified_by');
+          });
+      });
+    });
   }
   const rows = await query;
 
@@ -1342,6 +1377,9 @@ export async function syncFromFinance(orderIds?: string[]): Promise<{ updated: n
     try {
       const detail: any = await financeClient.getFeeDetail(row.finance_fee_id);
       const payStatus = detail?.payStatus;
+      /** ★ 2026-10-22 财务核对人 / 核对时间（财务侧 detail 已返回，之前没落库） */
+      const verifiedByName: string | null = detail?.verifiedByName ?? null;
+      const verifiedTime: string | null = detail?.verifiedTime ?? null;
 
       let nextStatus: ConsultFeeStatus | null = null;
       let rejectReason: string | null = null;
@@ -1356,8 +1394,22 @@ export async function syncFromFinance(orderIds?: string[]): Promise<{ updated: n
         nextStatus = CFS.PENDING;
       }
 
+      /* ---------- ★ 2026-10-22 快照差异：状态 / 财务侧 payStatus / 核对人与时间 ---------- */
+      const prevVerifiedTime = row.finance_verified_time ? formatTime(row.finance_verified_time) : null;
+      const patch: Record<string, any> = {};
+      if (payStatus != null && payStatus !== row.finance_pay_status) {
+        patch.finance_pay_status = payStatus;
+      }
+      if ((verifiedByName || null) !== ((row.finance_verified_by as string) || null)) {
+        patch.finance_verified_by = verifiedByName;
+      }
+      if (verifiedTime && verifiedTime !== prevVerifiedTime) {
+        patch.finance_verified_time = verifiedTime;
+      }
+
       if (nextStatus !== null && nextStatus !== row.status) {
         await db(FEE_ORDER_TABLE).where({ id: row.id }).update({
+          ...patch,
           status: nextStatus,
           finance_pay_status: payStatus,
           reject_reason: rejectReason,
@@ -1387,11 +1439,16 @@ export async function syncFromFinance(orderIds?: string[]): Promise<{ updated: n
           );
         }
         updated++;
-      } else if (payStatus !== row.finance_pay_status) {
-        // 状态没变但 payStatus 变了（如 待缴→已缴），也更新一下
+      } else if (Object.keys(patch).length) {
+        /**
+         * 状态没变，但财务侧快照变了（待缴→待核对、核对人补录、核对时间补录…），
+         * 也要落库 —— 否则「财务侧状态 / 操作人」会永远停在第一次同步的样子。
+         */
         await db(FEE_ORDER_TABLE).where({ id: row.id }).update({
-          finance_pay_status: payStatus,
+          ...patch,
+          update_time: new Date(),
         });
+        updated++;
       }
     } catch (err: any) {
       // 财务侧查不到这张单（可能被删了）不报错，跳过
