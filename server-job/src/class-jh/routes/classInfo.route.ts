@@ -22,6 +22,8 @@ import { validate } from '../middleware/validate';
 import { checkPermission } from '../middleware/auth';
 import { BizError } from '../middleware/errorHandler';
 import classSync from '../../utils/classSync';
+// ★ 2026-10-21 班号：建班时按学部组顺序分配（学号 = LZ + J/T + 班号 + 班内序号）
+
 
 export const classInfoRouter = Router();
 

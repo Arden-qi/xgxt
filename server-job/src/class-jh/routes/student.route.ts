@@ -39,6 +39,8 @@ import { BizError } from '../middleware/errorHandler';
 import { buildClassScope, getScopedClassIds } from '../middleware/dataScope';
 import { mobile, idCard, dateOnly, dateOnlyRequired } from '../utils/zodRules';
 import { classSync } from '../../utils/classSync';
+// ★ 2026-10-22 学号新规：LZ + 班级编号 + 班内序号(3位, 每班从001独立)
+import { nextStudentNoForClass } from '../../teaching/shared/studentNo';
 // ★ 2026-10-06：缴费记录统一取数（实时财务管理 + 初高台账兜底）
 import { fetchStudentFeeRecords, summarizeFees } from '../../utils/financeFeeRef';
 
@@ -68,22 +70,13 @@ function calcAge(birthDate?: string | Date | null): number | null {
   return age >= 0 ? age : null;
 }
 
-/** 生成学号：S + yyyy + 4 位序号（Q8 裁决） */
-async function generateStudentNo(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `S${year}`;
-  const rows = await db(TABLE)
-    .where('student_no', 'like', `${prefix}%`)
-    .orderBy('student_no', 'desc')
-    .limit(1)
-    .select('student_no');
-  let seq = 1;
-  if (rows.length && rows[0].student_no) {
-    const tail = String(rows[0].student_no).slice(prefix.length);
-    const n = parseInt(tail, 10);
-    if (!Number.isNaN(n)) seq = n + 1;
-  }
-  return `${prefix}${String(seq).padStart(4, '0')}`;
+/**
+ * 生成学号（★ 2026-10-22 用户口径）：
+ *   LZ + 班级编号 + 班内序号(3位)，如 LZQ17001
+ *   必须选班级、班级必须有班级编号；没有就报错（不造旧格式兜底号）
+ */
+async function generateStudentNo(classId?: string | null): Promise<string> {
+  return nextStudentNoForClass('jh', classId);
 }
 
 /** 当前时间 → 'yyyy-MM-dd HH:mm:ss'（推送时间戳用） */
@@ -404,7 +397,8 @@ studentRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
 
-    const studentNo = body.studentNo?.trim() || (await generateStudentNo());
+    // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略手填值（用户口径）
+    const studentNo = await generateStudentNo(body.classId ?? null);
     // ⚠️ 唯一性预检必须按「物理范围」查（不带 is_deleted 过滤）：
     //    t_class_student.uk_student_no 是物理唯一索引，被逻辑删除的历史行仍占用学号。
     //    若这里带 is_deleted=false，删除后重建同号会绕过预检、直撞索引 → 返回 50002。
@@ -1174,16 +1168,9 @@ studentRouter.post(
     // ---- 班级必须存在且开放 ----
     const cls = await assertClassAcceptsIntake(body.classId, false);
 
-    // 接收弹窗补的学号优先；留空则按初高规则自动生成
-    let studentNo = String(body.studentNo ?? '').trim();
-    if (studentNo) {
-      const dupNo = await db(TABLE).where({ student_no: studentNo, is_deleted: false }).first();
-      if (dupNo) {
-        throw new BizError(BizCode.DATA_DUPLICATE, `学号 ${studentNo} 已存在，请换一个或留空由系统生成`);
-      }
-    } else {
-      studentNo = await generateStudentNo();
-    }
+    // ★ 2026-10-22：学号一律按「LZ+班级编号+序号」生成，忽略接收弹窗里手填的值
+    //   （用户口径：即使班主任填了也以规则为准）
+    const studentNo = await generateStudentNo(cls.id);
     const id = randomUUID();
     const now = new Date();
     await db(TABLE).insert({

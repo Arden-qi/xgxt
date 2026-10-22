@@ -78,9 +78,17 @@ export async function listClassesByStage(
       .select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{ id: string; name: string }>;
     return rows.map(pick);
   }
-  // ★ 2026-10-19：实训与就业部共用 t_job_class、dept 都是 3，靠 stage_key 区分
+  // ★ 实训与就业部共用 t_job_class、dept 都是 3
   const qb = tbl(jobDb, 'sms_job', 't_job_class', stage).where('is_deleted', 0);
-  qb.andWhere('stage_key', stage === 'emp' ? 'emp' : 'job');
+  if (stage === 'emp') {
+    // ★ 2026-10-21：学生档案删掉「就业」学段后，就业部成了 sms_job 的唯一入口，
+    //   班级下拉必须列**整个部门**（dept_code=3）——
+    //   现存 SX2601 的 stage_key 是 'job'，按 stage_key='emp' 过滤会一个班都列不出来
+    //   （学生档案里选就业部 → 班级下拉空 → 按班级筛不了）。
+    qb.andWhere('dept_code', 3);
+  } else {
+    qb.andWhere('stage_key', 'job');
+  }
   const rows = (await qb.select('id', 'class_name as name', 'dept_code', 'stage')) as Array<{
     id: string;
     name: string;

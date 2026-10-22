@@ -292,7 +292,12 @@ export function getSchemeOptions() {
   return http.get<SchemeOption[]>('/api/teaching/class/scheme-options');
 }
 
-/** 生成班级编号（只有实训有；其它学段返回 null，前端应隐藏入口） */
+/**
+ * 生成班级编号（只有实训/就业部有；其它学段返回 null）
+ *
+ * ★ 2026-10-22 用户口径：班级表单去掉「生成」按钮，编号改手工填写 + 必填，
+ *   所以本函数**当前没有任何页面调用**（后端 /gen-code 仍在，保留给脚本/联调）。
+ */
 export function genClassCode(stage: ClassStage) {
   return http.get<{ classCode: string | null }>('/api/teaching/class/gen-code', { stage });
 }
