@@ -331,6 +331,19 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/class-jh/views/SettingList.vue'),
     meta: { title: '系统设置', pageCode: 'classjh:setting:view' },
   },
+  {
+    /**
+     * ★ 2026-10-20 楼栋设置独立页
+     *
+     * 从「系统设置」里把楼栋页签抽出来，单独一个权限码 ——
+     * 教务老师只拿 `classjh:building:view`，不会连带看到系统设置 KV /
+     * 阶段字典 / 操作日志（那三个仍归 `classjh:setting:view`）。
+     */
+    path: '/class-jh/building',
+    name: 'ClassJhBuilding',
+    component: () => import('@/class-jh/views/BuildingList.vue'),
+    meta: { title: '楼栋设置', pageCode: 'classjh:building:view' },
+  },
   // 进模块根路径 → 落到系统首页工作台（★ 2026-10-16 工作台已迁到 /）
   { path: '/class-jh', redirect: '/' },
 
