@@ -90,13 +90,25 @@ export function buildBillQuery(q: any) {
  *    3) 点某个分组 → 展开该组【每一笔】缴费记录：类型 + 金额 + 日期 + 凭证号 + 「查看凭证」
  * ============================================================ */
 
-/** 四类分组的定义（key 与前端 BillFeeGroupKey 对齐） */
+/** 五类分组的定义（key 与前端 BillFeeGroupKey 对齐） */
 const BILL_GROUPS: { key: string; name: string; types: number[] }[] = [
   // ⚠️ 试学费(5) 并入学费组：原型里「正式学费」「试学学费」都挂在「学费缴费记录」下
-  { key: 'tuition', name: '学费缴费记录', types: [FeeType.TUITION, FeeType.TRIAL_FEE] },
+  //
+  // ★ 2026-10-22 用户口径：学费组包含三类 —— 正式学费(1)、补费(8)、试学费(5)
+  //    补费(SUPPLEMENT) 原先是试学转正尾款/差额补收，金额老师自定义；
+  //    它属于学费性质，必须进「学费缴费记录」，否则账单会「计入总额但不进四列」，
+  //    导致四项之和 ≠ 总额，对账时对不上。
+  {
+    key: 'tuition',
+    name: '学费缴费记录',
+    types: [FeeType.TUITION, FeeType.SUPPLEMENT, FeeType.TRIAL_FEE],
+  },
   { key: 'meal', name: '餐费缴费记录', types: [FeeType.MEAL] },
   { key: 'dorm', name: '住宿费缴费记录', types: [FeeType.ACCOMMODATION] },
   { key: 'insurance', name: '保险费缴费记录', types: [FeeType.INSURANCE] },
+  // ★ 2026-10-22 用户口径：押金(6) + 校服(7) 单独成组，统一叫「杂费」
+  //    这两类不并入学费（不是学费性质），也不再无处可归。
+  { key: 'other', name: '杂费缴费记录', types: [FeeType.DEPOSIT, FeeType.UNIFORM] },
 ];
 
 /** 空分组（没有记录时也要返回，保证前端四列不缺格） */
