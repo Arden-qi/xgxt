@@ -59,6 +59,8 @@
       <el-form-item label="状态">
         <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px">
           <!-- 2026-10-19 批注：删除「待结业」选项 -->
+          <!-- 2026-10-21 批注：删除「已结业」选项 → 选项表见 api/class.ts#CLASS_STATUS_SELECTABLE
+               （只删筛选项；列表状态列 / 统计卡 / 编辑弹窗流转都不受影响） -->
           <el-option v-for="s in CLASS_STATUS_SELECTABLE" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>

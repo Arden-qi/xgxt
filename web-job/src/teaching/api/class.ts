@@ -401,11 +401,13 @@ export function isSystemClassStatus(s: number | null | undefined): boolean {
  * 可供选择的班级状态（筛选下拉）
  *   2026-10-19 批注：「待结业」删除。
  *   2026-10-21 批注：补上「实训 / 待就业 / 已就业」—— 不补就筛不到这三类班。
+ *   2026-10-21 批注（第二批）：「已结业」从筛选下拉删除。
+ *     → 只是筛选项不再提供；已结业(4) 仍是合法状态（列表状态列照常显示、
+ *       统计卡照常计数、编辑弹窗 2→4 照常可流转），后端筛选也仍支持 status=4。
  */
 export const CLASS_STATUS_SELECTABLE = [
   { value: 1, label: '开放' },
   { value: 2, label: '封班' },
-  { value: 4, label: '已结业' },
   { value: 5, label: '实训' },
   { value: 6, label: '待就业' },
   { value: 7, label: '已就业' },
