@@ -24,7 +24,7 @@ import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 // 升实训单独一个文件（跨库搬迁逻辑较重，且不参与班级仓储的适配器分发）
 import * as trainingSvc from './training';
-import type { ClassListQuery, ClassStage } from '../shared/dto';
+import type { ClassListQuery, ClassStage, TeachingStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
 import { normalizeClassroom } from '../shared/format';
 

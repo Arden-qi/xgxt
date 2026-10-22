@@ -31,6 +31,7 @@ import type {
 import { birthFromIdCard, calcAge, fmtDate, fmtDateTime } from '../shared/format';
 import type { PhaseOption, StudentRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import { applyClassScopeKeepNull } from '../shared/dataScope';
 import { nextStudentNoForClass } from '../shared/studentNo';
 
 const T = 't_class_student';
@@ -149,7 +150,8 @@ function buildBase(q: StudentListQuery, user: any) {
   if (q.classId) qb.where('class_id', q.classId);
   if (q.deptCode) qb.where('dept_code', q.deptCode);
   if (q.studentStatus) qb.where('student_status', q.studentStatus);
-  if (q.phaseCode) qb.where('stage', q.phaseCode);
+  // ★ 阶段码列名按开关取：老表 `stage` / 统一表 `stage_code`（硬编码 'stage' 会静默查空）。
+  if (q.phaseCode) qb.andWhere(phaseCodeCol(), q.phaseCode);
   applySchemeFilter(qb, q);
   if (q.keyword) {
     const k = q.keyword;
@@ -173,7 +175,10 @@ export const repo: StudentRepo = {
   supportUnassigned: true,
 
   async list(q, user) {
-    const qb = buildBase(q, user).orderBy('student_no', 'asc');
+    const qb = buildBase(q, user);
+    /* ★ 数据范围：班主任只看自己班的学生（applyDataScope 只到「部门」粒度） */
+    await applyClassScopeKeepNull(qb, 'class_id', STAGE, user);
+    qb.orderBy('student_no', 'asc');
     const rows = (await qb) as Array<Record<string, any>>;
     return rows.map(mapRow);
   },
@@ -187,7 +192,10 @@ export const repo: StudentRepo = {
     const base = mapRow(r);
     const [repeats, grades] = await Promise.all([
       notDeleted(tbl(db, 'sms_class', REPEAT_TABLE, STAGE)).where('student_id', id).orderBy('repeat_time', 'desc'),
-      notDeleted(db(GRADE_TABLE)).where('student_id', id).orderBy('create_time', 'desc'),
+      // ★ 切读接入：成绩子表 t_class_grade → t_uni_exam_score。
+      //   此处读的 written_score / machine_score / interview_score / comp_score / exam_result
+      //   在统一表里**同名保留**（统一表是超集），所以只需换表、不必改列名。
+      notDeleted(tbl(db, 'sms_class', GRADE_TABLE, STAGE)).where('student_id', id).orderBy('create_time', 'desc'),
     ]);
 
     return {

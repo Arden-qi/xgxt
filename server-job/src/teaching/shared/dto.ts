@@ -21,7 +21,7 @@ export const TEACHING_STAGES: TeachingStage[] = ['jh', 'class', 'job'];
 export const TEACHING_STAGE_NAME: Record<TeachingStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
 };
 
 export function isTeachingStage(x: unknown): x is TeachingStage {
@@ -45,7 +45,7 @@ export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job', 'emp'];
 export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
   emp: '就业部',
 };
 
@@ -249,6 +249,8 @@ export interface ExamRow {
   classNames: string;
   contentTypes: number[];
   contentNames: string;
+  /** ★ 自定义类型名称（exam_type=5「其他」时填写）；空=用标准名 */
+  examTypeCustom?: string | null;
   /** 1 草稿 / 2 已提交 */
   status: number;
   statusName: string;
@@ -285,6 +287,8 @@ export interface ExamSaveBody {
   id?: string;
   examName: string;
   examType: number;
+  /** examType=5「其他」时自定义的类型名称 */
+  examTypeName?: string | null;
   examDate: string;
   /** 统一用数组；初高/大学只取第一个（它们是单班模型） */
   classIds: string[];
@@ -360,6 +364,8 @@ export interface ScoreEntry {
   className: string;
   /** 满分合计（初高按比例判定通过用） */
   fullTotal: number;
+  /** ★ 各分数项的本场满分（键：written/machine/interview/other），录入框上限用 */
+  contentFullScore?: Record<string, number>;
   /** 该学段是否算笔试均分（前端据此决定要不要显示那一列） */
   hasWrittenAvg: boolean;
   rows: ScoreEntryRow[];
