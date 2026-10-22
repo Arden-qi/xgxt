@@ -58,6 +58,14 @@ const ORDER = [
  */
 const POST_STEPS = [
   ['scripts/fix-consult-columns.mjs', '咨询表补列', 'sms_consult'],
+  /**
+   * ★ 2026-10-22：咨询状态对账
+   *
+   * 「教学侧已建档入班、咨询侧还停在待分班 / 没学号」这类历史数据，
+   * 靠一次幂等对账补齐（只升不降、不碰退费流失）。
+   * 必须排在学籍库（class / class-jh）迁移之后 —— 它要读那边的档案。
+   */
+  ['scripts/repair-consult-state.mjs', '咨询状态对账', 'sms_consult'],
 ];
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
