@@ -1441,6 +1441,38 @@ const ARRIVAL_ADVANCEABLE_STATES: ConsultState[] = [
 const canAdvanceOnArrival = (cur: ConsultState): boolean =>
   ARRIVAL_ADVANCEABLE_STATES.includes(cur);
 
+/**
+ * ★ 2026-10-22 「→ 待分班(4)」专用前置集合 —— 修「试学中被财务同步打回待分班」
+ *
+ * 【真实事故（幺幺，2026-10-22）】
+ *   08:09 试学费到账 → 待分班
+ *   08:12 班主任接收 → **试学中**（正确）
+ *   10:34 财务侧再同步一次同一笔到账 → 又跑了一遍本函数 →
+ *         收款单还是「试学费」→ target 被算成「待分班」→ **状态被降级**
+ *   → 用户在「学生管理」里看到「分完班了状态还是待分班」。
+ *
+ * 根因：`ARRIVAL_ADVANCEABLE_STATES` 为了支持「试学中 → 补费转正」，
+ *   把 TRIAL(5) 也当成了可推进源；于是「试学费重复到账」这条老路径
+ *   把 5 当成了起点，一路推到 4（倒退）。
+ *
+ * 修法：把「往前推到待分班」和「往后推到正式在读」分成两个集合：
+ *   · 推「待分班」只允许从**缴费环节**（待分配/待面试/咨询中/缴费待确认）出发；
+ *   · 推「正式在读」只允许从**试学中**出发（补费转正）。
+ *   已经是 待分班/试学中/正式在读 的，到账重放一律不再改状态。
+ */
+const TO_WAIT_CLASS_STATES: ConsultState[] = [
+  ConsultState.WAIT_ASSIGN, // 1
+  ConsultState.WAIT_INTERVIEW, // 2
+  ConsultState.TRIAL_FEE_PENDING, // 3
+  ConsultState.FULL_FEE_PENDING, // 6
+];
+
+/** 可以「往前推到待分班」吗（已经是 4/5/7 的一律不动） */
+const canGoWaitClass = (cur: ConsultState): boolean => TO_WAIT_CLASS_STATES.includes(cur);
+
+/** 可以「从试学中补费转正」吗（只有真正入班试学中的才允许） */
+const canGoFormal = (cur: ConsultState): boolean => cur === ConsultState.TRIAL;
+
 export async function advanceStudentStateOnArrival(row: any): Promise<void> {
   const stu = await findStudent(row.consult_student_id);
   if (!stu) return;
@@ -1517,19 +1549,20 @@ export async function advanceStudentStateOnArrival(row: any): Promise<void> {
     );
 
     if (isTrialOnly) {
-      if (canAdvanceOnArrival(cur)) {
+      if (canGoWaitClass(cur)) {
         target = ConsultState.TRIAL_WAIT_CLASS;
         gate = '分期首付已到账';
       }
-    } else if (canAdvanceOnArrival(cur)) {
-      // ★ 2026-10-20 同口径：还没分班 → 先「待分班」，分完班再落正式
-      if (!stu.class_id) {
-        target = ConsultState.TRIAL_WAIT_CLASS;
-        gate = '分期首付已到账，待分配班级';
-      } else {
-        target = ConsultState.FORMAL;
-        gate = '分期首付已到账';
-      }
+    } else if (canGoFormal(cur)) {
+      /* 已经在试学中（= 班主任已接收）→ 分期款到账即可转正 */
+      target = ConsultState.FORMAL;
+      gate = '分期首付已到账';
+    } else if (canGoWaitClass(cur)) {
+      /* ★ 2026-10-22 同口径：还没被班主任接收 → 只推「待分班」，
+       *   落「正式在读」要等接收那一刻（receive-ack 按是否全款到齐判定），
+       *   否则会出现「正式在读但人还没进班」。 */
+      target = ConsultState.TRIAL_WAIT_CLASS;
+      gate = '分期首付已到账，待分配班级';
     }
 
     if (target && target !== cur) {
@@ -1548,7 +1581,10 @@ export async function advanceStudentStateOnArrival(row: any): Promise<void> {
   }
 
   if (row.fee_type === FeeType.TRIAL_FEE) {
-    if (canAdvanceOnArrival(cur)) {
+    /* ★ 2026-10-22 只允许「从缴费环节往前推到待分班」。
+     *   已经是 待分班(4)/试学中(5)/正式在读(7) 的，试学费重复到账不再动状态
+     *   —— 否则「接收成试学中」会被财务同步一次次打回「待分班」（幺幺事故）。 */
+    if (canGoWaitClass(cur)) {
       target = ConsultState.TRIAL_WAIT_CLASS;
       gate = '试学费已到账';
     }
@@ -1560,16 +1596,19 @@ export async function advanceStudentStateOnArrival(row: any): Promise<void> {
      * 补费单不属于 FULL_FEE_TYPES，所以不能走下面「全款全部到齐」的判断
      * （那样会永远不成立，钱到了状态不动）。
      *
-     * 落点与学费到账同口径：没分班先「待分班」，有班直接「正式在读」。
+     * ★ 2026-10-22 落点收紧：
+     *   · 已在「试学中」→ 正式在读（这是补费转正的正常路径）；
+     *   · 还在缴费环节 → 待分班，等班主任接收；
+     *   · 已经是正式在读/待分班 → 不动（幂等重放）。
+     *   不再看 `stu.class_id` —— 它在「分配班级（推送）」时就写了，
+     *   只能说明「分过班」，不代表班主任已经接收建档。
      */
-    if (canAdvanceOnArrival(cur)) {
-      if (!stu.class_id) {
-        target = ConsultState.TRIAL_WAIT_CLASS;
-        gate = '补费已到账，待分配班级';
-      } else {
-        target = ConsultState.FORMAL;
-        gate = '补费已到账';
-      }
+    if (canGoFormal(cur)) {
+      target = ConsultState.FORMAL;
+      gate = '补费已到账';
+    } else if (canGoWaitClass(cur)) {
+      target = ConsultState.TRIAL_WAIT_CLASS;
+      gate = '补费已到账，待分配班级';
     }
   } else if (FULL_FEE_TYPES.includes(row.fee_type)) {
     if (
@@ -1591,13 +1630,20 @@ export async function advanceStudentStateOnArrival(row: any): Promise<void> {
          *   用户口径：「交完试学费或学费就分配班级」——学费到账后学生同样要
          *   走「待分班」，分完班才落「正式在读」。原来直接跳 FORMAL，
          *   会出现「正式在读但没班」的脏状态（分配班级按钮还得靠兜底显示）。
+         *
+         * ★ 2026-10-22 再收紧：**不看 `stu.class_id`**
+         *   class_id 在「分配班级」推送时就写进咨询表了，用它判断「已分班」
+         *   会把「已推送、班主任还没接收」误当成已入班 → 直接跳正式在读。
+         *   现在只在两种情况下转正式：
+         *     ① 已经试学中（receieve 过）→ 补缴尾款转正；
+         *     ② 其余缴费环节 → 一律先「待分班」。
          */
-        if (!stu.class_id) {
-          target = ConsultState.TRIAL_WAIT_CLASS;
-          gate = '全款费用已全部到账，待分配班级';
-        } else {
+        if (canGoFormal(cur)) {
           target = ConsultState.FORMAL;
           gate = '全款费用已全部到账';
+        } else if (canGoWaitClass(cur)) {
+          target = ConsultState.TRIAL_WAIT_CLASS;
+          gate = '全款费用已全部到账，待分配班级';
         }
       }
     }
