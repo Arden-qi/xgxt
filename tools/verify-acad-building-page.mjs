@@ -79,6 +79,15 @@ check('CLASS_JH_ACAD_PAGES 含 classjh:building:view', /CLASS_JH_ACAD_PAGES[\s\S
 check('R08 台账 KEEP 含 /class-jh/building', /KEEP\s*=\s*\[[^\]]*'\/class-jh\/building'/.test(ledger));
 check('系统设置页复用公共面板', setting.includes('BuildingSettingPanel') && !setting.includes('saveDormBuilding'));
 
+// ★ 2026-10-22：楼栋设置搬进「宿舍管理」成为子页签（排在申请审批后面）
+const teachingDorm = read('web-job/src/teaching/views/TeachingDorm.vue');
+const buildingPane = /<el-tab-pane[^>]*label="楼栋设置"[^>]*name="building"/.test(teachingDorm);
+const approvalIdx = teachingDorm.indexOf('label="申请审批"');
+const buildingIdx = teachingDorm.indexOf('label="楼栋设置"');
+check('宿舍管理含「楼栋设置」子页签', buildingPane && teachingDorm.includes('BuildingSettingPanel'));
+check('楼栋设置页签排在申请审批之后', approvalIdx > 0 && buildingIdx > approvalIdx);
+check('班主任看不到楼栋设置页签', /<el-tab-pane[^>]*v-if="!isOnlyHeadTeacher"[^>]*label="楼栋设置"/.test(teachingDorm));
+
 console.log('\n▶ 运行时检查（教务老师 zhengym）');
 const login = await req('POST', '/api/portal/account/login', { body: { account: ACCOUNT, password: PWD } });
 if (login.status !== 200 || !login.body?.data?.token) {

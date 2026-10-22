@@ -605,6 +605,12 @@
       <el-tab-pane v-if="canApproveDorm" label="申请审批" name="approval" lazy>
         <DormChangeApproval />
       </el-tab-pane>
+
+      <!-- ★ 2026-10-22：楼栋设置（从「系统设置」原样搬来，同一个 BuildingSettingPanel 组件）
+           排在申请审批后面；只给教务/学管等非班主任角色看 -->
+      <el-tab-pane v-if="!isOnlyHeadTeacher" label="楼栋设置" name="building" lazy>
+        <BuildingSettingPanel />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -687,6 +693,8 @@ import { visibleStageOptions } from '@/teaching/access';
 import DormAllocate from './DormAllocate.vue';
 /** ★ 2026-10-21 第三个子页面：申请审批（接收班主任的换宿/退宿申请） */
 import DormChangeApproval from './DormChangeApproval.vue';
+/** ★ 2026-10-22 第四个子页面：楼栋设置（与「系统设置」页签同一个组件，原样搬来） */
+import BuildingSettingPanel from '@/class-jh/components/setting/BuildingSettingPanel.vue';
 /** ★ 2026-10-20 调宿弹窗：班级 / 学生搜索 / 楼栋床位（与班级分派同一套接口） */
 import {
   listAllocateClasses,
@@ -738,7 +746,7 @@ import {
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
 /** ★ 2026-10-20 子页面页签：宿舍房间（原页面） / 班级分派（教务给各班分宿舍） */
-const mainTab = ref<'rooms' | 'allocate' | 'approval'>('rooms');
+const mainTab = ref<'rooms' | 'allocate' | 'approval' | 'building'>('rooms');
 
 /**
  * ★ 2026-10-21：班主任（且没有更高业务角色）不参与「建房间」和「班级分派」
@@ -785,6 +793,7 @@ watch(
   () => {
     if (mainTab.value === 'allocate' && isOnlyHeadTeacher.value) mainTab.value = 'rooms';
     if (mainTab.value === 'approval' && !canApproveDorm.value) mainTab.value = 'rooms';
+    if (mainTab.value === 'building' && isOnlyHeadTeacher.value) mainTab.value = 'rooms';
   },
   { immediate: true },
 );
