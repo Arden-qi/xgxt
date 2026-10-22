@@ -103,23 +103,32 @@ export interface TransferCandidateResult {
   /** 某个部门查询失败（无权限等）的原因 —— 不静默，弹窗里要提示 */
   errors: Array<{ dept: TransferDept; deptName: string; message: string }>;
   /**
-   * 每个部门的取样统计（★ 2026-10-22 新增）
+   * 每个部门的取样统计（★ 2026-10-22 新增，★ 2026-10-23 加 transferred）
    *
-   * `scanned` = 该部门未删除的单据总数；`paid` = 其中已登记缴费的条数。
-   * 弹窗里显示「初高：共 12 单，已登记缴费 3 单」——
-   * 否则「弹窗空着」永远分不清是「没单」「有单但没登记缴费」还是「查询出错」。
+   * `scanned` = 该部门未删除的单据总数；`paid` = 其中已登记缴费的条数；
+   * `transferred` = 其中已经上传过财务的条数；`picked` = 本次返回（待上传）的条数。
+   * 弹窗里显示「初高：共 12 单，已登记缴费 3 单（已上传 2 / 待上传 1）」——
+   * 否则「弹窗只剩 1 条」永远分不清是「没单」「没登记缴费」还是「都上传过了」。
    */
   stats?: Array<{
     dept: TransferDept;
     deptName: string;
     scanned: number;
     paid: number;
+    /** 已上传过财务的条数（不包含在 list 里） */
+    transferred: number;
     picked: number;
     error?: string;
   }>;
 }
 
-/** 拉转交候选：`dept` 传 all 就是三个部门一起取 */
+/**
+ * 拉转交候选：`dept` 传 all 就是三个部门一起取
+ *
+ * ★ 2026-10-23 用户要求「列表只显示没有上传过的内容」：
+ *   接口已过滤掉 `finance_fee_id` 非空（= 已转交）的行，
+ *   `list` 里每一条都是可转交的，前端不需要再自己筛。
+ */
 export function fetchTransferCandidatesAll(dept: TransferDept | 'all'): Promise<TransferCandidateResult> {
   return http.get<TransferCandidateResult>('/api/teaching/fee/transfer/candidates', { dept });
 }

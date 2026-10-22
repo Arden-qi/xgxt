@@ -25,6 +25,15 @@
  *      · 就业部 → 财务新建 dept_code=3
  *      · 重复转交 → 全部跳过
  *
+ *   ★ 2026-10-23 用户追加两条需求，本段一并钉住：
+ *      D-1「列表只显示没有上传过的」：转交完再取候选，这几条必须**消失**；
+ *      D-2「大学部转交后财务侧没有对应信息」：转交新建的财务单**没有凭证**
+ *          （现金/线下），财务列表也必须能查到、能核对。
+ *
+ *   ⚠️ 夹具写在**统一表**（`sms_common.t_uni_urge` / `t_uni_fee`）：
+ *      P8 之后催费老表已 DROP，候选接口一律走 `tbl()` → 统一表，
+ *      夹具还写老表 = 写进空气，整个 D 段全是「催费单不存在或已删除」。
+ *
  * 【跑法】在 server-job 目录下（前后端已在 8004/5173 运行）：
  *     node scripts/_test-dept-three-modules.mjs
  */
@@ -169,6 +178,8 @@ async function main() {
     ['sms_common', 't_class_urge_sync'],
     ['sms_job', 't_job_fee_call'],
     ['sms_common', 't_uni_urge'],
+    // ★ 2026-10-23：就业催费的统一表（`t_job_fee_call` 的接班表）
+    ['sms_common', 't_uni_fee'],
   ]) {
     // eslint-disable-next-line no-await-in-loop
     const cols = await columnsOf(schema, table);
@@ -261,34 +272,44 @@ async function main() {
   const financeSeed = { id: FIN_SEED_ID };
 
   // 大学：无财务来源（source_system='test'）→ 应新建
-  await q(`DELETE FROM sms_common.t_class_urge_sync WHERE id=?`, [FIX_CLASS]);
+  // ★ 2026-10-23：写统一表 `t_uni_urge`（老表 `t_class_urge_sync` 已 DROP）
+  await q(`DELETE FROM sms_common.t_uni_urge WHERE id=?`, [FIX_CLASS]);
   await q(
-    `INSERT INTO sms_common.t_class_urge_sync
-      (id, create_time, is_deleted, source_system, source_id, sync_status, student_id, student_no, student_name,
-       class_id, class_name, fee_type, amount, expire_date, pay_status, pay_method, paid_amount, pay_date, pay_remark, voucher_url)
-     VALUES (?,NOW(),0,'test','test-src',2,'uni-tr-stu','TEST3D001','自检大学',NULL,NULL,1,88000,'2026-10-25',1,1,88000,'2026-10-20','自检·新建',NULL)`,
+    `INSERT INTO sms_common.t_uni_urge
+      (id, edu_stage, create_time, is_deleted, source_system, source_id, sync_status,
+       student_id, student_no, student_name, class_id, class_name, fee_type, amount,
+       expire_date, pay_status, urge_count, pay_method, paid_amount, pay_date, pay_remark, voucher_url)
+     VALUES (?, 'class', NOW(), 0, 'test', 'test-src', 2,
+             'uni-tr-stu', 'TEST3D001', '自检大学', NULL, NULL, 1, 88000,
+             '2026-10-25', 1, 0, 1, 88000, '2026-10-20', '自检·新建', NULL)`,
     [FIX_CLASS],
   );
 
   // 大学：财务里本来就有这张单 → 应只补凭证
-  await q(`DELETE FROM sms_common.t_class_urge_sync WHERE id=?`, [FIX_CLASS_EXIST]);
+  await q(`DELETE FROM sms_common.t_uni_urge WHERE id=?`, [FIX_CLASS_EXIST]);
   await q(
-    `INSERT INTO sms_common.t_class_urge_sync
-      (id, create_time, is_deleted, source_system, source_id, sync_status, student_id, student_no, student_name,
-       class_id, class_name, fee_type, amount, expire_date, pay_status, pay_method, paid_amount, pay_date, pay_remark, voucher_url)
-     VALUES (?,NOW(),0,'finance',?,2,'fin-seed-stu','TEST3DFIN','自检财务原单',
-            NULL,NULL,1,88000,'2026-10-25',1,2,88000,'2026-10-21','自检·补凭证','/uploads/voucher/selftest-exist.png')`,
+    `INSERT INTO sms_common.t_uni_urge
+      (id, edu_stage, create_time, is_deleted, source_system, source_id, sync_status,
+       student_id, student_no, student_name, class_id, class_name, fee_type, amount,
+       expire_date, pay_status, urge_count, pay_method, paid_amount, pay_date, pay_remark, voucher_url)
+     VALUES (?, 'class', NOW(), 0, 'finance', ?, 2,
+             'fin-seed-stu', 'TEST3DFIN', '自检财务原单', NULL, NULL, 1, 88000,
+             '2026-10-25', 1, 0, 2, 88000, '2026-10-21', '自检·补凭证', '/uploads/voucher/selftest-exist.png')`,
     [FIX_CLASS_EXIST, FIN_SEED_ID],
   );
 
-  // 就业：应新建
-  await q(`DELETE FROM sms_job.t_job_fee_call WHERE id=?`, [FIX_EMPLOY]);
+  // 就业：应新建 —— 就业催费在统一表 `t_uni_fee`，靠 edu_stage='job' 收窄
+  await q(`DELETE FROM sms_common.t_uni_fee WHERE id=?`, [FIX_EMPLOY]);
   await q(
-    `INSERT INTO sms_job.t_job_fee_call
-      (id, create_time, is_deleted, fee_type, student_id, student_no, student_name, class_id, class_name, dept_code,
-       fee_amount, due_date, call_reason, call_status, pay_method, paid_amount, pay_date, pay_remark, voucher_url)
-     VALUES (?,NOW(),0,1,'job-tr-stu','TEST3D002','自检就业',NULL,NULL,3,56000,'2026-10-24','自检',
-             3,3,56000,'2026-10-21','自检·就业',NULL)`,
+    `INSERT INTO sms_common.t_uni_fee
+      (id, edu_stage, create_time, is_deleted, source_system, source_id, sync_status,
+       fee_type, student_id, student_no, student_name, class_id, class_name, dept_code,
+       fee_amount, due_date, call_reason, call_status, pay_status,
+       pay_method, paid_amount, pay_date, pay_remark, voucher_url)
+     VALUES (?, 'job', NOW(), 0, 'test', 'test-src-job', 2,
+             1, 'job-tr-stu', 'TEST3D002', '自检就业', NULL, NULL, 3,
+             56000, '2026-10-24', '自检', 3, 1,
+             '3', 56000, '2026-10-21', '自检·就业', NULL)`,
     [FIX_EMPLOY],
   );
 
@@ -308,9 +329,23 @@ async function main() {
   const candEmploy = list.find((x) => x.feeId === FIX_EMPLOY);
   check(
     '★ 大学部行「财务推来的」不再被误判为已转交（否则整个部门一条都转不出去）',
-    !!candClass && candClass.transferred === false,
+    !!candClass && candClass.transferred === false && candClass.financeFeeId === '',
   );
   check('就业部行出现在候选里', !!candEmploy && candEmploy.transferred === false);
+
+  /* ★ 需求 D-1（2026-10-23）：候选列表整体不收「已上传过财务」的行 */
+  const leaked = list.filter((x) => x.financeFeeId || x.transferred);
+  check(
+    '★ 候选列表只含「还没上传到财务」的行（已转交的一条都不返）',
+    leaked.length === 0,
+    `共 ${list.length} 行，其中已转交 ${leaked.length} 行：${leaked.slice(0, 3).map((x) => `${x.dept}/${x.feeId}`).join(', ')}`,
+  );
+  const statsClass = (cand.json?.data?.stats || []).find((s) => s.dept === 'class');
+  check(
+    '★ 候选接口返回「已上传 N 单」统计（弹窗要能说清为什么列表是空的）',
+    !!statsClass && Number.isFinite(statsClass.transferred) && statsClass.transferred >= 1,
+    JSON.stringify(statsClass || null),
+  );
 
   // 提交转交
   const items = [
@@ -336,10 +371,13 @@ async function main() {
   );
 
   const [classRow] = await q(
-    'SELECT finance_fee_id FROM sms_common.t_class_urge_sync WHERE id=?',
+    "SELECT finance_fee_id FROM sms_common.t_uni_urge WHERE id=? AND edu_stage='class'",
     [FIX_CLASS],
   );
-  const [employRow] = await q('SELECT finance_fee_id FROM sms_job.t_job_fee_call WHERE id=?', [FIX_EMPLOY]);
+  const [employRow] = await q(
+    "SELECT finance_fee_id FROM sms_common.t_uni_fee WHERE id=? AND edu_stage='job'",
+    [FIX_EMPLOY],
+  );
   check('★ 大学部转交后回写 finance_fee_id', !!classRow?.finance_fee_id, classRow?.finance_fee_id || '');
   check('★ 就业部转交后回写 finance_fee_id', !!employRow?.finance_fee_id, employRow?.finance_fee_id || '');
 
@@ -366,7 +404,10 @@ async function main() {
   }
 
   if (financeSeed) {
-    const [x] = await q('SELECT finance_fee_id FROM sms_common.t_class_urge_sync WHERE id=?', [FIX_CLASS_EXIST]);
+    const [x] = await q(
+      "SELECT finance_fee_id FROM sms_common.t_uni_urge WHERE id=? AND edu_stage='class'",
+      [FIX_CLASS_EXIST],
+    );
     check(
       '★ 大学部「财务已有原单」回写的是原财务单 id（没有另建一张）',
       x?.finance_fee_id === financeSeed.id,
@@ -383,6 +424,45 @@ async function main() {
     again.json?.data?.success === 0 && (again.json?.data?.skipped || []).length === items.length,
     again.json?.message || '',
   );
+
+  /* ============================================================
+   * D-1. 需求①：转交完成后，这几条必须从候选列表里消失
+   * ============================================================ */
+  const candAfter = await req(`${BASE}/api/teaching/fee/transfer/candidates?dept=all`, { token: tokQ });
+  const left = (candAfter.json?.data?.list || []).filter((x) =>
+    [FIX_CLASS, FIX_CLASS_EXIST, FIX_EMPLOY].includes(x.feeId),
+  );
+  check(
+    '★ 需求①：已上传到财务的单不再出现在候选列表（列表只显示没上传过的）',
+    left.length === 0,
+    `残留 ${left.length} 条：${left.map((x) => `${x.dept}/${x.feeId}`).join(', ')}`,
+  );
+
+  /* ============================================================
+   * D-2. 需求②：大学部转交后「财务侧没有对应信息」
+   *      根因 = 财务列表硬约束「必须有凭证」，现金/线下转交的单被整条过滤掉
+   * ============================================================ */
+  const finTokD = await login('liukj'); // 财务专员
+  if (classRow?.finance_fee_id) {
+    const finList = await req(
+      `${BASE}/api/finance/fee/list?page=1&size=50&studentNo=TEST3D001`,
+      { token: finTokD },
+    );
+    const rows = finList.json?.data?.list || [];
+    const finRow = rows.find((x) => x.id === classRow.finance_fee_id);
+    check(
+      '★ 需求②：大学部转交新建的财务单，财务缴费列表能查到（无凭证也在）',
+      !!finRow,
+      `code=${finList.json?.code} total=${finList.json?.data?.total} ${finList.json?.message || ''}`,
+    );
+    check(
+      '★ 需求②：无凭证的转交单在财务侧可核对（canVerify=true）',
+      finRow?.canVerify === true && finRow?.hasVoucher === false,
+      JSON.stringify({ hasVoucher: finRow?.hasVoucher, canVerify: finRow?.canVerify, payStatus: finRow?.payStatus }),
+    );
+  } else {
+    check('★ 需求②：大学部转交新建的财务单，财务缴费列表能查到（无凭证也在）', false, '上一步没回写 finance_fee_id，无法验证');
+  }
 
   /* ============================================================
    * E. 退费推财务能接受 deptCode=3（就业部）
@@ -420,8 +500,8 @@ try {
 } finally {
   /* ---------- 清理夹具（无论成败都要清） ---------- */
   try {
-    await q('DELETE FROM sms_common.t_class_urge_sync WHERE id IN (?,?)', [FIX_CLASS, FIX_CLASS_EXIST]);
-    await q('DELETE FROM sms_job.t_job_fee_call WHERE id=?', [FIX_EMPLOY]);
+    await q("DELETE FROM sms_common.t_uni_urge WHERE id IN (?,?)", [FIX_CLASS, FIX_CLASS_EXIST]);
+    await q("DELETE FROM sms_common.t_uni_fee WHERE id=? AND edu_stage='job'", [FIX_EMPLOY]);
     await q('DELETE FROM sms_finance.t_finance_fee WHERE id=?', ['test3dept-fin-seed']);
     if (createdFinanceIds.length) {
       await q(

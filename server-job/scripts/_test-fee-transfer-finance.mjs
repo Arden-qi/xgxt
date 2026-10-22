@@ -95,6 +95,9 @@ function baseRow(over = {}) {
   try {
     /* ================= A. 静态契约 ================= */
     const route = read('server-job', 'src', 'class-jh', 'routes', 'fee.route.ts');
+    // ★ 2026-10-23：催费页弹窗现在走**三部门统一接口**（初高老接口只留作兼容），
+    //   凡是「候选口径 / 判重口径」的断言都要钉统一接口这份源码。
+    const uRoute = read('server-job', 'src', 'teaching', 'fee', 'transfer.route.ts');
     const api = read('web-job', 'src', 'class-jh', 'api', 'fee.ts');
     const feeList = read('web-job', 'src', 'class-jh', 'views', 'FeeList.vue');
     const types = read('shared-types', 'src', 'class-jh', 'api', 'fee.api.ts');
@@ -126,9 +129,14 @@ function baseRow(over = {}) {
        *   原因：`source_system='finance'` 对本表还有另一层意思是「这张单本来就从财务同步过来」，
        *   拿它当「已转交」会把财务同步来的单全标成已转交（转交弹窗里就一条都选不了）。
        *   断言钉**行为**（有 finance_fee_id 即已转交），不钉旧写法。
+       *
+       * ★ 2026-10-23 二次变更：候选接口已把「已转交」的行**直接过滤掉**，
+       *   所以弹窗里不再有「只选未上传过」。前端仅剩「全选」。
        */
-      '① 后端：实体带 transferred（前端「只选未上传过」靠它）',
-      /transferred: !!.{0,20}finance_fee_id/.test(route),
+      '① 后端：判重函数只看 finance_fee_id（isTransferred）',
+      // 函数体里有一大段注释，窗口放宽（注释长度会变，别写刚好卡住的值）
+      /function isTransferred[\s\S]{0,1500}?return !!row\.finance_fee_id;/.test(uRoute) &&
+        /transferred: isTransferred\(row, dept\)/.test(uRoute),
     );
     check('① 类型：FeeTransferPayload / FeeTransferResult 已定义', /interface FeeTransferPayload/.test(types) && /interface FeeTransferResult/.test(types));
 
@@ -144,8 +152,13 @@ function baseRow(over = {}) {
         !/v-if="query\.dept === 'jh' \|\| query\.dept === 'all'"[\s\S]{0,300}?批量上传到财务/.test(feeList),
     );
     check(
-      '② 前端弹窗：全选 / 只选未上传过 两个按钮都在',
-      /selectAllTransfer/.test(feeList) && /只选未上传过/.test(feeList),
+      // ★ 2026-10-23 口径变更：候选接口已在 SQL 里过滤掉已转交的行，
+      //   弹窗里每一条都可转交 → 「只选未上传过」按钮没意义，已删除。
+      //   断言钉**代码标识**，不钉注释里的字样（注释里仍留着改造原因）。
+      '② 前端弹窗：全选按钮在，「只选未上传过」按钮已删',
+      /selectAllTransfer/.test(feeList) &&
+        !/untransferredCount/.test(feeList) &&
+        !/selectUntransferred/.test(feeList),
     );
     // 只看转交弹窗那一段（主列表也有 type="index"，全局下标比会误判）
     const tStart = feeList.indexOf('title="批量上传到财务缴费管理"');
@@ -156,12 +169,16 @@ function baseRow(over = {}) {
         transferBlock.indexOf('type="selection"') < transferBlock.indexOf('type="index"'),
     );
     check(
-      '② 前端弹窗：有「转交状态 / 凭证」两列，能看出谁传过、谁转交过',
-      /label="转交状态"/.test(feeList) && /label="凭证"/.test(feeList) && /row\.transferred/.test(feeList),
+      // ★ 2026-10-23：列表里已不存在「已转交」的行 → 转交状态列没有意义，已删
+      '② 前端弹窗：只留「凭证」列，「转交状态」列已删',
+      /label="凭证"/.test(transferBlock) &&
+        !/label="转交状态"/.test(transferBlock) &&
+        !/row\.transferred/.test(transferBlock),
     );
     check(
-      '② 前端：提交时自动跳过已转交的（不靠人眼）',
-      /const targets = transferSelected\.value\.filter\(\(r\) => !r\.transferred\)/.test(feeList),
+      '② 前端：不再靠前端过滤已转交（服务端候选接口已过滤）',
+      !/filter\(\(r\) => !r\.transferred\)/.test(feeList) &&
+        /列表只显示还没上传到财务的缴费单/.test(feeList),
     );
     check(
       '③ 上传缴费金额默认带出「应缴金额」',
@@ -324,8 +341,10 @@ function baseRow(over = {}) {
     /* ---- 前端编译产物 ---- */
     const fe = await req(`${BASE}/src/class-jh/views/FeeList.vue`, { timeout: 15000 });
     check(
-      '★ 催费页编译通过，且产物里有「批量上传到财务」「只选未上传过」',
-      fe.status === 200 && fe.raw.includes('批量上传到财务') && fe.raw.includes('只选未上传过'),
+      '★ 催费页编译通过，且产物里有「批量上传到财务」与「只显示还没上传」提示',
+      fe.status === 200 &&
+        fe.raw.includes('批量上传到财务') &&
+        fe.raw.includes('列表只显示还没上传到财务的缴费单'),
       `status=${fe.status} len=${fe.raw.length}`,
     );
   } catch (e) {

@@ -56,7 +56,7 @@
         >
           <!--
             ⚠️ 这里只列「本页可能出现」的状态。
-               本页硬约束为「只看已上传凭证、且非冻结的单据」，所以
+               本页硬约束为「只看有凭证或已收款、且非冻结的单据」，所以
                「待缴」「冻结」永远不会出现，列出来只会让财务白踩一次坑。
           -->
           <el-option
@@ -98,13 +98,15 @@
       <!-- 工具条：左边说明，右边统计 + 主按钮（原型 .toolbar） -->
       <div class="table-toolbar">
         <div class="tools">
-          <span class="count-hint">共 {{ total }} 条已上传凭证的缴费单</span>
+          <span class="count-hint">共 {{ total }} 条已上传凭证 / 已收款的缴费单</span>
         </div>
         <div class="tools">
           <!--
             内联统计：财务核对台只关心这三件事。
             ⚠️ 2026-10-04 起本页只显示「已上传凭证」的单据，
                所以不再有「待缴费 / 待传凭证」（那两类根本不在结果集里）。
+            ★ 2026-10-23：现金/线下收款没有转账截图（教学侧登记缴费允许现金不传图），
+               这类「已收款但无凭证」的单也要进核对台，否则钱收了却核不了账。
           -->
           <span class="stat-line">
             待核对 <b>{{ stat.waitVerify }}</b> · 已缴 <b>{{ stat.verified }}</b> · 已打回
@@ -126,7 +128,7 @@
         :data="viewList"
         stripe
         style="width: 100%"
-        empty-text="暂无已上传凭证的缴费单"
+        empty-text="暂无可核对的缴费单"
         @selection-change="handleSelectionChange"
       >
         <!-- 只有可核对的才能勾选，避免财务误操作 -->
@@ -200,6 +202,15 @@
         <el-table-column label="缴费凭证" width="132" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.hasVoucher" type="primary" size="small" effect="plain">已上传 ›</el-tag>
+            <!--
+              ★ 2026-10-23：已收款但没有电子凭证 = 现金/线下收款
+                （教学侧「登记缴费」允许现金不传截图）。
+                以前这种单只显示「待上传」，财务看到会以为是班主任漏传了，
+                实际是钱已经收了 —— 措辞必须说清，否则又会来回问。
+            -->
+            <el-tag v-else-if="row.payStatus === PayStatus.PAID" type="warning" size="small" effect="plain">
+              现金·无凭证
+            </el-tag>
             <el-tag v-else-if="row.payDate" type="warning" size="small" effect="plain">待上传</el-tag>
             <el-tag v-else type="info" size="small" effect="plain">—</el-tag>
             <!--
@@ -437,8 +448,16 @@
           </div>
         </div>
 
-        <!-- 无凭证 -->
-        <el-empty v-else :image-size="70" description="该缴费单尚未上传缴费凭证" />
+        <!--
+          无凭证（★ 2026-10-23：已收款但现金/线下收款没有转账截图）
+          这种单也进核对台，所以提示语不能再说「尚未上传凭证」——
+          那会让人以为班主任漏传了，实际是这笔本来就没有截图。
+        -->
+        <el-empty
+          v-else
+          :image-size="70"
+          description="无电子凭证（现金 / 线下收款，可直接核对入账）"
+        />
       </div>
 
       <template #footer>

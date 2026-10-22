@@ -5,6 +5,14 @@
  * ★★ 2026-10-22 用户要求：
  *   「催费列表里大学部和就业部也要能上传凭证、批量上传到财务」
  *
+ * ★★ 2026-10-23 用户追加两条：
+ *   ① 「列表只显示没有上传过的内容」→ 候选接口在 SQL 里过滤 `finance_fee_id IS NULL`，
+ *      前端拿到的每一条都是可转交的（不再靠「只选未上传过」按钮绕）。
+ *   ② 「大学部上传到财务时，财务那里没有对应信息」→ 不是转交没生效，而是财务
+ *      「缴费管理」的硬约束是「必须有凭证」，而大学/就业的现金收款本来就没有截图
+ *      （登记缴费允许现金不传图）→ 单建出来了但列表里查不到。
+ *      修在 `finance/services/fee.service.ts::buildFeeQuery`：已收款的单也进核对台。
+ *
  * 【改造前是什么样】
  *   只有初高能做：`class-jh/routes/fee.route.ts` 的 `/transfer/candidates` + `/transfer`
  *     · 候选接口只读 `sms_class_jh.t_class_fee`
@@ -212,80 +220,79 @@ interface CandidateScan {
   scanned: number;
   /** 其中「已登记缴费」的条数（= 候选来源） */
   paid: number;
+  /** 其中「已经上传过财务」的条数（这些不再出现在弹窗列表里，只用于统计口径） */
+  transferred: number;
 }
 
 /**
- * 初高：sms_class_jh.t_class_fee
+ * 部门 → 候选来源
  *
- * ★★ 2026-10-23：改走 `tbl()`（→ 统一表 `sms_common.t_uni_fee`）。
- *   原来这里是裸 `jhDb('t_class_fee')`（老表），而催费列表读统一表 ——
+ * ★★ 2026-10-23：三个部门**一律走 `tbl()`**（→ 统一表 `t_uni_*`）。
+ *   原来初高是裸 `jhDb('t_class_fee')`（老表），而催费列表读统一表 ——
  *   结果是「页面刚登记缴费的单，转交弹窗里一条都没有」，
  *   以及「转交成功但 finance_fee_id 写进老表，统一表里仍是未转交 → 重复建单」。
- *   大学的 `t_class_urge_sync` / 就业的 `t_job_fee_call` 早就这么写了，只有初高漏了。
+ *
+ * ⚠️ 大学 `t_class_urge_sync` 是「三个学段共用一张」的只读副本，靠 `edu_stage` 收窄：
+ *    不加过滤会把就业推来的（source_system='edu'）也算成大学部的单，
+ *    转交时就会被按「大学部（部门码 2）」建到财务去。
+ *
+ * ⚠️ 排序第二列不同：初高/大学用 `expire_date`，就业老表只有 `due_date`。
  */
-async function candidatesJh(): Promise<CandidateScan> {
-  const base0 = () => tbl(jhDb, 'sms_class_jh', 't_class_fee', 'jh').where('is_deleted', false);
-  const scanned = Number(
-    ((await base0().count({ c: '*' })) as any[])[0]?.c ?? 0,
-  );
-  const rows = await base0()
-    .andWhere((qb) => {
-      qb.whereNotNull('pay_method').orWhereNotNull('paid_amount');
-    })
-    .orderBy('pay_date', 'desc')
-    .orderBy('expire_date', 'desc')
-    .limit(500);
-  return { list: rows.map((r: any) => base(r, 'jh')), scanned, paid: rows.length };
-}
+const CAND_SRC: Record<Dept, { conn: any; dbName: string; table: string; dateCol: string }> = {
+  jh: { conn: jhDb, dbName: 'sms_class_jh', table: 't_class_fee', dateCol: 'expire_date' },
+  class: { conn: commonDb, dbName: 'sms_common', table: 't_class_urge_sync', dateCol: 'expire_date' },
+  employ: { conn: jobDb, dbName: 'sms_job', table: 't_job_fee_call', dateCol: 'due_date' },
+};
+
+/** 「已登记缴费」判据：有缴费方式或有实缴金额（只说有截图不够，现金本来就没截图） */
+const paidCond = (qb: any) => {
+  qb.whereNotNull('pay_method').orWhereNotNull('paid_amount');
+};
 
 /**
- * 大学：sms_common.t_class_urge_sync
+ * 取某部门的转交候选
  *
- * ⚠️ 这张表是「三个学段共用一张」的只读副本，不加过滤会把就业推来的
- *    （source_system='edu'）也算成大学部的单。列表接口 `/api/class/urge/list`
- *    同样不过滤，所以「全部部门」视图里本来就会把同一笔显示两次
- *    （大学一行 `urge:`、就业一行 `call:`）—— 这是改造前就有的现象。
- *    转交这里必须收窄，否则就业的单会被按「大学部（部门码 2）」建到财务去。
+ * ★★ 2026-10-23 用户要求：**列表只显示还没上传过财务的**。
+ *   改造前候选接口把 `transferred=true` 的行也返回，靠前端「只选未上传过」按钮规避，
+ *   结果弹窗里一半是躺在那里点不动的历史行，看着像「重复列出」。
+ *   现在直接在 SQL 里 `finance_fee_id IS NULL` 过滤 —— 前端拿到的每一条都是可转交的。
+ *
+ *   `transferred` 计数仍要单独查：弹窗顶部要能说清
+ *   「共 66 单 · 已登记缴费 5 单 · 待上传 3 单」，否则「只剩 3 条」会被当成查询漏了数据。
  */
-async function candidatesClass(): Promise<CandidateScan> {
-  const scanned = Number(
-    ((await tbl(commonDb, 'sms_common', 't_class_urge_sync', 'class')
-      .where('is_deleted', false)
-      .count({ c: '*' })) as any[])[0]?.c ?? 0,
-  );
-  const rows = await tbl(commonDb, 'sms_common', 't_class_urge_sync', 'class')
-    .where('is_deleted', false)
-    .andWhere((sub: any) => {
-      sub.whereNotNull('pay_method').orWhereNotNull('paid_amount');
-    })
-    .orderBy('pay_date', 'desc')
-    .orderBy('expire_date', 'desc')
-    .limit(500);
-  return { list: (rows as any[]).map((r) => base(r, 'class')), scanned, paid: (rows as any[]).length };
-}
+async function candidatesOf(dept: Dept): Promise<CandidateScan> {
+  const spec = CAND_SRC[dept];
+  const stage = DEPT_STAGE[dept];
+  const base0 = () => tbl(spec.conn, spec.dbName, spec.table, stage).where('is_deleted', false);
 
-/** 就业：sms_job.t_job_fee_call */
-async function candidatesEmploy(): Promise<CandidateScan> {
-  const scanned = Number(
-    ((await tbl(jobDb, 'sms_job', 't_job_fee_call', 'job')
-      .where('is_deleted', false)
-      .count({ c: '*' })) as any[])[0]?.c ?? 0,
-  );
-  const rows = await tbl(jobDb, 'sms_job', 't_job_fee_call', 'job')
-    .where('is_deleted', false)
-    .andWhere((sub: any) => {
-      sub.whereNotNull('pay_method').orWhereNotNull('paid_amount');
-    })
-    .orderBy('pay_date', 'desc')
-    .orderBy('due_date', 'desc')
-    .limit(500);
-  return { list: (rows as any[]).map((r) => base(r, 'employ')), scanned, paid: (rows as any[]).length };
+  const [scannedRow, paidRow, transferredRow, rows] = await Promise.all([
+    base0().count({ c: '*' }) as any as Promise<any[]>,
+    base0().andWhere(paidCond).count({ c: '*' }) as any as Promise<any[]>,
+    base0()
+      .andWhere(paidCond)
+      .whereNotNull('finance_fee_id')
+      .count({ c: '*' }) as any as Promise<any[]>,
+    base0()
+      .andWhere(paidCond)
+      .whereNull('finance_fee_id')
+      .orderBy('pay_date', 'desc')
+      .orderBy(spec.dateCol, 'desc')
+      .limit(500) as any as Promise<any[]>,
+  ]);
+
+  const num = (r: any) => Number(r?.[0]?.c ?? 0);
+  return {
+    list: (rows as any[]).map((r) => base(r, dept)),
+    scanned: num(scannedRow),
+    paid: num(paidRow),
+    transferred: num(transferredRow),
+  };
 }
 
 const CANDIDATE_LOADERS: Record<Dept, () => Promise<CandidateScan>> = {
-  jh: candidatesJh,
-  class: candidatesClass,
-  employ: candidatesEmploy,
+  jh: () => candidatesOf('jh'),
+  class: () => candidatesOf('class'),
+  employ: () => candidatesOf('employ'),
 };
 
 /* ============================================================
@@ -311,12 +318,19 @@ teachingFeeRouter.get(
      */
     const list: TransferCandidate[] = [];
     const errors: Array<{ dept: Dept; deptName: string; message: string }> = [];
-    /** 每部门「读到几条 / 其中已登记缴费几条」—— 用来区分「没单」和「有单但没登记缴费」 */
+    /**
+     * 每部门的口径拆解（★ 2026-10-23 加 `transferred`）
+     *
+     * scanned = 该部门全部未删除单据；paid = 其中已登记缴费的；
+     * transferred = 其中已上传过财务的；picked = 本次返回（= 待上传）的条数。
+     * 四个数摆出来，「弹窗只剩 3 条」才不会被认为是查询漏数据。
+     */
     const stats: Array<{
       dept: Dept;
       deptName: string;
       scanned: number;
       paid: number;
+      transferred: number;
       picked: number;
       error?: string;
     }> = [];
@@ -331,12 +345,21 @@ teachingFeeRouter.get(
           deptName: DEPT_NAME[dept],
           scanned: scan.scanned,
           paid: scan.paid,
+          transferred: scan.transferred,
           picked: scan.list.length,
         });
       } catch (e: any) {
         const message = e?.message || '查询失败';
         errors.push({ dept, deptName: DEPT_NAME[dept], message });
-        stats.push({ dept, deptName: DEPT_NAME[dept], scanned: 0, paid: 0, picked: 0, error: message });
+        stats.push({
+          dept,
+          deptName: DEPT_NAME[dept],
+          scanned: 0,
+          paid: 0,
+          transferred: 0,
+          picked: 0,
+          error: message,
+        });
       }
     }
 

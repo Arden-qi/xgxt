@@ -175,7 +175,10 @@ async function columnsOf(schema, table) {
     );
 
     /* ---------- D. live：列表接口带出登记缴费字段（列才有东西可显示） ---------- */
-    const lu = await req(`${BASE}/api/class/urge/list?page=1&size=5`, { token });
+    // ★ 2026-10-23：原来取「第 1 页 5 条」再找夹具 —— 列表按 expire_date 升序，
+    //   库里逾期单攒到 6 条后，夹具（到期日 +5 天）就掉出前 5 条，断言假红。
+    //   改成按学号 keyword 精确定位，与库里的数据量无关。
+    const lu = await req(`${BASE}/api/class/urge/list?page=1&size=20&keyword=T0001`, { token });
     const urgeItem = (lu.json?.data?.list || []).find((x) => x.id === FIX_URGE) || {};
     check(
       '★ 大学催缴列表返回 payMethodName / paidAmount / voucherUrl（实缴/方式列有数据源）',

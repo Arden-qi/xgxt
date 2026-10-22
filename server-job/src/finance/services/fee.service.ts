@@ -124,18 +124,18 @@ export function toFeeListItem(r: any) {
      */
     itemCount: parseItemDetail(r.item_detail).length || 1,
     /**
-     * 可核对 = 待核对(status=2) + 有凭证 + 未核对 + 未被打回。
+     * 可核对 = 待核对(status=2) + 未核对 + 未被打回。
      *
      * ⚠️ 为什么可以用 pay_status===PAID 判定？
      *    因为「上传凭证」这个动作会同步把状态推到 PAID（见 addFee / attachVoucher），
-     *    所以 status=PAID 就等价于「凭证已到、等财务核对」。
+     *    所以 status=PAID 就等价于「钱已到、等财务核对」。
      *    若以后新增别的写凭证入口，务必同步维护这个不变量。
+     *
+     * ★ 2026-10-23：**不再要求有凭证**。现金/线下收款没有转账截图，
+     *   但钱确实到账了，财务必须能核对入账（否则教学侧转交过来的单
+     *   在财务里既看不到、也核不了）。有凭证的单行为完全不变。
      */
-    canVerify:
-      r.pay_status === PayStatus.PAID &&
-      !!r.voucher_url &&
-      !r.is_verified &&
-      !r.is_rejected,
+    canVerify: r.pay_status === PayStatus.PAID && !r.is_verified && !r.is_rejected,
   };
 }
 
@@ -230,14 +230,23 @@ export function toFeeDetail(r: any) {
  * 构造列表查询条件（列表和导出共用）
  *
  * ⚠️⚠️ 财务侧【硬约束】共两条：
- *    ① 只查「已上传凭证」的缴费单
+ *    ① 只查「已上传凭证 **或** 已收款」的缴费单
  *    ② 排除「冻结」状态的单据（2026-10-15 用户指令）
  *
  * 为什么（2026-10-04 用户指令）：
  *    缴费管理是财务的【核对工作台】，不是全量缴费台账。
  *    财务的职责链是：学生交钱 → 上游传凭证 → 财务核对凭证 → 入账。
- *    所以「还没传凭证」的单子（待缴）对财务毫无意义 ——
+ *    所以「还没传凭证、也还没收钱」的单子（待缴）对财务毫无意义 ——
  *    它们是上游（咨询/教务）该跟学生催缴的事，财务侧不该看到。
+ *
+ * ★★ 2026-10-23 用户反馈后放宽：「大学部批量上传到财务后，财务那里没有对应信息」
+ *   【真因】不是转交没写库 —— 财务单建出来了、部门/班级/班主任/实收金额都对，
+ *     唯独 `voucher_url` 是空的：**现金收款本来就没有转账截图**（教学侧登记缴费
+ *     允许现金不传图）。而这条硬约束是「必须有凭证」→ 单子在核对台里查不到，
+ *     等于「转交成功但财务看不见」，两边对不上账。
+ *   【口径】把「已收款」也算进核对台：现金/线下的钱财务同样要核对入账，
+ *     没有电子凭证不等于没这笔钱。未收款（待缴 1）仍然不出现 —— 原意图不变。
+ *   【为什么不改成「全部单据」】待缴单是上游该催的，漏进来只会干扰财务视线。
  *
  * 这个约束写死在 buildFeeQuery 里（而不是交给前端传参），
  * 是故意的：这样列表、统计、导出三条路径自动一致，
@@ -246,8 +255,17 @@ export function toFeeDetail(r: any) {
 export function buildFeeQuery(q: any): Knex.QueryBuilder {
   const query = db(FEE_TABLE).where('is_deleted', false);
 
-  // ---- 硬约束1：必须有凭证 ----
-  query.whereNotNull('voucher_url').andWhereNot('voucher_url', '');
+  /**
+   * ---- 硬约束1：有凭证，或已收款（已缴 / 已核对） ----
+   *
+   * ⚠️ 必须整组用 `andWhere(回调)` 包起来：外面还有「排除冻结」等条件，
+   *    直接 `orWhereIn` 会把它们全部变成「或」，冻结单、他部门的单都会漏进来。
+   */
+  query.andWhere((qb: any) => {
+    qb.where((sub: any) => {
+      sub.whereNotNull('voucher_url').andWhereNot('voucher_url', '');
+    }).orWhereIn('pay_status', [PayStatus.PAID, PayStatus.VERIFIED]);
+  });
 
   /**
    * ---- 硬约束2：冻结中的单据不出现在缴费管理 ----
@@ -342,7 +360,8 @@ export function buildFeeLedgerQuery(q: any): Knex.QueryBuilder {
 export async function listFeeClasses(deptCode?: number) {
   /**
    * 班级字典的两个来源：
-   *   ① t_finance_fee —— 只统计【有凭证】的单，口径与缴费管理列表严格一致，
+   *   ① t_finance_fee —— 只统计【有凭证或已收款】的单，口径与缴费管理列表严格一致
+   *      （★ 2026-10-23 与 buildFeeQuery 同步放宽，否则下拉的 N 会小于列表实际条数），
    *      这样下拉里「班级名 (N)」的 N 就是选完这个班后列表会出现的条数，不会有落差。
    *   ② t_student_base —— 学生表是「拥有班级」的权威口径。
    *      它只用来补「有名额但还没有任何已传凭证单据」的班级（保证下拉不缺点），
@@ -353,8 +372,11 @@ export async function listFeeClasses(deptCode?: number) {
   const [feeRows, stuRows] = await Promise.all([
     db(FEE_TABLE)
       .where('is_deleted', false)
-      .whereNotNull('voucher_url')
-      .andWhereNot('voucher_url', '')
+      .andWhere((qb: any) => {
+        qb.where((sub: any) => {
+          sub.whereNotNull('voucher_url').andWhereNot('voucher_url', '');
+        }).orWhereIn('pay_status', [PayStatus.PAID, PayStatus.VERIFIED]);
+      })
       .whereNotNull('class_name')
       .whereNot('class_name', '')
       .select('class_name', 'class_id', 'dept_code'),
@@ -525,9 +547,16 @@ export async function verifyFee(
     if (row.pay_status === PayStatus.UNPAID) {
       throw new BizError(BizCode.PARAM_ERROR, '该缴费单尚未缴费，无法核对');
     }
-    if (!row.voucher_url) {
-      throw new BizError(BizCode.PARAM_ERROR, '该缴费单未上传缴费凭证，无法核对');
-    }
+    /**
+     * ★ 2026-10-23：**不再要求必须有凭证**。
+     *
+     * 现金/线下收款（教学侧「登记缴费」允许现金不传截图）没有电子凭证，
+     * 但钱是收到了的 —— 财务必须能核对入账，否则：
+     *   · 催费页显示「已上传到财务」；
+     *   · 财务缴费管理里能看到这张单（列表已放宽）；
+     *   · 却点不了「核对」→ 这张单永远挂账，两边对不上。
+     * 无凭证时在账单备注里写明「无电子凭证（现金/线下收款）」，账本自解释。
+     */
 
     // ---- 生成账单号 ----
     const billNo = await nextBillNoForPay();
@@ -558,7 +587,10 @@ export async function verifyFee(
       operator_name: operator.userName,
       voucher_no: row.voucher_no ?? null,
       pay_method: null,
-      remark: remark ?? `缴费核对入账（${FEE_TYPE_NAME[row.fee_type] || ''}）`,
+      remark:
+        remark ??
+        `缴费核对入账（${FEE_TYPE_NAME[row.fee_type] || ''}）` +
+          (row.voucher_url ? '' : ' · 无电子凭证（现金/线下收款）'),
     });
 
     // ---- 回写缴费单 ----
