@@ -27,12 +27,19 @@ require('dotenv').config({ path: path.join(ROOT, '.env') });
 
 const mysql = require(path.join(ROOT, 'node_modules', 'mysql2', 'promise.js'));
 
+/** 控制台颜色：Windows 传统 cmd 不认 ANSI，会显示成 ←[32m 乱码 → 那时走纯文本 */
+const USE_COLOR =
+  !process.env.NO_COLOR &&
+  !!process.stdout.isTTY &&
+  (process.platform !== 'win32' || !!process.env.WT_SESSION || !!process.env.TERM_PROGRAM);
+const paint = (code) => (s) => (USE_COLOR ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+
 const C = {
-  ok: (s) => `\x1b[32m${s}\x1b[0m`,
-  bad: (s) => `\x1b[31m${s}\x1b[0m`,
-  warn: (s) => `\x1b[33m${s}\x1b[0m`,
-  dim: (s) => `\x1b[2m${s}\x1b[0m`,
-  bold: (s) => `\x1b[1m${s}\x1b[0m`,
+  ok: paint(32),
+  bad: paint(31),
+  warn: paint(33),
+  dim: paint(2),
+  bold: paint(1),
 };
 
 const env = process.env;

@@ -31,10 +31,17 @@ const COLUMNS = [
   ['referrer_phone', "varchar(20) DEFAULT NULL COMMENT '转介绍招生老师电话'"],
 ];
 
+/** 控制台颜色：Windows 传统 cmd 不认 ANSI，会显示成 ←[32m 乱码 → 那时走纯文本 */
+const USE_COLOR =
+  !process.env.NO_COLOR &&
+  !!process.stdout.isTTY &&
+  (process.platform !== 'win32' || !!process.env.WT_SESSION || !!process.env.TERM_PROGRAM);
+const paint = (code) => (s) => (USE_COLOR ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+
 const C = {
-  ok: (s) => `\x1b[32m${s}\x1b[0m`,
-  dim: (s) => `\x1b[2m${s}\x1b[0m`,
-  bad: (s) => `\x1b[31m${s}\x1b[0m`,
+  ok: paint(32),
+  dim: paint(2),
+  bad: paint(31),
 };
 
 (async () => {

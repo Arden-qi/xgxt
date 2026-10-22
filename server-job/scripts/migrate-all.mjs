@@ -63,11 +63,22 @@ const POST_STEPS = [
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
 const targets = only.length ? ORDER.filter(([env]) => only.includes(env)) : ORDER;
 
+/**
+ * 控制台颜色：Windows 传统 cmd 不认 ANSI 转义（会显示成 ←[32m 这种乱码），
+ * 所以只在"确实是现代终端"时才上色 —— 一键启动.bat 里跑的是 cmd，
+ * 这种情况下走纯文本，宁可不好看也不能是乱码。
+ */
+const USE_COLOR =
+  !process.env.NO_COLOR &&
+  !!process.stdout.isTTY &&
+  (process.platform !== 'win32' || !!process.env.WT_SESSION || !!process.env.TERM_PROGRAM);
+const paint = (code) => (s) => (USE_COLOR ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+
 const C = {
-  ok: (s) => `\x1b[32m${s}\x1b[0m`,
-  bad: (s) => `\x1b[31m${s}\x1b[0m`,
-  dim: (s) => `\x1b[2m${s}\x1b[0m`,
-  bold: (s) => `\x1b[1m${s}\x1b[0m`,
+  ok: paint(32),
+  bad: paint(31),
+  dim: paint(2),
+  bold: paint(1),
 };
 
 /** sms_common 是不是一张业务表都没有（新库） */
