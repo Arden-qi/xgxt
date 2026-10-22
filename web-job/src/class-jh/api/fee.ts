@@ -59,6 +59,63 @@ export function transferFees(feeIds: string[]): Promise<FeeTransferResult> {
   return http.post<FeeTransferResult>('/api/class-jh/fee/transfer', { feeIds });
 }
 
+/* ============================================================
+ * 批量上传到财务 · 三部门统一版（★ 2026-10-22）
+ * ============================================================
+ * 【为什么要新接口】
+ *   上面那两个只服务初高：后端候选只读 `sms_class_jh.t_class_fee`，
+ *   提交里还硬判断 dept_code=1，前端按钮也只在 初高/全部部门 时显示。
+ *   用户 2026-10-22 要求大学部和就业部也能转交，所以后端新开了
+ *   `/api/teaching/fee/transfer*`（三部门各自读自己的催费表）。
+ *
+ * ⚠️ 老接口保留不动（初高仍可回退），下面这两个是页面实际调用的。
+ * ============================================================ */
+
+/** 转交候选行的部门码 */
+export type TransferDept = 'jh' | 'class' | 'employ';
+
+export interface TransferCandidate {
+  /** 原始催费单 id（不带 urge:/call: 前缀，前缀只有列表接口才用） */
+  feeId: string;
+  dept: TransferDept;
+  deptName: string;
+  studentNo: string;
+  studentName: string;
+  className: string;
+  feeType: number | null;
+  /** 应缴金额（分） */
+  feeAmount: number;
+  /** 实缴金额（分） */
+  paidAmount: number | null;
+  payMethod: number | null;
+  payMethodName: string;
+  payDate: string | null;
+  expireDate: string | null;
+  voucherUrl: string | null;
+  payRemark: string | null;
+  transferred: boolean;
+  /** 已转交时：财务侧缴费单 id */
+  financeFeeId: string;
+}
+
+export interface TransferCandidateResult {
+  list: TransferCandidate[];
+  /** 某个部门查询失败（无权限等）的原因 —— 不静默，弹窗里要提示 */
+  errors: Array<{ dept: TransferDept; deptName: string; message: string }>;
+}
+
+/** 拉转交候选：`dept` 传 all 就是三个部门一起取 */
+export function fetchTransferCandidatesAll(dept: TransferDept | 'all'): Promise<TransferCandidateResult> {
+  return http.get<TransferCandidateResult>('/api/teaching/fee/transfer/candidates', { dept });
+}
+
+/** 提交转交（三部门统一入口） */
+export function transferFeesAll(
+  items: Array<{ dept: TransferDept; feeId: string }>,
+): Promise<FeeTransferResult & { voucherOnly?: number }> {
+  return http.post<FeeTransferResult & { voucherOnly?: number }>('/api/teaching/fee/transfer', { items });
+}
+
 /** 催费推送（生成可复制文案） */
 export function shareFee(payload: FeeSharePayload): Promise<FeeShareData> {
   return http.post<FeeShareData>('/api/class-jh/fee/share', payload);

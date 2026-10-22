@@ -2,11 +2,15 @@
   <div class="page-container">
     <!-- ============ 表格区（原型是「一个卡片」装下 Tab + 条件 + 表格 + 分页）============ -->
     <el-card shadow="never" class="table-card card-flush">
-      <!-- 部门二级 Tab（原型 .dept-tabs：二三期 / 大学部） -->
+      <!-- 部门二级 Tab（原型 .dept-tabs：二三期 / 大学部 / 就业部）
+           ★ 2026-10-22：教学侧的催费「批量上传到财务」扩到三个部门后，就业部的单
+             也会进到这张表（dept_code=3）。原来只有 全部/二三期/大学部 三个 Tab，
+             财务就没法按部门把就业部的单筛出来核对。 -->
       <div class="dept-tabs">
         <b :class="{ on: dept === 'all' }" @click="handleDept('all')">全部部门</b>
         <b :class="{ on: dept === '二三期' }" @click="handleDept('二三期')">二三期</b>
         <b :class="{ on: dept === '大学部' }" @click="handleDept('大学部')">大学部</b>
+        <b :class="{ on: dept === '就业部' }" @click="handleDept('就业部')">就业部</b>
       </div>
 
       <!--
@@ -533,7 +537,7 @@ const selectedRows = ref<FeeListItem[]>([]);
  *    直接传 deptCode 给 _list 接口，分页统计才准，
  *    也不会再出现「第 1 页有大学部、翻页就没了」的情况。
  */
-const dept = ref<'all' | '二三期' | '大学部'>('all');
+const dept = ref<'all' | '二三期' | '大学部' | '就业部'>('all');
 const className = ref<string | undefined>(undefined);
 
 /** 部门 Tab → deptCode（'all' → undefined 表示不传该条件） */
@@ -541,6 +545,8 @@ const DEPT_CODE: Record<string, number | undefined> = {
   all: undefined,
   二三期: DeptCode.JUNIOR_SENIOR,
   大学部: DeptCode.UNIVERSITY,
+  // ★ 2026-10-22：就业部（教学侧催费转交过来的单 dept_code=3）
+  就业部: DeptCode.EMPLOYMENT,
 };
 
 const query = reactive<FeeListQuery>({
@@ -717,7 +723,7 @@ function handleSearch() {
  * 切换部门 Tab。
  * ⭐ 与原来不同：现在会真的重新请求（服务端筛选），并同步刷新班级下拉。
  */
-async function handleDept(d: 'all' | '二三期' | '大学部') {
+async function handleDept(d: 'all' | '二三期' | '大学部' | '就业部') {
   if (dept.value === d) return;
   dept.value = d;
   // 部门变了，原来选的班级可能不属于新部门，必须清掉

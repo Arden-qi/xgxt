@@ -16,6 +16,14 @@ export enum Gender {
 export enum DeptCode {
   JUNIOR_SENIOR = 1,  // 初高部
   UNIVERSITY = 2,     // 大学部
+  /**
+   * ★ 2026-10-22 补齐：与主包 `shared-types/src/enums.ts` 的 DeptCode 对齐。
+   *
+   * 【为什么现在才加】教学侧的退费/催费从 2026-10-22 起会带部门码推给财务
+   *   （`teaching/refund/service.ts` 的 STAGE_DEPT_CODE），就业部的单会带 3。
+   *   财务这份字典原来只有 1/2 → 就业部的单在财务页面「部门」列显示空白。
+   */
+  EMPLOYMENT = 3,     // 就业部
 }
 
 /** 学生状态（全系统最重要的字段） */
@@ -212,6 +220,7 @@ export const GENDER_NAME: Record<number, string> = {
 export const DEPT_NAME: Record<number, string> = {
   [DeptCode.JUNIOR_SENIOR]: '初高部',
   [DeptCode.UNIVERSITY]: '大学部',
+  [DeptCode.EMPLOYMENT]: '就业部',
 };
 
 export const STUDENT_STATUS_NAME: Record<number, string> = {

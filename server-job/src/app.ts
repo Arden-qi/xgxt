@@ -74,6 +74,8 @@ import { teachingLeaveRouter } from './teaching/leave/route';
 import { teachingStudentRouter } from './teaching/student/route';
 import { teachingClassRouter } from './teaching/class/route';
 import { teachingDormRouter } from './teaching/dorm/route';
+// ★ 催费「批量上传到财务」（三部门统一，2026-10-22）
+import { teachingFeeRouter } from './teaching/fee/transfer.route';
 import { denyReadOnlyAdmin } from './teaching/shared/readOnlyGuard';
 
 /* ============================================================
@@ -631,8 +633,22 @@ app.use(
   teachingRefundRouter,
 );
 
-// ★ 休学 / 退学 / 复学审批（第五个合并的业务域）
-//   ★ 审批链同样统一采用实训那一套（休学/复学 1 步；退学 2 步：学管 → 校长）
+// ★ 催费「批量上传到财务」（2026-10-22 用户要求扩到大学部 / 就业部）
+//   ★ 原来只有初高能做：`/api/class-jh/fee/transfer/*` 里硬判断 dept_code=1，
+//     前端按钮也只在「初高 / 全部部门」时显示。现在三部门统一走这里：
+//       GET  /api/teaching/fee/transfer/candidates?dept=jh|class|employ|all
+//       POST /api/teaching/fee/transfer       { items: [{ dept, feeId }] }
+//   权限码：classjh:fee:view / class:urge:view / job:feeCall:view（三部门催费页的码）
+//   ⚠️ 老接口 /api/class-jh/fee/transfer/* 保留不动 —— 向后兼容，别删。
+app.use(
+  '/api/teaching/fee',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  requireAnyPage(['classjh:fee:view', 'class:urge:view', 'job:feeCall:view']),
+  teachingFeeRouter,
+);
+
+// ★ 休学 / 退学 / 复学审批（第五个合并的业务域）//   ★ 审批链同样统一采用实训那一套（休学/复学 1 步；退学 2 步：学管 → 校长）
 //   权限码：classjh:approval:view / class:suspend:view / job:suspendApproval:view
 app.use(
   '/api/teaching/leave',

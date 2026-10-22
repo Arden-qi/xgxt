@@ -33,6 +33,7 @@ import {
   BizCode,
   canApprove,
   canInitiate,
+  DeptCode,
   hasRole,
   isFinished,
   isMyApproval,
@@ -603,6 +604,21 @@ export async function financeConfirm(
  * 推送财务（统一实现；实训原逻辑搬过来，三学段共用）
  * ============================================================ */
 
+/**
+ * 学段 → 财务部门码
+ *
+ * ★ 2026-10-22：原来这条链路**不传 deptCode**，财务侧的退费单 `dept_code` 恒为 NULL
+ *   （实测 sms_finance.t_finance_refund 里 TF20260001/TF20260002 两单都是 NULL），
+ *   财务按部门核对时这两单会漏掉、也无法按部门筛选。
+ *   口径与 `shared-types` 的 DeptCode 一致：1 初高部 / 2 大学部 / 3 就业部
+ *   （用户口径的「就业」= 库里的 sms_job 学段 job，部门码 3）。
+ */
+const STAGE_DEPT_CODE: Record<TeachingStage, DeptCode> = {
+  jh: DeptCode.JUNIOR_SENIOR,
+  class: DeptCode.UNIVERSITY,
+  job: DeptCode.EMPLOYMENT,
+};
+
 async function pushRefundToFinance(
   stage: TeachingStage,
   row: RefundRow,
@@ -627,10 +643,15 @@ async function pushRefundToFinance(
       studentName: row.studentName,
       classId: row.classId || undefined,
       className: row.className || undefined,
+      // ★ 2026-10-22 新增：带上部门，财务侧才能按部门核对（原来恒为 NULL）
+      deptCode: STAGE_DEPT_CODE[stage],
       refundItems,
       refundAmount: row.refundAmount,
       refundReason,
-      sourceType: 2, // 2 = 就业（非咨询）
+      // ★ 2 = 校长审批推送（见 shared-types/src/finance/api/finance.api.ts 的
+      //   RefundSourceType：1 班主任提交 / 2 校长审批推送）。
+      //   原注释写「2 = 就业（非咨询）」是错的，已更正 —— 财务列表里显示的就是「校长审批推送」。
+      sourceType: 2,
       remark: `${TEACHING_STAGE_NAME[stage]}退费单 ${row.id}（${row.feeTypeName}）`,
     });
     // eslint-disable-next-line no-console
