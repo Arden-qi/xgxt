@@ -14,16 +14,17 @@
 import { db } from '../../utils/db';
 import { hasRole, RoleCode } from 'shared-types';
 
+/* ★ 2026-10-22 修：sms_job / sms_class_jh / sms_class 的这些老表在 P8 归一后已 DROP，
+   裸查会报「数据表不存在」或被 try/catch 静默吞掉（表现为该学段查不到数据）。
+   全部改指 sms_common 统一表：班级=t_uni_class、学生=t_uni_student（列名同名兼容）。 */
+
 const CLASS_SOURCES = [
-  'sms_class_jh.t_class_info',
-  'sms_class.t_class_info',
-  'sms_job.t_job_class',
+  'sms_common.t_uni_class',
 ];
 
 const STUDENT_SOURCES = [
-  'sms_class_jh.t_class_student',
-  'sms_class.t_class_student',
-  'sms_job.t_student_base',
+  // ★ jh/class/job 三份学生投影在 P8 后已物理合并为 t_uni_student 的一行
+  'sms_common.t_uni_student',
   'sms_edu.t_student_base',
   'sms_perm.t_student_base',
 ];
@@ -116,7 +117,11 @@ export async function resolveMyClasses(user: any): Promise<MyClassInfo> {
       const rows = (await db(table)
         .where({ is_deleted: false })
         .whereNotNull('class_name')
-        .andWhere((b: any) => matchOwner(b, portalUid || permUid))
+        .andWhere((b: any) => {
+          // ★ 合并到统一表后，owner id 有两种口径（门户 UUID / 权限库 id），都要试
+          matchOwner(b, portalUid);
+          if (permUid && permUid !== portalUid) matchOwner(b, permUid);
+        })
         .distinct('class_name')) as any[];
       collect(rows);
     } catch {

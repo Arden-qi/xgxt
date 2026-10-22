@@ -25,7 +25,7 @@ const SCHEME_TABLE = 't_class_stage_scheme';
 const SCHEME_STAGE_TABLE = 't_class_stage_scheme_stage';
 
 /** 方案被哪些班级表引用（跨库） */
-const CLASS_TABLES = ['sms_class_jh.t_class_info', 'sms_class.t_class_info', 'sms_job.t_job_class'];
+const CLASS_TABLES = ['sms_common.t_uni_class'];
 
 /* ============================================================
  * 类型
