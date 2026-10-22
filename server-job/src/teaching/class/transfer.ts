@@ -11,8 +11,19 @@
  *   · t_uni_class_transfer 换班留痕（from → to + 原因 + 时间）
  *   · t_uni_repeat         末班记录（含本场考试快照）+ 学生 repeat_count + 1
  *
- * ⚠️ 这里是「直接生效」，不走 `t_class_consult_push` 的待接收审批流。
- *    若要走审批，应改为 push + 目标班主任接收。
+ * 【★ 2026-10-22 用户新口径：末班 / 升班不再是「点一下直接生效」】
+ *   改为：点末班/升班 → 生成一条**待接收单**（t_uni_consult_push）→
+ *   目标班的班主任在「教学管理 → 待接收学员」页面点「接收」后才真正入班。
+ *   理由：换班是**转人**，必须由接收方（目标班班主任）确认，
+ *   否则发起方一句话就把别人的班撤了，责任不对等。
+ *
+ *   两种单据的区分（沿用老模块约定，接收端已支持）：
+ *     · 末班（repeat）→ is_repeat_in = 1，source_system='grade-repeat'
+ *       接收时：repeat_count + 1、写末班记录（带成绩快照）
+ *     · 升班（promote）→ source_system='transfer'
+ *       接收时：只转班籍，不计末班次数
+ *
+ *   学生的班籍 / 末班记录 / 换班留痕全部在**接收成功时**才写。
  */
 
 import { randomUUID } from 'crypto';
@@ -35,10 +46,14 @@ type ClassRow = {
   teacher_name: string | null;
   assistant_id: string | null;
   assistant_name: string | null;
+  dept_code: number | null;
 };
 
 /** 已结业（CLASS_STATUS 4）的班不再作为换班目标 */
 const CLOSED_STATUS = 4;
+
+/** 待接收单状态：1 待接收（与老模块 ConsultStatus.PENDING 一致） */
+const PUSH_STATUS_PENDING = 1;
 
 async function classOf(stage: ClassStage, id: string): Promise<ClassRow> {
   const row = (await uniDb('t_uni_class')
@@ -62,6 +77,7 @@ async function classOf(stage: ClassStage, id: string): Promise<ClassRow> {
     teacher_name: (row.teacher_name as string) ?? null,
     assistant_id: (row.assistant_id as string) ?? null,
     assistant_name: (row.assistant_name as string) ?? null,
+    dept_code: row.dept_code === null || row.dept_code === undefined ? null : Number(row.dept_code),
   };
 }
 
@@ -97,6 +113,22 @@ export async function transferTargets(
     .sort((a, b) => (b.stageCode ?? 0) - (a.stageCode ?? 0));
 }
 
+/** 待接收单号：LB{年月日}{4位流水}（与老模块末班推送同款，便于一眼认出） */
+async function nextPushNo(): Promise<string> {
+  const ymd = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const prefix = `LB${ymd}`;
+  const row = (await uniDb('t_uni_consult_push')
+    .where('consult_no', 'like', `${prefix}%`)
+    .orderBy('consult_no', 'desc')
+    .first()) as Record<string, any> | undefined;
+  let seq = 1;
+  if (row?.consult_no) {
+    const n = parseInt(String(row.consult_no).slice(prefix.length), 10);
+    if (!Number.isNaN(n)) seq = n + 1;
+  }
+  return `${prefix}${String(seq).padStart(4, '0')}`;
+}
+
 export async function transferStudent(
   body: {
     stage: ClassStage;
@@ -109,7 +141,7 @@ export async function transferStudent(
     examId?: string | null;
   },
   user: any,
-): Promise<{ ok: true; toClassName: string }> {
+): Promise<{ ok: true; toClassName: string; pushNo: string; pending: true }> {
   const { stage, studentId, fromClassId, toClassId, mode } = body;
   if (!studentId || !fromClassId || !toClassId) {
     throw new BizError(BizCode.PARAM_ERROR, '缺少学生或班级参数');
@@ -139,20 +171,9 @@ export async function transferStudent(
     throw new BizError(BizCode.PARAM_ERROR, '该学生已不在原班级，请刷新后重试');
   }
 
-  // 末班：带上本场考试成绩快照（有就带）
+  // 末班：带上本场考试成绩快照（接收时由接收端取最近一次成绩）
   let examName: string | null = null;
-  let written: number | null = null;
-  let interview: number | null = null;
-  let comp: number | null = null;
   if (mode === 'repeat' && body.examId) {
-    const sc = (await uniDb('t_uni_exam_score')
-      .where({ exam_id: body.examId, student_id: studentId, edu_stage: stage, is_deleted: 0 })
-      .first()) as Record<string, any> | undefined;
-    if (sc) {
-      written = sc.score_written ?? sc.written_score ?? null;
-      interview = sc.score_interview ?? null;
-      comp = sc.score_total ?? null;
-    }
     const ex = (await uniDb('t_uni_exam')
       .where({ id: body.examId, edu_stage: stage, is_deleted: 0 })
       .first()) as Record<string, any> | undefined;
@@ -161,103 +182,61 @@ export async function transferStudent(
 
   const now = new Date();
   const userId = user?.userId || 'system';
-  const userName = user?.userName || null;
   const reason = (body.reason || '').trim() || (mode === 'repeat' ? '末班转班重修' : '升班');
-  const repeatCount = Number(stu.repeat_count ?? 0) + (mode === 'repeat' ? 1 : 0);
 
-  await uniDb.transaction(async (trx) => {
-    /* ① 学生主档：换班 + 同步目标班的三岗老师（学生表上有冗余快照列） */
-    await trx('t_uni_student')
-      .where({ id: studentId, edu_stage: stage })
-      .update({
-        class_id: to.id,
-        class_name: to.class_name,
-        head_teacher_id: to.head_teacher_id,
-        head_teacher_name: to.head_teacher_name,
-        teacher_id: to.teacher_id,
-        teacher_name: to.teacher_name,
-        assistant_id: to.assistant_id,
-        assistant_name: to.assistant_name,
-        repeat_count: repeatCount,
-        update_time: now,
-        update_by: userId,
-      });
+  // 同一学员不允许同时有多条待接收单（与老模块 repeat-handoff 同口径）
+  const dup = (await uniDb('t_uni_consult_push')
+    .where({ origin_student_id: studentId, apply_status: PUSH_STATUS_PENDING, is_deleted: 0 })
+    .first()) as Record<string, any> | undefined;
+  if (dup) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `该学员已有一条待接收的${mode === 'repeat' ? '末班' : '升班'}记录（${dup.consult_no}），请先让班主任处理`,
+    );
+  }
 
-    /* ② 实训侧另有成员表（jh/class 的成员关系就在学生主档里，没有这张表的行） */
-    if (stage === 'job') {
-      const exists = (await trx('t_uni_class_student')
-        .where({ student_id: studentId, edu_stage: stage, is_deleted: 0 })
-        .first()) as Record<string, any> | undefined;
-      if (exists) {
-        await trx('t_uni_class_student')
-          .where({ id: String(exists.id) })
-          .update({ class_id: to.id, class_name: to.class_name, update_time: now, update_by: userId });
-      } else {
-        await trx('t_uni_class_student').insert({
-          id: randomUUID(),
-          edu_stage: stage,
-          class_id: to.id,
-          class_name: to.class_name,
-          student_id: studentId,
-          student_no: stu.student_no ?? null,
-          student_name: stu.student_name ?? null,
-          join_date: now,
-          status: 1,
-          is_deleted: 0,
-          create_time: now,
-          create_by: userId,
-        });
-      }
-    }
+  const pushNo = await nextPushNo();
 
-    /* ③ 换班留痕（transfer_type=0 = 学生换班，与老模块「班级信息管理发起换班」一致） */
-    await trx('t_uni_class_transfer').insert({
-      id: randomUUID(),
-      edu_stage: stage,
-      student_id: studentId,
-      student_no: stu.student_no ?? null,
-      student_name: stu.student_name ?? null,
-      from_class_id: from.id,
-      from_class_name: from.class_name,
-      to_class_id: to.id,
-      to_class_name: to.class_name,
-      transfer_reason: `${mode === 'repeat' ? '末班' : '升班'}：${reason}`,
-      transfer_time: now,
-      transfer_type: 0,
-      create_by_name: userName,
-      is_deleted: 0,
-      create_time: now,
-      create_by: userId,
-    });
+  /**
+   * ★ 只写待接收单，**不动学生的班籍**。
+   *   班籍变更 / 末班记录 / 换班留痕，都等目标班班主任在「待接收学员」点接收后再写
+   *   （接收端：class/modules/consult/consult.route.ts 的 /receive）。
+   */
+  await uniDb('t_uni_consult_push').insert({
+    id: randomUUID(),
+    edu_stage: stage,
+    consult_no: pushNo,
+    student_name: stu.student_name ?? null,
+    gender: stu.gender ?? null,
+    phone: stu.phone ?? null,
+    parent_phone: stu.parent_phone ?? null,
+    age: stu.age ?? null,
+    education: stu.education ?? null,
+    origin: stu.origin ?? null,
+    graduate_school: stu.graduate_school ?? null,
+    home_address: stu.home_address ?? null,
+    intend_dept_code: to.dept_code ?? stu.dept_code ?? null,
+    intend_stage: to.stage_code,
+    intend_class_id: to.id,
+    intend_class_name: to.class_name,
+    remark: `成绩管理「${mode === 'repeat' ? '末班' : '升班'}」转入，等待班主任接收：${reason}`,
+    apply_status: PUSH_STATUS_PENDING,
+    push_time: now.toISOString().slice(0, 19).replace('T', ' '),
+    receiver_id: to.head_teacher_id,
+    receiver_name: to.head_teacher_name,
+    student_id: studentId,
+    student_no: stu.student_no ?? null,
+    source_system: mode === 'repeat' ? 'grade-repeat' : 'transfer',
+    origin_student_id: studentId,
+    from_class_id: from.id,
+    from_class_name: from.class_name,
+    is_repeat_in: mode === 'repeat' ? 1 : 0,
+    transfer_reason: reason,
+    is_deleted: 0,
+    create_by: userId,
+    create_time: now,
+  } as never);
 
-    /* ④ 末班记录：留痕「由哪个班末到哪个班」+ 成绩快照 */
-    if (mode === 'repeat') {
-      await trx('t_uni_repeat').insert({
-        id: randomUUID(),
-        edu_stage: stage,
-        student_id: studentId,
-        student_no: stu.student_no ?? null,
-        student_name: stu.student_name ?? null,
-        from_class_id: from.id,
-        from_class_name: from.class_name,
-        from_stage: from.stage_code,
-        to_class_id: to.id,
-        to_class_name: to.class_name,
-        to_stage: to.stage_code,
-        repeat_reason: reason,
-        repeat_time: now,
-        repeat_count: repeatCount,
-        exam_name: examName,
-        written_score: written,
-        interview_score: interview,
-        comp_score: comp,
-        is_notified: 0,
-        is_deleted: 0,
-        create_time: now,
-        create_by: userId,
-      });
-    }
-  });
-
-  return { ok: true, toClassName: to.class_name };
+  void examName;
+  return { ok: true, toClassName: to.class_name, pushNo, pending: true };
 }

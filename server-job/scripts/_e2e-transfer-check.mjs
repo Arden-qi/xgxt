@@ -81,7 +81,7 @@ try {
     student_name: '自检-换班生',
     gender: 1,
     class_id: FROM,
-    class_name: 'U2601',
+    class_name: '自检换班源班206',
     student_status: 5,
     repeat_count: 0,
     is_deleted: 0,
@@ -95,10 +95,40 @@ try {
   });
   check('★ 班主任执行末班成功（不再 403）', doRes.json?.code === 200, `code=${doRes.json?.code} ${doRes.json?.message || ''}`);
 
+  /**
+   * ★ 2026-10-22 新口径：末班/升班**不再直接生效** ——
+   *   点下去只生成一张待接收单，学生班籍不变；
+   *   要等目标班班主任在「教学管理 → 待接收学员」点「接收」后才真正入班。
+   */
   const stu = await db('t_uni_student').where({ id: sid }).first();
-  // 夹具自造后，班级名固定为「自检换班源班206 / 自检换班目标班203」
-  check('★ 学生班籍已改到目标班', stu?.class_name === '自检换班目标班203', `class_name=${stu?.class_name}`);
-  check('★ repeat_count +1', Number(stu?.repeat_count) === 1, `repeat_count=${stu?.repeat_count}`);
+  check(
+    '★★ 提交末班后班籍**未变**（等班主任接收）',
+    stu?.class_name === '自检换班源班206',
+    `class_name=${stu?.class_name}`,
+  );
+  check('★ repeat_count 未变（接收后才 +1）', Number(stu?.repeat_count ?? 0) === 0, `repeat_count=${stu?.repeat_count}`);
+
+  const push = await db('t_uni_consult_push').where({ origin_student_id: sid, is_deleted: 0 }).first();
+  check(
+    '★★ 已生成待接收单（目标班 + 状态=待接收）',
+    !!push && push.intend_class_name === '自检换班目标班203' && Number(push.apply_status) === 1,
+    `${push?.consult_no} → ${push?.intend_class_name} 状态${push?.apply_status}`,
+  );
+  check('★ 待接收单标记为末班重修', Number(push?.is_repeat_in) === 1, `is_repeat_in=${push?.is_repeat_in}`);
+
+  // 目标班班主任在待接收页点接收 → 这时才入班
+  // ★ 用校长接收：夹具班是登录之后才建的，不在班主任登录时算好的 classIds 里
+  //   （真实场景里班主任的班在登录时就有，权限判定完全一致）
+  const recvRes = await req(`${BASE}/api/class/consult/receive`, {
+    method: 'POST',
+    token: tokens.qiansy,
+    body: { id: push.id },
+  });
+  check('★★ 目标班班主任接收成功', recvRes.json?.code === 200, `code=${recvRes.json?.code} ${recvRes.json?.message || ''}`);
+
+  const stu2 = await db('t_uni_student').where({ id: sid }).first();
+  check('★ 接收后班籍已改到目标班', stu2?.class_name === '自检换班目标班203', `class_name=${stu2?.class_name}`);
+  check('★ 接收后 repeat_count +1', Number(stu2?.repeat_count) === 1, `repeat_count=${stu2?.repeat_count}`);
 
   const rep = await db('t_uni_repeat').where({ student_id: sid }).first();
   check(
@@ -187,20 +217,48 @@ try {
     token: tokens.qiansy,
     body: { stage: 'emp', studentId: empSid, fromClassId: em2, toClassId: em1, mode: 'repeat', reason: '自检' },
   });
-  check('就业部：末班执行成功', empDo1.json?.code === 200, `${empDo1.json?.code} ${empDo1.json?.message || ''}`);
+  check('就业部：末班提交成功', empDo1.json?.code === 200, `${empDo1.json?.code} ${empDo1.json?.message || ''}`);
   const empS1 = await db('t_uni_student').where({ id: empSid }).first();
-  check('就业部：班籍改为 301 班 + repeat_count+1', empS1?.class_name === '自检就业一阶段班' && Number(empS1?.repeat_count) === 1, `${empS1?.class_name} / ${empS1?.repeat_count}`);
+  check(
+    '就业部：提交后班籍未变（等接收）',
+    empS1?.class_name === '自检就业二阶段班',
+    `${empS1?.class_name} / ${empS1?.repeat_count}`,
+  );
+  const empPush = (await db('t_uni_consult_push')
+    .where({ origin_student_id: empSid, is_deleted: 0 })
+    .orderBy('create_time', 'desc')
+    .limit(1))[0];
+  check('就业部：已生成待接收单', !!empPush && empPush.intend_class_name === '自检就业一阶段班', `${empPush?.consult_no}`);
+  const empRecv = await req(`${BASE}/api/class/consult/receive`, {
+    method: 'POST',
+    token: tokens.qiansy,
+    body: { id: empPush.id },
+  });
+  check('就业部：接收成功', empRecv.json?.code === 200, `${empRecv.json?.code} ${empRecv.json?.message || ''}`);
+  const empS1b = await db('t_uni_student').where({ id: empSid }).first();
+  check('就业部：接收后班籍改为 301 班 + repeat_count+1', empS1b?.class_name === '自检就业一阶段班' && Number(empS1b?.repeat_count) === 1, `${empS1b?.class_name} / ${empS1b?.repeat_count}`);
 
   const empDo2 = await req(`${BASE}/api/teaching/class-transfer/do`, {
     method: 'POST',
     token: tokens.qiansy,
     body: { stage: 'emp', studentId: empSid, fromClassId: em1, toClassId: em3, mode: 'promote', reason: '自检' },
   });
-  check('就业部：升班执行成功', empDo2.json?.code === 200, `${empDo2.json?.code} ${empDo2.json?.message || ''}`);
+  check('就业部：升班提交成功', empDo2.json?.code === 200, `${empDo2.json?.code} ${empDo2.json?.message || ''}`);
+  // ★ 取「待接收」那张（前面那次末班的单已接收；create_time 同秒排序不稳）
+  const empPush2 = (await db('t_uni_consult_push')
+    .where({ origin_student_id: empSid, is_deleted: 0, apply_status: 1 })
+    .limit(1))[0];
+  const empRecv2 = await req(`${BASE}/api/class/consult/receive`, {
+    method: 'POST',
+    token: tokens.qiansy,
+    body: { id: empPush2.id },
+  });
+  check('就业部：升班接收成功', empRecv2.json?.code === 200, `${empRecv2.json?.code} ${empRecv2.json?.message || ''}`);
   const empS2 = await db('t_uni_student').where({ id: empSid }).first();
-  check('就业部：班籍改为 303 班', empS2?.class_name === '自检就业三阶段班', empS2?.class_name);
+  check('就业部：接收后班籍改为 303 班', empS2?.class_name === '自检就业三阶段班', empS2?.class_name);
 
 } finally {
+  await db('t_uni_consult_push').whereIn('origin_student_id', [sid, empSid]).del().catch(() => {});
   await db('t_uni_class').whereIn('id', [FIX_FROM, FIX_TO]).del().catch(() => {});
   for (const id of empClasses) await db('t_uni_class').where({ id }).del().catch(() => {});
   if (empSid) {

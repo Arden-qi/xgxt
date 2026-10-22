@@ -359,7 +359,14 @@ async function submitTransfer() {
       reason: xferReason.value.trim() || null,
       examId: row.examId,
     });
-    ElMessage.success(`${row.studentName} 已${label}转入「${r?.toClassName || target?.name || ''}」`);
+    /**
+     * ★ 2026-10-22：末班/升班改成「待接收」流程 ——
+     *   这里只生成一张待接收单，**学生还没转班**；
+     *   要等目标班班主任在「教学管理 → 待接收学员」点「接收」后才真正入班。
+     */
+    ElMessage.success(
+      `${row.studentName} 的${label}申请已提交，等待「${r?.toClassName || target?.name || ''}」班主任接收`,
+    );
     xferVisible.value = false;
     await Promise.all([loadList(), loadSummary()]);
   } finally {
@@ -500,14 +507,9 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           <b>{{ row.totalScore ?? '—' }}</b>
         </template>
       </el-table-column>
-      <el-table-column prop="examResultName" label="结果" width="90" align="center">
-        <template #default="{ row }">
-          <el-tag v-if="row.examResult" size="small" :type="row.examResult === 1 ? 'success' : 'danger'" effect="plain">
-            {{ row.examResultName }}
-          </el-tag>
-          <span v-else>—</span>
-        </template>
-      </el-table-column>
+      <!-- ★ 2026-10-22 用户要求：列表不再显示「结果」列
+           （通过/未通过由老师在「录入成绩」里手选，不再在列表里占一列）。
+           ⚠️ 后端仍会存 exam_result（汇总统计、末班判定都要用），只是不展示。 -->
       <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="openRowDetail(row)">详情</el-button>
@@ -655,6 +657,7 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
           (xferMode === 'repeat'
             ? '末班：成绩不达标，转到进度相同或更慢的班重修（进度 = 班级阶段码）'
             : '升班：成绩达标，跳到进度更快的班') +
+          '。提交后生成待接收单，**需目标班班主任在「待接收学员」点接收后才入班**' +
           '，换班后立即生效、不需对方接收。'
         "
         style="margin-bottom: 12px"

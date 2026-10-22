@@ -21,7 +21,7 @@ export const TEACHING_STAGES: TeachingStage[] = ['jh', 'class', 'job'];
 export const TEACHING_STAGE_NAME: Record<TeachingStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
 };
 
 export function isTeachingStage(x: unknown): x is TeachingStage {
@@ -45,7 +45,7 @@ export const CLASS_STAGES: ClassStage[] = ['jh', 'class', 'job', 'emp'];
 export const CLASS_STAGE_NAME: Record<ClassStage, string> = {
   jh: '初高部',
   class: '大学部',
-  job: '实训',
+  job: '就业部',
   emp: '就业部',
 };
 

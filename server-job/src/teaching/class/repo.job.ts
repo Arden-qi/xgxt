@@ -49,7 +49,7 @@ const T = 't_job_class';
 const ROSTER_T = 't_job_class_student';
 const STUDENT_T = 't_student_base';
 const STAGE = 'job' as const;
-const STAGE_NAME = '实训';
+const STAGE_NAME = '就业部';
 
 /** 实训阶段：1 一阶段 2 二阶段 3 三阶段 */
 const PHASE_NAME: Record<number, string> = {

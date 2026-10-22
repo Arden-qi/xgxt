@@ -57,7 +57,7 @@ async function decorate(
 
   return {
     stage: STAGE,
-    stageName: '实训',
+    stageName: '就业部',
     id: String(row.id),
     bizType: biz,
     bizTypeName: LEAVE_BIZ_TYPE_NAME[biz] || '',
