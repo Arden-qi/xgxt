@@ -597,7 +597,7 @@
 
       <!-- ★ 2026-10-20 新增：教务给各班分派宿舍（左右两栏男寝 / 女寝）
            ★ 2026-10-21：班主任不显示该子页面（班级层面的分派归教务） -->
-      <el-tab-pane v-if="!isOnlyHeadTeacher" label="班级分派" name="allocate" lazy>
+      <el-tab-pane v-if="!isOnlyHeadTeacher" label="分派宿舍" name="allocate" lazy>
         <DormAllocate />
       </el-tab-pane>
 
@@ -689,13 +689,13 @@ import type { FormInstance, FormRules } from 'element-plus';
 import { RoleCode } from 'shared-types';
 import { isReadOnlyUser, isSuperTest, myRoles } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
-/** ★ 2026-10-20 宿舍管理的第二个子页面：班级分派 */
+/** ★ 2026-10-20 宿舍管理的第二个子页面：分派宿舍 */
 import DormAllocate from './DormAllocate.vue';
 /** ★ 2026-10-21 第三个子页面：申请审批（接收班主任的换宿/退宿申请） */
 import DormChangeApproval from './DormChangeApproval.vue';
 /** ★ 2026-10-22 第四个子页面：楼栋设置（与「系统设置」页签同一个组件，原样搬来） */
 import BuildingSettingPanel from '@/class-jh/components/setting/BuildingSettingPanel.vue';
-/** ★ 2026-10-20 调宿弹窗：班级 / 学生搜索 / 楼栋床位（与班级分派同一套接口） */
+/** ★ 2026-10-20 调宿弹窗：班级 / 学生搜索 / 楼栋床位（与分派宿舍同一套接口） */
 import {
   listAllocateClasses,
   listAllocateBuildings,
@@ -745,11 +745,11 @@ import {
 } from '@/teaching/api/dorm';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
-/** ★ 2026-10-20 子页面页签：宿舍房间（原页面） / 班级分派（教务给各班分宿舍） */
+/** ★ 2026-10-20 子页面页签：宿舍房间（原页面） / 分派宿舍（教务给各班分宿舍） */
 const mainTab = ref<'rooms' | 'allocate' | 'approval' | 'building'>('rooms');
 
 /**
- * ★ 2026-10-21：班主任（且没有更高业务角色）不参与「建房间」和「班级分派」
+ * ★ 2026-10-21：班主任（且没有更高业务角色）不参与「建房间」和「分派宿舍」
  *
  * 业务口径：班主任在宿舍域只做「查看本班住宿 + 发起调宿/退宿申请」，
  * 房间由教务/学管统一建，班级层面的分派也归教务。
@@ -787,7 +787,7 @@ const canApproveDorm = computed(
   () => isSuperTest.value || myRoles.value.some((r) => APPROVER_ROLES.includes(r)),
 );
 
-/** 班主任若停留在「班级分派 / 申请审批」页签，角色判定生效后强制回到「宿舍房间」 */
+/** 班主任若停留在「分派宿舍 / 申请审批」页签，角色判定生效后强制回到「宿舍房间」 */
 watch(
   [isOnlyHeadTeacher, canApproveDorm],
   () => {

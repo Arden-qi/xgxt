@@ -3,10 +3,10 @@
  * ============================================================
  *
  * 业务口径：班主任在宿舍域只做「查看本班住宿 + 发起调宿/退宿申请」，
- * **没有「新增房间」按钮，也没有「班级分派」子页签**（房间与班级分派归教务/学管）。
+ * **没有「新增房间」按钮，也没有「分派宿舍」子页签**（房间与分派宿舍归教务/学管）。
  *
  * 静态：
- *   · 页签「班级分派」带 `v-if="!isOnlyHeadTeacher"`
+ *   · 页签「分派宿舍」带 `v-if="!isOnlyHeadTeacher"`
  *   · 「新增房间」按钮带 `!isOnlyHeadTeacher`
  *   · 角色判定排除 教务/校长/管理员/学管主任，且 SUPER_TEST 不受影响
  * 运行时：
@@ -66,7 +66,7 @@ async function req(method, url, { token, body } = {}) {
 console.log('▶ 静态检查');
 const dorm = read('web-job/src/teaching/views/TeachingDorm.vue');
 check('保留「宿舍房间」页签', dorm.includes('label="宿舍房间"'));
-check('「班级分派」对班主任隐藏', /v-if="!isOnlyHeadTeacher"[\s\S]{0,80}label="班级分派"/.test(dorm));
+check('「分派宿舍」对班主任隐藏', /v-if="!isOnlyHeadTeacher"[\s\S]{0,80}label="分派宿舍"/.test(dorm));
 check('「新增房间」对班主任隐藏', dorm.includes('canCreate && !isOnlyHeadTeacher'));
 check('保持「调宿/退宿申请」入口', dorm.includes('调宿/退宿申请'));
 check('班主任判定排除更高角色', dorm.includes('HEAD_TEACHER_SUPERIOR_ROLES') && dorm.includes('RoleCode.TEACH_HEAD'));
@@ -82,7 +82,7 @@ check('「我的班」跨学段查班级表', myClassesSrc.includes('sms_class_j
 check('入住候选按数据范围过滤', repo.includes('async candidates') && repo.includes('IN_SCHOOL_STATUS'));
 
 console.log('\n▶ 运行时检查');
-// ① 班主任：能进页面、能发起调宿，但（前端）不给建房间/班级分派
+// ① 班主任：能进页面、能发起调宿，但（前端）不给建房间/分派宿舍
 for (const a of [
   { account: 'sunmin', label: '初高班主任', code: 'classjh:dorm:view', stage: 'jh' },
   { account: 'zhanght', label: '大学班主任', code: 'class:dorm:view', stage: 'class' },
@@ -114,7 +114,7 @@ if (acad.status === 200 && acad.body?.data?.token) {
   const meta = await req('GET', '/api/teaching/dorm/meta', { token });
   check('教务 /meta 可写', meta.status === 200 && (meta.body?.data || []).every((m) => m.hasCreate));
   const classes = await req('GET', '/api/teaching/dorm/allocate/classes', { token });
-  check('教务班级分派数据源 200', classes.status === 200, `${(classes.body?.data || []).length} 个班`);
+  check('教务分派宿舍数据源 200', classes.status === 200, `${(classes.body?.data || []).length} 个班`);
 } else {
   check('教务登录', false, `HTTP ${acad.status}`);
 }
