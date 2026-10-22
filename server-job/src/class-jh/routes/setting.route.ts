@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { BizCode, STAGE_NAME, DEPT_NAME, FLOW_TYPE_NAME, RoleCode } from 'shared-types/class-jh';
+import { BizCode, STAGE_NAME, DEPT_NAME, FLOW_TYPE_NAME, RoleCode, DeptCode } from 'shared-types/class-jh';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 // ★ 2026-10-19 就业部接入阶段方案：判断阶段是否被「就业部 / 实训」的班级或学生占用，
@@ -562,7 +562,22 @@ stageRouter.delete(
 /** 方案保存校验（新增 / 修改共用） */
 const schemeSaveSchema = z.object({
   schemeName: z.string().trim().min(1, '方案名称必填').max(50),
-  deptCode: z.coerce.number().int().min(1, '所属部门必填').max(2),
+  /**
+   * ★ 2026-10-22 修：上限从 2 放宽到 3（就业部）。
+   *
+   *   阶段方案是 2026-10-16 做的，那时部门只有 初高部(1) / 大学部(2)，
+   *   所以这里写死 max(2)。2026-10-19 加了就业部(3)，
+   *   方案列表、班级绑定、阶段推进都跟着改了，唯独这行校验漏了 ——
+   *   结果在「班级管理 → 阶段方案设计」里，就业部方案一保存就报
+   *   「参数「deptCode」太大或超出范围」，新增和编辑都过不去。
+   *
+   *   用 DeptCode.EMPLOYMENT 而不是字面量 3：部门枚举再变时这里不会又漏。
+   */
+  deptCode: z.coerce
+    .number()
+    .int()
+    .min(1, '所属部门必填')
+    .max(DeptCode.EMPLOYMENT, '所属部门超出范围（只有 初高部 / 大学部 / 就业部）'),
   stages: z
     .array(
       z.object({
