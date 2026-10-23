@@ -84,3 +84,43 @@ export async function loadSchemeStagesForStage(stage: string): Promise<SchemeSta
   if (!dept) return [];
   return loadSchemeStageOptions(dept);
 }
+
+/**
+ * ★ 2026-10-22 部门 → 阶段码起始值（方案里第 1 个阶段对应的阶段码）
+ *
+ * 「阶段方案」里的阶段只有名称和 sort_no，没有数字码；而班级表 `stage_code`
+ * 是 NOT NULL、且下游（学生档案/咨询分配班级/缴费台账）都按它判阶段。
+ * 所以建班只选了方案阶段时，按 `起始值 + sort_no` 推导：
+ *   初高部（dept=1）：预科 101 / 初中部1~3期 102~104 / 高中部1~3期 105~107
+ *   大学部（dept=2）：一阶段~六阶段 201~206
+ * 两张种子方案的阶段顺序与这套码恰好一一对应。
+ */
+export const FIRST_PHASE_OF_DEPT: Record<number, number> = { 1: 101, 2: 201 };
+
+/**
+ * 由「阶段方案阶段 id」推导阶段码
+ *
+ * @returns 推导不出（没选方案阶段 / 方案里找不到 / 越界）→ undefined，由调用方兜底
+ *
+ * ⚠️ 不要退回 `Object.keys(PHASE_NAME)[0]` 这类兜底：数字键按数值升序，
+ *    大学部 PHASE_NAME 里 13（实训）比 201 小，取「第一个」会静默拿到实训。
+ */
+export async function resolvePhaseCodeFromScheme(
+  deptCode: unknown,
+  schemeStageId: unknown,
+): Promise<number | undefined> {
+  const dept = Number(deptCode);
+  const base = FIRST_PHASE_OF_DEPT[dept];
+  const sid = String(schemeStageId ?? '').trim();
+  if (!base || !sid) return undefined;
+  try {
+    const opts = await loadSchemeStageOptions(dept);
+    const hit = opts.find((o) => o.id === sid);
+    if (!hit) return undefined;
+    const code = base + Number(hit.sortNo ?? 0);
+    // 只接受本部门合法区间（初高 101~107 / 大学 201~206），越界视为推导失败
+    return code >= base && code <= base + 9 ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}

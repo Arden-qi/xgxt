@@ -12,6 +12,14 @@ import { errorHandler } from './middleware/errorHandler';
 import { authMiddleware } from './middleware/auth';
 import { requirePage, requireAnyPage } from './middleware/pagePermission';
 import { denyApprovalOnlyWrite } from './middleware/approvalOnly';
+/**
+ * ★ 2026-10-22 全系统操作留痕
+ *
+ *   把「谁在哪个模块做了什么」统一记进 sms_perm.t_perm_log，
+ *   供「权限管理 → 操作日志」查看。挂在最外层，新增接口自动覆盖。
+ *   记录范围与排除项见文件头注释（普通 GET 不记、/api/perm 已有精细日志不重复记）。
+ */
+import { auditLog } from './middleware/auditLog';
 import { jobPermGate, eduPermGate } from './middleware/boardPermGate';
 import { RoleCode, BizCode } from 'shared-types';
 import { examRouter } from './routes/exam.route';
@@ -166,6 +174,22 @@ app.use((req, _res, next) => {
   }
   next();
 });
+
+/**
+ * ★★ 2026-10-22：全系统操作留痕（审计日志）
+ *
+ * 【为什么挂在这里】
+ *   ① 在 express.json 之后 —— 要读 req.body 才能记「改成了什么」；
+ *   ② 在所有业务路由之前 —— 新增模块/接口不需要再改这个文件，自动被覆盖；
+ *   ③ 用 res.on('finish') 收集 —— 用户请求早就返回了，写库是异步批量做的，
+ *      不会给任何接口增加响应延迟。
+ *
+ * 【为什么不用 authMiddleware】
+ *   各模块的鉴权中间件不是同一套（咨询/财务/权限/初高/班级各有各的），
+ *   挂死在某一个上会漏掉别的模块。这里不鉴权，只在 finish 时读 `req.user`
+ *   —— 那个字段是下游中间件填好的，谁填的都认。
+ */
+app.use(auditLog);
 
 // ============================================================
 // 健康检查（不鉴权，用于快速确认服务活着）

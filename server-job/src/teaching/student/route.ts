@@ -231,6 +231,25 @@ teachingStudentRouter.get(
 );
 
 /**
+ * 10. 标记「已就业」（2026-10-21 批注）
+ *
+ * body: { stage, id }
+ * 终态操作：确认后不可回退（前端按钮不再出现、编辑弹窗状态锁死）。
+ * 只改 student_status，不收集入职明细 —— 要填单位/岗位/薪资请走就业模块的「确认就业」。
+ */
+teachingStudentRouter.post(
+  '/confirm-employed',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = reqStage(b.stage);
+    const id = str(b.id);
+    if (!id) throw new BizError(BizCode.PARAM_ERROR, '缺少学生ID');
+    const r = await svc.confirmEmployed(stage, id, req.user);
+    res.json(ok(r, `学生状态已由「${r.fromStatusName}」改为「${r.toStatusName}」`));
+  }),
+);
+
+/**
  * 9. 升云（初高部 → 大学部开放班级，批量）
  *
  * body: { studentIds: string[], targetClassId: string, remark?: string }

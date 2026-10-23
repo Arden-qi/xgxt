@@ -24,6 +24,8 @@ import { ok, page as pageResp } from '../../utils/response';
 import * as svc from './service';
 // 升实训单独一个文件（跨库搬迁逻辑较重，且不参与班级仓储的适配器分发）
 import * as trainingSvc from './training';
+// 升就业（2026-10-21 批注：实训班学生状态 → 待就业）
+import * as employmentSvc from './employment';
 import type { ClassListQuery, ClassStage, TeachingStage } from '../shared/dto';
 import { CLASS_STATUS_NAME } from '../shared/dto';
 import { normalizeClassroom } from '../shared/format';
@@ -99,10 +101,9 @@ function buildSaveBody(b: Record<string, any>, stage: ClassStage) {
     classCode: strOrNull(b.classCode),
     deptCode,
     phaseCode,
-    // ★ 2026-10-16：阶段方案三字段（可空 —— 老班级/不选方案时不传）
-    schemeId: strOrNull(b.schemeId),
-    schemeStageId: strOrNull(b.schemeStageId),
-    schemeStageName: strOrNull(b.schemeStageName),
+    /* ★ 2026-10-20：原「阶段方案」三字段（schemeId / schemeStageId / schemeStageName）已删除 ——
+     *   它们指向 t_class_stage_scheme 那套从未建表的实现；班级表里也从来没有这三列。
+     *   阶段统一只落 phase_code（阶段码），方案只作为前端筛选阶段的手段。 */
     headTeacherId: strOrNull(b.headTeacherId),
     headTeacherName: strOrNull(b.headTeacherName),
     teacherId: strOrNull(b.teacherId),
@@ -169,6 +170,20 @@ teachingClassRouter.get(
   }),
 );
 
+/**
+ * 3.5 教职员工下拉（建班 / 交接时选班主任、教员、助教、项目经理、就业老师）
+ *
+ * ★ 2026-10-22 新增。原来前端直接拉 /api/perm/user/list（挂 permAuth），
+ *   初高/大学/就业账号一律 403 → 用户一进班级管理就弹「您没有该操作的权限」，
+ *   而且下拉是空的。改由本接口出人，跟着班级页面权限走。
+ */
+teachingClassRouter.get(
+  '/staff-options',
+  wrap(async (_req, res) => {
+    res.json(ok(await svc.listStaffOptions(), '查询成功'));
+  }),
+);
+
 /** 4. 保存（新增 / 修改） */
 teachingClassRouter.post(
   '/save',
@@ -179,6 +194,7 @@ teachingClassRouter.post(
       throw new BizError(BizCode.PARAM_ERROR, '班级名称必填');
     }
     // 状态值校验必须在入仓储前 —— 否则非法值会静默落库
+    // ★ 2026-10-22：校验走 CLASS_STATUS_NAME，已结业(4) 已从中删除 → 会自动被拦成「取值非法」
     if (b.classStatus !== undefined && b.classStatus !== null && b.classStatus !== '') {
       const st = Number(b.classStatus);
       if (!CLASS_STATUS_NAME[st]) {
@@ -215,6 +231,7 @@ teachingClassRouter.post(
     const stage = reqStage(b.stage);
     const id = requireId(b.id);
     const to = Number(b.classStatus);
+    // ★ 2026-10-22：已结业(4) 已从 CLASS_STATUS_NAME 删除，这里天然拒绝旧请求
     if (!Number.isFinite(to) || !CLASS_STATUS_NAME[to]) {
       throw new BizError(BizCode.PARAM_ERROR, '目标状态取值非法');
     }
@@ -259,13 +276,10 @@ teachingClassRouter.get(
   }),
 );
 
-/** 7b. 阶段方案选项（★ 2026-10-16：班级表单的「阶段方案 / 阶段」两个下拉用） */
-teachingClassRouter.get(
-  '/scheme-options',
-  wrap(async (req, res) => {
-    res.json(ok(await svc.listSchemeOptions(req.user), '查询成功'));
-  }),
-);
+/* ★ 2026-10-20：原 /scheme-options（阶段方案下拉）已删除 ——
+ *   它读的 t_class_stage_scheme / t_class_stage_scheme_stage 两张表从未建过，
+ *   班级管理页一打开就报「数据表不存在」。表单的方案/阶段选项统一取
+ *   GET /api/teaching/class/meta 里的 planOptions（t_class_stage_plan + t_class_stage）。 */
 
 /** 8. 统计卡片（口径与列表完全一致） */
 teachingClassRouter.get(
@@ -321,5 +335,56 @@ teachingClassRouter.post(
       req.user,
     );
     res.json(ok(r, `已升实训：${r.targetClassName}（${r.classCode}），转入 ${r.moved} 人`));
+  }),
+);
+
+/* ============================================================
+ * 12. 升就业（2026-10-21 批注）
+ *   实训班 → 「升就业」：把该班学生的状态批量改成「待就业」，
+ *   同时把**班级状态**改成「待就业」（批注第 2 条）。
+ *   ⚠️ 不搬班、不改班级名、不换部门（口径见 employment.ts 头部）。
+ * ============================================================ */
+teachingClassRouter.post(
+  '/employment-upgrade',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const r = await employmentSvc.upgradeClassToEmployment({ classId: requireId(b.classId) }, req.user);
+    const tip = r.updated
+      ? `已将「${r.className}」的 ${r.updated} 名学生状态改为「待就业」，班级状态：${r.classStatusName}`
+      : `「${r.className}」的学生都已是待就业 / 已就业，班级状态：${r.classStatusName}`;
+    res.json(ok(r, tip));
+  }),
+);
+
+/* ============================================================
+ * 13. 已就业 · 识别整班学生状态（2026-10-21 批注第 3 条）
+ *   返回各学生状态人数 + settled（全班是否都已是「已就业 / 退学」）。
+ *   前端据此决定：一次确认，还是「提示人数 → 强制确认 → 再次确认」。
+ * ============================================================ */
+teachingClassRouter.get(
+  '/employment-progress',
+  wrap(async (req, res) => {
+    const r = await employmentSvc.getEmploymentProgress(
+      { classId: requireId(req.query.classId) },
+      req.user,
+    );
+    res.json(ok(r, '查询成功'));
+  }),
+);
+
+/* ============================================================
+ * 14. 已就业 · 确认写班级状态（2026-10-21 批注第 3 条）
+ *   只把班级状态改成「已就业(7)」，学生状态不动
+ *   （学生是不是已就业，由学生档案里逐个点【已就业】）。
+ * ============================================================ */
+teachingClassRouter.post(
+  '/employment-confirm',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const r = await employmentSvc.confirmClassEmployed({ classId: requireId(b.classId) }, req.user);
+    const tip = r.changed
+      ? `「${r.className}」的班级状态已改为「已就业」`
+      : `「${r.className}」已经是「已就业」状态，无需修改`;
+    res.json(ok(r, tip));
   }),
 );

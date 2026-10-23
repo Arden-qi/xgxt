@@ -30,6 +30,7 @@ import {
 import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { isStatusLocked } from '../shared/statusLock';
 import { hydrateWithArchive } from '../shared/studentRef';
 import { buildApplyNo } from '../shared/conf';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
@@ -371,6 +372,12 @@ export async function afterApproved(conn: any, id: string, operatorId: string): 
   // ★ 复学：回到复学班（service 在调本函数前已把复学班写进单据）
   // ★ 2026-10-22：优先新列，老数据回落 new_class_id
   if (biz === 3) patch.class_id = row.resume_class_id ?? row.new_class_id ?? patch.class_id;
+  /* ★ 2026-10-21 批注：退学 = 学生状态永久锁（见 shared/statusLock.ts）
+   *   老单据在退学之后才审批通过时，不能把 7 改成别的值；审批单照常通过。 */
+  const cur = (await tblTrx(conn, SRC, S, STAGE)
+    .where({ id: row.student_id })
+    .first('student_status')) as Record<string, any> | undefined;
+  if (isStatusLocked(cur?.student_status) && Number(cur?.student_status) !== newStatus) return;
   await tblTrx(conn, SRC, S, STAGE).where({ id: row.student_id }).update(patch);
 }
 

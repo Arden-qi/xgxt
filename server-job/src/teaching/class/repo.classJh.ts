@@ -20,6 +20,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { STUDENT_STATUS_NAME } from 'shared-types';
 import { db } from '../../class-jh/utils/db';
 import { assertClassCodeAvailable } from '../shared/classCode';
 import {
@@ -37,6 +38,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 import { applyClassScope } from '../shared/dataScope';
+import { resolvePhaseCodeFromScheme } from '../shared/stageSchemes';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -59,6 +61,8 @@ const PHASE_NAME: Record<number, string> = {
 };
 
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
+/** ★ 2026-10-22：建班 phaseCode 兜底值（显式常量，别靠 Object.keys 顺序） */
+const JH_FIRST_PHASE = 101;
 const GENDER: Record<number, string> = { 0: '未知', 1: '男', 2: '女' };
 
 /**
@@ -103,10 +107,6 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
-    // ★ 2026-10-16：阶段方案（新表单选择；老班级为 null，回显退回 phaseName）
-    schemeId: str(r.scheme_id),
-    schemeStageId: str(r.scheme_stage_id),
-    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -125,7 +125,8 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     studentCount: studentCount ?? Number(r.student_count ?? 0),
     classStatus: status,
     classStatusName: CLASS_STATUS_NAME[status] ?? '',
-    canChangeStatus: status !== CLASS_STATUS.GRADUATED,
+    // ★ 2026-10-22：已结业(4) 下线后，只有「已就业」是终态
+    canChangeStatus: status !== CLASS_STATUS.EMPLOYED,
     attendanceRate: numOrNull(r.today_attendance_rate),
     // ★★ 初高是「今日」出勤率，不是累计
     attendanceRateKind: 'today',
@@ -266,7 +267,10 @@ export const repo: ClassRepo = {
     };
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
-    set(phaseCodeCol(), body.phaseCode);
+    /* ★ 2026-10-22 与大学部同一口径：只选了方案阶段时按 sort_no 推导阶段码
+     *   （初高方案：预科 101 / 初中部1~3期 102~104 / 高中部1~3期 105~107） */
+    const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
+    set(phaseCodeCol(), body.phaseCode ?? derivedPhaseCode);
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
     set('scheme_id', body.schemeId);
     set('scheme_stage_id', body.schemeStageId);
@@ -328,7 +332,9 @@ export const repo: ClassRepo = {
     const id = randomUUID();
     // ★ 2026-10-21 班号：按学部组（J=预科+初中 / T=高中）顺序分配，101 起；
     //   学号 = LZ + J/T + 班号(3位) + 班内序号(3位, 每班从001独立)，见 classNo.ts
-    const stage = body.phaseCode ?? Number(Object.keys(PHASE_NAME)[0]);
+    // ★ 2026-10-22：兜底值写死 101（预科），不再用 `Object.keys(PHASE_NAME)[0]` ——
+    //   数值键按升序排列，一旦这张表里出现更小的码（如 13 实训），兜底就会静默跑偏。
+    const stage = body.phaseCode ?? JH_FIRST_PHASE;
     await tblIns(db, 'sms_class_jh', T, STAGE, {
       id,
       class_code: classCode,
@@ -367,6 +373,8 @@ export const repo: ClassRepo = {
       .orderBy('student_no', 'asc')) as Array<Record<string, any>>;
     return rows.map((x): ClassRosterRow => {
       const gender = Number(x.gender ?? 0);
+      // ★ 2026-10-21：状态列回读学生档案里的学生状态（不再是写死的「在班」）
+      const sStatus = x.student_status === null || x.student_status === undefined ? null : Number(x.student_status);
       return {
         studentId: String(x.id),
         studentNo: str(x.student_no),
@@ -378,6 +386,8 @@ export const repo: ClassRepo = {
         joinDate: str(fmtDate(x.enroll_date)),
         inClassStatus: null,
         inClassStatusName: '在班',
+        studentStatus: sStatus,
+        studentStatusName: sStatus === null ? '在班' : STUDENT_STATUS_NAME[sStatus] ?? String(sStatus),
       };
     });
   },
@@ -416,7 +426,6 @@ export const repo: ClassRepo = {
           openCount: 0,
           closedCount: 0,
           graduatingCount: 0,
-          graduatedCount: 0,
           studentCount: 0,
         };
       }
@@ -428,14 +437,12 @@ export const repo: ClassRepo = {
     let openCount = 0;
     let closedCount = 0;
     let graduatingCount = 0;
-    let graduatedCount = 0;
     for (const r of rows) {
       studentCount += counts.get(String(r.id)) ?? 0;
       const s = Number(r.class_status);
       if (s === CLASS_STATUS.OPEN) openCount++;
       else if (s === CLASS_STATUS.CLOSED) closedCount++;
       else if (s === CLASS_STATUS.GRADUATING) graduatingCount++;
-      else if (s === CLASS_STATUS.GRADUATED) graduatedCount++;
     }
     return {
       stage: STAGE,
@@ -444,7 +451,6 @@ export const repo: ClassRepo = {
       openCount,
       closedCount,
       graduatingCount,
-      graduatedCount,
       studentCount,
     };
   },
@@ -453,9 +459,9 @@ export const repo: ClassRepo = {
 function transitionsFrom(from: number): number[] {
   const map: Record<number, number[]> = {
     [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED],
-    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATED]: [],
+    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN],
+    // 历史状态：没有任何下一跳
+    [CLASS_STATUS.GRADUATING]: [],
   };
   return map[from] ?? [];
 }

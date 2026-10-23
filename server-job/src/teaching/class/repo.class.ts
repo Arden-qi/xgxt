@@ -17,6 +17,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { STUDENT_STATUS_NAME } from 'shared-types';
 import { db } from '../../class/db';
 import { applyDataScope } from '../../class/middleware/dataScope';
 import { assertClassCodeAvailable } from '../shared/classCode';
@@ -31,6 +32,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 import { applyClassScope } from '../shared/dataScope';
+import { resolvePhaseCodeFromScheme } from '../shared/stageSchemes';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -58,6 +60,22 @@ const PHASE_NAME: Record<number, string> = {
   206: '六阶段',
   13: '实训',
 };
+
+/**
+ * ★ 2026-10-22：建班时 phaseCode 的兜底值
+ *
+ * 必须是**显式常量**，不能靠 `Object.keys(PHASE_NAME)[0]`：
+ * 上面 PHASE_NAME 里 13（实训）比 201 小，数值键升序后排在第一位，
+ * 取「第一个键」会静默拿到「实训」（真实踩坑，见 create() 里的注释）。
+ */
+const UNIVERSITY_FIRST_PHASE = 201;
+
+/*
+ * ★ 2026-10-22 阶段码推导：见 shared/stageSchemes.ts 的 resolvePhaseCodeFromScheme
+ *   （建班表单选了「阶段方案阶段」时只提交 schemeStageId，不提交 phaseCode，
+ *     必须按方案阶段的 sort_no 推导，否则会落到兜底值 13（实训））。
+ */
+
 
 const DEPT_NAME: Record<number, string> = { 1: '初高部', 2: '大学部' };
 const GENDER: Record<number, string> = { 0: '未知', 1: '男', 2: '女' };
@@ -96,10 +114,6 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
-    // ★ 2026-10-16：阶段方案（新表单选择；老班级为 null，回显退回 phaseName）
-    schemeId: str(r.scheme_id),
-    schemeStageId: str(r.scheme_stage_id),
-    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -119,7 +133,8 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     studentCount: studentCount ?? Number(r.student_count ?? 0),
     classStatus: status,
     classStatusName: CLASS_STATUS_NAME[status] ?? '',
-    canChangeStatus: status !== CLASS_STATUS.GRADUATED,
+    // ★ 2026-10-22：已结业(4) 下线后，只有「已就业」是终态
+    canChangeStatus: status !== CLASS_STATUS.EMPLOYED,
     attendanceRate: numOrNull(r.attendance_rate),
     attendanceRateKind: 'total',
     // ★ 这张表没 remark 列
@@ -224,7 +239,16 @@ export const repo: ClassRepo = {
     };
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
-    set(phaseCodeCol(), body.phaseCode);
+    /**
+     * ★ 2026-10-22 阶段码：显式传了 phaseCode 就用它；
+     *   只选了「阶段方案阶段」时按方案阶段的 sort_no 推导（见 resolvePhaseCodeFromScheme）。
+     *
+     * 之前这里是 `set(phaseCodeCol(), body.phaseCode)`：表单选方案时 phaseCode 是 undefined
+     * → 编辑不写阶段码（勉强没事），新建则落到 `create` 的兜底
+     * → 兜底取到 13（实训），建出来的班阶段全是错的。
+     */
+    const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
+    set(phaseCodeCol(), body.phaseCode ?? derivedPhaseCode);
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
     set('scheme_id', body.schemeId);
     set('scheme_stage_id', body.schemeStageId);
@@ -296,8 +320,15 @@ export const repo: ClassRepo = {
       class_name: className, // ★ create 时名称可能被自动占位（见上）
       class_status: body.classStatus ?? CLASS_STATUS.OPEN,
       // ★ `stage`（学段内阶段码）在这张表是 NOT NULL，前端没传时必须给兜底值，
-      //   否则 insert 直接报 ER_BAD_NULL_ERROR。取第一个可选阶段码更贴近业务。
-      [phaseCodeCol()]: body.phaseCode ?? Number(Object.keys(PHASE_NAME)[0]),
+      //   否则 insert 直接报 ER_BAD_NULL_ERROR。
+      //
+      // ⚠️ 2026-10-22 修：兜底值必须写死 201（一阶段），不能用
+      //   `Number(Object.keys(PHASE_NAME)[0])` —— JS 对象里数字键按**数值升序**排列，
+      //   PHASE_NAME 含 { 201..206, 13 }，13 最小排最前 → 兜底取到 13（实训）。
+      //   于是「按阶段方案建班」（表单只传 schemeStageId/schemeStageName，不带 phaseCode）
+      //   建出来的班 stage_code 全落成 13：班级管理列表按方案名显示「一阶段」看不出问题，
+      //   但咨询侧「分配班级」下拉读的是 stageName → 显示成「运维（实训）」。
+      [phaseCodeCol()]: body.phaseCode ?? UNIVERSITY_FIRST_PHASE,
       dept_code: body.deptCode ?? 2,
       student_count: 0,
       is_deleted: false,
@@ -327,6 +358,8 @@ export const repo: ClassRepo = {
       .orderBy('student_no', 'asc')) as Array<Record<string, any>>;
     return rows.map((r): ClassRosterRow => {
       const gender = Number(r.gender ?? 0);
+      // ★ 2026-10-21：状态列回读学生档案里的学生状态（不再是写死的「在班」）
+      const sStatus = r.student_status === null || r.student_status === undefined ? null : Number(r.student_status);
       return {
         studentId: String(r.id),
         studentNo: str(r.student_no),
@@ -339,6 +372,8 @@ export const repo: ClassRepo = {
         joinDate: str(fmtDate(r.enroll_date)),
         inClassStatus: null,
         inClassStatusName: '在班',
+        studentStatus: sStatus,
+        studentStatusName: sStatus === null ? '在班' : STUDENT_STATUS_NAME[sStatus] ?? String(sStatus),
       };
     });
   },
@@ -373,14 +408,12 @@ export const repo: ClassRepo = {
     let openCount = 0;
     let closedCount = 0;
     let graduatingCount = 0;
-    let graduatedCount = 0;
     for (const r of rows) {
       studentCount += counts.get(String(r.id)) ?? 0;
       const s = Number(r.class_status);
       if (s === CLASS_STATUS.OPEN) openCount++;
       else if (s === CLASS_STATUS.CLOSED) closedCount++;
       else if (s === CLASS_STATUS.GRADUATING) graduatingCount++;
-      else if (s === CLASS_STATUS.GRADUATED) graduatedCount++;
     }
     return {
       stage: STAGE,
@@ -389,7 +422,6 @@ export const repo: ClassRepo = {
       openCount,
       closedCount,
       graduatingCount,
-      graduatedCount,
       studentCount,
     };
   },
@@ -398,9 +430,9 @@ export const repo: ClassRepo = {
 function transitionsFrom(from: number): number[] {
   const map: Record<number, number[]> = {
     [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED],
-    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATED]: [],
+    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN],
+    // 历史状态：没有任何下一跳
+    [CLASS_STATUS.GRADUATING]: [],
   };
   return map[from] ?? [];
 }

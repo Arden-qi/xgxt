@@ -171,7 +171,15 @@ const applySchema = z.object({
   refundAmount: z.coerce.number().int().positive('退费金额必须大于 0（单位：分）'),
   refundReason: z.string().min(1, '退费原因必填').max(255),
   attachmentUrl: z.string().max(255).optional(),
-  sourceType: z.coerce.number().int().min(1).max(2).optional(),
+  /**
+   * 来源类型：1 班主任提交 / 2 校长审批推送 / 3 咨询部门
+   *
+   * ★ 2026-10-22 上限从 2 放到 3：咨询侧新增了 CONSULT=3，
+   *   如果这里仍然 max(2)，咨询上报退费会被 400 拦掉，
+   *   而咨询那边是「失败不阻断」的静默处理 ——
+   *   表现就是退费单显示提交成功、财务却一条都收不到。
+   */
+  sourceType: z.coerce.number().int().min(1).max(3).optional(),
   remark: z.string().max(500).optional(),
 });
 

@@ -50,6 +50,30 @@ const STUDENT_NO_MAX = 32;
 const SEQ_MAX = 999;
 
 /**
+ * 取某个班级的阶段码（学生「阶段跟随班级」用）
+ *
+ * ★ 2026-10-22 用户口径：学生不再手选阶段，跟着所在班级走。
+ *   前端选班时会带出来，但**后端保存时必须再按班级覆盖一次** ——
+ *   否则接口调用方仍能写进与班级不一致的阶段。
+ *
+ * 返回 null = 班级不存在 / 班级没配阶段，调用方保持原值（不写脏值）。
+ */
+export async function phaseCodeOfClass(stage: StudentNoStage, classId: unknown): Promise<number | null> {
+  const cid = String(classId ?? '').trim();
+  if (!cid) return null;
+  const src = SRC[stage];
+  try {
+    const cls = (await tbl(src.conn, src.schema, src.classTable, stage)
+      .where({ id: cid, is_deleted: false })
+      .first()) as Record<string, any> | undefined;
+    const n = Number(cls?.stage);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 按班级生成下一个学号
  *
  * @throws BizError 没选班级 / 班级不存在 / 班级没编号 / 编号太长 / 序号用尽

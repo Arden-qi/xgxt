@@ -39,6 +39,7 @@ import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { listClassesByStage } from '../shared/classOptions';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { loadSchemeStagesForStage } from '../shared/stageSchemes';
+import { nextStudentNoForClass, phaseCodeOfClass } from '../shared/studentNo';
 import { db } from '../../utils/db';
 import { StudentStatus } from 'shared-types';
 import type { StudentRepo, StudentStat } from './types';
@@ -49,6 +50,8 @@ import { db as jhDb } from '../../class-jh/utils/db';
 import { tbl, tblInsTrx, tblTrx, phaseCodeCol } from '../shared/uniTable';
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 import { insertUpgrade, listByStudentNo } from './upgrade.repo';
+import { getStudentStatus, markEmployed } from './employed.repo';
+import { assertStatusUnlocked, lockedStatusMessage, isStatusLocked } from '../shared/statusLock';
 import { ClassStatus, CLASS_STATUS_NAME, DeptCode } from 'shared-types';
 
 /**
@@ -334,6 +337,29 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
   if (body.stage !== 'jh' && !body.deptCode) {
     throw new BizError(BizCode.PARAM_ERROR, `${STUDENT_STAGE_NAME[body.stage]}学段「部门」必填`);
   }
+  /* ★ 2026-10-21 批注：「学生状态为【退学】的，任何操作都不可更改该状态」
+   *   编辑学生档案是唯一能直接写 `student_status` 的入口 → 在这里锁死：
+   *     ① 库里已经是退学(7) → 传上来的状态必须还是 7，想改就报错（前端下拉也已 disabled）；
+   *     ② 顺便把 payload 里的状态钉成 7，防止绕过前端改出别的值。
+   *   ⚠️ 新增（没有 id）不受影响，见 statusLock.ts 的说明。 */
+  if (body.id) {
+    const current = await getStudentStatus(body.stage, body.id);
+    if (isStatusLocked(current)) {
+      if (body.studentStatus !== undefined && Number(body.studentStatus) !== Number(current)) {
+        throw new BizError(BizCode.PARAM_ERROR, lockedStatusMessage('该学生'));
+      }
+      body = { ...body, studentStatus: Number(current) };
+    }
+  }
+
+  /**
+   * ★ 2026-10-22 用户口径：学生阶段跟随所在班级，不再手选。
+   *   前端选班时已带出，这里再按班级覆盖一次 —— 接口调用方也改不了。
+   */
+  if (body.classId) {
+    const phase = await phaseCodeOfClass(body.stage, body.classId);
+    if (phase !== null) body.phaseCode = phase;
+  }
   try {
     return await REPOS[body.stage].save(body, user?.userId || 'system');
   } catch (e) {
@@ -497,6 +523,20 @@ function bedNoToInt(v: unknown): number | null {
   if (!m) return null;
   const n = Number(m[0]);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/* ============================================================
+ * ★ 2026-10-21 批注：学生档案操作列【已就业】（终态，不可回退）
+ *   学生必须属于当前账号可访问的学段；已是已就业的直接报错。
+ * ============================================================ */
+export async function confirmEmployed(
+  stage: StudentStage,
+  id: string,
+  user: any,
+): Promise<{ fromStatusName: string; toStatusName: string }> {
+  await assertStageView(user, stage);
+  const r = await markEmployed(stage, id, user);
+  return { fromStatusName: r.fromStatusName, toStatusName: r.toStatusName };
 }
 
 export async function upgradeToUniversity(

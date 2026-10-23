@@ -19,7 +19,7 @@ export enum Gender {
  *   （与 consult/enums.ts 保持一致，五份副本必须同步）
  */
 export enum DeptCode {
-  JUNIOR_SENIOR = 1,  // 初中部（历史命名，值不变）
+  JUNIOR_SENIOR = 1,  // 初高部（历史命名，值不变）
   UNIVERSITY = 2,     // 大学部
   /**
    * ★ 2026-10-22 补齐：与主包 `shared-types/src/enums.ts` 的 DeptCode 对齐。
@@ -29,14 +29,13 @@ export enum DeptCode {
    *   财务这份字典原来只有 1/2 → 就业部的单在财务页面「部门」列显示空白。
    */
   EMPLOYMENT = 3,     // 就业部
-  SENIOR = 4,         // 高中部
 }
 
 /** 部门下拉顺序（初中部 → 高中部 → 大学部） */
 export const DEPT_OPTIONS: number[] = [
   DeptCode.JUNIOR_SENIOR,
-  DeptCode.SENIOR,
   DeptCode.UNIVERSITY,
+  DeptCode.EMPLOYMENT,
 ];
 
 /** 学生状态（全系统最重要的字段） */
@@ -233,8 +232,8 @@ export const GENDER_NAME: Record<number, string> = {
 };
 
 export const DEPT_NAME: Record<number, string> = {
-  [DeptCode.JUNIOR_SENIOR]: '初中部',
-  [DeptCode.SENIOR]: '高中部',
+  // ★ 2026-10-22 部门名统一叫「初高部」（原「初中部 / 二三期」两种叫法并存）
+  [DeptCode.JUNIOR_SENIOR]: '初高部',
   [DeptCode.UNIVERSITY]: '大学部',
   [DeptCode.EMPLOYMENT]: '就业部',
 };

@@ -30,9 +30,11 @@ import type {
 } from '../shared/dto';
 import { CLASS_STAGES, CLASS_STAGE_NAME, isClassStage } from '../shared/dto';
 import { assertClassInScope } from '../shared/dataScope';
-import { uniDb } from '../shared/uniTable';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
+/* ★ 2026-10-22：教职员工下拉直接读权限库的用户表（与本模块其它跨库查询同款，
+ *   参考 teaching/dorm/repo.uni.ts 的 sms_perm.t_perm_user 用法）。 */
+import { db as permDb } from '../../perm/utils/db';
 import type { ClassDetail, ClassRepo } from './types';
 import {
   HANDOVER_ROLES,
@@ -42,7 +44,6 @@ import {
   type RoleKey,
   type StaffSlot,
 } from './handover.repo';
-import { listSchemes, type StageSchemeItem } from '../../class-jh/utils/stageScheme';
 
 const REPOS: Record<ClassStage, ClassRepo> = {
   jh: repoClassJh.repo,
@@ -95,6 +96,63 @@ function optStage(v: unknown): ClassStage | undefined {
 }
 
 /* ============================================================
+ * ★ 2026-10-22 批注：「部门」下拉删除「实训」，实训班并入「就业部」
+ * ------------------------------------------------------------
+ *   前端「部门」筛选只剩 初高部 / 大学部 / 就业部。
+ *   实训(job) 与就业(emp) 在库里是**同一张表**（sms_job.t_job_class），
+ *   只靠 stage_key 区分，dept_code 都是 3 —— 所以选「就业部」必须同时查这两套，
+ *   否则做了「升实训」的班在页面上就凭空消失了。
+ *   行的 stage 仍是 job / emp（操作按钮、删改、详情都要按真实 stage 走），
+ *   只是「部门」这一层的展示合并成就业部。
+ * ============================================================ */
+const STAGE_FANOUT: Record<ClassStage, ClassStage[]> = {
+  jh: ['jh'],
+  class: ['class'],
+  job: ['job'],
+  emp: ['job', 'emp'],
+};
+
+/** 把「部门选项」展开成真正要查的学段（去重、保持顺序） */
+function expandStages(stages: ClassStage[]): ClassStage[] {
+  const out: ClassStage[] = [];
+  for (const s of stages) {
+    for (const x of STAGE_FANOUT[s]) if (!out.includes(x)) out.push(x);
+  }
+  return out;
+}
+
+/** 按学段固定顺序排（初高 → 大学 → 实训 → 就业） */
+function sortByStage<T extends { stage: ClassStage }>(list: T[]): T[] {
+  return list.sort((a, b) => CLASS_STAGES.indexOf(a.stage) - CLASS_STAGES.indexOf(b.stage));
+}
+
+/**
+ * 统计卡：把「实训」那一行并进「就业部」，页面上不再出现「实训班级」卡
+ *   （部门下拉已经没有实训了，卡片再单列一行就和筛选对不上）
+ */
+function mergeJobIntoEmp(list: ClassSummary[]): ClassSummary[] {
+  const job = list.find((x) => x.stage === 'job');
+  if (!job) return list;
+  const n = (v: number | undefined) => Number(v || 0);
+  const out = list.filter((x) => x.stage !== 'job');
+  const emp = out.find((x) => x.stage === 'emp');
+  if (!emp) {
+    // 只有实训班（还没有真正的就业班）→ 用实训那条顶上，名字统一成「就业部」
+    out.push({ ...job, stage: 'emp', stageName: CLASS_STAGE_NAME.emp });
+  } else {
+    emp.total += job.total;
+    emp.openCount += job.openCount;
+    emp.closedCount += job.closedCount;
+    emp.graduatingCount += job.graduatingCount;
+    emp.studentCount += job.studentCount;
+    emp.trainingCount = n(emp.trainingCount) + n(job.trainingCount);
+    emp.waitEmployCount = n(emp.waitEmployCount) + n(job.waitEmployCount);
+    emp.employedCount = n(emp.employedCount) + n(job.employedCount);
+  }
+  return sortByStage(out);
+}
+
+/* ============================================================
  * 列表（合并 + 分页；统计与列表共用 mergedRows，保证「卡片 = 列表」）
  * ============================================================ */
 
@@ -102,14 +160,16 @@ async function mergedRows(
   q: ClassListQuery,
   user: any,
 ): Promise<{ rows: ClassRow[]; stages: ClassStage[] }> {
-  const stages: ClassStage[] = q.stage ? [q.stage] : await visibleStages(user);
+  const stages: ClassStage[] = expandStages(q.stage ? [q.stage] : await visibleStages(user));
   if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有班级信息的访问权限');
   if (q.stage) await assertStageView(user, q.stage);
 
+  // ★ 展开出来的子学段（就业部 → job + emp）不再单独判权：
+  //   两个学段用的是同一个权限码（见 CODES），父级过了就等于子级也过了。
   const parts = await Promise.all(stages.map((s) => REPOS[s].list(q, user)));
   let rows = parts.flat();
 
-  // 学段顺序固定（初高 → 大学 → 实训），再按创建时间倒序
+  // 学段顺序固定（初高 → 大学 → 实训 → 就业），再按创建时间倒序
   rows.sort((a, b) => {
     const sa = CLASS_STAGES.indexOf(a.stage);
     const sb = CLASS_STAGES.indexOf(b.stage);
@@ -138,12 +198,14 @@ export async function summaryClasses(
   q: ClassListQuery,
   user: any,
 ): Promise<ClassSummary[]> {
-  const stages: ClassStage[] = q.stage ? [q.stage] : await visibleStages(user);
+  const stages: ClassStage[] = expandStages(q.stage ? [q.stage] : await visibleStages(user));
   if (!stages.length) return [];
   if (q.stage) await assertStageView(user, q.stage);
 
   // 逐学段统计（每个仓储自己算，口径与它自己的 list 一致）
-  return Promise.all(stages.map((s) => REPOS[s].summary(q, user)));
+  const list = await Promise.all(stages.map((s) => REPOS[s].summary(q, user)));
+  // ★ 2026-10-22：「实训」不再单列一行卡片，并进「就业部」
+  return mergeJobIntoEmp(list);
 }
 
 /** 详情 */
@@ -174,21 +236,33 @@ export async function saveClass(body: ClassSaveBody, user: any): Promise<{ id: s
 /** 删除 */
 export async function removeClass(stage: ClassStage, id: string, user: any): Promise<void> {
   await assertStageView(user, stage);
-
-  /* ★ 2026-10-21：班内还有学生就**不许删班**。
-     之前直接软删班级，学生档案/考试成绩还挂着这个 class_id →
-     成绩页会出现「幽灵行」，点末班报「班级不存在」（实测过）。
-     要删班请先把学生转出或删除。 */
-  const [{ c: stuCount }] = (await uniDb('t_uni_student')
-    .where({ class_id: id, edu_stage: stage, is_deleted: 0 })
-    .count({ c: '*' })) as Array<{ c: number }>;
-  if (Number(stuCount) > 0) {
+  /**
+   * ★ 2026-10-22 批注：**不可删除有人的班级**
+   *   原实现直接软删班级 —— 班里还有学生时，删完班级就没了，
+   *   学生档案与花名册里会留下指向已删班级的孤儿记录。
+   *
+   * 【为什么在这里拦，而不在各仓储的 remove()】
+   *   四个 repo 的 remove 只做一句 update，口径各异（jh/class 读 t_class_student、
+   *   job/emp 读 t_job_class_student）。detail() 已经把「在读人数」算好了
+   *   （base.studentCount，与列表「人数」列同源），复用它可以避免四份重复判断。
+   *
+   * 【为什么用 detail 现算，不信前端传的 studentCount】
+   *   前端只是提前提示；真要删的时候必须由后端复算，否则改个请求就能删掉有人的班。
+   *
+   * 【合并上游时的取舍（2026-10-22）】
+   *   上游同期也加了同一道闸（直接 count t_uni_student）。两版等价，
+   *   保留本版：① 提示里带班级名与人数，和前端弹窗「不可删除有人的班级」同一句话；
+   *   ② 人数口径走各仓储的 detail()，与列表「人数」列同源（emp/job 两套表都覆盖）。
+   */
+  const detail = await pick(stage).detail(id, user);
+  if (!detail) throw new BizError(BizCode.PARAM_ERROR, '班级不存在或无权操作');
+  const studentCount = Number(detail.base?.studentCount ?? 0);
+  if (studentCount > 0) {
     throw new BizError(
       BizCode.PARAM_ERROR,
-      `班内还有 ${stuCount} 名学生，请先把学生转出或删除，再删班级`,
+      `不可删除有人的班级：「${detail.base.className}」当前有 ${studentCount} 名学生，请先将学生转出或结业后再删除`,
     );
   }
-
   await pick(stage).remove(id, user?.userId || '');
 }
 
@@ -233,20 +307,11 @@ export async function listClassMeta(user: any): Promise<ClassStageMeta[]> {
   }));
 }
 
-/**
- * ★ 2026-10-16：阶段方案选项（班级表单的「阶段方案 / 阶段」两个下拉）
- *
- * 方案数据存在初高库（sms_class_jh）的 t_class_stage_scheme，
- * 但按部门区分（1 初高部 / 2 大学部）—— 三个学段的班级表单都取这一份，
- * 前端按表单里选中的「部门」过滤，选完方案后「阶段」下拉 = 该方案的阶段明细。
- */
-export async function listSchemeOptions(user: any): Promise<StageSchemeItem[]> {
-  const stages = await visibleStages(user);
-  if (!stages.length) {
-    throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有班级信息的访问权限');
-  }
-  return listSchemes();
-}
+/* ★ 2026-10-20：原 listSchemeOptions（/api/teaching/class/scheme-options）已删除 ——
+ *   它读的 t_class_stage_scheme / t_class_stage_scheme_stage 两张表从未建过
+ *   （迁移从未执行），接口一进来就报「数据表不存在」。
+ *   班级表单的「阶段方案 / 阶段」统一取上面 listClassMeta 下发的 planOptions，
+ *   数据源 = t_class_stage_plan + t_class_stage（系统设置 · 阶段方案页维护的那套）。 */
 
 /**
  * 班级下拉（供出勤/考试/成绩/学生等域复用）
@@ -269,8 +334,6 @@ export async function listClassOptions(user: any) {
   for (const s of stages) {
     const rows = await REPOS[s].list({ stage: s, page: 1, size: 200 }, user);
     for (const r of rows) {
-      // 已结业的班不作为「可转入」选项
-      if (r.classStatus === 4) continue;
       out.push({
         stage: r.stage,
         stageName: r.stageName,
@@ -407,4 +470,29 @@ export async function handoverClass(
     operatorId: userId || null,
     operatorName: userName || null,
   });
+}
+
+
+/* ============================================================
+ * ★ 2026-10-22 新增：教职员工下拉（建班 / 交接时选班主任、教员、助教…）
+ *
+ * 【为什么不在前端直接拉 /api/perm/user/list】
+ *   那个接口挂 permAuth（要求账号 modules 含 perm）。
+ *   初高 / 大学 / 就业账号一进「班级管理」就会 403 ——
+ *   前端拦截器弹一条「您没有该操作的权限」，而且下拉是空的（建班选不了人）。
+ *   （2026-10-22 用户报障：每个账号登录都弹没有权限）
+ *
+ * 【口径】
+ *   本函数只吐下拉要用的 id + 姓名，跟着「班级页面权限」走
+ *   （app.ts 里 /api/teaching/class 已用 requireAnyPage 卡三个学段的班级页面码），
+ *   不额外要求权限管理模块。停用 / 已删的账号不返回。
+ * ============================================================ */
+export async function listStaffOptions(): Promise<Array<{ id: string; userName: string }>> {
+  const rows = (await permDb('t_perm_user')
+    .where('is_deleted', false)
+    .andWhere('user_status', '正常')
+    .orderBy('user_name', 'asc')
+    .select('id', 'user_name as userName')) as any[];
+
+  return rows.map((r) => ({ id: String(r.id), userName: String(r.userName ?? '') }));
 }

@@ -234,7 +234,7 @@ const addSchema = z.object({
 
 deptRouter.post(
   '/add',
-  checkPermission('perm:职位管理:add'),
+  checkPermission('perm:部门管理:add'),
   validate(addSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
@@ -291,7 +291,7 @@ const updateSchema = addSchema.extend({ id: z.string().min(1, '必须传 id') })
 
 deptRouter.put(
   '/update',
-  checkPermission('perm:职位管理:edit'),
+  checkPermission('perm:部门管理:edit'),
   validate(updateSchema),
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof updateSchema>;
@@ -377,7 +377,7 @@ deptRouter.put(
 
 deptRouter.delete(
   '/delete/:id',
-  checkPermission('perm:职位管理:del'),
+  checkPermission('perm:部门管理:del'),
   wrap(async (req, res) => {
     const { id } = req.params;
 

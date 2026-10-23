@@ -207,6 +207,14 @@ export interface ConsultStudentSavePayload {
   parentContact?: string;
   parentPhone?: string;
   deptCode?: DeptCode;
+  /**
+   * ★ 2026-10-22 用户口径：新建学生表单里的「部门」取消，改成「年龄」。
+   *
+   * 部门是分班时才确定的（选学部 = 选班级所在学段），咨询录入阶段不该先锁死；
+   * 年龄是咨询期就要看的真实信息，且班主任接收入班时可以直接沿用
+   * （见 /enroll-to-class 推送单里的 age 字段）。
+   */
+  age?: number;
 }
 
 /** 完善档案信息 */

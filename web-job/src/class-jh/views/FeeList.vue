@@ -37,9 +37,16 @@ import { fetchFeeCallList, submitFeeCallPayment } from '@/api/feeCall';
 import { fetchClassOptions } from '@/class-jh/api/classInfo';
 import { exportCsv } from '@/class-jh/utils/exportCsv';
 import { dash, formatAmount, formatDate, payStatusTagType } from '@/class-jh/utils/format';
+/* ★ 2026-10-22：三部门聚合取数前先看「本账号有没有那个板块」——
+ *   没有就不请求（否则后端 403，拦截器弹「您没有该操作的权限」，用户一进催费页就吃红字）。 */
+import { moduleAllowed } from '@/store/modules';
 
 const loading = ref(false);
 const classOptions = ref<ClassInfo[]>([]);
+
+/* 本账号能否看「大学 / 就业」两个部门的数据（决定：请求要不要发、部门下拉要不要显示） */
+const canDeptClass = computed(() => moduleAllowed('class'));
+const canDeptEmploy = computed(() => moduleAllowed('job'));
 
 // ★ 2026-10-19 部门维度（用户二次要求）：催费列表聚合 初高/大学/就业 三部门——
 //   初高=本页原生缴费台账（功能不变）；大学=催缴记录（/api/class/urge/list）；
@@ -208,6 +215,8 @@ async function loadData() {
   loading.value = true;
   try {
     if (query.dept === 'class') {
+      // ★ 2026-10-22：没有「大学」板块 → 不请求（部门下拉里也不显示这一项）
+      if (!canDeptClass.value) { tableRows.value = []; serverTotal.value = 0; return; }
       // 大学催缴记录：缴费状态 / 仅看紧急 / 应缴日期 三筛全生效（2026-10-20）
       const data = await urgeList({
         page: query.page,
@@ -223,6 +232,7 @@ async function loadData() {
       tableRows.value = data.list.map((r) => urgeToRow(r));
       serverTotal.value = data.total;
     } else if (query.dept === 'employ') {
+      if (!canDeptEmploy.value) { tableRows.value = []; serverTotal.value = 0; return; }
       // 就业催费单：缴费状态统一成初高/大学那套，由后端按口径翻译（待缴/逾期靠应缴日区分）
       const data = await fetchFeeCallList({
         page: query.page,
@@ -242,7 +252,7 @@ async function loadData() {
       const kw = query.keyword || undefined;
       const settled = await Promise.allSettled([
         fetchFeeList({ ...query, page: 1, size: 100 }),
-        urgeList({
+        !canDeptClass.value ? Promise.resolve(null) : urgeList({
           page: 1,
           size: 100,
           classId: query.classId,
@@ -254,7 +264,7 @@ async function loadData() {
           keyword: kw,
         }),
         // 选了「已核对 / 冻结」时就业没有对应状态 → 后端 payStatus 翻译成 1=0，该源不出数据
-        fetchFeeCallList({
+        !canDeptEmploy.value ? Promise.resolve(null) : fetchFeeCallList({
           page: 1,
           size: 100,
           classId: query.classId,
@@ -271,8 +281,10 @@ async function loadData() {
         rows.push(...settled[0].value.list.map((r) => ({ ...r, dept: '初高' } as FeeRow)));
         urgeWindowDays.value = settled[0].value.urgeWindowDays ?? urgeWindowDays.value;
       }
-      if (settled[1].status === 'fulfilled') rows.push(...settled[1].value.list.map((r: any) => urgeToRow(r)));
-      if (settled[2].status === 'fulfilled') rows.push(...settled[2].value.list.map((r: any) => callToRow(r)));
+      const clsRes: any = settled[1].status === 'fulfilled' ? settled[1].value : null;
+      const empRes: any = settled[2].status === 'fulfilled' ? settled[2].value : null;
+      if (clsRes?.list) rows.push(...clsRes.list.map((r: any) => urgeToRow(r)));
+      if (empRes?.list) rows.push(...empRes.list.map((r: any) => callToRow(r)));
       rows.sort((a, b) => (b.expireDate || '0000').localeCompare(a.expireDate || '0000'));
       mergedRows.value = rows;
     } else {
@@ -755,11 +767,11 @@ async function collectRowsForExport(): Promise<FeeRow[]> {
     const list = await exportFee(query);
     out.push(...list.map((r) => ({ ...r, dept: '初高' } as FeeRow)));
   }
-  if (dept === 'class' || dept === 'all') {
+  if ((dept === 'class' || dept === 'all') && canDeptClass.value) {
     const list = await collectAllPages((page, size) => urgeList({ ...deptQuery(), page, size }));
     out.push(...list.map((r) => urgeToRow(r)));
   }
-  if (dept === 'employ' || dept === 'all') {
+  if ((dept === 'employ' || dept === 'all') && canDeptEmploy.value) {
     const list = await collectAllPages((page, size) => fetchFeeCallList({ ...deptQuery(), page, size }));
     out.push(...list.map((r) => callToRow(r)));
   }
@@ -796,8 +808,8 @@ onMounted(() => {
           <el-select v-model="query.dept" style="width: 130px" @change="handleDeptChange">
             <el-option label="全部部门" value="all" />
             <el-option label="初高" value="jh" />
-            <el-option label="大学" value="class" />
-            <el-option label="就业" value="employ" />
+            <el-option v-if="canDeptClass" label="大学" value="class" />
+            <el-option v-if="canDeptEmploy" label="就业" value="employ" />
           </el-select>
         </el-form-item>
         <el-form-item label="关键字">
