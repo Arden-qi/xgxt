@@ -23,6 +23,7 @@ import {
 import { config } from '../../config';
 import { wrap } from '../../middleware/error';
 import { tbl, tblTrx, tblInsTrx } from '../../../teaching/shared/uniTable';
+import { actorId, actorIds, isActor } from '../../../utils/actor';
 
 /** 本模块只服务大学学段 */
 const SRC = 'sms_class';
@@ -197,7 +198,7 @@ refundRouter.post(
         refund_reason: b.refundReason,
         refund_status: RefundStatus.PENDING_MANAGER,
         is_need_principal: isNeedPrincipal ? 1 : 0,
-        applicant_id: user.userId,
+        applicant_id: actorId(user),
         applicant_name: user.userName,
         apply_time: applyTimeStr,
         current_handler_role: RefundStatusHandlerRole[RefundStatus.PENDING_MANAGER] ?? null,
@@ -291,7 +292,7 @@ refundRouter.post(
 
     // **只有申请人本人**可以撤回：撤回是「发起人」的动作，不是「审批人」的动作。
     // 这里刻意不给全量权限角色开后门——否则「学管能否撤掉班主任的申请」就变得含糊。
-    if (apply.applicant_id !== user.userId) {
+    if (!isActor(user, apply.applicant_id)) {
       throw Errors.noOperationPermission('只有该申请的发起人可以撤回');
     }
 

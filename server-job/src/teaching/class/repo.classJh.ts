@@ -154,14 +154,16 @@ function applyScope(qb: any, user: any): void {
 async function scopedClassIds(user: any): Promise<string[] | null> {
   const scope = Number(user?.dataScope ?? 4);
   if (scope !== 2) return null;
-  const uid = user?.userId || '';
-  if (!uid) return [];
+  /* ★ 2026-10-23：责任人列可能存门户 UUID 或权限库 U 号，两个都比 */
+  const uids = [...new Set([user?.userId, user?.businessUserId, user?.portalUserId]
+    .map((x: any) => String(x || '')).filter(Boolean))];
+  if (!uids.length) return [];
   const rows = (await tbl(db, 'sms_class_jh', T, STAGE)
     .where('is_deleted', false)
     .andWhere((b: any) => {
-      b.where('head_teacher_id', uid)
-        .orWhere('teacher_id', uid)
-        .orWhere('assistant_id', uid);
+      b.whereIn('head_teacher_id', uids)
+        .orWhereIn('teacher_id', uids)
+        .orWhereIn('assistant_id', uids);
     })
     .select('id')) as Array<{ id: string }>;
   return rows.map((r) => String(r.id));

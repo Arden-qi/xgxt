@@ -631,12 +631,19 @@ export interface StageDict extends BaseEntity {
 /**
  * 阶段方案 · 阶段明细（★ 2026-10-16）
  *
- * 方案里的一个阶段：阶段名称 + 学制月数。
+ * 方案里的一个阶段：阶段名称 + 学制月数 + 阶段编码。
  * 例：方案一 → 一阶段 2月 / 二阶段 2月 / 三阶段 2月。
  */
 export interface StageSchemeStage {
   id: string;
   stageName: string;
+  /**
+   * 阶段编码（★ 2026-10-22 新增）
+   *
+   * 班级 / 学生表的 `stage` 存的就是它（1xx 初高 / 2xx 大学 / 3xx 就业）。
+   * 新增时可不传，后端按「同名沿用 → 原位置沿用 → 字典同名 → 号段分配」自动算。
+   */
+  stageCode?: number | null;
   /** 学制月数 */
   studyMonths?: number | null;
   /** 方案内顺序 */

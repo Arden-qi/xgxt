@@ -16,6 +16,7 @@ import { wrap } from '../../middleware/error';
 import { tbl, tblTrx, tblInsTrx, uniUpdCols } from '../../../teaching/shared/uniTable';
 import { boolFlag } from '../../../utils/query';
 import { checkPayDate, saveVoucherImage, PAY_METHOD, PAY_METHOD_NAME } from '../../../utils/feeVoucher';
+import { actorId, actorIds, isActor } from '../../../utils/actor';
 
 /**
  * ★ 第 10 批：催费域切读
@@ -364,7 +365,7 @@ urgeRouter.post(
         amount: rec.amount as number,
         channel: b.channel,
         remark: b.remark ?? null,
-        operator_id: user.userId,
+        operator_id: actorId(user),
         operator_name: user.userName,
         urge_time: t,
       });

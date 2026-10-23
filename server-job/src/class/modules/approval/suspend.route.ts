@@ -19,6 +19,7 @@ import { applySyncScope } from '../shared/syncScope';
 import { tbl, tblTrx, tblInsTrx } from '../../../teaching/shared/uniTable';
 // ★ 2026-10-20 试学闭环：退学通过后回写咨询侧状态（→ 流失）
 import { consultClient } from '../../lib/consultClient';
+import { actorId, actorIds, isActor } from '../../../utils/actor';
 
 /** 本模块只服务大学学段 */
 const SRC = 'sms_class';
@@ -148,7 +149,7 @@ suspendRouter.post(
         occurred_amount: b.occurredAmount ?? null,
         refundable_amount: b.refundableAmount ?? null,
         apply_status: SuspendStatus.PENDING_MANAGER,
-        applicant_id: user.userId,
+        applicant_id: actorId(user),
         applicant_name: user.userName,
         apply_time: t,
       } as never);
@@ -464,7 +465,7 @@ suspendRouter.post(
       | Record<string, unknown>
       | undefined;
     if (!apply) throw Errors.applyNotFound();
-    if (apply.applicant_id !== user.userId && !isFullAccess(user)) {
+    if (!isActor(user, apply.applicant_id) && !isFullAccess(user)) {
       throw Errors.noOperationPermission('只能撤回自己提交的申请');
     }
     const status = apply.apply_status as number;

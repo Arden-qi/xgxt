@@ -58,6 +58,11 @@ export interface StageSchemeStagePayload {
   stageName: string;
   /** 学制月数 */
   studyMonths: number;
+  /**
+   * 阶段编码（可选）
+   * 不传时由后端分配：同名沿用 → 原位置沿用 → 字典同名 → 部门号段内第一个空号。
+   */
+  stageCode?: number | null;
 }
 
 /** 阶段方案新增 / 修改入参（修改时阶段明细整体覆盖） */

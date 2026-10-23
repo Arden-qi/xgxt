@@ -560,6 +560,22 @@ async function ensureDatabases() {
     else warn(`${db} 导入失败（不影响其它模块，可稍后手动导入）`);
   }
 
+  // 5d-2) ★ 人员 ID 统一（2026-10-23）
+  //
+  // 【为什么放在这里】
+  //   全系统统一用「权限库用户号（U004…）」作为人员 ID，但四个模块库的演示 SQL
+  //   是历史导出，里面还写着门户账号 UUID。新装环境导完 SQL 就带着旧 ID，
+  //   于是「班主任看不到自己的班」等问题会在每台新机器上重演一遍。
+  //   这一步在导入之后自动把 UUID 映射成 U 号；幂等，老环境跑也只是空转。
+  console.log('    正在统一人员 ID（门户 UUID → 权限库 U 号）...');
+  const idOk = await runNpm(
+    path.join(ROOT, 'server-job'),
+    ['run', 'id:unify:apply', '--', '--quiet'],
+    'id-unify',
+  );
+  if (idOk) ok('人员 ID 已统一（权限库 U 号）');
+  else warn('人员 ID 统一失败（不影响启动，可稍后在 server-job 执行 npm run id:unify:apply）');
+
   // 5e) ★ 权限树版本自检（2026-10-22）
   //
   // 【为什么要有这一步】

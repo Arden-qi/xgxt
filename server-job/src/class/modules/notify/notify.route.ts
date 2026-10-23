@@ -9,6 +9,7 @@ import { now } from '../../lib/ids';
 import { ApplyTypeName, NotifyTypeName } from '../../lib/dict';
 import { wrap } from '../../middleware/error';
 import { tbl, uniUpdCols } from '../../../teaching/shared/uniTable';
+import { actorId, actorIds, isActor } from '../../../utils/actor';
 
 const SRC = 'sms_class';
 const STAGE = 'class' as const;
@@ -68,7 +69,7 @@ notifyRouter.get(
 
     const base = NOTIFY();
     notDeleted(base);
-    base.where('receiver_id', user.userId);
+    base.whereIn('receiver_id', actorIds(user));
     if (query.notifyType) base.where('notify_type', query.notifyType);
     if (query.applyType) base.where('apply_type', query.applyType);
     if (query.onlyUnread) base.where('is_read', 0);
@@ -104,7 +105,7 @@ notifyRouter.get(
   wrap(async (req, res) => {
     const user = req.user!;
     const rows = (await notDeleted(NOTIFY())
-      .where({ receiver_id: user.userId, is_read: 0 })
+      .whereIn('receiver_id', actorIds(user)).andWhere('is_read', 0)
       .select('notify_type')
       .count({ c: '*' })
       .groupBy('notify_type')) as Array<Record<string, unknown>>;
@@ -153,7 +154,7 @@ notifyRouter.post(
     const user = req.user!;
     const { id, ids } = req.body as { id?: string; ids?: string[] };
 
-    const qb = NOTIFY().where({ receiver_id: user.userId, is_read: 0 });
+    const qb = NOTIFY().whereIn('receiver_id', actorIds(user)).andWhere('is_read', 0);
     const targets = (ids ?? (id ? [id] : [])).filter(Boolean);
     if (targets.length) qb.whereIn('id', targets);
 
@@ -189,7 +190,7 @@ notifyRouter.get(
       | Record<string, unknown>
       | undefined;
     if (!row) throw Errors.notifyNotFound();
-    if (row.receiver_id !== user.userId) {
+    if (!isActor(user, row.receiver_id) && !((user.roles || []) as string[]).includes(String(row.receiver_id))) {
       throw Errors.noOperationPermission('只能查看发给自己的通知');
     }
     if (!row.is_read) {

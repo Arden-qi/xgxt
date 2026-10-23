@@ -34,6 +34,7 @@ import { db as jhDb } from '../../../class-jh/utils/db';
 import { consultClient } from '../../lib/consultClient';
 // ★ 2026-10-22 方案A：建档生成学号后回填财务单据并重推缴费台账（同进程直调，非阻断）
 import { syncStudentNoFromTeaching } from '../../../finance/services/student-no-sync.service';
+import { actorId, actorIds, isActor } from '../../../utils/actor';
 
 /**
  * 咨询推送（需求 v1.2）
@@ -692,7 +693,7 @@ async function doReceive(
         .where({ id: b.id })
         .update({
           apply_status: ConsultStatus.RECEIVED,
-          receiver_id: user.userId,
+          receiver_id: actorId(user),
           receiver_name: user.userName,
           receive_time: now(),
           student_id: sid,
@@ -907,7 +908,7 @@ async function doReceive(
 
         await trx('t_uni_consult_push').where({ id: b.id, edu_stage: pushStage }).update({
           apply_status: ConsultStatus.RECEIVED,
-          receiver_id: user.userId,
+          receiver_id: actorId(user),
           receiver_name: user.userName,
           receive_time: now(),
           student_id: sid,
@@ -986,7 +987,7 @@ async function doReceive(
 
       await PUSH_TRX(trx).where({ id: b.id }).update({
         apply_status: ConsultStatus.RECEIVED,
-        receiver_id: user.userId,
+        receiver_id: actorId(user),
         receiver_name: user.userName,
         receive_time: now(),
         student_id: studentId,
@@ -1164,7 +1165,7 @@ consultRouter.post(
       .where({ id: b.id, edu_stage: stageOfPush(push) })
       .update({
       apply_status: ConsultStatus.REJECTED,
-      receiver_id: user.userId,
+      receiver_id: actorId(user),
       receiver_name: user.userName,
       receive_time: now(),
       reject_reason: b.rejectReason.trim(),

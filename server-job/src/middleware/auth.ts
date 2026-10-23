@@ -29,6 +29,18 @@ export interface AuthUser {
   userName: string;
   roles: string[];
   /**
+   * ★ 2026-10-23 ID 统一改造：
+   *   业务表里的"责任人"列历史上混存两类值 ——
+   *   门户账号 UUID 与 权限库用户号（U004/U_chenxf…）。
+   *   现在以 **权限库用户号** 为唯一标准：
+   *     · businessUserId = 权限库用户号（新数据都写它）
+   *     · portalUserId   = 门户账号 UUID（只用于登录/账号维护）
+   *     · userId         留待第 5 批统一切到 businessUserId，
+   *                      过渡期业务代码用 [businessUserId, userId] 两个都比
+   */
+  businessUserId?: string;
+  portalUserId?: string;
+  /**
    * ★ 2026-10-04 班级模块并入时：由「可选」改为**必填**。
    *   班级的 `dataScope.ts` 等代码直接读 `user.deptCode`（不带兜底），
    *   类型上必须是 number 才能通过编译。
@@ -375,10 +387,29 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
    */
   await ensureRoleEquivLoaded();
 
+  /**
+   * ★ 2026-10-23 收口：`userId` 统一等于**权限库用户号**
+   *
+   *   历史包袱（本次改造的根因）：token 里带的是门户 UUID，
+   *   而业务表责任人列混存 UUID 与 U 号，导致「谁是我」两套答案。
+   *   现在：userId = businessUserId（U 号），门户 UUID 单独放 portalUserId，
+   *   只有登录、账号维护这类必须用门户主键的地方才读 portalUserId。
+   */
+  if (!businessUserId && account) {
+    // 系统管理员分支没走 profile 解析，这里补一次（失败返回空，退回门户 id）
+    try {
+      businessUserId = (await resolveAccountProfile(account)).permUserId;
+    } catch {
+      /* 忽略 */
+    }
+  }
+  const portalUserId = String(payload.userId || payload.accountId || '');
   req.user = {
-    userId: String(payload.userId || payload.accountId || ''),
+    userId: businessUserId || portalUserId,
     // ★ 业务侧用户 id（U004…），业务表责任人列用它做「我带的班」过滤
     businessUserId,
+    /** ★ 2026-10-23：门户账号 UUID 单独留一份 */
+    portalUserId,
     userName: String(payload.userName || account || ''),
     roles,
     /* ★★★ 2026-10-15 修：部门码原来**硬编码 1**（等于把所有账号都当成初高），
@@ -496,6 +527,16 @@ async function resolveAccountProfile(account: string): Promise<AccountProfile> {
 /** 薄包装：老调用方只关心角色码，保持原签名不变 */
 async function resolveBusinessRoles(account: string): Promise<string[]> {
   return (await resolveAccountProfile(account)).roles;
+}
+
+/**
+ * ★ 2026-10-23：给需要「权限库用户号」的模块用（班级/初高/财务…）
+ *
+ *   原来只导出 roles，导致别的模块拿不到 permUserId，
+ *   只能拿门户 UUID 去比业务表 → 恒不匹配（班主任 classIds 恒空）。
+ */
+export async function resolveBusinessProfile(account: string): Promise<AccountProfile> {
+  return resolveAccountProfile(account);
 }
 
 /**

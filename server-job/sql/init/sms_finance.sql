@@ -323,14 +323,34 @@ CREATE TABLE `t_finance_refund` (
   `reject_reason` varchar(255) DEFAULT NULL COMMENT '驳回原因',
   `is_in_bill` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否已归集账单明细',
   `attachment_url` varchar(255) DEFAULT NULL COMMENT '附件URL',
+  -- ★ 2026-10-23 补：上游溯源三列（教务/咨询推送退费时写入；出款后据此回写上游）
+  `source_module` varchar(32) DEFAULT NULL COMMENT '上游来源模块（teaching/consult…）',
+  `source_stage` varchar(16) DEFAULT NULL COMMENT '上游学段（jh/class/job）',
+  `source_refund_id` varchar(36) DEFAULT NULL COMMENT '上游教务退费单id（幂等键）',
   `remark` varchar(500) DEFAULT NULL COMMENT '备注',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_refund_order_no` (`order_no`),
+  UNIQUE KEY `uk_refund_source` (`source_module`,`source_refund_id`),
   KEY `idx_refund_student_id` (`student_id`),
   KEY `idx_refund_status` (`refund_status`),
   KEY `idx_refund_pushed_time` (`pushed_time`),
   KEY `idx_refund_is_deleted` (`is_deleted`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='退费记录表';
+
+-- ★ 2026-10-23 补：退费单费用项明细（2026-10-22 「每个费用项在财务对应一行」）
+CREATE TABLE `t_finance_refund_item` (
+  `id` varchar(36) NOT NULL COMMENT '主键UUID',
+  `create_time` datetime NOT NULL COMMENT '创建时间',
+  `create_by` varchar(36) DEFAULT NULL COMMENT '创建人ID',
+  `update_time` datetime DEFAULT NULL COMMENT '修改时间',
+  `update_by` varchar(36) DEFAULT NULL COMMENT '修改人ID',
+  `is_deleted` tinyint(1) NOT NULL DEFAULT '0' COMMENT '逻辑删除',
+  `refund_id` varchar(36) NOT NULL COMMENT '退费单id（t_finance_refund.id）',
+  `fee_type` int NOT NULL COMMENT '费用类型 1学费2住宿费3餐费4保险费5试学费',
+  `amount` int NOT NULL COMMENT '金额（单位：分）',
+  PRIMARY KEY (`id`),
+  KEY `idx_ri_refund` (`refund_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='退费单费用项明细（一项一行）';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
