@@ -270,12 +270,26 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
   
   /** 房间列表 + 实时已住（数 t_job_dorm_bed 里 bed_status=2 的条数） */
   async function roomRows(q: DormListQuery, user: any): Promise<DormRow[]> {
-    const qb = T_DORM().where({ is_deleted: false });
-  
     const scope = await scopedDormIds(user);
+
+    /**
+     * ★ 2026-10-23 修：班主任（scope 有限）改走**跨学段**房间查询。
+     *
+     *   scope = 「分派给本班的房间 ∪ 本班学生已入住的房间」，其中分派
+     *   来自 t_edu_dorm_assignment —— 分派弹窗给房时不分学段
+     *   （1号楼是初高房间，也能分给大学班 Q20）。而 T_DORM() 带
+     *   edu_stage=stage 注入 → 跨学段的分派房间被整段排除，
+     *   班主任登录后「看不到分配的宿舍」（实测 0 行）。
+     *
+     *   scope 本身就是最小集合 → 直接 whereIn('id', scope) 圈定，
+     *   不再叠加学段过滤；特权角色（scope=null）保持按学段全量。
+     */
+    let qb;
     if (scope !== null) {
       if (!scope.length) return [];
-      qb.whereIn('id', scope);
+      qb = uniDb('t_uni_dorm_room').where({ is_deleted: false }).whereIn('id', scope);
+    } else {
+      qb = T_DORM().where({ is_deleted: false });
     }
   
     if (q.building) qb.andWhere('building', q.building);
@@ -305,7 +319,8 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
     if (!rooms.length) return [];
   
     const ids = rooms.map((r: any) => String(r.id));
-    const beds = await T_BED().whereIn('dorm_id', ids).where({ is_deleted: false });
+    // ★ 床位统计跨学段查（房间 id 唯一；scope 房间可能来自别的学段）
+    const beds = await uniDb('t_uni_dorm_bed').whereIn('dorm_id', ids).where({ is_deleted: false });
     const cntByDorm = new Map<string, number>();
     const bedTotal = new Map<string, number>();
     for (const b of beds) {

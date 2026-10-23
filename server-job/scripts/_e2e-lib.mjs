@@ -39,7 +39,7 @@ const TASKKILL = process.platform === 'win32' ? 'C:/Windows/System32/taskkill.ex
  * 进程管理
  * ============================================================ */
 
-const procs = [];
+export const procs = [];
 
 export function launch(cwd, args, tag, envOverride = null) {
   const p = spawn(NODE, args, {

@@ -32,8 +32,24 @@ const JH_SRC = 'sms_class_jh';
  *   （班级自己的 JWT 里本来就带 classIds，那条路不用查）
  */
 async function fillClassIds(user: AuthUser): Promise<void> {
+  console.log('[DBG2] fillClassIds 调用: userId=', user.userId, '| token自带classIds=', JSON.stringify(user.classIds), '| account=', (user as any).account);
   if (!user.userId) return;
   const ids = new Set<string>(user.classIds || []);
+
+  /* ★ 2026-10-23：按账号反查权限库 id —— 三岗 id 两种口径（门户 UUID / U00x），
+     远端新代码建班存的是后者，只按门户 UUID 匹配会漏掉新带的班
+     （宿舍分派/待接收/数据范围全部受影响）。 */
+  let permUid = '';
+  if ((user as any).account) {
+    try {
+      const pu = (await db('sms_perm.t_perm_user')
+        .where({ account: String((user as any).account) })
+        .first()) as any;
+      if (pu?.id) permUid = String(pu.id);
+    } catch {
+      /* 权限库不可用 → 只按 userId 匹配 */
+    }
+  }
 
   if (!ids.size) {
     try {
@@ -56,9 +72,19 @@ async function fillClassIds(user: AuthUser): Promise<void> {
          */
         .whereNot('class_status', ClassStatus.TRAINING)
         .andWhere((q: any) => {
-          q.where('head_teacher_id', user.userId)
-            .orWhere('teacher_id', user.userId)
-            .orWhere('assistant_id', user.userId);
+          /**
+           * ★ 2026-10-23 修：三岗 id 存在**两种口径**——
+           *   老数据/宿舍域存门户 UUID，远端新代码建班存权限库 id（U004）。
+           *   只按 user.userId 单口径匹配 → 新建的班（U004 口径）不进 classIds，
+           *   班主任在宿舍管理/待接收里都看不到自己新带的班。
+           *   这里两个口径都试（token 里有 businessUserId 时一并匹配）。
+           */
+          const matchIds = [...new Set([user.userId, permUid, (user as any).businessUserId].filter(Boolean))];
+          for (const id of matchIds) {
+            q.orWhere('head_teacher_id', id)
+              .orWhere('teacher_id', id)
+              .orWhere('assistant_id', id);
+          }
         })
         .select('id')) as Array<{ id: string }>;
       for (const r of rows) ids.add(r.id);
@@ -128,6 +154,9 @@ async function resolvePortalRoles(user: AuthUser, payload: Record<string, unknow
   }
   const roles = account ? await resolveBusinessRoles(account) : [];
   user.roles = roles;
+  /* ★ 2026-10-23：把账号带给 fillClassIds —— 三岗 id 有门户 UUID / 权限库 id
+     两种口径，补 classIds 时要按账号反查权限库 id 才能两种都匹配。 */
+  (user as any).account = account;
   // 角色 → 数据范围：SYS_ADMIN / RM_PRINCIPAL / TEACH_DEAN → ALL；班主任/教员/助教 → CLASS
   user.dataScope = resolveDataScope(roles);
   user.deptCode = roles.length ? user.deptCode || 2 : 2;
