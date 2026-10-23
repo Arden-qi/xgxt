@@ -2,7 +2,11 @@
 /**
  * 系统设置页
  *
- * 两个页签：系统设置（KV）/ 操作日志。
+ * 一个页签：系统设置（KV）。
+ *
+ * ★ 2026-10-23：按用户要求再删「操作日志」页签 —— 本页只剩「系统设置」一个页签。
+ *   操作日志仍在后端写入（utils/opLog.ts → t_class_op_log），
+ *   要查全局留痕请走「权限管理 · 操作日志」（/perm/log）。
  *
  * ★ 2026-10-22：「楼栋设置」页签已下线 —— 搬到「教学管理 → 宿舍管理」
  *   （宿舍管理第 4 个页签）。楼栋字典仍是同一份（sms_common.t_dorm_building），
@@ -15,10 +19,9 @@
 
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Search, Refresh, SetUp } from '@element-plus/icons-vue';
-import type { ClassSetting, OpLog, OpLogListQuery } from 'shared-types/class-jh';
-import { fetchSettingDetail, updateSetting, fetchOpLogList } from '@/class-jh/api/setting';
-import { dash, formatDateTime } from '@/class-jh/utils/format';
+import { SetUp } from '@element-plus/icons-vue';
+import type { ClassSetting } from 'shared-types/class-jh';
+import { fetchSettingDetail, updateSetting } from '@/class-jh/api/setting';
 
 const activeTab = ref('setting');
 
@@ -80,43 +83,8 @@ async function saveSettings() {
   }
 }
 
-/* ================= 操作日志 ================= */
-const opLogLoading = ref(false);
-const opLogData = ref<OpLog[]>([]);
-const opLogTotal = ref(0);
-const opLogQuery = reactive<OpLogListQuery & { page: number; size: number }>({
-  page: 1,
-  size: 20,
-  bizType: undefined,
-  startDate: undefined,
-  endDate: undefined,
-});
-
-async function loadOpLog() {
-  opLogLoading.value = true;
-  try {
-    const data = await fetchOpLogList(opLogQuery);
-    opLogData.value = data.list;
-    opLogTotal.value = data.total;
-  } catch {
-    /* 错误已统一处理 */
-  } finally {
-    opLogLoading.value = false;
-  }
-}
-
-function resetOpLogQuery() {
-  opLogQuery.page = 1;
-  opLogQuery.size = 20;
-  opLogQuery.bizType = undefined;
-  opLogQuery.startDate = undefined;
-  opLogQuery.endDate = undefined;
-  loadOpLog();
-}
-
 onMounted(() => {
   loadSettings();
-  loadOpLog();
 });
 </script>
 
@@ -152,49 +120,7 @@ onMounted(() => {
            （第四个页签，与宿舍管理共用同一份楼栋字典） -->
 
       <!-- ★ 2026-10-22：「阶段方案」页签已迁到「班级管理 → 阶段方案设计」弹窗，此处删除 -->
-      <!-- 操作日志 -->
-      <el-tab-pane label="操作日志" name="opLog">
-        <el-form :model="opLogQuery" inline class="mb12">
-          <el-form-item label="业务类型">
-            <el-input v-model="opLogQuery.bizType" placeholder="如 休学/退费" clearable style="width: 150px" @keyup.enter="loadOpLog" />
-          </el-form-item>
-          <el-form-item label="操作时间">
-            <el-date-picker v-model="opLogQuery.startDate" type="date" value-format="YYYY-MM-DD" placeholder="开始" style="width: 140px" />
-            <span class="sep">~</span>
-            <el-date-picker v-model="opLogQuery.endDate" type="date" value-format="YYYY-MM-DD" placeholder="结束" style="width: 140px" />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :icon="Search" @click="loadOpLog">查询</el-button>
-            <el-button :icon="Refresh" @click="resetOpLogQuery">重置</el-button>
-          </el-form-item>
-        </el-form>
-
-        <el-table v-loading="opLogLoading" :data="opLogData" border stripe size="small" empty-text="暂无日志">
-          <el-table-column type="index" label="序号" width="60" align="center" />
-          <el-table-column label="操作时间" width="170">
-            <template #default="{ row }">{{ formatDateTime(row.opTime) }}</template>
-          </el-table-column>
-          <el-table-column prop="module" label="模块" width="100">
-            <template #default="{ row }">{{ dash(row.module) }}</template>
-          </el-table-column>
-          <el-table-column prop="bizType" label="业务类型" width="110" />
-          <el-table-column label="操作人" width="110">
-            <template #default="{ row }">{{ dash(row.opUserName) }}</template>
-          </el-table-column>
-          <el-table-column prop="opDesc" label="操作描述" min-width="240" show-overflow-tooltip />
-        </el-table>
-
-        <el-pagination
-          v-model:current-page="opLogQuery.page"
-          v-model:page-size="opLogQuery.size"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="opLogTotal"
-          layout="total, sizes, prev, pager, next"
-          style="margin-top: 16px; justify-content: flex-end"
-          @size-change="loadOpLog"
-          @current-change="loadOpLog"
-        />
-      </el-tab-pane>
+      <!-- ★ 2026-10-23：「操作日志」页签已按用户要求删除；留痕改在「权限管理 · 操作日志」查 -->
     </el-tabs>
 
   </div>

@@ -123,6 +123,8 @@ export interface RefundRow {
   currentHandlerHint: string | null;
   financeRemark: string | null;
   refundTime: string | null;
+  /** ★ 2026-10-22：财务退费单号（推送成功即回写）；出款完成后 refundTime 由财务自动回写 */
+  financeRefundNo?: string | null;
   createTime: string | null;
   canApprove: boolean;
   canCancel: boolean;

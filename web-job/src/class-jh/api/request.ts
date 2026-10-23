@@ -48,6 +48,18 @@ const instance: AxiosInstance = axios.create({
  */
 const APPROVAL_ACTION_RE = /\/(approve|reject|receive|refuse)(\/)?$/i;
 
+/**
+ * ★ 2026-10-22：学管主任**允许的写操作** —— 登记缴费
+ *
+ * 用户口径：「谁能登记缴费 —— 班主任、学管、校长」（三部门一致）。
+ * 学管是「只读 + 仅审批」账号，下面那段拦截会把他的 POST 全部 reject 掉，
+ * 于是「学管能登记缴费」在前端就点不动。这里按路径开三个口子，
+ * 与后端 `middleware/approvalOnly.ts` 的 `isDeanAllowedWrite` 是同一份名单。
+ *
+ * ⚠️ 改这里必须同步改后端那份，否则会出现「前端能点、后端 403」的割裂。
+ */
+const DEAN_WRITE_ALLOW_RE = /(class-jh\/fee|class\/urge|job\/fee-call)\/voucher$/i;
+
 instance.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('sms_token');
@@ -62,6 +74,10 @@ instance.interceptors.request.use(
     if (method !== 'get' && isReadOnlyUser.value) {
       const url = (config.url || '').split('?')[0];
       if (isApprovalOnly.value && APPROVAL_ACTION_RE.test(url)) {
+        return config;
+      }
+      // ★ 2026-10-22：登记缴费（班主任 / 学管 / 校长 都能做）放行
+      if (isApprovalOnly.value && DEAN_WRITE_ALLOW_RE.test(url)) {
         return config;
       }
       ElMessage.warning(readOnlyReason.value || '当前账号只能查看，不能执行新增 / 修改 / 删除');
