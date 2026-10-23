@@ -77,6 +77,69 @@ function walk(dir, out = []) {
   return out;
 }
 
+/* ---------------- init SQL 里的列 ⇄ 真实库 ---------------- */
+/**
+ * 逐表比对「init SQL 里声明的列」与库里实际的列。
+ * 返回 [{ table, cols: [...] }] —— cols 是库里缺的列。
+ *
+ * ⚠️ 只取 CREATE TABLE 块里以反引号开头的行（列定义），
+ *    索引/主键/约束行不以反引号开头，天然被排除。
+ */
+async function columnGaps(db, sql, tables) {
+  const out = [];
+  for (const t of tables) {
+    const block = new RegExp('CREATE TABLE `' + t + '` \\(([\\s\\S]*?)\\n\\)', 'i').exec(sql);
+    if (!block) continue;
+    const declared = [...block[1].matchAll(/^\s*`([^`]+)`\s/gm)].map((m) => m[1]);
+    if (!declared.length) continue;
+    const [rows] = await conn.query(
+      'select column_name from information_schema.columns where table_schema=? and table_name=?',
+      [db, t],
+    );
+    const actual = new Set(rows.map((r) => r.COLUMN_NAME));
+    const miss = declared.filter((c) => !actual.has(c));
+    if (miss.length) out.push({ table: t, cols: miss });
+  }
+  return out;
+}
+
+/* ---------------- 迁移是否落后 ---------------- */
+/**
+ * 对比各库 `knex_migrations` 与 `migrations-*` 目录里的文件名。
+ *
+ * ★ 2026-10-23 加：这次事故的根因就是「迁移 20261022_001 从来没跑」，
+ *   而当时的自检只看表名，完全发现不了。现在把「目录里有、库里没记录」
+ *   的迁移直接点名列出来。
+ */
+const MIGRATION_DIRS = [
+  ['migrations', 'sms_job'],
+  ['migrations-edu', 'sms_edu'],
+  ['migrations-class', 'sms_class'],
+  ['migrations-class-common', 'sms_common'],
+  ['migrations-class-jh', 'sms_class_jh'],
+];
+
+async function pendingMigrations() {
+  const out = [];
+  for (const [dir, db] of MIGRATION_DIRS) {
+    const abs = path.join(SERVER_ROOT, dir);
+    if (!fs.existsSync(abs)) continue;
+    const files = fs.readdirSync(abs).filter((f) => /\.(js|cjs|mjs|ts)$/.test(f));
+    if (!files.length) continue;
+    let applied = new Set();
+    try {
+      const [rows] = await conn.query(`select name from \`${db}\`.knex_migrations`);
+      applied = new Set(rows.map((r) => String(r.name)));
+    } catch {
+      out.push({ db, dir, names: ['（连不上该库或没有 knex_migrations 表）'] });
+      continue;
+    }
+    const pending = files.filter((f) => !applied.has(f)).sort();
+    if (pending.length) out.push({ db, dir, names: pending });
+  }
+  return out;
+}
+
 /* ---------------- 主流程 ---------------- */
 const env = readEnv();
 const mysql = (await import('file://' + path.join(SERVER_ROOT, 'node_modules', 'mysql2', 'promise.js').replace(/\\/g, '/'))).default;
@@ -150,8 +213,19 @@ if (!ONLY_CODE) {
 
     const missing = created.filter((t) => !actual.has(t));
     const extra = [...actual].filter((t) => !created.includes(t));
+    /* ★ 2026-10-23：除了表，**列**也要比 —— 这次的事故就是「表在、列缺」，
+     *   只比表名完全查不出来（t_class_stage_scheme_stage 少 stage_code）。 */
+    const colGaps = await columnGaps(db, sql, created);
     if (!missing.length && !extra.length) {
-      lines.push(`  ✅ ${db}：${created.length} 张，一致`);
+      lines.push(
+        colGaps.length
+          ? `  ⚠️ ${db}：表齐全，但有 ${colGaps.length} 张表缺列`
+          : `  ✅ ${db}：${created.length} 张表、列齐全`,
+      );
+      for (const g of colGaps) {
+        lines.push(`     缺列 ${g.table}：${g.cols.join('、')}`);
+        problems.push(`${db}.${g.table} 缺列`);
+      }
       continue;
     }
     lines.push(`  ⚠️ ${db}：SQL 里 ${created.length} 张，库里 ${actual.size} 张`);
@@ -161,6 +235,22 @@ if (!ONLY_CODE) {
     }
     if (extra.length) lines.push(`     库里多（${extra.length}）：${extra.join('、')}`);
   }
+  /* ---------- ③ 迁移是否落后 ---------- */
+  lines.push('');
+  const pending = await pendingMigrations();
+  if (!pending.length) {
+    lines.push('迁移状态：5 个迁移目录都与库同步');
+  } else {
+    lines.push(`⚠️ 有 ${pending.length} 个库的迁移没跑完：`);
+    for (const g of pending) {
+      lines.push(`  ${g.db}（${g.dir}）未执行 ${g.names.length} 条：`);
+      for (const n of g.names.slice(0, 8)) lines.push(`     · ${n}`);
+      if (g.names.length > 8) lines.push(`     · …还有 ${g.names.length - 8} 条`);
+      problems.push(`${g.db} 有未执行迁移`);
+    }
+    lines.push('  修复：cd server-job && npm run migrate -- <库名，如 class-jh>');
+  }
+
   lines.push('');
   lines.push('  提示：「库里多」多半是本机残留或 initialization SQL 没跟上，不算错误；');
   lines.push('        「库里缺」会让对应功能报「数据表不存在」，必须补齐（见根目录「数据库变更约定.md」）。');
@@ -173,7 +263,7 @@ if (QUIET && !problems.length) process.exit(0);
 console.log('\n================ 数据库表结构自检 ================');
 lines.forEach((l) => console.log(l));
 if (problems.length) {
-  console.log(`\n  → 共 ${problems.length} 处缺表。补法见仓库根目录「数据库变更约定.md」。`);
+  console.log(`\n  → 共 ${problems.length} 处问题（缺表 / 缺列 / 迁移没跑）。补法见仓库根目录「数据库变更约定.md」。`);
   console.log('=================================================\n');
   process.exit(1);
 }
