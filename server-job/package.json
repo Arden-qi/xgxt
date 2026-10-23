@@ -16,6 +16,7 @@
     "migrate:consult": "node scripts/fix-consult-columns.mjs",
     "fix:consult": "node scripts/fix-consult-columns.mjs",
     "fix:consult-state": "node scripts/repair-consult-state.mjs",
+    "fix:trial-start": "node scripts/repair-trial-start.mjs",
     "db:check": "node scripts/db-check.mjs",
     "db:regen-perm": "node scripts/regen-init-perm.cjs",
     "db:verify-init": "node scripts/verify-init-sql.cjs",

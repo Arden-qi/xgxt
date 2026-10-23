@@ -66,6 +66,14 @@ const POST_STEPS = [
    * 必须排在学籍库（class / class-jh）迁移之后 —— 它要读那边的档案。
    */
   ['scripts/repair-consult-state.mjs', '咨询状态对账', 'sms_consult'],
+  /**
+   * ★ 2026-10-23：进班日（trial_start）对账
+   *
+   * 已入班但 trial_start 为空的学生（缴全款直接转正式的走 FORMAL 分支，
+   * 早期没写这一列），退费弹窗算不出最早可选日 → 日历能选到几个月前。
+   * 用入班历史 / 建档日补齐，只补空不覆盖。
+   */
+  ['scripts/repair-trial-start.mjs', '进班日对账', 'sms_consult'],
 ];
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));

@@ -480,9 +480,15 @@ consultInternalRouter.post(
           : '仅缴试学费，状态→试学中（试学结束后由班主任发起补费转正）'),
       extraFields: {
         class_name: className || null,
-        ...(next === ConsultState.TRIAL
-          ? { trial_start: (stu.trial_start as string) || today() }
-          : {}),
+        /**
+         * ★ 2026-10-23 进班日一律落下来（试学 / 直接转正式都写）
+         *
+         * 原来只在「→试学中」时写 trial_start，缴全款直接转「正式在读」的学生
+         * 这里是空的。退费按天算要从进班日起，缺了这一天前端日历没有下限，
+         * 能一路翻到几个月前，试学天数算成 80 天、多扣住宿餐费。
+         * 已经有值的不覆盖（首次进班日才是基准）。
+         */
+        ...(!stu.trial_start ? { trial_start: today() } : {}),
       },
     });
 

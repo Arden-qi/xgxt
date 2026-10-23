@@ -518,10 +518,12 @@ export function fetchRefundPrefill(
     incomeAmount: number;
     trialStart?: string;
     /**
-     * ★ 2026-10-22 试学期间最早可选日（= 进班试学日 `trial_start`）
-     * null / 没有值时表示该生没有进班记录，前端不设下限
+     * ★ 2026-10-22 / 2026-10-23 试学期间最早可选日
+     * 取值链：trial_start（进班日）→ 入班历史日 → 建档日，正常一定有值
      */
     earliestTrialStart?: string | null;
+    /** 最早可选日的来源，前端据此写提示文案 */
+    earliestSource?: 'TRIAL_START' | 'CLASS_HISTORY' | 'CREATE_TIME';
   }
 > {
   return http.get('/api/consult/refund/prefill', { consultStudentId });
