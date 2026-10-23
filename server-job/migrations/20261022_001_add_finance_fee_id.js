@@ -30,6 +30,10 @@ const COLS = [
  * @param { import("knex").Knex } knex
  */
 exports.up = async function (knex) {
+  /* ★ 2026-10-23 补守卫：本迁移给【老表】加列，而 P8 归一后部分环境的老表已 DROP
+     （统一表 t_uni_fee 已自带这两列，功能不受影响）。
+     表不存在 → 直接跳过，migrate 不再因此失败。 */
+  if (!(await knex.schema.hasTable(TABLE))) return;
   const pending = [];
   for (const [name, def] of COLS) {
     // eslint-disable-next-line no-await-in-loop
@@ -45,6 +49,7 @@ exports.up = async function (knex) {
  * @param { import("knex").Knex } knex
  */
 exports.down = async function (knex) {
+  if (!(await knex.schema.hasTable(TABLE))) return;
   const exist = [];
   for (const [name] of COLS) {
     // eslint-disable-next-line no-await-in-loop

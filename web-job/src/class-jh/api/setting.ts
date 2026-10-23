@@ -1,14 +1,16 @@
 /**
- * 系统设置 / 阶段字典 / 阶段方案 / 操作日志 接口调用
+ * 系统设置 / 阶段方案 / 操作日志 接口调用
+ *
+ * ★ 2026-10-22：删除「阶段字典」三个包装（fetchStageList / addStage / deleteStage）。
+ *   「系统设置 → 阶段设置」页签早已撤掉，阶段（名称 / 学制 / 编码）现在统一在
+ *   「班级管理 → 阶段方案设计」里维护，对应下面的 stage-scheme 接口；
+ *   后端 /api/class-jh/stage/* 也已整套删除。
  */
 
 import { http } from './request';
 import type {
   PageData,
   ClassSetting,
-  StageDict,
-  StageListQuery,
-  StageSavePayload,
   StageScheme,
   StageSchemeListQuery,
   StageSchemeSavePayload,
@@ -28,24 +30,7 @@ export function updateSetting(payload: Record<string, string | number | boolean>
   return http.put<null>('/api/class-jh/setting/update', payload);
 }
 
-/* ---------------- 阶段字典 ---------------- */
-
-/** 阶段列表 */
-export function fetchStageList(query?: StageListQuery): Promise<StageDict[]> {
-  return http.get<StageDict[]>('/api/class-jh/stage/list', query);
-}
-
-/** 阶段新增 */
-export function addStage(payload: StageSavePayload): Promise<{ id: string }> {
-  return http.post<{ id: string }>('/api/class-jh/stage/add', payload);
-}
-
-/** 阶段删除 */
-export function deleteStage(id: string): Promise<null> {
-  return http.delete<null>(`/api/class-jh/stage/delete/${id}`);
-}
-
-/* ---------------- 阶段方案（★ 2026-10-16：阶段字典升级为「方案 + 多阶段」） ---------------- */
+/* ---------------- 阶段方案（方案 + 多阶段，阶段编码由后端分配） ---------------- */
 
 /** 阶段方案列表（含阶段明细） */
 export function fetchStageSchemeList(query?: StageSchemeListQuery): Promise<StageScheme[]> {

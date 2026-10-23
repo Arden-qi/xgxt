@@ -16,6 +16,7 @@ import { logApproval, sendNotify, sendNotifyByRole, STUDY_MANAGER_ROLES } from '
 import { wrap } from '../../middleware/error';
 import { tbl, tblTrx, tblInsTrx, phaseCodeCol, readPhaseCode } from '../../../teaching/shared/uniTable';
 import { TransferType } from 'shared-types';
+import { actorId, actorIds, isActor } from '../../../utils/actor';
 
 /** 本模块只服务大学学段 */
 const SRC = 'sms_class';
@@ -152,7 +153,7 @@ upgradeRouter.post(
         exam_score: b.examScore ?? null,
         grade_snapshot: gradeSnapshot,
         apply_status: UpgradeStatus.PENDING,
-        applicant_id: user.userId,
+        applicant_id: actorId(user),
         applicant_name: user.userName,
         apply_time: now(),
       } as never);
@@ -258,7 +259,7 @@ upgradeRouter.post(
         to_class_name: toClassName,
         exam_score: b.examScore ?? apply.exam_score ?? null,
         receive_time: t,
-        receiver_id: user.userId,
+        receiver_id: actorId(user),
         receiver_name: user.userName,
         ...baseUpdate(user),
       } as never);
@@ -368,7 +369,7 @@ upgradeRouter.post(
         apply_status: UpgradeStatus.REJECTED,
         reject_reason: b.opinion,
         receive_time: now(),
-        receiver_id: user.userId,
+        receiver_id: actorId(user),
         receiver_name: user.userName,
         ...baseUpdate(user),
       } as never);

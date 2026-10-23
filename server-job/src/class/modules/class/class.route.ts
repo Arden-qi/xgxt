@@ -21,6 +21,7 @@ import { tbl, tblTrx, tblIns, tblInsTrx, phaseCodeCol, readPhaseCode } from '../
 //   TransferType  = 「为什么换」（事由）→ 岗位交接统一填 1=调岗
 //   ClassPostType = 「换的是哪个岗位」→ 写进新列 post_transfer_type
 import { ClassPostType, TransferType } from 'shared-types';
+import { actorId, actorIds, isActor } from '../../../utils/actor';
 
 /** 第 4 批：统一表切读 —— 大学学段班级域的老表全部改为路由到统一表 */
 const SRC = 'sms_class';
@@ -679,7 +680,7 @@ classRouter.post(
         to_stage_name: toName,
         student_count: count,
         operate_time: now(),
-        operator_id: user.userId,
+        operator_id: actorId(user),
         operator_name: user.userName,
         reason: b.reason ?? '推进阶段',
       } as never);
@@ -810,8 +811,9 @@ classRouter.post(
     // ★ 班主任组发起时，必须是该班三岗之一（班主任/教员/助教）；
     //   学管/校长不受限。斌哥 2026-10-04：大学部班主任能用全部班级操作。
     if (!isFullAccess(user)) {
+      const me = actorIds(user);
       const inPosts = [cls.head_teacher_id, cls.teacher_id, cls.assistant_id]
-        .includes(user.userId);
+        .some((x) => me.includes(String(x || '')));
       if (!inPosts) {
         throw Errors.noOperationPermission('只能对自己所在的班级执行升实训');
       }
@@ -914,7 +916,7 @@ classRouter.post(
         to_module: '实训模块',
         handoff_status: 1,
         handoff_time: now(),
-        operator_id: user.userId,
+        operator_id: actorId(user),
         operator_name: user.userName,
         remark: b.remark ?? null,
       } as never);
