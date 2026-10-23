@@ -109,7 +109,20 @@ async function addIndex(schema, table, indexName, ddl, comment) {
   done.push(`${schema}.${table}.${indexName}`);
 }
 
+/** 某库是否存在 */
+async function schemaExists(schema) {
+  const [rows] = await db.raw(
+    `select SCHEMA_NAME as name from information_schema.SCHEMATA where SCHEMA_NAME = ?`,
+    [schema],
+  );
+  return rows.length > 0;
+}
+
 async function createRefundItemTable() {
+  if (!(await schemaExists(FINANCE_DB))) {
+    plan.push(`跳过（库不存在） ${FINANCE_DB}.t_finance_refund_item`);
+    return;
+  }
   const exists = await tableExists(FINANCE_DB, 't_finance_refund_item');
   plan.push(`退款明细表 ${FINANCE_DB}.t_finance_refund_item —— ${exists ? '已存在，跳过' : '待新建'}`);
   if (exists || !APPLY) return;
@@ -135,34 +148,47 @@ try {
   console.log(`模式：${APPLY ? '★ 执行（--apply）' : '预演（不写库，加 --apply 才执行）'}\n`);
 
   /* ---------------- ① 财务退费主表：来源三列 ---------------- */
-  await addColumn(
-    FINANCE_DB,
-    't_finance_refund',
-    'source_module',
-    'varchar(32) null',
-    '上游模块（teaching 教学域 / consult 咨询）',
-  );
-  await addColumn(
-    FINANCE_DB,
-    't_finance_refund',
-    'source_stage',
-    'varchar(16) null',
-    '上游学段（jh 初高中 / class 大学 / job 就业）',
-  );
-  await addColumn(
-    FINANCE_DB,
-    't_finance_refund',
-    'source_refund_id',
-    'varchar(64) null',
-    '上游退费单 id（出款后按它对回上游）',
-  );
-  await addIndex(
-    FINANCE_DB,
-    't_finance_refund',
-    'uk_source',
-    'unique key `uk_source` (`source_module`, `source_refund_id`)',
-    '防重复推送：同一张上游单只能落一条财务退费单',
-  );
+  /**
+   * ★ 2026-10-23：主表不存在时整体跳过。
+   *
+   * 本脚本已并入 `npm run migrate`（migrate-all.mjs 的 POST_STEPS），
+   * 而一键启动的顺序是「migrate → 再导 sms_finance.sql 演示库」。
+   * 全新机器上跑 migrate 的这一刻 sms_finance 还是空库 → 主表不存在，
+   * 若照旧 alter 就会报「table doesn't exist」，把整个迁移标成失败（假红）。
+   * 那种情况下由后面的 SQL 导入建表，本步骤无事可做。
+   */
+  if (!(await tableExists(FINANCE_DB, 't_finance_refund'))) {
+    plan.push(`跳过（表不存在） ${FINANCE_DB}.t_finance_refund —— 等 SQL 导入建表后再跑本脚本`);
+  } else {
+    await addColumn(
+      FINANCE_DB,
+      't_finance_refund',
+      'source_module',
+      'varchar(32) null',
+      '上游模块（teaching 教学域 / consult 咨询）',
+    );
+    await addColumn(
+      FINANCE_DB,
+      't_finance_refund',
+      'source_stage',
+      'varchar(16) null',
+      '上游学段（jh 初高中 / class 大学 / job 就业）',
+    );
+    await addColumn(
+      FINANCE_DB,
+      't_finance_refund',
+      'source_refund_id',
+      'varchar(64) null',
+      '上游退费单 id（出款后按它对回上游）',
+    );
+    await addIndex(
+      FINANCE_DB,
+      't_finance_refund',
+      'uk_source',
+      'unique key `uk_source` (`source_module`, `source_refund_id`)',
+      '防重复推送：同一张上游单只能落一条财务退费单',
+    );
+  }
 
   /* ---------------- ② 财务退费明细表 ---------------- */
   await createRefundItemTable();

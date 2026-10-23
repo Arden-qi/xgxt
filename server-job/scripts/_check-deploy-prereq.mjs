@@ -318,6 +318,68 @@ async function checkApi() {
   }
 }
 
+/* ---------------- G. 退费「校长审批 → 财务」结构 ---------------- */
+/**
+ * ★ 2026-10-23 新增：这一组结构**不在 knex 迁移里**（knexfile 没有 finance env），
+ *   全靠 `scripts/_migrate-finance-refund-20261022.mjs` 单独补。
+ *   漏跑的症状就是「校长审批通过后提示：推送财务失败，请人工补录」，
+ *   而后端日志里是 `ER_BAD_FIELD_ERROR ... source_module` 或 `t_finance_refund_item doesn't exist`。
+ *
+ *   ✅ 已并入 `npm run migrate`（migrate-all.mjs 的 POST_STEPS），
+ *      所以正常跑过一次 migrate 就不会缺；这里留着是为了**快速定位**。
+ */
+async function checkRefundFinanceSchema() {
+  title('G. 退费「校长审批 → 财务」依赖的结构（财务库无 knex env，靠独立脚本补）');
+  const F = ENV.DB_NAME_FINANCE || 'sms_finance';
+  const C = ENV.DB_NAME_COMMON || 'sms_common';
+  const fix = 'npm run migrate（内部会跑 scripts/_migrate-finance-refund-20261022.mjs --apply）';
+
+  // ① 主表三列 + 唯一索引
+  const cols = await DB.finance
+    .select(DB.finance.raw('COLUMN_NAME AS name'))
+    .from(DB.finance.raw('information_schema.COLUMNS'))
+    .whereRaw('TABLE_SCHEMA = ? AND TABLE_NAME = ?', [F, 't_finance_refund']);
+  const have = new Set(cols.map((x) => x.name));
+  if (!have.size) {
+    bad(`${F}.t_finance_refund **表不存在**`, '确认 sms_finance 已建库并导入 sql/init/sms_finance.sql');
+  } else {
+    const miss = ['source_module', 'source_stage', 'source_refund_id'].filter((c) => !have.has(c));
+    if (miss.length) bad(`${F}.t_finance_refund 缺列：${miss.join(', ')}（推送财务必然失败）`, fix);
+    else ok(`${F}.t_finance_refund 三列齐全（source_module / source_stage / source_refund_id）`);
+  }
+
+  const idx = await DB.finance
+    .select(DB.finance.raw('INDEX_NAME AS name'))
+    .from(DB.finance.raw('information_schema.STATISTICS'))
+    .whereRaw('TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = ?', [F, 't_finance_refund', 'uk_source'])
+    .first();
+  if (idx) ok('唯一索引 uk_source 存在（重复推送不会建第二张单）');
+  else bad('缺唯一索引 uk_source（重复推送会建出重复财务单）', fix);
+
+  // ② 费用项明细表
+  const itemT = await DB.finance
+    .select(DB.finance.raw('TABLE_NAME AS name'))
+    .from(DB.finance.raw('information_schema.TABLES'))
+    .whereRaw('TABLE_SCHEMA = ? AND TABLE_NAME = ?', [F, 't_finance_refund_item'])
+    .first();
+  if (itemT) ok(`${F}.t_finance_refund_item 存在（每个费用项一行）`);
+  else bad(`${F}.t_finance_refund_item **不存在**（推送财务必然失败）`, fix);
+
+  // ③ 教学统一表回写列
+  const cCols = await DB.common
+    .select(DB.common.raw('COLUMN_NAME AS name'))
+    .from(DB.common.raw('information_schema.COLUMNS'))
+    .whereRaw('TABLE_SCHEMA = ? AND TABLE_NAME = ?', [C, 't_uni_refund']);
+  const cHave = new Set(cCols.map((x) => x.name));
+  if (!cHave.size) {
+    warn(`${C}.t_uni_refund 不存在 —— 统一表没导入？教学域会整片空（见 uni-tables.sql）`);
+  } else {
+    const miss = ['finance_refund_id', 'finance_refund_no'].filter((c) => !cHave.has(c));
+    if (miss.length) bad(`${C}.t_uni_refund 缺列：${miss.join(', ')}（财务单号回写不进来）`, fix);
+    else ok(`${C}.t_uni_refund 回写列齐全（finance_refund_id / finance_refund_no）`);
+  }
+}
+
 /* ---------------- 汇总 ---------------- */
 async function main() {
   console.log('\n========== 催费「批量上传到财务」环境自检 ==========');
@@ -328,6 +390,7 @@ async function main() {
   checkSharedTypes();
   await checkCandidatesData().catch((e) => bad(`候选数据检查失败：${e.message}`, '同上'));
   await checkPermLedger();
+  await checkRefundFinanceSchema().catch((e) => bad(`退费→财务结构检查失败：${e.message}`, '同上'));
   await checkApi().catch((e) => bad(`接口检查失败：${e.message}`, '确认后端在跑'));
 
   console.log(

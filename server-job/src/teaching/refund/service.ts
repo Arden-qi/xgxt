@@ -522,7 +522,23 @@ export async function approve(
   id: string,
   comment: string | undefined,
   user: any,
-): Promise<{ finished: boolean; approvalStatus: number; approvalStatusName: string; pushed: boolean }> {
+): Promise<{
+  finished: boolean;
+  approvalStatus: number;
+  approvalStatusName: string;
+  pushed: boolean;
+  /**
+   * ★ 2026-10-23：推送失败的具体原因（成功时为 null）
+   *
+   * 【为什么要往接口里带】
+   *   `pushRefundToFinance` 是「失败不阻断」的：只记一行 console.error，接口只回 `pushed:false`。
+   *   远端测试时前端只能看到「推送财务失败，请人工补录」这句笼统提示，
+   *   真正原因（财务模块 500 / 连不上 / 超时 / 缺列）全在后端日志里，
+   *   于是「本地好、远端坏」的排查只能靠翻日志。
+   *   现在把原因原样带回前端，一眼就能定位是哪一环断了。
+   */
+  pushError: string | null;
+}> {
   await assertStageView(user, stage);
   const op = toOperator(user);
   const row = await mustGet(stage, id);
@@ -541,8 +557,11 @@ export async function approve(
   // ★ 审批链走完 → 通知财务建退费单（**事务外**：财务是外部模块，
   //   超时会把本地审批一起回滚，得不偿失；失败不回滚，人工补录）
   let pushed = false;
+  let pushError: string | null = null;
   if (finished) {
-    pushed = await pushRefundToFinance(stage, row, op);
+    const r = await pushRefundToFinance(stage, row, op);
+    pushed = r.ok;
+    pushError = r.error;
   }
 
   return {
@@ -550,6 +569,7 @@ export async function approve(
     approvalStatus: nextStatus,
     approvalStatusName: REFUND_STATUS_NAME[nextStatus] || '',
     pushed,
+    pushError,
   };
 }
 
@@ -691,7 +711,7 @@ async function pushRefundToFinance(
   stage: TeachingStage,
   row: RefundRow,
   op: Operator,
-): Promise<boolean> {
+): Promise<{ ok: boolean; error: string | null }> {
   /**
    * 费用项 → 财务明细行
    *
@@ -759,11 +779,12 @@ async function pushRefundToFinance(
      * 现在回写 `finance_refund_id / finance_refund_no`（内部失败只 warn，不影响推送结果）。
      */
     await REPOS[stage].setPushInfo(row.id, res.id, res.orderNo);
-    return true;
+    return { ok: true, error: null };
   } catch (err: any) {
     // eslint-disable-next-line no-console
     console.error(`[退费推送财务] 失败：${stage} 单`, row.id, err?.message);
-    return false;
+    // ★ 2026-10-23：原因要能回到界面上，否则远端只能看到「推送财务失败」这种笼统提示
+    return { ok: false, error: String(err?.message || err || '未知错误') };
   }
 }
 
