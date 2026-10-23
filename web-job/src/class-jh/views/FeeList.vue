@@ -17,8 +17,12 @@
  *     · 操作列「上传缴费凭证 / 重新登记 / 查看」对三个部门都出现，
  *       submitPayment() 按行上的部门分发到各自的接口；
  *     · 导出对三个部门都放开（初高走服务端 exportFee，另两个按列表接口取全量后前端拼 CSV）。
- *   ⚠️ 「批量上传到财务」仍然只对初高（+全部部门）：大学催缴副本本身就是**财务推来的**
+ *   ⚠️ 「批量上传到财务」原来只对初高（+全部部门）：大学催缴副本本身就是**财务推来的**
  *      （source_system='finance'），再转交一次会在财务里重复建单。
+ *      ★ 2026-10-22 用户要求「大学部和就业部也要能批量上传到财务」→ 已放开：
+ *        · 前端按钮三个部门都显示，弹窗按当前部门取候选（走 /api/teaching/fee/transfer*）；
+ *        · 后端对「财务里本来就有这张单」的大学部行（source_system='finance' 且有 source_id）
+ *          **只补凭证、不新建**，所以不会再出现重复单；就业部一律新建。
  */
 
 import { computed, ref, reactive, onMounted } from 'vue';
@@ -26,7 +30,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh, Download, Plus, Upload } from '@element-plus/icons-vue';
 import { FEE_TYPE_NAME, PAY_METHOD_NAME, PAY_STATUS_NAME, PayMethod, PayStatus } from 'shared-types/class-jh';
 import type { FeeRecord, FeeListQuery, ClassInfo } from 'shared-types/class-jh';
-import { fetchFeeList, exportFee, submitFeePayment, fetchTransferCandidates, transferFees } from '@/class-jh/api/fee';
+import { fetchFeeList, exportFee, submitFeePayment, fetchTransferCandidatesAll, transferFeesAll } from '@/class-jh/api/fee';
+import type { TransferDept } from '@/class-jh/api/fee';
 import { urgeList, submitUrgePayment } from '@/class/api/student';
 import { fetchFeeCallList, submitFeeCallPayment } from '@/api/feeCall';
 import { fetchClassOptions } from '@/class-jh/api/classInfo';
@@ -108,11 +113,20 @@ const payStatusOptions = computed<Array<{ label: string; value: number }>>(() =>
 
 /**
  * 就业催费单状态（call_status）→ 统一缴费状态
- *   3 已缴清 → 2 已缴
- *   1 待催缴 / 2 催缴中：还没收到钱 → 待缴；**已过应缴日则为逾期**（2026-10-20 用户反馈
- *   「剩余 -12 天了还显示待缴」—— 逾期不在催费单状态里，只能按日期派生）
+ *
+ * ★ 2026-10-22：**改用后端下发的 `payStatus` 为主**，这个函数只做兜底。
+ *   用户要求「状态字段所有部门对齐初高」—— 就业表已经补了 `pay_status`
+ *   （1待缴 2已缴 3已核对 4逾期 5冻结，与初高同码），后端在 decorate 里按
+ *   「未缴清 + 过了应缴日 = 逾期」派生好后下发了，前端不需要再自己算一遍。
+ *   前端再算一遍的风险：后端改了派生口径，前端没跟上，两处打架。
  */
-function callStatusToPayStatus(callStatus: any, dueDate?: string | null): number {
+function callStatusToPayStatus(
+  callStatus: any,
+  dueDate?: string | null,
+  payStatus?: number | null,
+): number {
+  // 后端给了就直接用（含逾期派生结果）
+  if (payStatus != null && !Number.isNaN(Number(payStatus))) return Number(payStatus);
   const s = Number(callStatus);
   if (s === 3) return PayStatus.PAID; // 已缴清 → 已缴
   return isPastDate(dueDate) ? PayStatus.OVERDUE : PayStatus.UNPAID;
@@ -178,8 +192,10 @@ function callToRow(r: any): FeeRow {
     feeAmount: Number(r.feeAmount || 0),
     // ★ 2026-10-20：就业也按统一缴费状态展示（原催缴状态留在 callStatusName 里，列上用 title 提示）；
     //    未缴清且已过应缴日 → 逾期（催费单本身没有「逾期」这个状态）
-    payStatus: callStatusToPayStatus(r.callStatus, r.dueDate),
-    payStatusName: PAY_STATUS_NAME[callStatusToPayStatus(r.callStatus, r.dueDate)] || '',
+    // ★ 2026-10-22：优先用后端下发的 payStatus（三部门同一套码），没有再按 callStatus 折算
+    payStatus: callStatusToPayStatus(r.callStatus, r.dueDate, r.payStatus),
+    payStatusName:
+      PAY_STATUS_NAME[callStatusToPayStatus(r.callStatus, r.dueDate, r.payStatus)] || '',
     callStatusName: r.callStatusName || '',
     expireDate: r.dueDate || undefined,
     isUrgent: !!r.overdue,
@@ -504,24 +520,115 @@ function hasPayment(row: FeeRow): boolean {
 }
 
 /* ============ 批量上传到财务缴费管理 ============ */
+
+/**
+ * 转交弹窗里的行（★ 2026-10-22：三部门统一结构）
+ *
+ * ⚠️ 和列表的 FeeRow 不是一回事：列表行是「按当前部门拼出来的展示行」，
+ *   这里是从 `/api/teaching/fee/transfer/candidates` 拿的**原始催费单**
+ *   （带 dept 字段区分初高/大学/就业），提交时按 dept 分组回传。
+ */
+interface TransferRow {
+  /** 表格 row-key：dept + feeId，防止不同部门撞 id */
+  transferKey: string;
+  feeId: string;
+  dept: TransferDept;
+  deptName: string;
+  studentNo: string;
+  studentName: string;
+  className: string;
+  feeTypeName: string;
+  feeAmount: number;
+  paidAmount: number | null;
+  payMethodName: string;
+  payDate: string | null;
+  voucherUrl: string | null;
+}
+
 const transferVisible = ref(false);
 const transferLoading = ref(false);
 const transferSubmitting = ref(false);
-const transferRows = ref<FeeRow[]>([]);
-const transferSelected = ref<FeeRow[]>([]);
+const transferRows = ref<TransferRow[]>([]);
+const transferSelected = ref<TransferRow[]>([]);
 const transferTableRef = ref<any>(null);
+/** 某个部门拉候选失败的原因（如无该部门权限）—— 不静默，弹窗里要亮出来 */
+const transferErrors = ref<Array<{ deptName: string; message: string }>>([]);
+/**
+ * 每部门取样统计（★ 2026-10-22，★ 2026-10-23 加 transferred）
+ *
+ * 「弹窗空着」有三种可能：这个部门没单 / 有单但都没登记缴费 / 都上传过了。
+ * 把「共几单、已登记缴费几单、其中已上传几单」摆在弹窗顶上，谁的环境都能一眼分清。
+ */
+const transferStats = ref<
+  Array<{ deptName: string; scanned: number; paid: number; transferred: number; error?: string }>
+>([]);
 
-/** 还没转交的条数（「只选未上传过」按钮上显示） */
-const untransferredCount = computed(() => transferRows.value.filter((r) => !r.transferred).length);
+/** 诊断摘要文案（三个部门各一段） */
+const transferStatText = computed(() =>
+  transferStats.value
+    .map((s) =>
+      s.error
+        ? `${s.deptName}：查询失败`
+        : `${s.deptName}：共 ${s.scanned} 单，已登记缴费 ${s.paid} 单` +
+          `（已上传 ${s.transferred} / 待上传 ${Math.max(s.paid - s.transferred, 0)}）`,
+    )
+    .join(' · '),
+);
 
-/** 打开弹窗：拉「已登记缴费」的候选行（含已转交的，用状态列区分） */
+/** 表格空了的时候给一句能定位原因的话 */
+const transferEmptyText = computed(() => {
+  if (!transferStats.value.length) return '暂无已登记缴费的记录（先在操作列「上传缴费凭证」登记）';
+  const anyPaid = transferStats.value.some((s) => s.paid > 0);
+  const anyScanned = transferStats.value.some((s) => s.scanned > 0);
+  if (!anyScanned) return '这些部门都还没有催费单（先在催费列表里有数据，再登记缴费）';
+  if (!anyPaid) return '有催费单，但都还没「上传缴费凭证」→ 先在这里的列表操作列登记缴费';
+  // ★ 2026-10-23：列表只显示没上传过的 → 一张都没有 = 全都上传过了
+  return '已登记缴费的单都已上传到财务，没有待上传的记录';
+});
+
+/**
+ * 打开弹窗：按**当前筛选的部门**拉「还没上传到财务」的候选行
+ *
+ * ★ 2026-10-22：原来只调初高接口 + 硬编码 dept:'初高'，所以大学/就业没有入口。
+ *   现在走 `/api/teaching/fee/transfer/candidates?dept=...`：
+ *   当前选的是「全部部门」就三部门一起取，选了具体部门就只取那一个。
+ * ★ 2026-10-23：接口已过滤掉已转交的行，返回的每一条都可转交。
+ */
 async function openTransfer() {
   transferVisible.value = true;
   transferLoading.value = true;
   transferRows.value = [];
   transferSelected.value = [];
+  transferErrors.value = [];
+  transferStats.value = [];
   try {
-    transferRows.value = (await fetchTransferCandidates()).map((r) => ({ ...r, dept: '初高' }) as FeeRow);
+    const res = await fetchTransferCandidatesAll(query.dept as TransferDept | 'all');
+    transferErrors.value = (res.errors || []).map((e) => ({
+      deptName: e.deptName,
+      message: e.message,
+    }));
+    transferStats.value = (res.stats || []).map((s) => ({
+      deptName: s.deptName,
+      scanned: s.scanned,
+      paid: s.paid,
+      transferred: s.transferred ?? 0,
+      error: s.error,
+    }));
+    transferRows.value = (res.list || []).map((r) => ({
+      transferKey: `${r.dept}:${r.feeId}`,
+      feeId: r.feeId,
+      dept: r.dept,
+      deptName: r.deptName,
+      studentNo: r.studentNo,
+      studentName: r.studentName,
+      className: r.className,
+      feeTypeName: r.feeType == null ? '' : (FEE_TYPE_NAME[r.feeType] ?? ''),
+      feeAmount: r.feeAmount,
+      paidAmount: r.paidAmount,
+      payMethodName: r.payMethodName,
+      payDate: r.payDate,
+      voucherUrl: r.voucherUrl,
+    }));
   } catch {
     /* 错误已统一处理 */
   } finally {
@@ -535,38 +642,30 @@ function selectAllTransfer() {
   transferRows.value.forEach((r) => transferTableRef.value?.toggleRowSelection(r, true));
 }
 
-/** 只选未上传过（= 还没转交过财务的） */
-function selectUntransferred() {
-  transferTableRef.value?.clearSelection();
-  transferRows.value.filter((r) => !r.transferred).forEach((r) => transferTableRef.value?.toggleRowSelection(r, true));
-}
-
-function onTransferSelectionChange(rows: FeeRow[]) {
+function onTransferSelectionChange(rows: TransferRow[]) {
   transferSelected.value = rows;
 }
 
-/** 提交转交：只送还没转交的，已转交的自动略过 */
+/** 提交转交：列表里的每一条都是没上传过的，直接提交 */
 async function submitTransfer() {
-  const targets = transferSelected.value.filter((r) => !r.transferred);
-  if (!transferSelected.value.length) {
-    ElMessage.warning('请先勾选要转交的记录');
-    return;
-  }
+  const targets = transferSelected.value;
   if (!targets.length) {
-    ElMessage.warning('选中的记录都已转交过财务');
+    ElMessage.warning('请先勾选要转交的记录');
     return;
   }
   transferSubmitting.value = true;
   try {
-    const res = await transferFees(targets.map((r) => r.feeId));
+    // ★ 三部门统一入口：按 dept 分组回传，后端各写各的表
+    const res = await transferFeesAll(targets.map((r) => ({ dept: r.dept, feeId: r.feeId })));
     const parts = [`成功 ${res.success} 条`];
+    if (res.voucherOnly) parts.push(`其中 ${res.voucherOnly} 条财务已有原单、只补了凭证`);
     if (res.skipped.length) parts.push(`跳过 ${res.skipped.length} 条`);
     if (res.failed.length) parts.push(`失败 ${res.failed.length} 条`);
     ElMessage.success(`转交完成：${parts.join('，')}`);
     // 有跳过/失败时把原因摊开给人看，别让人猜
     const detail = [...res.skipped, ...res.failed]
       .slice(0, 8)
-      .map((x) => `${x.feeId.slice(-6)}：${x.reason}`)
+      .map((x: any) => `${x.deptName ? `[${x.deptName}]` : ''}${String(x.feeId).slice(-6)}：${x.reason}`)
       .join('\n');
     if (detail) {
       ElMessageBox.alert(detail, '未转交明细（前 8 条）', { type: 'warning' });
@@ -744,8 +843,10 @@ onMounted(() => {
           <el-button :icon="Refresh" @click="handleReset">重置</el-button>
         </el-form-item>
         <!-- ★ 2026-10-20 用户要求：整页一个「批量上传到财务缴费管理」，放在筛选行（重置后面）。
-             默认视图是「全部部门」，所以不能只对初高显示，否则一进来就看不见这个按钮。 -->
-        <el-form-item v-if="query.dept === 'jh' || query.dept === 'all'">
+             默认视图是「全部部门」，所以不能只对初高显示，否则一进来就看不见这个按钮。
+             ★ 2026-10-22：大学部 / 就业部也要能转交 → 去掉「只对初高/全部部门」的 v-if，
+               三个部门选中时都显示；弹窗按当前部门拉对应的催费表。 -->
+        <el-form-item>
           <el-button type="primary" plain :icon="Upload" @click="openTransfer">批量上传到财务</el-button>
         </el-form-item>
         <el-form-item>
@@ -851,29 +952,49 @@ onMounted(() => {
       />
     </el-card>
 
-    <!-- 批量上传到财务缴费管理（★ 2026-10-20 用户要求：全选 / 只选未上传过 / 序号前复选框） -->
+    <!--
+      批量上传到财务缴费管理
+      ★ 2026-10-20 用户要求：全选 / 只选未上传过 / 序号前复选框
+      ★ 2026-10-23 用户要求：**列表只显示还没上传过财务的**
+        → 候选接口已在 SQL 里过滤掉已转交的行，所以这里不再需要
+          「只选未上传过」和「转交状态」列（列表里每一条都是可转交的）。
+    -->
     <el-dialog v-model="transferVisible" title="批量上传到财务缴费管理" width="1000px">
       <div class="transfer-toolbar">
         <el-button size="small" @click="selectAllTransfer">全选</el-button>
-        <el-button size="small" @click="selectUntransferred">只选未上传过（{{ untransferredCount }}）</el-button>
         <span class="field-unit">
-          已选 {{ transferSelected.length }} 条 · 转交后财务在「缴费管理」里核对（已转交的会自动跳过）
+          已选 {{ transferSelected.length }} 条 · 列表只显示还没上传到财务的缴费单
         </span>
       </div>
+      <!-- ★ 2026-10-22：把「这个部门共几单 / 其中已登记缴费几单」摆在明面上。
+           否则弹窗空着时，分不清是「没单」「有单没登记缴费」还是「查询出错」。 -->
+      <div v-if="transferStatText" class="transfer-stat">{{ transferStatText }}</div>
+      <!-- ★ 2026-10-22：某个部门拉不到候选（无权限等）不能只给个空表格，要把原因说出来 -->
+      <el-alert
+        v-for="e in transferErrors"
+        :key="e.deptName"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 8px"
+        :title="`${e.deptName}部的催费单没取到：${e.message}`"
+      />
       <el-table
         ref="transferTableRef"
         v-loading="transferLoading"
         :data="transferRows"
-        row-key="feeId"
+        row-key="transferKey"
         border
         stripe
         size="small"
         height="420"
-        empty-text="暂无已登记缴费的记录（先在操作列「上传缴费凭证」登记）"
+        :empty-text="transferEmptyText"
         @selection-change="onTransferSelectionChange"
       >
         <el-table-column type="selection" width="46" />
         <el-table-column type="index" label="序号" width="60" align="center" />
+        <!-- ★ 2026-10-22：三部门混在一张表里，必须有部门列 -->
+        <el-table-column prop="deptName" label="部门" width="70" align="center" />
         <el-table-column prop="studentNo" label="学号" width="120" />
         <el-table-column prop="studentName" label="姓名" width="90" />
         <el-table-column prop="feeTypeName" label="缴费类型" width="90" />
@@ -892,13 +1013,12 @@ onMounted(() => {
         <el-table-column label="凭证" width="90" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.voucherUrl" type="success" size="small">已上传</el-tag>
-            <el-tag v-else type="info" size="small">未上传</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="转交状态" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag v-if="row.transferred" type="info" size="small">已转交</el-tag>
-            <el-tag v-else type="warning" size="small">未转交</el-tag>
+            <!--
+              ★ 2026-10-23：现金收款允许不传截图（登记缴费就是这么定的），
+                这种单照样能转交，财务那边会显示「现金·无凭证」并可核对入账。
+                这里不能只写「未上传」，否则会以为是漏传了。
+            -->
+            <el-tag v-else type="info" size="small">无（现金）</el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -1063,9 +1183,17 @@ onMounted(() => {
 /* 批量转交财务：顶部全选/只选未上传过 */
 .transfer-toolbar {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: center;  gap: 8px;
   margin-bottom: 10px;
+}
+/* ★ 2026-10-22：每部门「共几单 / 已登记缴费几单」的诊断摘要 */
+.transfer-stat {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--el-fill-color-lighter);
+  font-size: 12px;
+  color: var(--el-text-color-regular);
 }
 .voucher-title {
   margin: 14px 0 8px;
