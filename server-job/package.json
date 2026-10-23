@@ -30,7 +30,7 @@
     "seed:portal:clean": "node scripts/seed-portal-accounts.mjs clean",
     "seed:class-jh": "node scripts/seed-class-jh-demo.js",
     "seed:class-job": "node scripts/seed-class-job-demo.mjs",
-    "seed:all": "node scripts/seed-all-demo.mjs",
+    "seed:all": "node scripts/seed-all-demo.mjs && npm run uni:migrate",
     "seed:all:dry": "node scripts/seed-all-demo.mjs --dry",
     "seed:teaching": "node scripts/seed-teaching-demo.mjs",
     "seed:teaching:dry": "node scripts/seed-teaching-demo.mjs --dry",

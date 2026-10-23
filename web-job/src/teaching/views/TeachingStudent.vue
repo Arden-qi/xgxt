@@ -20,6 +20,12 @@
         <div class="tsv-card__k">正式在读</div>
         <div class="tsv-card__v ok">{{ summary.studying }}</div>
       </div>
+      <!-- ★ 2026-10-23：实训中（status=8）单列一档。就业部的学生全是这一状态，
+           不加这张卡就出现「总人数 5、其余全 0」，看着像没数据。 -->
+      <div class="tsv-card">
+        <div class="tsv-card__k">实训中</div>
+        <div class="tsv-card__v ok">{{ summary.training ?? 0 }}</div>
+      </div>
       <div class="tsv-card">
         <div class="tsv-card__k">试学中</div>
         <div class="tsv-card__v">{{ summary.trial }}</div>
@@ -977,6 +983,7 @@ const total = ref(0);
 const summary = ref<StudentSummary>({
   total: 0,
   studying: 0,
+  training: 0,
   trial: 0,
   suspended: 0,
   quit: 0,

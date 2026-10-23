@@ -286,6 +286,8 @@ export interface StudentStageMeta {
 export interface StudentSummary {
   total: number;
   studying: number;
+  /** 实训中（status=8，只有就业部有；不加这档就业部卡片会全是 0） */
+  training: number;
   trial: number;
   suspended: number;
   quit: number;
