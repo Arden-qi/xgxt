@@ -56,8 +56,11 @@ export function applyDataScope<T extends Knex.QueryBuilder>(
         // 没有可判定的「本人」列 → 保守拒绝，绝不放过
         throw Errors.noOperationPermission('当前账号没有查看该数据的权限，请联系学管');
       }
+      /* ★ 2026-10-23：责任人列历史上有 UUID / U号 两种写法，两个都比 */
+      const me = [...new Set([user.userId, user.businessUserId, (user as any).portalUserId]
+        .map((x) => String(x || '')).filter(Boolean))];
       return qb.where(function (this: Knex.QueryBuilder) {
-        for (const c of cols) this.orWhere(c, user.userId);
+        for (const c of cols) this.whereIn(c, me);
       }) as T;
     }
   }

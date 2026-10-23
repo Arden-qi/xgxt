@@ -86,6 +86,29 @@ mysql -uroot -p sms_finance  < sql\init\sms_finance.sql
 
 说明：`uni-tables.sql` 用 `IF NOT EXISTS`，可重复执行；另外四个文件含 `DROP TABLE`，**只对空库执行**，库里有业务表时会冲掉数据。运行迁移前确认 `.env` 指向正确的 MySQL 实例和数据库。
 
+### 人员 ID 统一（2026-10-23 起）
+
+系统里"人"的 ID **只认权限库用户号**（`sms_perm.t_perm_user.id`，如 `U004`）。
+门户账号（`t_sys_account.id`，UUID）只用于登录，登录后由后端映射成 U 号。
+
+历史版本里业务表混存过两种写法，会导致「班主任看不到自己的班」「审批人看不到自己的单」
+这类不报错、只是列表全空的问题。检查和修复：
+
+```bat
+cd server-job
+npm run id:audit        :: 体检：逐个人员列统计 U 号 / 门户 UUID / 无法映射值
+npm run id:unify        :: 预览：会把哪些 UUID 映射成哪个 U 号（不写库）
+npm run id:unify:apply  :: 执行（可用 --quiet 只看结论）
+```
+
+说明：
+
+- 映射依据是**登录名**：`t_sys_account.account` 与 `t_consult_account.account` 对齐 `t_perm_user.account`。
+- 脚本幂等，重复执行不会重复改；无法映射的值（角色码如 `TEACH_DEAN`、系统账号 `system`）原样保留。
+- `一键启动.bat`（`tools/start.mjs`）在导入 `sql/init/*.sql` 之后会**自动跑一次 apply**，
+  所以新装的机器不会重新引入旧 ID，不需要手工执行。
+- `npm run db:check` 的 E 段会校验这一点：不是全 U 号就报红。
+
 ### 拉取后跑不通？先跑这两条命令
 
 别人把仓库拉下来在本地跑，最常见的三个报错都能用下面两条命令定位或直接修好：

@@ -111,10 +111,12 @@ const LOCAL_STAFF_TABLES = ['sms_common.t_uni_class'];
  *   （sms_perm.t_perm_user_role → t_perm_role.role_code）。
  *   谁是教员 = 谁的账号角色里有 TEACH_TUTOR —— 唯一事实来源。
  *
- * 【userId 用哪个】用**门户账号 id**（t_sys_account.id）。
- *   因为班级表的 head_teacher_id / project_manager_id … 存的就是门户账号 id
- *   （数据重建脚本 seed-all-demo 就是这么挂的），两边必须同口径，
- *   否则「下拉选出来的人」和「列表里显示的人」对不上。
+ * 【userId 用哪个】★ 2026-10-23 改为**权限库用户号**（t_perm_user.id，如 U004）。
+ *
+ *   全系统已统一：业务表的人员列只认权限库 U 号。
+ *   原来这里返回门户账号 UUID，选一次人就把 UUID 写进班级表 ——
+ *   与已有的 U004 混在一起，是本次 ID 混乱的直接来源之一。
+ *   现在 userId = 权限库 U 号，portalId 单独返回（需要登录态的地方用）。
  * ============================================================ */
 
 /**
@@ -176,7 +178,8 @@ async function staffFromAccounts(codes: string[], requiredModule = ''): Promise<
   // 注意：本连接绑在 sms_class 上，靠**跨库限定名**读 portal / perm（项目里既有写法）
   const sql = `
     SELECT DISTINCT
-           a.id            AS userId,
+           u.id            AS userId,
+           a.id            AS portalId,
            a.user_name     AS userName,
            a.account       AS account,
            a.title         AS title,

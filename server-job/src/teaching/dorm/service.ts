@@ -42,7 +42,7 @@ import {
   DORM_ROOMS_PER_FLOOR_MAX,
 } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
-import { USE_UNI_TABLE } from '../shared/uniTable';
+import { USE_UNI_TABLE, uniDb } from '../shared/uniTable';
 import type { DormCandidateRow, DormRepo } from './types';
 
 /**
@@ -136,6 +136,31 @@ function pick(stage: TeachingStage): DormRepo {
   const r = REPOS[stage];
   if (!r) throw new BizError(BizCode.PARAM_ERROR, `stage 只能是 jh / class / job`);
   return r;
+}
+
+/**
+ * ★ 2026-10-23：按 dormId 解析**房间自己的学段**。
+ *
+ *   分派弹窗给房不分学段（初高的房间 1号楼 也能分给大学班 Q20），
+ *   于是「页面学段 ≠ 房间学段」。床位/在住/入住/退宿这些**按 dormId 精确操作**
+ *   的接口，必须按房间自己的 edu_stage 取数，否则按页面学段过滤会查空 ——
+ *   实测：班主任（大学部页签）点开分派的初高房间，床位抽屉显示
+ *   「该房间还没有床位记录」。
+ *
+ *   模块授权仍按页面学段把关（那是「进页面」的门槛）；
+ *   数据范围由 assertRoomInScope 兜底（班主任只能动自己范围内的房间）。
+ */
+async function roomStageOf(dormId: string, fallback: TeachingStage): Promise<TeachingStage> {
+  try {
+    const room = (await uniDb('t_uni_dorm_room')
+      .where({ id: String(dormId), is_deleted: false })
+      .first()) as any;
+    const st = String(room?.edu_stage ?? '');
+    if (st === 'jh' || st === 'class' || st === 'job') return st;
+  } catch {
+    /* 查不到 → 用页面学段 */
+  }
+  return fallback;
 }
 
 export function assertStage(v: unknown): TeachingStage {
@@ -287,7 +312,7 @@ export async function getDormDetail(
   user: any,
 ): Promise<DormRow | null> {
   await assertStageView(user, stage);
-  return pick(stage).detail(id, user);
+  return pick(await roomStageOf(id, stage)).detail(id, user);
 }
 
 /** 床位（含在住学生） */
@@ -297,7 +322,8 @@ export async function listBeds(
   user: any,
 ): Promise<{ beds: Awaited<ReturnType<DormRepo['beds']>>; dorm: DormRow | null }> {
   await assertStageView(user, stage);
-  const r = pick(stage);
+  // ★ 床位按房间自己的学段查（页面学段 ≠ 房间学段时按页面学段会查空）
+  const r = pick(await roomStageOf(dormId, stage));
   const [beds, dorm] = await Promise.all([r.beds(dormId, user), r.detail(dormId, user)]);
   return { beds, dorm };
 }
@@ -317,7 +343,13 @@ export async function listResidents(
       ? [STAGE_KEEP_PRIORITY.find((s) => stages.includes(s)) ?? stages[0]]
       : stages;
 
-  const parts = await Promise.all(scanStages.map((s) => REPOS[s].residents(q, user)));
+  /**
+   * ★ 2026-10-23：按 dormId 查在住名单时，用**房间自己的学段**的 repo
+   *   （床位行跟随房间学段；页面学段 ≠ 房间学段时按页面学段查会漏）。
+   */
+  const residentStages: TeachingStage[] =
+    q.dormId ? [await roomStageOf(String(q.dormId), scanStages[0])] : scanStages;
+  const parts = await Promise.all(residentStages.map((s) => REPOS[s].residents(q, user)));
   return dedupResidents(parts.flat());
 }
 
@@ -565,7 +597,8 @@ export async function assignBed(body: DormAssignBody, user: any): Promise<void> 
   await assertStageView(user, body.stage);
   // ★ 大学床位是同步来的，只能走申请
   assertWritable(body.stage);
-  return pick(body.stage).assign(body, user);
+  // ★ 床位操作按房间自己的学段（跨学段分派时页面学段 ≠ 房间学段）
+  return pick(await roomStageOf(body.dormId, body.stage)).assign(body, user);
 }
 
 export async function checkoutBed(
@@ -576,7 +609,8 @@ export async function checkoutBed(
 ): Promise<void> {
   await assertStageView(user, stage);
   assertWritable(stage);
-  return pick(stage).checkout(dormId, bedId, user?.userId || '');
+  // ★ 床位操作按房间自己的学段（跨学段分派时页面学段 ≠ 房间学段）
+  return pick(await roomStageOf(dormId, stage)).checkout(dormId, bedId, user?.userId || '');
 }
 
 /* ============================================================

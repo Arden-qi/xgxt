@@ -47,6 +47,7 @@ import { fetchStudentFeeRecords, summarizeFees } from '../../utils/financeFeeRef
 //   t_class_exam_score / t_class_flow / t_class_repeat）均已归一，
 //   全部走 tbl()/tblIns() 路由；开关关时与原实现逐字节等价。
 import { tbl, tblIns, phaseCodeCol, readPhaseCode } from '../../teaching/shared/uniTable';
+import { actorId } from '../../utils/actor';
 
 export const studentRouter = Router();
 
@@ -1364,7 +1365,7 @@ studentRouter.post(
       bizType: '升学',
       bizId: stu.id,
       studentId: stu.id,
-      opUserId: user.userId,
+      opUserId: actorId(user),
       opUserName: user.userName,
       opDesc: `升学：${stu.student_name} 已推送至大学部班级（待班主任接收）`,
       afterValue: { studentNo: stu.student_no, targetClassId: body.targetClassId, inserted },

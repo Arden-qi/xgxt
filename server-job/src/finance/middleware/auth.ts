@@ -22,7 +22,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { BizCode, ApiResponse, RoleCode, DataScope, ModuleKey } from 'shared-types/finance';
 import { verifyToken, looksLikeJwt } from '../utils/jwt';
-import { resolveBusinessRoles } from '../../middleware/auth';
+import { resolveBusinessRoles, resolveBusinessProfile } from '../../middleware/auth';
 // ★ 2026-10-07：接口级打通 —— 把「职位权限分配」的显式改动叠加到 FIN_ROLE_OPERATIONS 上
 import {
   preloadRoleActionOverrides,
@@ -91,7 +91,11 @@ function unauthorized(res: Response, message: string): void {
  * 主鉴权中间件
  * ============================================================ */
 
-export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+/**
+ * ★ 2026-10-23：改成 async —— 需要查一次权限库把 userId 换成 U 号。
+ *   内部所有失败都已 try/catch，不会把 rejected promise 丢给 Express。
+ */
+export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization || '';
 
   /* ---- 1. 开发兜底（默认关闭）---- */
@@ -150,8 +154,20 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   }
 
   /* ---- 5. 组装 req.user ---- */
+  /**
+   * ★ 2026-10-23 ID 统一：userId = 权限库 U 号（业务表人员列的唯一标准）
+   *   查不到映射时退回门户 id，保证老账号可用。
+   */
+  let permUserId = '';
+  try {
+    permUserId = (await resolveBusinessProfile(String(payload.account || ''))).permUserId;
+  } catch {
+    /* 查不到就退回门户 id */
+  }
   req.user = {
-    userId: payload.userId,
+    userId: permUserId || payload.userId,
+    businessUserId: permUserId || undefined,
+    portalUserId: payload.userId,
     userName: payload.userName || payload.account || '',
     account: payload.account || '',
     roles: payload.roles || [],
