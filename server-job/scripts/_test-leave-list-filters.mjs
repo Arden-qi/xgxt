@@ -93,6 +93,13 @@ const TODAY = (() => {
       await db(table).insert(row);
       reg(dbName, table, row.id);
       await mirrorRow(uniDb, dbName, table, row, stage, (_d, t, id) => reg('sms_common', t, id));
+      /* ★ 2026-10-23 修（自检债，不是产品 bug）：
+         USE_UNI 开时产品只读统一表，老表这一行纯属"双写残留"。
+         而上面的 reg() 走 regTarget 会把 id 记成 `sms_common.t_uni_student`
+         → finally 只删统一表 → **老表行留着** → 下次再跑同一学号撞
+         `uk_student_no`（实测连续两次红在 `Duplicate entry 'RSF2A1'`）。
+         与 `_e2e-refund-check.mjs` 的处理保持一致：插完即删。 */
+      if (USE_UNI) await db(table).where({ id: row.id }).del();
       return row;
     };
 
@@ -256,11 +263,14 @@ const TODAY = (() => {
       `返回 ${ids(e1).length} 条`,
     );
     check(
-      'E 学段=实训：每一行都是实训，且含实训那单',
+      'E 学段=就业：每一行都是就业部，且含就业那单',
+      // ★ 2026-10-23：`TEACHING_STAGE_NAME.job` 已由「实训」改为「就业部」
+      //    （department 口径：初高部 / 大学部 / 就业部）。上面 jh 那条当时已跟着改，
+      //    这条漏了 → 一直红。这里按 dto 的实际值断言。
       e2.json?.code === 200 &&
-        (e2.json?.data?.list || []).every((x) => x.stage === 'job' && x.stageName === '实训') &&
+        (e2.json?.data?.list || []).every((x) => x.stage === 'job' && x.stageName === '就业部') &&
         ids(e2).includes(jobSuspend),
-      `返回 ${ids(e2).length} 条`,
+      `返回 ${ids(e2).length} 条，stageName=${(e2.json?.data?.list || [])[0]?.stageName ?? '空'}`,
     );
 
     /* ================= F. 大学 + 复学：2026-10-16 起大学开放复学 ================= */

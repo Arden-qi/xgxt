@@ -23,10 +23,10 @@
 import { randomUUID } from 'crypto';
 import { db } from '../../class/db';
 import type { RefundListQuery, RefundRow } from '../shared/dto';
-import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME } from '../shared/dto';
+import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME, REFUND_UNFINISHED_STATUSES } from '../shared/dto';
 import { toRawRefundStatus, toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
-import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
+import type { FeeTypeConflict, RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import { tbl, tblTrx, tblInsTrx, trxTbl, uniUpdCols } from '../shared/uniTable';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 import { hydrateWithArchive, ARCHIVE_TABLE } from '../shared/studentRef';
@@ -366,11 +366,48 @@ export async function setPushInfo(
   }
 }
 
-/** 该学生是否有进行中的退费单 */
-export async function hasPending(studentId: string): Promise<boolean> {
-  const row = await tbl(db, SRC, T, STAGE)
+/**
+ * 找出「同一学生 + 同一费用项」的重复申请 —— 防重复提交的唯一口径
+ *
+ * ★ 2026-10-23（用户明确的口径）：
+ *   一个学生**可以有多条**退费申请 —— 第 1 条退住宿费、第 2 条退学费；
+ *   只有**同一个费用项**不允许重复：已有「住宿费」在审批，再申请「住宿费」要拦。
+ *
+ * ⚠️ 判重范围 = 未办结（待提交 + 待学管 + 待校长）；草稿也算占位，
+ *   否则「建两条住宿费草稿 → 分别提交」又能绕过。
+ * 费用项取值：子表优先（一笔可多项），子表没有则回落主表 `fee_type`。
+ */
+export async function findFeeTypeConflicts(
+  studentId: string,
+  feeTypes: number[],
+  excludeId?: string,
+): Promise<FeeTypeConflict[]> {
+  const wanted = [...new Set(feeTypes.map((x) => Number(x)))].filter((n) => Number.isFinite(n));
+  if (!wanted.length) return [];
+
+  const raw: number[] = [];
+  for (const u of REFUND_UNFINISHED_STATUSES) {
+    const r = await toRawRefundStatus(STAGE, u);
+    if (r !== null && r !== undefined && !raw.includes(r)) raw.push(r);
+  }
+  const q = tbl(db, SRC, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
-    .whereIn('refund_status', [2, 3, 4, 5])
-    .first();
-  return !!row;
+    .whereIn('refund_status', raw);
+  if (excludeId) q.andWhereNot('id', excludeId);
+  const rows = (await q) as Array<Record<string, any>>;
+  if (!rows.length) return [];
+
+  const itemMap = await loadItems(rows.map((r) => String(r.id)));
+  const out: FeeTypeConflict[] = [];
+  for (const r of rows) {
+    const id = String(r.id);
+    const own = itemMap[id];
+    const types = own?.length ? own.map((x) => Number(x.fee_type)) : [Number(r.fee_type)];
+    const status = (await toUnifiedRefundStatus(STAGE, Number(r.refund_status))) ?? 0;
+    const applyNo = String(r.apply_no || '');
+    for (const t of new Set(types)) {
+      if (wanted.includes(t)) out.push({ feeType: t, refundId: id, applyNo, status });
+    }
+  }
+  return out;
 }

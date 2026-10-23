@@ -675,13 +675,19 @@ async function doApprove(row: RefundRow) {
       inputValue: '',
     });
     const r = await approveRefund(row.stage, row.id, value || undefined);
-    ElMessage.success(
-      r.finished
-        ? r.pushed
-          ? '审批通过，已通知财务出款'
-          : '审批通过（推送财务失败，请人工补录）'
-        : '本环节已通过，流转到下一节点',
-    );
+    if (r.finished && !r.pushed) {
+      // ★ 2026-10-23：把后端返回的真实原因带出来（超时 / 财务 500 / 缺列 各不相同，
+      //   原来只有一句「推送财务失败」，远端排查全靠翻后端日志）
+      ElMessage.warning({
+        message: `审批通过，但推送财务失败：${r.pushError || '原因未知（详见后端日志）'}。请在财务模块人工补录`,
+        duration: 8000,
+        showClose: true,
+      });
+    } else {
+      ElMessage.success(
+        r.finished ? '审批通过，已通知财务出款' : '本环节已通过，流转到下一节点',
+      );
+    }
     await Promise.all([load(), loadSummary()]);
   } catch (e: any) {
     if (e === 'cancel' || e?.message === 'cancel') return;
