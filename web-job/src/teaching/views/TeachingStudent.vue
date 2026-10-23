@@ -167,6 +167,17 @@
           <el-button v-if="!isReadOnlyUser" link type="primary" size="small" @click="openEdit(row)">
             编辑
           </el-button>
+          <!-- ★ 2026-10-21 批注：编辑后面加【已就业】—— 点一下弹确认，把学生状态改为「已就业」；
+               确认后是终态，不可再改（已就业的行不再出现这个按钮）。 -->
+          <el-button
+            v-if="!isReadOnlyUser && canMarkEmployed(row)"
+            link
+            type="success"
+            size="small"
+            @click="doMarkEmployed(row)"
+          >
+            已就业
+          </el-button>
           <el-button v-if="!isReadOnlyUser" link type="danger" size="small" @click="doDelete(row)">
             删除
           </el-button>
@@ -703,9 +714,13 @@
           <!-- ★ 2026-10-22 用户口径：不再手选阶段，学生阶段跟随所在班级自动带出 -->
           <el-col :span="8">
             <el-form-item label="状态">
-              <el-select v-model="form.studentStatus" style="width: 100%">
+              <!-- ★ 2026-10-21 批注：下拉不再提供「已就业」（改由列表【已就业】按钮写入）；
+                   已经是「已就业」的学生是终态，状态字段直接锁死，不可改回其它状态。
+                   同批批注：「学生状态为【退学】的，任何操作都不可更改该状态」→ 退学一并锁死。 -->
+              <el-select v-model="form.studentStatus" style="width: 100%" :disabled="isStatusLocked">
                 <el-option v-for="(n, v) in formStatusOptions" :key="v" :label="n" :value="Number(v)" />
               </el-select>
+              <div v-if="statusLockTip" class="tsv-lock-tip">{{ statusLockTip }}</div>
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -749,26 +764,13 @@
           </el-col>
           <el-col :span="8">
             <el-form-item label="宿舍号">
-              <!-- 2026-10-15 改版：同步「宿舍管理」的宿舍号，下拉选择 -->
-              <el-select
-                v-model="form.dormId"
-                clearable
-                filterable
-                placeholder="同步宿舍管理，请选择"
-                :loading="dormLoading"
-                style="width: 100%"
-                @change="onFormDormChange"
-              >
-                <el-option v-for="r in dormRoomOptions" :key="r.roomId" :label="r.label" :value="r.roomId" />
-              </el-select>
+              <!-- ★ 2026-10-22：只读展示。宿舍只能通过「宿舍管理 → 办理入住/调宿」变更 -->
+              <el-input :model-value="form.dormNo || ''" placeholder="办理入住后自动带出" disabled />
             </el-form-item>
           </el-col>
           <el-col :span="8" v-if="showBed">
             <el-form-item label="床位号">
-              <!-- 2026-10-15 改版：根据所选宿舍号同步「宿舍管理」的床位号 -->
-              <el-select v-model="form.bedNo" clearable placeholder="请先选择宿舍号" style="width: 100%" :disabled="!form.dormId">
-                <el-option v-for="b in formBedOptions" :key="b.value" :label="b.label" :value="b.value" />
-              </el-select>
+              <el-input :model-value="formBedLabel" placeholder="办理入住后自动带出" disabled />
             </el-form-item>
           </el-col>
           <!-- 2026-10-16 按批注：删除「上网账号 / 初始密码」两个输入框（红字「删除框选内容」）。
@@ -786,6 +788,17 @@
           </el-col>
         </el-row>
 
+        <el-alert
+          v-if="isEmployedLocked"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="该学生已是「已就业」（终态）：状态不可再修改，其余档案字段仍可编辑"
+        />
+        <!-- ★ 2026-10-22 合并冲突处理：原本这里还有一条「教务来源改休学/退学会冻结缴费」的
+             提示（v-if form.stage === 'edu'）。远端已按用户口径把「教务」入口从学生档案下线，
+             StudentStage 只剩 jh / class / emp，该分支永远不会成立（TS2367），故整条删除；
+             它后面的部门字段提示原为 v-else，一并改为无条件显示。 -->
         <el-alert
           type="info"
           :closable="false"
@@ -900,11 +913,15 @@ import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { DEPT_NAME, DeptCode, EDUCATION_OPTIONS, StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
-import type { DormRoomItem } from 'shared-types/edu';
 import { isReadOnlyUser } from '@/store/permission';
-import { moduleAllowed } from '@/store/modules';
 import { visibleStageOptions } from '@/teaching/access';
-import { fetchDormList } from '@/api/edu/dorm';
+/**
+ * ★ 2026-10-22：宿舍下拉改用「宿舍管理」的合并房间接口
+ *   原来是 /api/edu/dorm/list（旧教务宿舍，班主任还没有 edu:dorm:view → 403），
+ *   选项为空时宿舍号既显示不了、也改不了。
+ */
+import { getDormBeds } from '@/teaching/api/dorm';
+import type { DormBedRow, DormStage } from '@/teaching/api/dorm';
 import {
   listStudents,
   getStudentDetail,
@@ -915,6 +932,7 @@ import {
   getStudentSummary,
   listUpgradeTargets,
   upgradeToUniversity,
+  confirmStudentEmployed,
   type StudentDetail,
   type StudentExtras,
   type StudentPayments,
@@ -1328,66 +1346,32 @@ function onFormDeptChange(v: number | undefined) {
 
 /* ============ 2026-10-15 表单改版：宿舍号 / 床位号同步宿舍管理 ============ */
 
-const dormLoading = ref(false);
-const dormRooms = ref<DormRoomItem[]>([]);
+/**
+ * ★ 2026-10-22：宿舍号 / 床位号改为**只读展示**
+ *
+ * 用户口径：宿舍只能通过「宿舍管理 → 办理入住 / 调宿 / 退宿」变更，
+ * 编辑学生弹窗里这两个字段只展示当前值，保存时原值回传、不会被清掉。
+ * 床位的中文标签（1-上）仍按需拉一次，只为显示好看。
+ */
+const formBedList = ref<DormBedRow[]>([]);
 
-async function loadDormRooms() {
-  /* ★ 2026-10-22：宿舍字典在「教务」板块（/api/edu/dorm/list），
-   *   初高 / 大学 / 就业账号都没有这个板块 —— 原来无条件预取，
-   *   一进学生档案就吃一条「该模块未授权给当前账号」的红字（用户报障：登录就弹无权限）。
-   *   现在没教务板块直接跳过；有教务板块的账号才拉，且失败不弹提示。 */
-  if (!moduleAllowed('edu')) {
-    dormRooms.value = [];
-    return;
-  }
-  dormLoading.value = true;
+async function loadFormBeds(roomId: string) {
+  formBedList.value = [];
+  if (!roomId) return;
   try {
-    // ⚠️ /api/edu/dorm/list 的 size 上限是 200（zod 校验），一次拉 500 会被
-    //   「参数 size 超出允许范围」400 拒掉 —— 这里按 200/页自动翻页拉全量
-    const out: DormRoomItem[] = [];
-    const size = 200;
-    const silent = { silent: true };
-    const first = await fetchDormList({ page: 1, size }, silent);
-    out.push(...(first.list || []));
-    const pages = Math.ceil((first.total || 0) / size);
-    for (let p = 2; p <= Math.min(pages, 10); p++) {
-      const d = await fetchDormList({ page: p, size }, silent);
-      out.push(...(d.list || []));
-    }
-    dormRooms.value = out;
+    const r = await getDormBeds((form.stage || 'jh') as DormStage, roomId);
+    formBedList.value = r.beds || [];
   } catch {
-    dormRooms.value = [];
-  } finally {
-    dormLoading.value = false;
+    formBedList.value = [];
   }
 }
 
-const dormRoomOptions = computed(() =>
-  dormRooms.value.map((r) => ({
-    roomId: r.roomId,
-    label: r.building ? `${r.building}-${r.room}` : r.room,
-  })),
-);
-
-/** 床位下拉：取所选宿舍的床位；老数据只有床位号没匹配到宿舍时，兜底展示原值 */
-const formBedOptions = computed(() => {
-  const room = dormRooms.value.find((r) => r.roomId === form.dormId);
-  if (room) {
-    return room.beds.map((b) => ({
-      value: b.bedNo,
-      label: b.studentName ? `${b.bedNo}（${b.studentName}）` : b.bedNo,
-    }));
-  }
-  return form.bedNo ? [{ value: form.bedNo, label: form.bedNo }] : [];
+/** 床位号展示文案：能匹配到中文标签就用标签（1-上），否则原样 */
+const formBedLabel = computed(() => {
+  if (!form.bedNo) return '';
+  const hit = formBedList.value.find((b) => b.bedNo === form.bedNo);
+  return hit?.bedLabel || form.bedNo;
 });
-
-function onFormDormChange(roomId: string) {
-  const r = dormRooms.value.find((x) => x.roomId === roomId);
-  // ★ 2026-10-20：清空宿舍时要连 dorm_no 一起清（原来只清床位号，导致
-  //   「移出宿舍」实际上把旧房号又存回去，也让保存前的变更清单漏掉这一项）
-  form.dormNo = r ? (r.building ? `${r.building}-${r.room}` : r.room) : '';
-  form.bedNo = '';
-}
 
 /**
  * 床位号入库口径：
@@ -1397,11 +1381,7 @@ function onFormDormChange(roomId: string) {
 function normalizeBedNo(): string | null {
   const bed = (form.bedNo || '').trim();
   if (!bed) return null;
-  if (form.stage === 'class' && !/^\d+$/.test(bed)) {
-    const room = dormRooms.value.find((x) => x.roomId === form.dormId);
-    const b = room?.beds.find((x) => x.bedNo === bed);
-    if (b) return String(b.bedIndex);
-  }
+  // 大学表是整数列：老数据里若是「1-上」这种字符串，取不到序号就原样存（保持历史值）
   return bed;
 }
 
@@ -1418,12 +1398,16 @@ const formClassOptions = computed(() =>
  *  ★ 2026-10-16 按批注：去掉「预在读」（截图红框 + 红字「删除这个选择」）——
  *    新增 / 编辑学生时不再提供这个选项。
  *  ★ 2026-10-20 按批注：再删「待咨询 / 咨询中」，且大学部与初高部保持一致
- *    （口径见上面 STATUS_BY_STAGE 的注释）。 */
+ *    （口径见上面 STATUS_BY_STAGE 的注释）。
+ *  ★ 2026-10-21 按批注：「将所有的【编辑】操作的状态-已就业选项进行删除」
+ *    → 「已就业」不再出现在编辑/新增下拉里，只能走列表操作列的【已就业】按钮
+ *      （它是终态，进了就不能改回去，见 doMarkEmployed）。 */
 const formStatusOptions = computed(() => {
   const allow = STATUS_BY_STAGE[form.stage] || [];
   const out: Record<number, string> = {};
   for (const s of allow) {
     if (s === StudentStatus.PRE_STUDY) continue;
+    if (s === StudentStatus.EMPLOYED) continue;
     out[s] = STUDENT_STATUS_NAME[s] || String(s);
   }
   // 历史数据兜底：编辑老学生时，其状态可能已不在可选列表里（如「预在读 / 待咨询」），
@@ -1434,6 +1418,25 @@ const formStatusOptions = computed(() => {
 });
 /** 是否显示床位号：就业/教务表没有 bed_no 列 */
 const showBed = computed(() => form.stage === 'class' || form.stage === 'jh');
+
+/** ★ 2026-10-21：已就业 = 终态 → 编辑表单里状态字段锁死（避免从下拉改回去） */
+const isEmployedLocked = computed(
+  () => !!form.id && Number(form.studentStatus) === StudentStatus.EMPLOYED,
+);
+
+/** ★ 2026-10-21 批注：「学生状态为【退学】的，任何操作都不可更改该状态」
+ *  → 退学同样是终态锁，编辑弹窗里状态字段直接禁用（后端 saveStudent 也会拦）。 */
+const isQuitLocked = computed(() => !!form.id && Number(form.studentStatus) === StudentStatus.QUIT);
+
+/** 状态下拉是否锁定（退学 / 已就业） */
+const isStatusLocked = computed(() => isEmployedLocked.value || isQuitLocked.value);
+
+/** 锁定原因（给下拉旁的灰字提示用） */
+const statusLockTip = computed(() => {
+  if (isQuitLocked.value) return '已退学：状态为终态，不可更改';
+  if (isEmployedLocked.value) return '已就业：状态为终态，不可更改';
+  return '';
+});
 
 function openCreate() {
   Object.assign(form, emptyForm());
@@ -1476,7 +1479,8 @@ async function openEdit(row: StudentRow) {
     recruitTeacherPhone: d.market.recruitTeacherPhone || '',
     consultTeacherName: d.market.consultTeacherName || '',
     consultTeacherPhone: d.market.consultTeacherPhone || '',
-    dormId: b.dormId || dormRoomOptions.value.find((r) => r.label === b.dormNo)?.roomId || '',
+    // 宿舍只读展示：宿舍号/床位号直接取详情同步来的值， dormId 仅用于拉床位标签
+    dormId: b.dormId || '',
     dormNo: b.dormNo || '',
     bedNo: b.bedNo || '',
     netAccount: d.net?.netAccount || '',
@@ -1487,6 +1491,8 @@ async function openEdit(row: StudentRow) {
   // ★ 2026-10-20：留一份原始快照，保存时用它算「改了哪些内容」
   editOrigin.value = { ...form };
   editVisible.value = true;
+  // 只读展示用：拉一次当前宿舍的床位，方便显示「1-上」这种中文标签
+  void loadFormBeds(form.dormId);
 }
 
 function onFormClassChange(id: string) {
@@ -1684,6 +1690,47 @@ async function doDelete(row: StudentRow) {
   load();
 }
 
+/* ---------------- ★ 已就业（2026-10-21 批注：编辑后面加【已就业】，终态） ----------------
+ * 批注原文：「在【编辑】后面加入【已就业】操作，点击【已就业】，弹出是否更改该学生状态为
+ *   【已就业】，该操作不可更改」
+ *
+ * 口径：
+ *   · 按钮只在**还没到已就业**的学生行上出现（已就业 = 终态，不再给入口）。
+ *     退学(7) / 流失(11) 是学籍终态，这类学生不适合再标就业，也一并不显示。
+ *   · 点一下先弹确认（把「当前状态 → 已就业」写清楚），确认后才提交，防误点。
+ *   · 提交后状态不可回退：编辑弹窗的状态下拉对已就业学生锁死、下拉里也没有该选项。
+ */
+function canMarkEmployed(row: StudentRow): boolean {
+  const s = Number(row.studentStatus);
+  return s !== StudentStatus.EMPLOYED && s !== StudentStatus.QUIT && s !== StudentStatus.LOST;
+}
+
+async function doMarkEmployed(row: StudentRow) {
+  const fromName = row.studentStatusName || STUDENT_STATUS_NAME[Number(row.studentStatus)] || '—';
+  try {
+    await ElMessageBox.confirm(
+      `确认把「${escHtml(row.studentName)}（${escHtml(row.studentNo)}）」的学生状态由「${escHtml(fromName)}」更改为「已就业」？` +
+        '<br/><br/><b>⚠️ 该操作不可更改</b>：确认后状态将固定为「已就业」，无法再改回其它状态。',
+      '已就业确认',
+      {
+        type: 'warning',
+        confirmButtonText: '确认已就业',
+        cancelButtonText: '取消',
+        dangerouslyUseHTMLString: true,
+      },
+    );
+  } catch {
+    return;
+  }
+  try {
+    const r = await confirmStudentEmployed(row.stage, row.studentId);
+    ElMessage.success(`学生状态已由「${r.fromStatusName}」改为「${r.toStatusName}」`);
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message || '标记已就业失败');
+  }
+}
+
 /* ---------------- ★ 升云（2026-10-20 批注） ----------------
  * 批注：「增加【升云】功能：点击升云可以批量选择人员进行升云，只适用于初高中，
  *   选择人员后再进行大学部要升入班级的选择，只能选择班级状态为开放的。」
@@ -1873,7 +1920,6 @@ async function refreshMeta() {
 onMounted(async () => {
   await loadAux();
   // 宿舍号/床位号下拉的数据源（宿舍管理）；失败不阻塞页面
-  loadDormRooms();
   await load(1);
 });
 
@@ -2055,6 +2101,13 @@ async function doTrialQuit() {
 }
 .muted {
   color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+/* ★ 2026-10-21：状态被锁（退学 / 已就业）时，下拉下面那行灰提示 */
+.tsv-lock-tip {
+  margin-top: 2px;
+  line-height: 1.4;
+  color: var(--el-color-warning);
   font-size: 12px;
 }
 

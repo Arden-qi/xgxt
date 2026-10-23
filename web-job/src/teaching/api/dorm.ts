@@ -155,6 +155,9 @@ export interface DormRow {
   roomStatusName: string;
   ownerName: string | null;
   className: string | null;
+  /** ★ 2026-10-22：分派给哪个班 / 该班状态（1 开放 / 2 封班） */
+  assignedClassName?: string | null;
+  assignedClassStatus?: number | null;
   remark: string | null;
 }
 
@@ -314,9 +317,34 @@ export interface DormCandidateRow {
   dormNo: string | null;
 }
 
-export async function listDormCandidates(q: { stage?: DormStage; keyword?: string }) {
+export async function listDormCandidates(
+  q: {
+    stage?: DormStage;
+    keyword?: string;
+    classId?: string;
+    className?: string;
+    /** ★ 2026-10-22：房间性别（1 男 / 2 女），男寝只出男生 */
+    gender?: number;
+  },
+) {
   const r = await http.get(`${BASE}/candidates${qs(q)}`);
   return r as unknown as DormCandidateRow[];
+}
+
+/**
+ * 4.2 办理入住弹窗的「班级」下拉选项（★ 2026-10-21）
+ *
+ * 校长/教务/学管/管理员 → 本学段「班级管理」的全部班级；
+ * 班主任/教员/助教 → 只返回名下班级。
+ */
+export interface DormCheckinClassRow {
+  classId: string | null;
+  className: string;
+}
+
+export async function listDormCheckinClasses(stage?: DormStage) {
+  const r = await http.get(`${BASE}/classes${qs({ stage })}`);
+  return r as unknown as DormCheckinClassRow[];
 }
 
 /** 5. 楼栋下拉 */

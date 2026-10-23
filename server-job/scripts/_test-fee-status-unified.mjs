@@ -111,8 +111,11 @@ const CALL_FIX = [
     );
     check(
       '③ 初高：缴费状态不能在 SQL 层按 pay_status 筛（派生后必须按展示状态筛）',
+      // ⚠️ 2026-10-22 修正：原断言写死了变量名 `query`，
+      //   实际代码是 `list = list.filter(...)`（先派生再按展示状态筛）→ 断言假红。
+      //   钉住的是**行为**（不能 in SQL 层筛），不是变量名。
       !/if \(q\.payStatus\) query\.andWhere\('pay_status'/.test(feeRoute) &&
-        /if \(q\.payStatus\) list = list\.filter\(\(x\) => x\.payStatus === q\.payStatus\)/.test(feeRoute),
+        /if \(q\.payStatus\) list = list\.filter\(\(x(?:: any)?\) => x\.payStatus === q\.payStatus\)/.test(feeRoute),
     );
     check(
       '③ 大学：催缴列表同样按到期日派生逾期',
@@ -121,13 +124,13 @@ const CALL_FIX = [
       ),
     );
     check(
-      '③ 就业：未缴清且已过应缴日 → 逾期（前端 callStatusToPayStatus 带 dueDate）',
-      /callStatusToPayStatus\(callStatus: any, dueDate\?: string \| null\)/.test(feeList),
-    );
-    check(
-      '③ 就业：筛选按统一 payStatus 由后端翻译（待缴排掉过期、逾期按应缴日）',
+      // ★ 2026-10-22 口径变更：就业催费单已有 pay_status（与初高同码），
+      //   后端改为「直接按 pay_status 筛」，前端不再用 callStatusToPayStatus 折算。
+      //   断言改为钉住**新口径**。
+      '③ 就业：筛选按统一 payStatus 直接筛 pay_status 列（后端统一，前端不折算）',
       /payStatus: z\.coerce\.number\(\)\.int\(\)\.optional\(\)/.test(feeCallRoute) &&
-        /q\.payStatus === 4\) base\.whereIn\('call_status', \[1, 2\]\)\.andWhere\('due_date', '<', t\)/.test(feeCallRoute),
+        /q\.payStatus === PayStatus\.UNPAID\)[\s\S]{0,160}?base\.andWhere\('pay_status', PayStatus\.UNPAID\)/.test(feeCallRoute) &&
+        /q\.payStatus === PayStatus\.OVERDUE\)[\s\S]{0,260}?andWhere\('due_date', '<', t\)/.test(feeCallRoute),
     );
 
     check(
@@ -135,12 +138,14 @@ const CALL_FIX = [
       /Object\.entries\(PAY_STATUS_NAME\)\.map/.test(feeList) && !/FEE_CALL_STATUS_NAME/.test(feeList),
     );
     check(
-      '④ 就业催费单状态折算：已缴清→已缴，待催缴/催缴中→待缴',
-      /function callStatusToPayStatus[\s\S]{0,200}?PayStatus\.PAID[\s\S]{0,120}?PayStatus\.UNPAID/.test(feeList),
+      // ★ 2026-10-22 口径变更：就业行的缴费状态由**后端**算好直接返回，
+      //   前端不再自己折算（callStatusToPayStatus 已被后端 effectivePayStatus 取代）。
+      '④ 就业行用后端算好的 payStatus / payStatusName（前端不再自己折算）',
+      /payStatus: r\.payStatus/.test(feeList) && /payStatusName: r\.payStatusName/.test(feeList),
     );
     check(
-      '④ 就业行按折算后的状态显示（原始催缴状态挂 title 备查）',
-      /payStatus: callStatusToPayStatus\(r\.callStatus, r\.dueDate\)/.test(feeList) && /催费单状态：/.test(feeList),
+      '④ 就业行按折算后的状态显示（原始催收状态挂 title 备查）',
+      /:title="row\.callStatusName \? `催费单状态：\$\{row\.callStatusName\}` : ''"/.test(feeList),
     );
     check(
       '⑤ 就业接口 callStatus 支持多值（「待缴」= 待催缴 1 + 催缴中 2）',
@@ -212,6 +217,39 @@ const CALL_FIX = [
       const exists = await dbJh('t_class_fee').where({ id: row.id }).first('id');
       if (exists) await dbJh('t_class_fee').where({ id: row.id }).update(row);
       else await dbJh('t_class_fee').insert(row);
+
+      // ★★ 2026-10-22：统一表也要插一份（切读模式下仓储读 t_uni_fee，不读老表）
+      //   只写老表 → 列表接口一条夹具都查不到 → 断言全红。
+      //   口径与 `_e2e-lib.mjs` 顶部「双写」注释一致。
+      const uniJhRow = {
+        id: row.id,
+        edu_stage: 'jh',
+        create_time: nowText(),
+        create_by: 'selftest',
+        update_time: nowText(),
+        update_by: 'selftest',
+        is_deleted: 0,
+        student_id: row.student_id,
+        student_no: row.student_no,
+        student_name: row.student_name,
+        class_id: row.class_id,
+        class_name: row.class_name,
+        dept_code: row.dept_code,
+        fee_type: row.fee_type,
+        fee_amount: row.fee_amount,
+        pay_status: row.pay_status,
+        pay_date: row.pay_date,
+        expire_date: row.expire_date,
+        voucher_url: row.voucher_url,
+        source_system: row.source_system,
+        source_id: row.source_id,
+        period: row.period,
+      };
+      const uniJh = conn('sms_common');
+      const uniJhExists = await uniJh('t_uni_fee').where({ id: uniJhRow.id }).first('id');
+      if (uniJhExists) await uniJh('t_uni_fee').where({ id: uniJhRow.id }).update(uniJhRow);
+      else await uniJh('t_uni_fee').insert(uniJhRow);
+      await uniJh.destroy();
     }
     const jhFixRes = await req(`${BASE}/api/class-jh/fee/list?keyword=${P}&page=1&size=50`, { token, timeout: 20000 });
     const jhFixRows = jhFixRes.json?.data?.list || [];
@@ -277,10 +315,61 @@ const CALL_FIX = [
         handle_remark: null,
         applicant_id: null,
         applicant_name: '自检',
+        // ★ 2026-10-22：后端已改成「直接按 pay_status 筛」（不再用 call_status 折算）
+        //   → 夹具的 pay_status 必须按各行语义给对：
+        //     待催缴 / 催缴中 → 1 待缴（逾期与否由 due_date 派生）
+        //     已缴清        → 2 已缴
+        //   写死 1 会让「已缴」那行被当成待缴 → 「按已缴筛选」查不出来。
+        pay_status: f.callStatus === 3 ? 2 : 1,
       };
       const exists = await db('t_job_fee_call').where({ id: row.id }).first('id');
       if (exists) await db('t_job_fee_call').where({ id: row.id }).update(row);
       else await db('t_job_fee_call').insert(row);
+
+      // ★★ 2026-10-22：统一表也要插一份（切读模式下仓储读 t_uni_fee，不读老表）
+      //   只写老表 → 列表接口一条夹具都查不到 → 断言全红（实测 6 条红）。
+      //   口径与 `_e2e-lib.mjs` 顶部「双写」注释一致。
+      const uniRow = {
+        id: row.id,
+        edu_stage: 'job',
+        create_time: now,
+        create_by: 'selftest',
+        update_time: now,
+        update_by: 'selftest',
+        is_deleted: 0,
+        fee_type: row.fee_type,
+        student_id: row.student_id,
+        student_no: row.student_no,
+        student_name: row.student_name,
+        phone: row.phone,
+        parent_phone: row.parent_phone,
+        class_id: row.class_id,
+        class_name: row.class_name,
+        dept_code: row.dept_code,
+        head_teacher_id: row.head_teacher_id,
+        head_teacher_name: row.head_teacher_name,
+        fee_amount: row.fee_amount,
+        due_date: row.due_date,
+        call_reason: row.call_reason,
+        remark: row.remark,
+        call_status: row.call_status,
+        handle_time: row.handle_time,
+        handle_remark: row.handle_remark,
+        applicant_id: row.applicant_id,
+        applicant_name: row.applicant_name,
+        // ★ 2026-10-22：后端已改成「直接按 pay_status 筛」（不再用 call_status 折算）
+        //   → 夹具的 pay_status 必须按各行语义给对：
+        //     待催缴 / 催缴中 → 1 待缴（逾期与否由 due_date 派生）
+        //     已缴清        → 2 已缴
+        //   写死 1 会让「已缴」那行被当成待缴 → 「按已缴筛选」查不出来。
+        pay_status: f.callStatus === 3 ? 2 : 1,
+        source_system: 'local',
+      };
+      const uniDb = conn('sms_common');
+      const uniExists = await uniDb('t_uni_fee').where({ id: uniRow.id }).first('id');
+      if (uniExists) await uniDb('t_uni_fee').where({ id: uniRow.id }).update(uniRow);
+      else await uniDb('t_uni_fee').insert(uniRow);
+      await uniDb.destroy();
     }
     check(`★ 造了 ${CALL_FIX.length} 行就业夹具（待催缴逾期 / 催缴中未到期 / 已缴清过期）`, true);
 
@@ -353,6 +442,15 @@ const CALL_FIX = [
   } catch (e) {
     check('脚本执行未抛异常', false, e?.message || String(e));
   } finally {
+    // ★ 统一表那两份夹具也要标回已删除（切读模式下仓储读的就是它）
+    try {
+      const uniClean = conn('sms_common');
+      await uniClean('t_uni_fee').whereIn('id', [
+        ...JH_FIX.map((f) => `${P}jh-${f.key}`),
+        ...CALL_FIX.map((f) => `${P}${f.key}`),
+      ]).update({ is_deleted: 1 });
+      await uniClean.destroy();
+    } catch { /* 忽略 */ }
     if (dbJh) {
       try {
         await dbJh('t_class_fee').whereIn('id', JH_FIX.map((f) => `${P}jh-${f.key}`)).update({ is_deleted: 1 });

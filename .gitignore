@@ -35,6 +35,19 @@
 #   环境细节，只留本机，不随仓库分发到 GitHub。
 /AGENTS.md
 
+# Local code knowledge-graph index (codebase-memory-mcp)
+#
+# ★ 2026-10-22：这是 codebase-memory-mcp 扫描本机代码生成的索引库 —— 把
+#   「哪个函数在哪、谁调用了谁」记成一张表，压缩后约 4.4MB，供 AI 秒查调用链。
+#   不提交的三个理由：
+#     ① 里面写死了**生成者电脑的绝对路径**（如 C:\Users\xxx\Desktop\学管\xgxt），
+#        换台机器就对不上；
+#     ② 是某一刻的快照，代码一改就过期（artifact.json 里的 commit 会落后）；
+#     ③ 每人本地跑一次自动就有，无需分发；二进制压缩包 git 也 diff 不了，
+#        每次更新等于整包重存 4.4MB，仓库会越滚越大。
+#   2026-10-21 曾误随「首页比例」提交进来（7052d2e），已从仓库移除，以后一律忽略。
+/.codebase-memory/
+
 # Temporary diagnostics and test output
 /.workbuddy/
 /README-先看我.md
@@ -45,6 +58,11 @@
 /release/
 /输出/
 /server-job/tessdata/*.traineddata.gz
+# ★ 2026-10-22：补写缺陷表时脚本会在仓库根生成临时 payload / 提交正文转储，
+#   正常跑完会自己删；中途失败留下的这几个模式别再手滑提交上去
+/.bug-*.json
+/.git-commits-dump.txt
+/.tmp-*.mjs
 
 # vite 构建时被沙箱拦住清不掉的旧产物（改名挪开的历史 dist）
 dist_old_*/

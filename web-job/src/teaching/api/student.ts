@@ -324,6 +324,22 @@ export function getStudentSummary(params: StudentListParams) {
   return http.get<StudentSummary>('/api/teaching/student/summary', params);
 }
 
+/* ---------------- 已就业（2026-10-21 批注：终态，不可回退） ---------------- */
+
+export interface ConfirmEmployedResult {
+  fromStatusName: string;
+  toStatusName: string;
+}
+
+/**
+ * 标记「已就业」
+ *   批注：「在【编辑】后面加入【已就业】操作，点击【已就业】，弹出是否更改该学生状态为【已就业】，
+ *          该操作不可更改」→ 只改状态为 10，不收集入职明细；已是已就业的会被后端拒绝。
+ */
+export function confirmStudentEmployed(stage: StudentStage, id: string) {
+  return http.post<ConfirmEmployedResult>('/api/teaching/student/confirm-employed', { stage, id });
+}
+
 /* ---------------- 升云（2026-10-20 批注：初高部 → 大学部开放班级） ---------------- */
 
 /** 升云可选的目标班级（后端只返回大学部 + 状态=开放的班） */

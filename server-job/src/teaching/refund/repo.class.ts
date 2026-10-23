@@ -27,7 +27,7 @@ import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME } from '../shared/dto';
 import { toRawRefundStatus, toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
-import { tbl, tblTrx, tblInsTrx, trxTbl } from '../shared/uniTable';
+import { tbl, tblTrx, tblInsTrx, trxTbl, uniUpdCols } from '../shared/uniTable';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 import { hydrateWithArchive, ARCHIVE_TABLE } from '../shared/studentRef';
 
@@ -93,6 +93,8 @@ async function decorate(
      *   原来这一列不存在 → 列表「结束日期」只能显示「—」，与初高/就业不对齐。
      */
     refundTime: fmtDateTime(row.pay_out_time),
+    // ★ 2026-10-22：财务退费单号（推送成功即回写）
+    financeRefundNo: row.finance_refund_no || null,
     createTime: fmtDateTime(row.create_time),
     canApprove: false,
     canCancel: false,
@@ -339,6 +341,29 @@ export async function setFinance(
       pay_out_time: refundTime ? new Date(refundTime) : new Date(),
       update_time: new Date(),
     });
+}
+
+/**
+ * ★ 2026-10-22：回写财务退费单（推送成功后立刻写）
+ *
+ * 见 repo.job.ts 同名函数的说明：溯源 + 展示；失败只 warn，不影响推送结果。
+ */
+export async function setPushInfo(
+  id: string,
+  financeRefundId: string | null,
+  financeRefundNo: string | null,
+): Promise<void> {
+  try {
+    const patch = await uniUpdCols(db, SRC, T, {
+      finance_refund_id: financeRefundId,
+      finance_refund_no: financeRefundNo,
+      update_time: new Date(),
+    });
+    await tbl(db, SRC, T, STAGE).where({ id }).update(patch as never);
+  } catch (err: any) {
+    // eslint-disable-next-line no-console
+    console.warn('[退费] 回写财务单号失败', STAGE, id, err?.message);
+  }
 }
 
 /** 该学生是否有进行中的退费单 */

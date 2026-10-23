@@ -37,7 +37,7 @@ import { BizError } from '../middleware/errorHandler';
 // ★ P4 切读层：本文件三张初高表（t_class_fee / t_class_fee_notify /
 //   t_class_student）均已归一，全部走 tbl()/tblIns() 路由；
 //   开关关时与原实现逐字节等价。
-import { tbl, tblIns } from '../../teaching/shared/uniTable';
+import { tbl, tblIns, uniUpdCols } from '../../teaching/shared/uniTable';
 // ★ 2026-10-20 批量转交财务：直接复用财务自己的建单服务（凭证唯一性等规则不重复实现）
 import { addFee as financeAddFee } from '../../finance/services/fee.service';
 
@@ -50,6 +50,23 @@ const STUDENT_TABLE = 't_class_student';
 /** ★ 统一表 edu_stage 取值（本路由只服务初高） */
 const DB = 'sms_class_jh';
 const STAGE = 'jh' as const;
+
+/**
+ * 缴费台账的**唯一入口**：一律从这里取查询构造器
+ *
+ * ★★ 2026-10-23 修「登记缴费成功但操作列不变成重新登记/查看」
+ *
+ * 【根因】本文件里读走 `tbl()`（→ 统一表 `sms_common.t_uni_fee`），
+ *   而 `voucher` / `transfer` 这几处写的是裸 `db('t_class_fee')`（→ 老表）。
+ *   P8 之后统一表是**唯一真源**，老表已不是页面读的对象
+ *   → 写得进去、读不回来：列表里 pay_method 永远是空，
+ *     前端 `hasPayment()` 判为「没登记过」，按钮就一直停在「上传缴费凭证」。
+ *
+ * 【纪律】**本文件不许再出现裸 `db(FEE_TABLE)` / `db(NOTIFY_TABLE)`**。
+ *   老表还存在（历史环境）但已经没有任何读写路径应该碰它 ——
+ *   碰了就是「静默写进没人读的地方」，比报错难查得多。
+ */
+const FEE = () => tbl(db, DB, FEE_TABLE, STAGE);
 
 /** 剩余天数（到期日 - 今天）；无到期日返回 null */
 function calcRemainDays(expireDate: any): number | null {
@@ -120,7 +137,7 @@ function toFee(r: any, remindDays: number) {
     parentPhone: r.parent_phone ?? null,
     feeType: r.fee_type,
     feeTypeName: nameOf(FEE_TYPE_NAME, r.fee_type),
-    feeAmount: r.fee_amount,
+    feeAmount: Number(r.fee_amount ?? 0),
     payStatus,
     payStatusName: nameOf(PAY_STATUS_NAME, payStatus),
     /** 库里的原值（1 待缴 / 2 已缴 / 3 已核对 / 4 逾期 / 5 冻结） */
@@ -130,16 +147,26 @@ function toFee(r: any, remindDays: number) {
     remainDays,
     isUrgent,
     voucherUrl: r.voucher_url,
-    /* ★ 2026-10-20 登记缴费写入的三项（未登记为 null，前端显示 —） */
-    payMethod: r.pay_method ?? null,
+    /**
+     * ★ 2026-10-20 登记缴费写入的三项（未登记为 null，前端显示 —）
+     *
+     * ⚠️ 2026-10-23：统一表 `t_uni_fee.pay_method` 是 **varchar(32)**（老表是 int），
+     *   读回来是字符串 `"1"`。前端用 `payMethod != null` 判「登记过」没问题，
+     *   但「缴费方式」下拉回选、以及 `openPayment()` 里按数字比都会踩到类型不一致
+     *   → 出口统一转数字，让下游只认一种类型。
+     */
+    payMethod: r.pay_method == null || r.pay_method === '' ? null : Number(r.pay_method),
     payMethodName: r.pay_method ? nameOf(PAY_METHOD_NAME, r.pay_method) : null,
-    paidAmount: r.paid_amount ?? null,
+    paidAmount: r.paid_amount == null || r.paid_amount === '' ? null : Number(r.paid_amount),
     payRemark: r.pay_remark ?? null,
     /**
      * 是否已转交财务（批量转交的判据）
-     * source_system='finance' + source_id 有值 = 这张单已经有对应的财务缴费单
+     * ★ 2026-10-23：改以 `finance_fee_id` 为准（三部门统一口径）。
+     *   `source_system='finance'` 对本表是「这张单本来就在财务」的同步来源，
+     *   不是「已转交」—— 拿它当判据会把财务同步来的单全标成已转交。
+     *   老字段保留兜底，等老环境的数据补完 finance_fee_id 就能去掉。
      */
-    transferred: r.source_system === 'finance' && !!r.source_id,
+    transferred: !!r.finance_fee_id || (r.source_system === 'finance' && !!r.source_id),
   };
 }
 
@@ -202,7 +229,7 @@ async function fetchStudentContacts(studentIds: Array<string | null | undefined>
   > = {};
   const ids = [...new Set(studentIds.filter((x): x is string => !!x))];
   for (let i = 0; i < ids.length; i += 500) {
-    const rows = await db(STUDENT_TABLE)
+    const rows = await tbl(db, DB, STUDENT_TABLE, STAGE)
       .where('is_deleted', false)
       .whereIn('id', ids.slice(i, i + 500))
       .select('id', 'phone', 'parent_phone', 'student_no', 'student_name', 'class_id', 'class_name', 'dept_code');
@@ -256,7 +283,7 @@ function mergeArchive<T extends Record<string, any>>(
  * 学生换班后会出现「列表显示 B 班、按 B 班筛却一条都出不来」。
  */
 async function studentIdsInClass(classId: string): Promise<string[]> {
-  const rows = (await db(STUDENT_TABLE)
+  const rows = (await tbl(db, DB, STUDENT_TABLE, STAGE)
     .where({ is_deleted: false, class_id: classId })
     .select('id')) as any[];
   return [...new Set(rows.map((r) => String(r.id || '')).filter(Boolean))];
@@ -264,7 +291,7 @@ async function studentIdsInClass(classId: string): Promise<string[]> {
 
 /** ★ 2026-10-20：按档案的姓名/学号搜人（改名后按新名字也能搜到老单据） */
 async function studentIdsByKeyword(keyword: string): Promise<string[]> {
-  const rows = (await db(STUDENT_TABLE)
+  const rows = (await tbl(db, DB, STUDENT_TABLE, STAGE)
     .where('is_deleted', false)
     .andWhere((b) => {
       b.where('student_name', 'like', `%${keyword}%`).orWhere('student_no', 'like', `%${keyword}%`);
@@ -344,7 +371,8 @@ feeRouter.get(
     const stuIds = ([...new Set(paged.map((x: any) => x.studentId))].filter(Boolean)) as string[];
     let urgeCountMap: Record<string, number> = {};
     if (stuIds.length) {
-      const counts = await db(NOTIFY_TABLE)
+      // ★ 2026-10-23：催费记录也走 tbl()（→ t_uni_notify），原来读老表恒为 0 条
+      const counts = await tbl(db, DB, NOTIFY_TABLE, STAGE)
         .where('is_deleted', false)
         .whereIn('student_id', stuIds)
         .groupBy('student_id')
@@ -487,7 +515,7 @@ feeRouter.post(
     }
 
     /* ---- 2. 准备落盘 ---- */
-    const row = await db(FEE_TABLE).where({ id: body.feeId, is_deleted: false }).first();
+    const row = await FEE().where({ id: body.feeId, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.FEE_NOT_FOUND, '缴费单不存在或已被删除');
 
     /* ---- 3. 截图：现金不强制，微信/支付宝必须有 ---- */
@@ -539,7 +567,14 @@ feeRouter.post(
     };
     // 现金且没传截图：保留原来的凭证，不要把它清空
     if (voucherUrl) updateFields.voucher_url = voucherUrl;
-    await db(FEE_TABLE).where({ id: row.id }).update(updateFields);
+    /**
+     * ★ 2026-10-23：写入必须走 `FEE()`（统一表）+ `uniUpdCols()`。
+     *   原来写裸 `db(FEE_TABLE)`（老表），而列表读统一表 →
+     *   登记成功后列表里 pay_method 一直是空，前端就不给「重新登记 / 查看」。
+     *   `uniUpdCols` 负责两件事：列名按目标表对齐、目标表没有的列剔掉（不硬塞报 Unknown column）。
+     */
+    const patch = await uniUpdCols(db, DB, FEE_TABLE, updateFields);
+    await FEE().where({ id: row.id }).update(patch as never);
 
     /* ---- 4. 财务侧反写（best-effort）：只写凭证/日期/备注，状态交给财务核对流程 ---- */
     let financeSynced = false;
@@ -615,7 +650,8 @@ feeRouter.get(
   wrap(async (_req, res) => {
     const remindDays = await getNumberSetting('feeRemindDays');
     // 候选 = 已登记缴费（有方式或实缴金额）的初高单；已转交的也返回，前端用 transferred 区分
-    const rows = await db(FEE_TABLE)
+    // ★ 2026-10-23：改走 FEE()（统一表）。原来读老表 → 新登记的单永远不出现在候选里。
+    const rows = await FEE()
       .where('is_deleted', false)
       .andWhere((qb) => {
         qb.whereNotNull('pay_method').orWhereNotNull('paid_amount');
@@ -644,7 +680,7 @@ feeRouter.post(
     const operator = { userId: req.user?.userId ?? '', userName: req.user?.userName ?? '' };
     const uniq = [...new Set(feeIds)];
 
-    const rows = await db(FEE_TABLE).whereIn('id', uniq).where('is_deleted', false).select('*');
+    const rows = await FEE().whereIn('id', uniq).where('is_deleted', false).select('*');
     const byId = new Map(rows.map((r: any) => [r.id, r]));
 
     const skipped: Array<{ feeId: string; reason: string }> = [];
@@ -665,7 +701,9 @@ feeRouter.post(
         skipped.push({ feeId: id, reason: '还没登记缴费，没有凭证可转交' });
         continue;
       }
-      if (row.source_system === 'finance' && row.source_id) {
+      // ★ 2026-10-23：判重以 finance_fee_id 为准（与三部门统一入口同口径），
+      //   source_system/source_id 兜底老数据 —— 那两个字段对财务同步来的单也是 'finance'
+      if (!!row.finance_fee_id || (row.source_system === 'finance' && !!row.source_id)) {
         skipped.push({ feeId: id, reason: '已转交过财务' });
         continue;
       }
@@ -700,12 +738,18 @@ feeRouter.post(
           operator,
         );
 
-        await db(FEE_TABLE).where({ id }).update({
-          source_system: 'finance',
-          source_id: financeFeeId,
-          update_time: new Date(),
-          update_by: operator.userId || null,
-        });
+        // ★ 2026-10-23：回写也走 FEE()（统一表）+ uniUpdCols，否则判重标记写进老表、页面读不到
+        await FEE().where({ id }).update(
+          (await uniUpdCols(db, DB, FEE_TABLE, {
+            source_system: 'finance',
+            source_id: financeFeeId,
+            // 三部门统一判重口径（与 /api/teaching/fee/transfer 一致）
+            finance_fee_id: financeFeeId,
+            finance_transfer_time: new Date(),
+            update_time: new Date(),
+            update_by: operator.userId || null,
+          })) as never,
+        );
         success += 1;
       } catch (e) {
         failed.push({ feeId: id, reason: (e as Error)?.message || '转交失败' });

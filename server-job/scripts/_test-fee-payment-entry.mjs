@@ -60,6 +60,22 @@ const nowText = () => {
 /** 记录本次上传的文件，收尾时删掉（自检产物，不是业务数据） */
 const createdFiles = [];
 
+/**
+ * 读回统一表里那行夹具
+ *
+ * ★ 断言必须查**接口真正读写的表**（`sms_common.t_uni_fee`），
+ *   查老表 `t_class_fee` 就变成「自己验证自己写的草稿」——
+ *   2026-10-23 那个 bug（写老表、读统一表）正是这么躲过自检的。
+ */
+async function feeRow() {
+  const uniDb = conn('sms_common');
+  try {
+    return await uniDb('t_uni_fee').where({ id: FIX_ID }).first();
+  } finally {
+    await uniDb.destroy();
+  }
+}
+
 (async () => {
   let db = null;
   try {
@@ -106,7 +122,28 @@ const createdFiles = [];
       '③ 登记即报缴：待缴/逾期 → 已缴，已核对不动',
       /rawStatus === PayStatus\.UNPAID \|\| rawStatus === PayStatus\.OVERDUE[\s\S]{0,120}?PayStatus\.PAID/.test(route),
     );
-    check('③ 列表实体输出 payMethodName / paidAmount / payRemark', ['payMethodName', 'paidAmount: r.paid_amount', 'payRemark: r.pay_remark'].every((k) => route.includes(k)));
+    check(
+      '③ 列表实体输出 payMethodName / paidAmount / payRemark',
+      /payMethodName: .*PAY_METHOD_NAME/.test(route) &&
+        /paidAmount: r\.paid_amount/.test(route) &&
+        /payRemark: r\.pay_remark/.test(route),
+    );
+    /**
+     * ★ 2026-10-23 用户反馈「登记缴费后操作列不变成重新登记/查看」的**根因断言**
+     *
+     * 现象是「上传成功、按钮不变」，根因是写老表、读统一表：
+     *   `tbl()` 读 `sms_common.t_uni_fee`，而 voucher/transfer 写裸 `db('t_class_fee')`。
+     * 钉「读写入同一张表」这件事，而不是钉某个变量名：
+     *   · 本文件里不许再出现裸 `db(FEE_TABLE)`（老表）
+     *   · 写路径必须过 `uniUpdCols`（按目标表真实列过滤，避免 Unknown column）
+     */
+    check(
+      '③ 登记缴费的读与写走同一张表（不许裸写老表 t_class_fee）',
+      !/db\(FEE_TABLE\)/.test(route.replace(/\/\*[\s\S]*?\*\//g, '')) &&
+        /const FEE = \(\) => tbl\(db, DB, FEE_TABLE, STAGE\)/.test(route) &&
+        /await FEE\(\)\.where\(\{ id: row\.id \}\)\.update/.test(route) &&
+        /uniUpdCols\(db, DB, FEE_TABLE/.test(route),
+    );
 
     check(
       '④ 前端操作列回来了，按钮叫「上传缴费凭证」（已登记过则「重新登记」）',
@@ -195,6 +232,14 @@ const createdFiles = [];
     if (!token) throw new Error('无可用账号，live 段无法继续');
 
     db = conn('sms_class_jh');
+    /**
+     * ★★ 2026-10-23：夹具必须**双写**（老表 + 统一表 `sms_common.t_uni_fee`）
+     *
+     *   P8 之后统一表是唯一真源，接口读的是 `t_uni_fee`（`tbl()` 路由）。
+     *   只写老表 → 接口报「缴费单不存在或已被删除」（40408），
+     *   下面的 live 断言会**全红**，但红的是夹具不是功能 —— 正是这个脚本
+     *   在 2026-10-23 修 bug 时踩到的坑（31/40）。
+     */
     const now = nowText();
     const fix = {
       id: FIX_ID,
@@ -219,10 +264,25 @@ const createdFiles = [];
       paid_amount: null,
       pay_remark: null,
     };
-    const exists = await db('t_class_fee').where({ id: FIX_ID }).first('id');
-    if (exists) await db('t_class_fee').where({ id: FIX_ID }).update(fix);
-    else await db('t_class_fee').insert(fix);
-    check('★ 造了 1 行夹具（待缴 + 已逾期 3 天，金额 1200 元）', true);
+
+    // ① 老表（历史环境还在，顺手对齐；不在也不该让自检崩）
+    try {
+      const exists = await db('t_class_fee').where({ id: FIX_ID }).first('id');
+      if (exists) await db('t_class_fee').where({ id: FIX_ID }).update(fix);
+      else await db('t_class_fee').insert(fix);
+    } catch (e) {
+      console.log(`（老表 t_class_fee 写入跳过：${e?.message || e}）`);
+    }
+
+    // ② 统一表 —— 这才是接口真正读/写的那张（edu_stage / student_id / fee_type 是 NOT NULL）
+    const uniDb = conn('sms_common');
+    const uniFix = { ...fix, edu_stage: 'jh' };
+    const uniExists = await uniDb('t_uni_fee').where({ id: FIX_ID }).first('id');
+    if (uniExists) await uniDb('t_uni_fee').where({ id: FIX_ID }).update(uniFix);
+    else await uniDb('t_uni_fee').insert(uniFix);
+    await uniDb.destroy();
+
+    check('★ 造了 1 行夹具（老表 + 统一表双写；待缴 + 已逾期 3 天，金额 1200 元）', true);
 
     const url = `${BASE}/api/class-jh/fee/voucher`;
     const body = {
@@ -238,7 +298,7 @@ const createdFiles = [];
     const voucherUrl = res.json?.data?.voucherUrl || '';
     if (voucherUrl) createdFiles.push(path.join(process.cwd(), voucherUrl.replace(/^\//, '')));
 
-    const row = await db('t_class_fee').where({ id: FIX_ID }).first();
+    const row = await feeRow();
     check(
       '★ 五项都落库（方式/实缴金额/缴费日期/备注/凭证）',
       Number(row?.pay_method) === 1 &&
@@ -306,7 +366,7 @@ const createdFiles = [];
       body: { feeId: FIX_ID, payMethod: 3, paidAmount: 120000, payDate: dayOffset(0), remark: '自检-现金收据' },
     });
     check('★ 现金 + 不传截图 → 也能登记成功', cashRes.json?.code === 200, `code=${cashRes.json?.code} msg=${cashRes.json?.message || ''}`);
-    const cashRow = await db('t_class_fee').where({ id: FIX_ID }).first();
+    const cashRow = await feeRow();
     check(
       '★ 现金登记：方式变现金、实缴/备注更新，且原有截图不被清空',
       Number(cashRow?.pay_method) === 3 &&
@@ -336,8 +396,12 @@ const createdFiles = [];
   } finally {
     if (db) {
       try {
+        // ★ 双写就要双清：老表 + 统一表都标已删除（项目铁律：不物理删除）
         await db('t_class_fee').where({ id: FIX_ID }).update({ is_deleted: 1 });
-        console.log('\n（已逻辑删除 1 行自检夹具）');
+        const uniDb = conn('sms_common');
+        await uniDb('t_uni_fee').where({ id: FIX_ID }).update({ is_deleted: 1 });
+        await uniDb.destroy();
+        console.log('\n（已逻辑删除 1 行自检夹具：老表 + 统一表）');
       } catch (e) {
         console.log(`\n（夹具清理失败，人工处理：${e?.message || e}）`);
       }

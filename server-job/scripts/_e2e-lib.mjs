@@ -629,8 +629,23 @@ export async function mirrorToUni(dbName, table, row, stage, reg) {
  * ★ 第 4 期步骤 2：断言侧的表路由
  * ============================================================ */
 
-/** 与后端同一个开关（`src/teaching/shared/uniTable.ts` 读的就是这个变量） */
-export const USE_UNI = process.env.TEACHING_UNI_TABLE === '1';
+/**
+ * 与后端同一个开关（`src/teaching/shared/uniTable.ts` 读的就是这个变量）
+ *
+ * ⚠️⚠️ 2026-10-22 修正：这里原来写的是 `=== '1'`（**默认关**），
+ *   而后端是 `!== '0'`（**默认开**）—— 两套默认值正好相反，是纯粹的 bug。
+ *
+ * 【症状（实测过两次，都查了很久）】
+ *   不设环境变量跑自检时，后端把数据写进 `sms_common.t_uni_*`，
+ *   脚本却按 `USE_UNI=false` 去 `sms_job.t_job_refund` / `sms_job.t_job_approval` 读：
+ *     · 断言侧：`approval_status=undefined` / 「找到 0 条审批单」→ 一屏假红
+ *     · 清理侧：`reg()` 按老表删 = 一行都没删掉 → 夹具残留，
+ *       下次跑可能撞唯一索引（第一次过、第二次报「已存在」）
+ *   最坑的是**假红和真红长得一样**，会让人去改没坏的代码。
+ *
+ * → 默认值与后端严格对齐：没设 = 开，只有显式 `TEACHING_UNI_TABLE=0` 才关。
+ */
+export const USE_UNI = process.env.TEACHING_UNI_TABLE !== '0';
 
 /**
  * ★ 夹具登记要记「数据真正落在哪张表」

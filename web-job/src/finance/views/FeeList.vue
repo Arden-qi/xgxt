@@ -2,11 +2,15 @@
   <div class="page-container">
     <!-- ============ 表格区（原型是「一个卡片」装下 Tab + 条件 + 表格 + 分页）============ -->
     <el-card shadow="never" class="table-card card-flush">
-      <!-- 部门二级 Tab（原型 .dept-tabs：初高部 / 大学部） -->
+      <!-- 部门二级 Tab（原型 .dept-tabs：初高部 / 大学部 / 就业部）
+           ★ 2026-10-22：教学侧的催费「批量上传到财务」扩到三个部门后，就业部的单
+             也会进到这张表（dept_code=3）。原来只有 全部/初高部/大学部 三个 Tab，
+             财务就没法按部门把就业部的单筛出来核对。 -->
       <div class="dept-tabs">
         <b :class="{ on: dept === 'all' }" @click="handleDept('all')">全部部门</b>
         <b :class="{ on: dept === '初高部' }" @click="handleDept('初高部')">初高部</b>
         <b :class="{ on: dept === '大学部' }" @click="handleDept('大学部')">大学部</b>
+        <b :class="{ on: dept === '就业部' }" @click="handleDept('就业部')">就业部</b>
       </div>
 
       <!--
@@ -52,7 +56,7 @@
         >
           <!--
             ⚠️ 这里只列「本页可能出现」的状态。
-               本页硬约束为「只看已上传凭证、且非冻结的单据」，所以
+               本页硬约束为「只看有凭证或已收款、且非冻结的单据」，所以
                「待缴」「冻结」永远不会出现，列出来只会让财务白踩一次坑。
           -->
           <el-option
@@ -94,13 +98,15 @@
       <!-- 工具条：左边说明，右边统计 + 主按钮（原型 .toolbar） -->
       <div class="table-toolbar">
         <div class="tools">
-          <span class="count-hint">共 {{ total }} 条已上传凭证的缴费单</span>
+          <span class="count-hint">共 {{ total }} 条已上传凭证 / 已收款的缴费单</span>
         </div>
         <div class="tools">
           <!--
             内联统计：财务核对台只关心这三件事。
             ⚠️ 2026-10-04 起本页只显示「已上传凭证」的单据，
                所以不再有「待缴费 / 待传凭证」（那两类根本不在结果集里）。
+            ★ 2026-10-23：现金/线下收款没有转账截图（教学侧登记缴费允许现金不传图），
+               这类「已收款但无凭证」的单也要进核对台，否则钱收了却核不了账。
           -->
           <span class="stat-line">
             待核对 <b>{{ stat.waitVerify }}</b> · 已缴 <b>{{ stat.verified }}</b> · 已打回
@@ -122,7 +128,7 @@
         :data="viewList"
         stripe
         style="width: 100%"
-        empty-text="暂无已上传凭证的缴费单"
+        empty-text="暂无可核对的缴费单"
         @selection-change="handleSelectionChange"
       >
         <!-- 只有可核对的才能勾选，避免财务误操作 -->
@@ -196,6 +202,15 @@
         <el-table-column label="缴费凭证" width="132" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.hasVoucher" type="primary" size="small" effect="plain">已上传 ›</el-tag>
+            <!--
+              ★ 2026-10-23：已收款但没有电子凭证 = 现金/线下收款
+                （教学侧「登记缴费」允许现金不传截图）。
+                以前这种单只显示「待上传」，财务看到会以为是班主任漏传了，
+                实际是钱已经收了 —— 措辞必须说清，否则又会来回问。
+            -->
+            <el-tag v-else-if="row.payStatus === PayStatus.PAID" type="warning" size="small" effect="plain">
+              现金·无凭证
+            </el-tag>
             <el-tag v-else-if="row.payDate" type="warning" size="small" effect="plain">待上传</el-tag>
             <el-tag v-else type="info" size="small" effect="plain">—</el-tag>
             <!--
@@ -433,8 +448,16 @@
           </div>
         </div>
 
-        <!-- 无凭证 -->
-        <el-empty v-else :image-size="70" description="该缴费单尚未上传缴费凭证" />
+        <!--
+          无凭证（★ 2026-10-23：已收款但现金/线下收款没有转账截图）
+          这种单也进核对台，所以提示语不能再说「尚未上传凭证」——
+          那会让人以为班主任漏传了，实际是这笔本来就没有截图。
+        -->
+        <el-empty
+          v-else
+          :image-size="70"
+          description="无电子凭证（现金 / 线下收款，可直接核对入账）"
+        />
       </div>
 
       <template #footer>
@@ -540,7 +563,7 @@ const selectedRows = ref<FeeListItem[]>([]);
  *    直接传 deptCode 给 _list 接口，分页统计才准，
  *    也不会再出现「第 1 页有大学部、翻页就没了」的情况。
  */
-const dept = ref<'all' | '初高部' | '大学部'>('all');
+const dept = ref<'all' | '初高部' | '大学部' | '就业部'>('all');
 const className = ref<string | undefined>(undefined);
 
 /** 部门 Tab → deptCode（'all' → undefined 表示不传该条件） */
@@ -548,6 +571,8 @@ const DEPT_CODE: Record<string, number | undefined> = {
   all: undefined,
   初高部: DeptCode.JUNIOR_SENIOR,
   大学部: DeptCode.UNIVERSITY,
+  // ★ 2026-10-22：就业部（教学侧催费转交过来的单 dept_code=3）
+  就业部: DeptCode.EMPLOYMENT,
 };
 
 const query = reactive<FeeListQuery>({
@@ -724,7 +749,7 @@ function handleSearch() {
  * 切换部门 Tab。
  * ⭐ 与原来不同：现在会真的重新请求（服务端筛选），并同步刷新班级下拉。
  */
-async function handleDept(d: 'all' | '初高部' | '大学部') {
+async function handleDept(d: 'all' | '初高部' | '大学部' | '就业部') {
   if (dept.value === d) return;
   dept.value = d;
   // 部门变了，原来选的班级可能不属于新部门，必须清掉

@@ -17,6 +17,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { STUDENT_STATUS_NAME } from 'shared-types';
 import { db } from '../../class/db';
 import { applyDataScope } from '../../class/middleware/dataScope';
 import { assertClassCodeAvailable } from '../shared/classCode';
@@ -113,10 +114,6 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
-    // ★ 2026-10-16：阶段方案（新表单选择；老班级为 null，回显退回 phaseName）
-    schemeId: str(r.scheme_id),
-    schemeStageId: str(r.scheme_stage_id),
-    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -136,7 +133,8 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     studentCount: studentCount ?? Number(r.student_count ?? 0),
     classStatus: status,
     classStatusName: CLASS_STATUS_NAME[status] ?? '',
-    canChangeStatus: status !== CLASS_STATUS.GRADUATED,
+    // ★ 2026-10-22：已结业(4) 下线后，只有「已就业」是终态
+    canChangeStatus: status !== CLASS_STATUS.EMPLOYED,
     attendanceRate: numOrNull(r.attendance_rate),
     attendanceRateKind: 'total',
     // ★ 这张表没 remark 列
@@ -360,6 +358,8 @@ export const repo: ClassRepo = {
       .orderBy('student_no', 'asc')) as Array<Record<string, any>>;
     return rows.map((r): ClassRosterRow => {
       const gender = Number(r.gender ?? 0);
+      // ★ 2026-10-21：状态列回读学生档案里的学生状态（不再是写死的「在班」）
+      const sStatus = r.student_status === null || r.student_status === undefined ? null : Number(r.student_status);
       return {
         studentId: String(r.id),
         studentNo: str(r.student_no),
@@ -372,6 +372,8 @@ export const repo: ClassRepo = {
         joinDate: str(fmtDate(r.enroll_date)),
         inClassStatus: null,
         inClassStatusName: '在班',
+        studentStatus: sStatus,
+        studentStatusName: sStatus === null ? '在班' : STUDENT_STATUS_NAME[sStatus] ?? String(sStatus),
       };
     });
   },
@@ -406,14 +408,12 @@ export const repo: ClassRepo = {
     let openCount = 0;
     let closedCount = 0;
     let graduatingCount = 0;
-    let graduatedCount = 0;
     for (const r of rows) {
       studentCount += counts.get(String(r.id)) ?? 0;
       const s = Number(r.class_status);
       if (s === CLASS_STATUS.OPEN) openCount++;
       else if (s === CLASS_STATUS.CLOSED) closedCount++;
       else if (s === CLASS_STATUS.GRADUATING) graduatingCount++;
-      else if (s === CLASS_STATUS.GRADUATED) graduatedCount++;
     }
     return {
       stage: STAGE,
@@ -422,7 +422,6 @@ export const repo: ClassRepo = {
       openCount,
       closedCount,
       graduatingCount,
-      graduatedCount,
       studentCount,
     };
   },
@@ -431,9 +430,9 @@ export const repo: ClassRepo = {
 function transitionsFrom(from: number): number[] {
   const map: Record<number, number[]> = {
     [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED],
-    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATED]: [],
+    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN],
+    // 历史状态：没有任何下一跳
+    [CLASS_STATUS.GRADUATING]: [],
   };
   return map[from] ?? [];
 }

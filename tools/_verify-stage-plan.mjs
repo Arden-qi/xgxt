@@ -196,7 +196,10 @@ async function wsInit() {
 console.log('\n【1】系统设置 → 阶段方案');
 await loginAs('qiansy');
 await nav('/class-jh/setting', 3200);
-check('默认页签是「系统设置」', (await ev(bodyText())).includes('保存设置'));
+check(
+  '默认（也是唯一）页签是「阶段方案」',
+  await ev(`document.body.innerText.includes('新增方案') && !document.body.innerText.includes('保存设置')`),
+);
 
 const tabClick = await ev(clickByText('阶段方案'));
 check('找到「阶段方案」页签', tabClick === 'ok');
@@ -236,10 +239,10 @@ for (let i = 0; i < 2; i++) {
   await ev(clickByText('添加阶段名称', '.el-dialog'));
   await sleep(250);
 }
-const phaseRows = await ev(`document.querySelectorAll('.el-dialog .phase-row').length`);
+const phaseRows = await ev(`document.querySelectorAll('.el-dialog .plan-phase-row').length`);
 check('点 2 次「添加阶段名称」后有 3 行阶段明细', phaseRows === 3, `实际 ${phaseRows}`);
 await ev(`(() => {
-  const rows = [...document.querySelectorAll('.el-dialog .phase-row')];
+  const rows = [...document.querySelectorAll('.el-dialog .plan-phase-row')];
   const names = ['一阶段', '二阶段', '三阶段'];
   const setVal = (el, v) => {
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
