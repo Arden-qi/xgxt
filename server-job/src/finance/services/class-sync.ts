@@ -254,13 +254,25 @@ export async function syncFeeToJh(feeId: string): Promise<void> {
       fee_type: feeType,
       fee_amount: Number(row.amount ?? 0),
       pay_status: Number(row.pay_status ?? 1),
-      pay_date: dateOnly(row.pay_date),
       expire_date: dateOnly(row.expire_date),
-      voucher_url: row.voucher_url || null,
-      period: row.period || null,
       source_system: 'finance',
       source_id: String(row.id),
     };
+
+    /**
+     * ★ 2026-10-23：收款展示字段**只有财务确实有值时才覆盖**。
+     *
+     * 背景（用户反馈）：核对后缴费状态变了，但「实缴金额 / 缴费方式」这类字段没了。
+     * 这几项是班主任在催费页「登记缴费」时写进台账的**本地收款事实**：
+     * 财务表只有 `voucher_url` / `pay_date` / `period`，**没有** `pay_method` / `paid_amount`。
+     * 照抄 `row.xxx ?? null` 的话，财务那边为空就把本地登记好的信息冲成空 ——
+     * 用户看到的就是「钱交过了、方式没了」。
+     * 所以这里一律「有值才写」，没值就保持台账原值（不传该列 = update 不碰它）。
+     */
+    const payDate = dateOnly(row.pay_date);
+    if (payDate) facts.pay_date = payDate;
+    if (row.voucher_url) facts.voucher_url = row.voucher_url;
+    if (row.period) facts.period = row.period;
 
     /**
      * ★ 2026-10-23：三级命中（详见 findUrgeTarget 的注释）
@@ -549,14 +561,28 @@ export async function syncFeeToJob(feeId: string): Promise<void> {
       due_date: dateOnly(row.expire_date),
       // ★ 状态直接搬财务的（与初高同码），前端不再折算
       pay_status: payStatus,
-      pay_method: row.pay_method ?? null,
-      paid_amount: row.paid_amount ?? null,
-      pay_date: dateOnly(row.pay_date) || null,
-      voucher_url: row.voucher_url || null,
-      pay_remark: row.remark || null,
       source_system: 'finance',
       source_id: String(row.id),
     };
+
+    /**
+     * ★★ 2026-10-23 修正：**绝不在这里写 `pay_method` / `paid_amount`**。
+     *
+     * 用户反馈「财务核对后状态变了，但实缴金额、缴费方式这些字段没了」，根因就在这两行：
+     *   `pay_method: row.pay_method ?? null` / `paid_amount: row.paid_amount ?? null`
+     * 而财务表 `t_finance_fee` **根本没有这两列** → row 上永远是 undefined
+     * → 每次财务核对回写都把就业催费单登记好的「微信支付 / 500 元」冲成空。
+     *
+     * 「钱怎么交的」只有催费侧登记时才写（feeCall.route.ts 的 /voucher），
+     * 财务那边没有权威来源，就**不许拿来覆盖**。
+     *
+     * 其余收款字段同理：财务有值才覆盖，为空时保持台账原值。
+     * `pay_remark` 也**不覆盖** —— 它是班主任登记时写的催费备注，
+     * 和财务的 `remark`（财务内部备注/核对说明）不是一回事。
+     */
+    const payDate = dateOnly(row.pay_date);
+    if (payDate) facts.pay_date = payDate;
+    if (row.voucher_url) facts.voucher_url = row.voucher_url;
 
     /** ★ 2026-10-23：三级命中（详见 findUrgeTarget 的注释）—— 命中就改状态，不新增 */
     const target = await findUrgeTarget(CONN, JOB_DB, JOB_FEE_TABLE, JOB_STAGE, {

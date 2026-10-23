@@ -265,6 +265,23 @@ async function main() {
   check('③ 核对接口返回成功', Number(verifyRes?.code) === 200, `code=${verifyRes?.code} ${verifyRes?.message || ''}`);
   check('③ 财务单 → 3「已核对」+ is_verified', Number(fin2.pay_status) === ST_VERIFIED && Number(fin2.is_verified) === 1, `pay_status=${fin2.pay_status} is_verified=${fin2.is_verified}`);
   check('★ ③ 催费行**原地** → 3「已核对」', Number(urge2.pay_status) === ST_VERIFIED, `pay_status=${urge2.pay_status}`);
+  /**
+   * ★ 2026-10-23 补：核对回写**不许把收款事实冲成空**
+   *   用户反馈「核对后状态变了，但实缴金额、缴费方式这些字段没了」。
+   *   财务表 `t_finance_fee` 根本没有 pay_method / paid_amount 两列
+   *   → 回写时拿不到值，若照抄 null 就地清空催费侧登记好的信息。
+   */
+  check(
+    '★ ③ 核对后缴费方式仍在（不被清空）',
+    urge2.pay_method != null && String(urge2.pay_method) !== '',
+    `pay_method=${urge2.pay_method}`,
+  );
+  check(
+    '★ ③ 核对后实缴金额仍在（不被清空）',
+    urge2.paid_amount != null && Number(urge2.paid_amount) === 50000,
+    `paid_amount=${urge2.paid_amount}`,
+  );
+  check('★ ③ 核对后缴费日期仍在', !!urge2.pay_date, `pay_date=${urge2.pay_date}`);
 
   const same = (await common.raw(
     `SELECT COUNT(*) c FROM t_uni_fee WHERE edu_stage=? AND student_no=? AND fee_type=? AND is_deleted=0`,
@@ -276,6 +293,132 @@ async function main() {
   /* 账单也要收尾（verifyFee 生成了账单） */
   const bills = (await finance.raw('SELECT id FROM t_finance_bill WHERE source_id=?', [financeId]))[0] as any[];
   bills.forEach((b) => track(finance, 't_finance_bill', String(b.id)));
+
+  /* ============================================================
+   * 就业部同一条链（★ 2026-10-23 用户反馈就在这里中招）
+   *   就业回写原来抄了 `pay_method: row.pay_method ?? null`，
+   *   而财务表没有这两列 → 核对一次就把「微信支付 / 500 元」清空。
+   *
+   * 【为什么这里不走 HTTP】
+   *   就业催费页的写权限只给就业部角色，演示库里没有同时具备
+   *   「就业催费写权限 + 班主任/学管角色」的自检账号。
+   *   而本 bug 完全在回写函数里 → 直接调 `syncFeeToJob()` 更精准，
+   *   初高那条已经用真实 HTTP 覆盖了整条用户操作链。
+   * ============================================================ */
+  console.log('\n----- 就业部：核对后收款信息不许被清空 -----\n');
+
+  const jobTpl = (
+    await common.raw(
+      `SELECT * FROM t_uni_fee WHERE edu_stage='job' AND is_deleted=0 AND student_no<>'' ORDER BY create_time ASC LIMIT 1`,
+    )
+  )[0] as any[];
+  if (!jobTpl.length) {
+    check('取到就业催费行模板', false);
+    return;
+  }
+  const jt = jobTpl[0];
+  const jobStudentNo = String(jt.student_no);
+
+  const jobExisted = (await common.raw(
+    `SELECT COUNT(*) c FROM t_uni_fee WHERE edu_stage='job' AND student_no=? AND fee_type=? AND is_deleted=0`,
+    [jobStudentNo, FEE_TYPE],
+  ))[0] as any[];
+  check('前置（就业）：该学生该科目原本没有数据', Number(jobExisted[0].c) === 0, `现有 ${jobExisted[0].c} 行`);
+
+  const jobFinId = uuid('TSTF');
+  /** 财务单：班主任已在催费页登记过（已缴 2、有凭证与缴费日期），等财务核对 */
+  await finance('t_finance_fee').insert({
+    ...finTemplate[0],
+    id: jobFinId,
+    student_no: jobStudentNo,
+    student_name: jt.student_name || finTemplate[0].student_name,
+    class_id: jt.class_id ?? finTemplate[0].class_id,
+    class_name: jt.class_name ?? finTemplate[0].class_name,
+    fee_type: FEE_TYPE,
+    amount: 50000,
+    dept_code: 3, // 就业部
+    pay_status: ST_PAID,
+    is_verified: 0,
+    verified_by: null,
+    verified_by_name: null,
+    verified_time: null,
+    is_rejected: 0,
+    reject_reason: null,
+    voucher_url: '/uploads/voucher/selftest-job.png',
+    voucher_no: null,
+    voucher_by: 'selftest',
+    voucher_time: nowStr,
+    pay_date: '2026-10-20',
+    remark: '微信支付',
+    is_in_bill: 0,
+    is_deleted: 0,
+    create_time: nowStr,
+    update_time: nowStr,
+  });
+  track(finance, 't_finance_fee', jobFinId);
+
+  const jobUrgeId = uuid('TSTU');
+  /** 催费行：班主任登记缴费后的状态（待缴→已缴，收款信息齐全） */
+  await common('t_uni_fee').insert({
+    ...jt,
+    id: jobUrgeId,
+    edu_stage: 'job',
+    student_no: jobStudentNo,
+    fee_type: FEE_TYPE,
+    fee_amount: 50000,
+    dept_code: 3,
+    pay_status: ST_PAID,
+    pay_method: 1,
+    paid_amount: 50000,
+    pay_date: '2026-10-20',
+    pay_remark: '自检：就业登记缴费',
+    voucher_url: '/uploads/voucher/selftest-job.png',
+    source_system: 'finance',
+    source_id: jobFinId,
+    is_deleted: 0,
+    create_time: nowStr,
+    update_time: nowStr,
+  });
+  track(common, 't_uni_fee', jobUrgeId);
+
+  const readJobUrge = async () =>
+    (await common.raw('SELECT * FROM t_uni_fee WHERE id=?', [jobUrgeId]))[0][0];
+
+  const { syncFeeToJob } = await import('../src/finance/services/class-sync');
+
+  /* 场景 A：财务核对前的同步（pay_status=2）——先确认登记信息没被同步冲掉 */
+  await syncFeeToJob(jobFinId);
+  const jobA = await readJobUrge();
+  check(
+    '④ 同步（已缴）后：缴费方式 / 实缴金额 / 备注都还在',
+    Number(jobA.pay_method) === 1 && Number(jobA.paid_amount) === 50000 && jobA.pay_remark === '自检：就业登记缴费',
+    `method=${jobA.pay_method} paid=${jobA.paid_amount} remark=${jobA.pay_remark}`,
+  );
+
+  /* 场景 B：财务核对（pay_status=3）后的回写 —— 用户实际踩的就是这一步 */
+  await finance('t_finance_fee').where({ id: jobFinId }).update({
+    pay_status: ST_VERIFIED,
+    is_verified: 1,
+    verified_time: nowStr,
+    update_time: nowStr,
+  });
+  await syncFeeToJob(jobFinId);
+  const jobB = await readJobUrge();
+
+  check('★ ④ 就业催费行原地 → 3「已核对」', Number(jobB.pay_status) === ST_VERIFIED, `pay_status=${jobB.pay_status}`);
+  check(
+    '★★ ④ 核对后「缴费方式」仍在（这次用户反馈的核心）',
+    Number(jobB.pay_method) === 1,
+    `pay_method=${jobB.pay_method}`,
+  );
+  check(
+    '★★ ④ 核对后「实缴金额」仍在',
+    Number(jobB.paid_amount) === 50000,
+    `paid_amount=${jobB.paid_amount}`,
+  );
+  check('★ ④ 核对后缴费日期仍在', jobB.pay_date === '2026-10-20', `pay_date=${jobB.pay_date}`);
+  check('★ ④ 核对后缴费备注仍在', jobB.pay_remark === '自检：就业登记缴费', `pay_remark=${jobB.pay_remark}`);
+  check('★ ④ 核对后凭证仍在', jobB.voucher_url === '/uploads/voucher/selftest-job.png', `voucher=${jobB.voucher_url}`);
 
   /* ---- 汇总 ---- */
   const pass = results.filter((r) => r.ok).length;
