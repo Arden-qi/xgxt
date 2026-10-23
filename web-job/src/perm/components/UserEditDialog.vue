@@ -274,7 +274,7 @@ async function doSave(): Promise<void> {
 
     <!-- 只改基础信息：职位 / 部门不在这里改，写清楚免得用户以为能改 -->
     <div class="desc" style="margin-top: 10px">
-      仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「分配职位」）。
+      仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「修改职位」）。
       <span v-if="loading">正在读取最新资料…</span>
     </div>
 
@@ -308,7 +308,7 @@ async function doSave(): Promise<void> {
       <div>账号状态：{{ form.userStatus || '—' }}</div>
     </div>
     <div class="desc mt12">
-      仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「分配职位」）。
+      仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「修改职位」）。
     </div>
     <template #footer>
       <button class="btn" type="button" @click="confirmOpen = false">再改改</button>
