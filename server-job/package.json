@@ -43,7 +43,8 @@
     "check:action-overlay": "tsx scripts/check-action-overlay.ts",
     "uni:migrate:plan": "tsx scripts/uni-migrate.ts --plan",
     "uni:migrate": "tsx scripts/uni-migrate.ts --run",
-    "uni:migrate:verify": "tsx scripts/uni-migrate.ts --verify"
+    "uni:migrate:verify": "tsx scripts/uni-migrate.ts --verify",
+    "db:schema-diff": "node scripts/db-schema-diff.mjs"
   },
   "dependencies": {
     "axios": "^1.7.2",
