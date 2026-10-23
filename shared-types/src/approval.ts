@@ -254,24 +254,28 @@ export function getApprovalStepCount(bizType: string): number {
 }
 
 /**
- * 「学管」角色集合（教质经理 / 学术经理）
- *
- * ★ 2026-09-30 斌哥拍板：学管拿到**校长的邮件授权**后，可以**代替校长审批**，
- *   这个授权过程**不体现在系统里** —— 所以这里直接放行，让学管能审任何一环节。
- *
- * ⚠️ 注意：**不做**「校长跳级」功能。流程仍然按顺序走（学管 → 校长），
- *    只是学管这个角色被放开了所有环节的审批权 —— 他拿到邮件同意后，
- *    可以把校长那一环也自己批掉，流程就走完了。
- *
- * 📌 #5 把教质/学术经理合并成「学管主任」后，这里只需改成本集合 = [RoleCode.TEACH_DEAN]。
- */
-const MANAGER_ROLES: string[] = XUE_GUAN_ROLES;
-
-/**
  * 判断某个角色能不能审批某业务的第 N 步
  *
- * ⚠️ 这个函数是「后端拦截」的依据 ——
+ * ⚠️ 这个函数是「后端拦截」的唯一依据 ——
  *    前端藏按钮只是"不碍眼"，真正拦人靠这里。
+ *
+ * ============================================================
+ * 【2026-10-23 口径变更：学管**不能**代替校长审批】
+ * ============================================================
+ *   用户原话：「退费中学管审批后是校长审批，学管不能代替校长审批」。
+ *
+ *   本条**覆盖** 2026-09-30 的旧口径（旧：学管拿到校长邮件授权后可代批校长环节）。
+ *   旧口径的两个问题：
+ *     ① 授权走邮件、不落系统 —— 后端无从校验，实际等于「学管什么都能批」；
+ *     ② 学管一人就能把退费／退学从第 1 步批到第 2 步，校长节点形同虚设，
+ *        审批链「学管 → 校长」在数据和轨迹上都看不出是两个人做的。
+ *
+ *   现在：第 2 步（校长审批）**只认** `RoleCode.RM_PRINCIPAL`（别名感知），
+ *        学管主任点同意/驳回一律 403「您没有「校长审批」的审批权限」，
+ *        业务单状态也不会前进（`doApprove` / `doReject` 在写库前就抛错）。
+ *
+ *   ⚠️ 以后不要再往这里加「某角色可跨节点审批」的便利口子 ——
+ *      越权都是从这种"临时放行"开始的。
  */
 export function canApprove(bizType: string, step: number, roles: string[]): boolean {
   const node = getApprovalNode(bizType, step);
@@ -283,24 +287,11 @@ export function canApprove(bizType: string, step: number, roles: string[]): bool
   //    ⚠️ 这颗「后门」上线前必须随 DEV_MODE 一起摘掉。
   if (roles.includes('SUPER_TEST')) return true;
 
-  // ① 正常情况：这个环节指定的角色
+  // ① 唯一放行规则：命中这个环节配置的角色
   //    ★ 2026-10-08 改用 hasRole —— 别名感知。
   //      运行时 roles 来自权限库（如 RM_PROJECT），配置写的是主包 RoleCode
   //      （如 PROJECT_MANAGER），两者对不上 → 直接用 includes 会恒 false。
-  if (node.roles.some((r) => hasRole(roles, r))) return true;
-
-  // ② 学管「代替校长审批」—— ★ 只放开【本来就是校长审批的那些环节】
-  //
-  //    业务口径（斌哥 2026-09-30）：学管拿到校长邮件授权后，可以替校长把
-  //    校长那一环批掉。**不是**"学管哪一环都能批"。
-  //
-  //    ⚠️ 2026-09-30 踩过的坑：这里原来写的是「只要角色里有学管就 return true」，
-  //       结果**学管连宿舍调换/退宿（那是教务老师的环节）也能批了** —— 越权。
-  //       所以必须加 `isPrincipalNode` 这个前置条件。
-  const isPrincipalNode = node.roles.includes(RoleCode.RM_PRINCIPAL);
-  if (isPrincipalNode && MANAGER_ROLES.some((r) => hasRole(roles, r))) return true;
-
-  return false;
+  return node.roles.some((r) => hasRole(roles, r));
 }
 
 /**

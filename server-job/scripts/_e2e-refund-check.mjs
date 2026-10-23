@@ -142,19 +142,34 @@ function reg(db, table, id) {
       pick(jhRaw8)?.approvalStatus === 6 && pick(jhRaw8)?.approvalStatusName === '已撤销',
       `得到 ${pick(jhRaw8)?.approvalStatus}/${pick(jhRaw8)?.approvalStatusName}`,
     );
-    // 老单（无审批单）的按钮：
-    //   · **学管**应能看到「审批」→ 说明不会因合并而卡死（这是本断言的目的）
-    //   · **班主任**本来就不该有审批按钮 → 一并断言，防止"顺手多放一个"
+    // 老单（无审批单）的按钮 —— ★ 2026-10-23 口径变更后整段重写：
+    //   jhRaw4 是「待校长审批」（统一 3）：
+    //     · 学管 **不该** 看到「审批」→ 用户口径「学管不能代替校长审批」
+    //       （旧断言写的是 `=== true`，等于把这个越权固化成了预期，本次一并纠正）
+    //     · 校长 **该** 看到「审批」→ 否则老单真没人能批，那才是"卡死"
+    //     · 班主任 不该有 → 防"顺手多放一个"
     const rListDean = await req(`${API}/list?stage=jh&size=100`, { token: tDean });
     const deanRows = (rListDean.json?.data?.list || []).filter((x) =>
       x.studentName?.startsWith('自检-'),
     );
     const deanPick = (id) => deanRows.find((x) => x.id === id);
     check(
-      '老单（无审批单）：学管仍看得到「审批」按钮（不会因合并而卡死）',
-      deanPick(jhRaw4)?.canApprove === true,
+      '★ 老单·待校长：学管看不到「审批」按钮（学管不能代替校长审批）',
+      deanPick(jhRaw4)?.canApprove === false,
       `canApprove=${deanPick(jhRaw4)?.canApprove}`,
     );
+
+    const rListPrincipal = await req(`${API}/list?stage=jh&size=100`, { token: tPrincipal });
+    const principalRows = (rListPrincipal.json?.data?.list || []).filter((x) =>
+      x.studentName?.startsWith('自检-'),
+    );
+    const principalPick = (id) => principalRows.find((x) => x.id === id);
+    check(
+      '★ 老单·待校长：校长看得到「审批」按钮（老单不会卡死）',
+      principalPick(jhRaw4)?.canApprove === true,
+      `canApprove=${principalPick(jhRaw4)?.canApprove}`,
+    );
+
     check(
       '老单：班主任看不到「审批」按钮（权限口径正确，没多放）',
       pick(jhRaw4)?.canApprove === false,
@@ -287,6 +302,49 @@ function reg(db, table, id) {
       '实训：学管审完 → 状态 = 3（待校长审批）',
       Number(jobRow2?.approval_status) === 3,
       `approval_status=${jobRow2?.approval_status}`,
+    );
+
+    /* ============================================================
+     * ★★ 2026-10-23 用户口径：「退费中学管审批后是校长审批，学管不能代替校长审批」
+     *
+     *   这条必须**接口级**验，不能只看前端按钮：
+     *     前端藏按钮只是"不碍眼"，绕过前端直接 POST 仍可能把单子批掉。
+     *   两层都要断言：
+     *     ① 同意被拦 + 状态不前进
+     *     ② 驳回被拦 + 状态不前进（驳回同样是终态，漏了等于学管能否决校长环节）
+     * ============================================================ */
+    const ap1b = await req(`${API}/approve`, {
+      method: 'POST',
+      token: tDean,
+      body: { stage: 'job', id: jobId, comment: '学管想代校长批' },
+    });
+    check(
+      '★★ 学管在「待校长」环节再点同意 → 被拦（非 200）',
+      ap1b.json?.code !== 200,
+      `code=${ap1b.json?.code} msg=${ap1b.json?.message || ''}`,
+    );
+    const jobRow2b = await jobRefundT().where({ id: jobId }).first();
+    check(
+      '★★ 学管代批被拦后状态仍 = 3（没有偷偷前进到 4）',
+      Number(jobRow2b?.approval_status) === 3,
+      `approval_status=${jobRow2b?.approval_status}`,
+    );
+
+    const rj1b = await req(`${API}/reject`, {
+      method: 'POST',
+      token: tDean,
+      body: { stage: 'job', id: jobId, reason: '学管想代校长驳回' },
+    });
+    check(
+      '★★ 学管在「待校长」环节点驳回 → 被拦（非 200）',
+      rj1b.json?.code !== 200,
+      `code=${rj1b.json?.code} msg=${rj1b.json?.message || ''}`,
+    );
+    const jobRow2c = await jobRefundT().where({ id: jobId }).first();
+    check(
+      '★★ 学管代驳被拦后状态仍 = 3（没被学管驳回成 5）',
+      Number(jobRow2c?.approval_status) === 3,
+      `approval_status=${jobRow2c?.approval_status}`,
     );
 
     const ap2 = await req(`${API}/approve`, {
