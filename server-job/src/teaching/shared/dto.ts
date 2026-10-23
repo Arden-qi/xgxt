@@ -519,6 +519,26 @@ export const REFUND_ACTIVE_STATUSES: number[] = [
   REFUND_STATUS.PENDING_PRINCIPAL,
 ];
 
+/**
+ * ★ 2026-10-23：**未办结**状态 = 待提交草稿 + 进行中 —— 费用项判重的取值范围
+ *
+ * 【业务口径】一个学生**可以有多条**退费申请：第 1 条退住宿费、第 2 条退学费。
+ *   只有**同一个费用项**不允许同时有两条未办结的申请
+ *   （「住宿费已经在审批了，不能再申请一次住宿费」）。
+ *
+ * 【为什么要含「待提交」】
+ *   草稿也是一张没办完的单子，同样占着这个费用项。
+ *   不含草稿的话，「建两条住宿费草稿 → 分别点提交」就能绕过判重 —— 已实测复现。
+ *   与请假（异动）域的口径一致（见 `teaching/leave/repo.*.ts` 的 `PENDING_*_STATUS`）。
+ *
+ * ⚠️ 这里是**统一码**；各学段仓储用 `toRawRefundStatus` 翻译成自己的原码再查。
+ */
+export const REFUND_UNFINISHED_STATUSES: number[] = [
+  REFUND_STATUS.DRAFT,
+  REFUND_STATUS.PENDING_MANAGER,
+  REFUND_STATUS.PENDING_PRINCIPAL,
+];
+
 /** 退费费用类型（三套一致；实训另有 6 退学退费 / 9 其他） */
 export const REFUND_FEE_TYPE_NAME: Record<number, string> = {
   1: '学费',
