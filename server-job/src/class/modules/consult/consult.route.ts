@@ -816,6 +816,24 @@ async function doReceive(
           .where({ id: sid, edu_stage: pushStage })
           .update(patch);
 
+        /**
+         * ★ 2026-10-23 补：成绩行的班级快照也要跟着学生走。
+         *
+         *   成绩录入页每个学生行显示的「班级」来自 t_uni_exam_score 的
+         *   class_id / class_name 快照（录入成绩时写入）。接收（末班/升班）后
+         *   只改了学生主档 → 原班主任的成绩页面还显示旧班
+         *   （用户实测：学生从 Q19 末到 Q17、17 班接收后，成绩页仍显示 Q19）。
+         *   这里把该生在读成绩快照统一改成新班，历史成绩跟着学生走。
+         */
+        await trx('t_uni_exam_score')
+          .where({ student_id: sid, edu_stage: pushStage, is_deleted: 0 })
+          .update({
+            class_id: classId,
+            class_name: className,
+            update_time: new Date(),
+            update_by: user?.userId ?? null,
+          });
+
         if (isRepeatIn) {
           /**
            * ★ 2026-10-22：末班是「转班重修」—— 除了末班记录，**换班留痕也要写**

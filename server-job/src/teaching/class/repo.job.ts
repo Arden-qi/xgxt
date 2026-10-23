@@ -100,7 +100,8 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
-    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase)),
+    // ★ 2026-10-23：阶段名方案优先、字典兜底（同 repo.classJh 口径）
+    phaseName: phase === null ? '' : (str(r.scheme_stage_name) || PHASE_NAME[phase] || resolveStageName(phase) || ''),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
