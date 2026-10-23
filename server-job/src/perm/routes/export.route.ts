@@ -33,6 +33,7 @@ import {
   addLog,
   clientIp,
   collectDescendants,
+  deptPathMap,
   joinRoleNames,
   maskPhone,
 } from '../services/perm.service';
@@ -132,6 +133,9 @@ async function fetchUser(page?: number, size?: number, all = false): Promise<She
 
   const depts = await db('t_perm_dept').where('is_deleted', false).select('id', 'dept_name');
   const deptMap = new Map(depts.map((d: any) => [d.id, d.dept_name]));
+  /* ★ 2026-10-23：导出里的「所属部门」与界面同口径，显示带上级的完整路径
+     （「教学部-初中部」），否则导出来的是「初中部」，看不出属于哪个部门。 */
+  const deptPaths = await deptPathMap();
 
   const ids = rows.map((r: any) => r.id);
   const roleRows = ids.length
@@ -157,7 +161,7 @@ async function fetchUser(page?: number, size?: number, all = false): Promise<She
       手机号: maskPhone(r.phone),
       性别: GENDER_NAME[r.gender] || '',
       年龄: r.age ?? '',
-      所属部门: deptMap.get(r.dept_id) || '—',
+      所属部门: deptPaths.get(r.dept_id) || deptMap.get(r.dept_id) || '—',
       职位: joinRoleNames(roleMap.get(r.id) || []),
       账号状态: r.user_status,
       待改密码: r.need_change_pwd ? '是' : '否',

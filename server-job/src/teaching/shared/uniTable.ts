@@ -278,11 +278,21 @@ export const UNI_MAP: Record<string, string> = {
    *         （初高查 `attendance_status` / `absent_reason`，大学只有 `absent_reason`）
    *         → 这正是「同一业务、两套命名」的典型，统一表把两套列都留着。
    *
-   *   ② `sms_job.t_job_attendance`（18 列）→ t_uni_attendance（32 列）
+   *   ② `sms_job.t_job_attendance`（18 列）→ **t_uni_attendance_detail**（19 列）
    *      ⚠️ 注意表名容易误导：实训这张表叫「attendance」，但它是**按人按天的明细**，
    *         不是班级台账（实训没有「先建台账再挂明细」那套）。
-   *         初高/大学的台账 t_class_attendance 也映射到同一张 t_uni_attendance
-   *         → 统一表同时装得下「台账行」和「明细行」，靠 edu_stage + 列是否为空区分。
+   *
+   *      ★★ 2026-10-23 纠正：这里原先映射到 `t_uni_attendance`（台账表），**是错的**。
+   *         台账表一行 = 一个班一天，唯一索引 `uk_uni_att_class_date_stage`
+   *         (class_id, attendance_date, edu_stage) 决定了它**装不下第二个人**；
+   *         而实训仓储 `attendance/repo.job.ts` 读写的是 `attend_date / student_id /
+   *         attend_status / reason` 这四列，台账表一列都没有 →
+   *         打开「就业部 · 出勤录入」直接 `数据库字段不存在`（实测 50002）。
+   *         → 改挂 `t_uni_attendance_detail`（一人一天一行，主键维度正是
+   *           attendance_id + student_id + edu_stage），与初高/大学的明细同表。
+   *         代价：明细列名要按统一表写（attend_date→attendance_date、
+   *         attend_status→attendance_status、reason→absent_reason），见 repo.job.ts 的 DCOL；
+   *         并且每行要带 `attendance_id` 指向当天的 t_uni_attendance_summary 行。
    *
    *   ③ `sms_job.t_job_attendance_summary`（15 列）→ t_uni_attendance_summary（17 列）
    *      缺 2：edu_stage / stage_code，其余逐列同名同义。
@@ -291,7 +301,7 @@ export const UNI_MAP: Record<string, string> = {
    */
   'sms_class.t_class_attendance_absent': 't_uni_attendance_detail',
   'sms_class_jh.t_class_attendance_detail': 't_uni_attendance_detail',
-  'sms_job.t_job_attendance': 't_uni_attendance',
+  'sms_job.t_job_attendance': 't_uni_attendance_detail',
   'sms_job.t_job_attendance_summary': 't_uni_attendance_summary',
 
   /**
@@ -842,6 +852,24 @@ const UNI_COL_RENAME: Record<string, Record<string, string>> = {
    */
   'sms_common.t_class_fee_sync': {
     amount: 'fee_amount',
+  },
+
+  /**
+   * ★ 2026-10-23：实训出勤明细的列名统一
+   *
+   * 老表 `t_job_attendance` 的 `attend_date / attend_status / reason`
+   * 与统一表 `t_uni_attendance_detail` 的
+   * `attendance_date / attendance_status / absent_reason` 是同一件事。
+   * 不登记 rename 的后果：写入时这三列被当作「统一表没有的列」**整列剔掉** ——
+   * 不报错，但明细行的日期为空、状态恒为 0（默认值），出勤统计全变 0。
+   *
+   * ⚠️ 只管写入。读路径的列名由业务代码取，见
+   *   `attendance/repo.job.ts` 的 `DCOL`。
+   */
+  'sms_job.t_job_attendance': {
+    attend_date: 'attendance_date',
+    attend_status: 'attendance_status',
+    reason: 'absent_reason',
   },
 };
 

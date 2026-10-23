@@ -122,6 +122,21 @@ const permLoading = ref(false);
 const allRoles = ref<PermRoleListItem[]>([]);
 const modules = ref<PermModule[]>([]);
 
+/**
+ * 部门展示名：改成「教学部-初中部」这种带上级的完整路径
+ *
+ * 【为什么不用 detail.deptName】
+ *   账号创建时选的是**具体学段**（初中部 / 高中部 / 大学部 / 实训管理 / 就业管理），
+ *   但 deptName 只有自己那一级 ——「初中部」单看不出是教学部还是谁的。
+ *   后端已在列表项里带出 deptPath（按部门树一路向上拼），这里优先用它，
+ *   老接口 / 老缓存没这个字段时退回 deptName，不至于显示空白。
+ */
+const deptLabel = computed(() => {
+  const d = detail.value;
+  if (!d) return '—';
+  return d.deptPath || d.deptName || '—';
+});
+
 /** 职位 id → 该职位权限映射（按需拉、拉过就缓存） */
 const rolePerms = ref<Record<string, RolePermMap>>({});
 
@@ -344,7 +359,7 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
             <span v-if="detail.needChangePwd" class="tag w">需首次改密</span>
           </div>
           <div class="desc" style="margin-top: 3px">
-            {{ detail.deptName }} · {{ (detail.roleNames || []).join('、') || '无职位' }}
+            {{ deptLabel }} · {{ (detail.roleNames || []).join('、') || '无职位' }}
           </div>
         </div>
         <div style="text-align: right; flex: 0 0 auto">
@@ -368,9 +383,9 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
           </div>
         </div>
         <div class="f"><label>手机号</label><div class="num">{{ detail.phone }}</div></div>
-        <div class="f"><label>所属部门</label><div>{{ detail.deptName }}</div></div>
+        <div class="f"><label>所属部门</label><div>{{ deptLabel }}</div></div>
         <div class="f"><label>账号状态</label><div>{{ detail.userStatus }}</div></div>
-        <div class="f"><label>创建人</label><div>{{ detail.createBy || '—' }}</div></div>
+        <!-- ★ 2026-10-23 按用户要求删除「创建人」字段（原型遗留，业务上无用） -->
         <div class="f"><label>创建时间</label><div class="desc num">{{ detail.createTime }}</div></div>
         <div class="f"><label>最后登录</label><div class="desc num">{{ detail.lastLoginTime || '—' }}</div></div>
         <div class="f">

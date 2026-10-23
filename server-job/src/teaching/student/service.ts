@@ -283,6 +283,7 @@ export async function summaryStudents(q: StudentListQuery, user: any): Promise<S
   const out: StudentStat = {
     total: rows.length,
     studying: 0,
+    training: 0,
     trial: 0,
     suspended: 0,
     quit: 0,
@@ -290,6 +291,8 @@ export async function summaryStudents(q: StudentListQuery, user: any): Promise<S
   };
   for (const r of rows) {
     if (r.studentStatus === StudentStatus.STUDYING) out.studying += 1;
+    /* ★ 实训中（就业部的「在校」形态）：单独计一档，不再落到空档 */
+    if (r.studentStatus === StudentStatus.TRAINING) out.training += 1;
     if (r.studentStatus === StudentStatus.TRIAL) out.trial += 1;
     if (r.studentStatus === StudentStatus.SUSPENDED) out.suspended += 1;
     if (r.studentStatus === StudentStatus.QUIT) out.quit += 1;
