@@ -18,9 +18,16 @@
  *      班级本身不搬、不改名、不换部门。
  *      已是「待就业(9)」的学生跳过；已是「已就业(10)」的**不降级**（终态）。
  *   ③ 已就业：先查整班学生状态分布（employment-progress），
- *      全部为「已就业 / 退学」→ 一次确认；还有其它状态 → 提示各状态人数 + 二次确认，
- *      确认后把**班级状态**置为「已就业(7)」。**不改学生状态**
+ *      全部为「已就业 / 退学」→ 提示整班已就业 + 班级人数 / 就业人数 → 一次确认
+ *      → 把**班级状态**置为「已就业(7)」。**不改学生状态**
  *      （学生是不是已就业，由「学生档案 → 已就业」按钮逐个确认）。
+ *
+ * ★ 2026-10-23 批注（改口径，以此为准）：
+ *   「若识别班级内仍存在其他状态的学生，则进行提示班级各个状态的人数及人员，
+ *     **不可进行【已就业】操作**」
+ *   → 原「强制确认 + 再次确认」两条弹窗**整体删除**。只要还有学生不是
+ *     「已就业 / 退学」，就只弹提示（人数 + 姓名），**不允许改班级状态**；
+ *     后端的 confirmClassEmployed 也做同一道校验，绕过前端直接调接口同样会被拦。
  *
  * ⚠️ 与「升实训」不同：这里不跨库、不建班、不写花名册，只是批量改状态，
  *    所以不放进 training.ts，单独一个文件更不容易误改到搬迁逻辑。
@@ -55,10 +62,22 @@ export interface EmploymentUpgradeResult {
 }
 
 /** 一个「学生状态 → 人数」条目 */
+export interface EmploymentProgressStudent {
+  studentId: string;
+  studentNo: string | null;
+  studentName: string | null;
+}
+
 export interface EmploymentProgressItem {
   status: number;
   statusName: string;
   count: number;
+  /**
+   * 该状态下的学生名单
+   *   ★ 2026-10-23 批注：被拦时除了人数还要显示「人员」，所以这里直接带名字，
+   *     前端不必再按状态回查一次花名册。
+   */
+  students: EmploymentProgressStudent[];
 }
 
 export interface EmploymentProgressResult {
@@ -168,8 +187,8 @@ export async function upgradeClassToEmployment(
 
 /**
  * 【已就业】第一步：识别整班学生状态
- *   前端拿 settled 决定是「一次确认」还是「强制 + 二次确认」，
- *   items 用来在弹窗里逐条列出「已就业 12 人 / 退学 2 人 / 待就业 3 人」。
+ *   前端拿 settled 决定弹「确认」还是弹「不可操作」，
+ *   items 用来逐条列出「已就业 12 人（张三、李四…）/ 待就业 3 人（王五…）」。
  */
 export async function getEmploymentProgress(
   input: EmploymentUpgradeInput,
@@ -184,29 +203,50 @@ export async function getEmploymentProgress(
   const ids = await rosterStudentIds(classId);
   if (!ids.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生');
 
+  return buildProgress(cls, ids);
+}
+
+/** 整班学生状态分布（getEmploymentProgress 与 confirmClassEmployed 共用） */
+async function buildProgress(
+  cls: Record<string, any>,
+  ids: string[],
+): Promise<EmploymentProgressResult> {
   const rows = (await tbl(db, 'sms_job', STUDENT_T, STAGE)
     .whereIn('id', ids)
-    .select('id', 'student_status')) as Array<Record<string, any>>;
+    .select('id', 'student_no', 'student_name', 'student_status')) as Array<Record<string, any>>;
 
-  const counter = new Map<number, number>();
+  // 状态码 → 该状态的学生名单
+  const bucket = new Map<number, EmploymentProgressStudent[]>();
   for (const r of rows) {
     const s = Number(r.student_status ?? 0);
-    counter.set(s, (counter.get(s) ?? 0) + 1);
+    const list = bucket.get(s) ?? [];
+    list.push({
+      studentId: String(r.id),
+      studentNo: r.student_no == null ? null : String(r.student_no),
+      studentName: r.student_name == null ? null : String(r.student_name),
+    });
+    bucket.set(s, list);
   }
   // 花名册有、主档查不到的学生也要算进总人数，否则「人数」对不上
-  const missing = Math.max(ids.length - rows.length, 0);
-  if (missing) counter.set(0, (counter.get(0) ?? 0) + missing);
+  const found = new Set(rows.map((r) => String(r.id)));
+  const missing = ids.filter((id) => !found.has(id));
+  if (missing.length) {
+    const list = bucket.get(0) ?? [];
+    for (const id of missing) list.push({ studentId: id, studentNo: null, studentName: null });
+    bucket.set(0, list);
+  }
 
-  const items: EmploymentProgressItem[] = [...counter.entries()]
-    .map(([status, count]) => ({
+  const items: EmploymentProgressItem[] = [...bucket.entries()]
+    .map(([status, students]) => ({
       status,
       statusName: status ? (STUDENT_STATUS_NAME[status] ?? String(status)) : '状态未知',
-      count,
+      count: students.length,
+      students,
     }))
     .sort((a, b) => b.count - a.count || a.status - b.status);
 
-  const employed = counter.get(StudentStatus.EMPLOYED) ?? 0;
-  const quit = counter.get(StudentStatus.QUIT) ?? 0;
+  const employed = bucket.get(StudentStatus.EMPLOYED)?.length ?? 0;
+  const quit = bucket.get(StudentStatus.QUIT)?.length ?? 0;
   // 既不是已就业也不是退学（含状态未知）→ 都算「未结清」
   const pending = ids.length - employed - quit;
 
@@ -226,6 +266,8 @@ export async function getEmploymentProgress(
 /**
  * 【已就业】第二步：把班级状态改成「已就业」
  *   ⚠️ 只改班级状态，学生状态一个不动（学生档案里逐个点【已就业】才是写 10）。
+ *   ★ 2026-10-23 批注：班级里还有学生不是「已就业 / 退学」→ **不允许改**，
+ *     即使前端被绕过也在这里拦下（否则「不可进行已就业操作」只是前端假象）。
  */
 export async function confirmClassEmployed(
   input: EmploymentUpgradeInput,
@@ -247,6 +289,21 @@ export async function confirmClassEmployed(
       classStatusName: CLASS_STATUS_NAME[CLASS_STATUS.EMPLOYED],
       changed: false,
     };
+  }
+
+  const ids = await rosterStudentIds(classId);
+  if (!ids.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生');
+
+  const progress = await buildProgress(cls, ids);
+  if (!progress.settled) {
+    const detail = progress.items
+      .filter((i) => i.status !== StudentStatus.EMPLOYED && i.status !== StudentStatus.QUIT)
+      .map((i) => `${i.statusName} ${i.count} 人`)
+      .join('、');
+    throw new BizError(
+      BizCode.CLASS_STATUS_NOT_ALLOW,
+      `班级内还有学生未到「已就业 / 退学」（${detail}），不可改为已就业`,
+    );
   }
 
   await tbl(db, 'sms_job', T, STAGE).where({ id: classId }).update({

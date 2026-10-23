@@ -41,7 +41,10 @@ import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { loadSchemeStagesForStage } from '../shared/stageSchemes';
 import { nextStudentNoForClass, phaseCodeOfClass } from '../shared/studentNo';
 import { db } from '../../utils/db';
-import { StudentStatus } from 'shared-types';
+import { StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
+import { CONSULT_TO_STUDENT_STATUS } from 'shared-types/consult';
+import { remotePost } from '../../shared/http';
+import { config } from '../../config';
 import type { StudentRepo, StudentStat } from './types';
 import { assertStudentsInScope } from '../shared/dataScope';
 import { randomUUID } from 'crypto';
@@ -190,6 +193,76 @@ function dedupeByStudentNo(rows: StudentRow[]): StudentRow[] {
 }
 
 /* ============================================================
+ * ★ 2026-10-23 批注：「转正式的按钮删掉，然后状态同步咨询那边的学生状态」
+ *
+ * 【口径】
+ *   · 转正不再由班主任手动发起（前端【转正式】弹窗已删）；
+ *   · 学生的「试学中 / 预在读 / 正式在读」以**咨询侧状态为准**：
+ *     档案读列表/详情时，按学号去咨询侧批量取一次状态，换算成学籍状态；
+ *     与库内不一致的就**回写教学主档**，保证列表、详情、花名册、统计看到的是同一套值。
+ *   · 只在这三档之间同步（3 试学中 / 4 预在读 / 5 正式在读）：
+ *     教学侧一旦进入 6 休学 / 7 退学 / 8 实训中 / 9 待就业 / 10 已就业 就不归咨询管，
+ *     否则「休学」「退学审批链」的结果会被咨询侧状态覆盖回去。
+ *   · 咨询侧指向「退费中 / 已退费 / 流失 / 未通过」时**不跟**（换算出来是 7/11），
+ *     退学、流失在教学侧有独立审批链，不能因为咨询点一下就改学籍。
+ *   · 查不到咨询记录（教学自己新建的学生）→ 原样保留教学状态。
+ *   · 咨询模块不可用 → 直接跳过，列表照常打开（不能因为跨模块超时让档案页打不开）。
+ * ============================================================ */
+const CONSULT_SYNCABLE = new Set<number>([StudentStatus.TRIAL, 4, StudentStatus.STUDYING]);
+const CONSULT_SYNC_TARGETS = new Set<number>([StudentStatus.TRIAL, 4, StudentStatus.STUDYING]);
+
+async function syncConsultStatuses(rows: StudentRow[]): Promise<void> {
+  const todo = rows.filter((r) => r.studentNo && CONSULT_SYNCABLE.has(Number(r.studentStatus)));
+  if (!todo.length) return;
+
+  const nos = [...new Set(todo.map((r) => String(r.studentNo).trim()).filter(Boolean))];
+  let items: Array<{ studentNo: string; consultState: number }> = [];
+  try {
+    // ⚠️ remotePost 的签名是 (module, url, body, opts) —— body 和 opts 别写串了
+    const res: any = await remotePost(
+      'consult',
+      '/api/consult/student/internal/states-by-nos',
+      { nos },
+      { timeout: 3000, headers: { 'x-internal-token': config.internalToken } },
+    );
+    items = (res?.items || []) as Array<{ studentNo: string; consultState: number }>;
+    if (!items.length) return;
+  } catch {
+    return; // 咨询不可用：沿用教学自己的状态
+  }
+
+  const byNo = new Map(items.map((i) => [String(i.studentNo), Number(i.consultState || 0)]));
+
+  // 按学段分组，最后批量回写
+  const pending: Record<string, Array<{ id: string; status: number }>> = {};
+  for (const r of todo) {
+    const consultState = byNo.get(String(r.studentNo).trim());
+    if (consultState == null) continue;
+    const mapped = Number(CONSULT_TO_STUDENT_STATUS[consultState] ?? 0);
+    if (!CONSULT_SYNC_TARGETS.has(mapped)) continue;
+    if (mapped === Number(r.studentStatus)) continue;
+    r.studentStatus = mapped;
+    r.studentStatusName = STUDENT_STATUS_NAME[mapped] ?? '';
+    (pending[r.stage] ||= []).push({ id: r.studentId, status: mapped });
+  }
+
+  for (const [stage, list] of Object.entries(pending)) {
+    const ids = list.map((x) => x.id);
+    if (!ids.length) continue;
+    try {
+      // 逐条改（同一页里同一状态的往往只有几个），避免 IN + CASE 那种复杂 SQL
+      for (const x of list) {
+        await tbl(db, 'sms_job', 't_student_base', stage as StudentStage)
+          .where({ id: x.id })
+          .update({ student_status: x.status, update_time: new Date() });
+      }
+    } catch (e: any) {
+      console.warn('[syncConsultStatuses] 回写学籍失败', stage, e?.message);
+    }
+  }
+}
+
+/* ============================================================
  * 对外能力
  * ============================================================ */
 
@@ -199,7 +272,10 @@ export async function listStudents(
 ): Promise<{ total: number; page: number; size: number; list: StudentRow[] }> {
   const { rows } = await mergedRows(q, user);
   const start = (q.page - 1) * q.size;
-  return { total: rows.length, page: q.page, size: q.size, list: rows.slice(start, start + q.size) };
+  const list = rows.slice(start, start + q.size);
+  // ★ 2026-10-23：状态跟咨询侧同步（只同步本页，避免整表打咨询）
+  await syncConsultStatuses(list);
+  return { total: rows.length, page: q.page, size: q.size, list };
 }
 
 export async function summaryStudents(q: StudentListQuery, user: any): Promise<StudentStat> {
@@ -232,6 +308,8 @@ export async function getStudentDetail(
   await assertStudentsInScope(stage, [id], user, '该学生');
   const d = await REPOS[stage].detail(id, user);
   if (!d) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或没有访问权限');
+  // ★ 2026-10-23：详情也跟咨询侧对齐（与列表同一口径，见 syncConsultStatuses）
+  await syncConsultStatuses([d.base]);
   // ★ 2026-10-21：详情「阶段」也要显示方案阶段名（与列表同一口径）
   await attachSchemeStageNames([d.base]);
   // ★ 2026-10-20 升云记录：按学号挂到详情上（升云后大学那条是新 id，只有学号两边一致）
