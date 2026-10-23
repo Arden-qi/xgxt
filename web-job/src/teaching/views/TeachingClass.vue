@@ -1,12 +1,19 @@
 <template>
   <div class="tcv">
     <!-- 说明条 -->
+    <!-- ★ 2026-10-22 批注（红字）：「班级状态没有已结业，前后端以及上方的说明全都删除已结业」
+         ① 已结业(4) 整体下线 —— 状态字典 / 流转表 / 统计卡 / 说明全部去掉，封班即终态；
+         ② 部门从 4 个变 3 个：实训班与就业班在库里是同一张表、dept_code 都是 3，
+            下拉里单列「实训」是重复，统一并入「就业部」查询；
+         ③ 「班级编号」「结业日期」列只有就业部有（两张 meta 里 hasClassCode / hasCloseDate 都是 true），
+            「出勤率」初高按当日、其余部门按累计。 -->
     <el-alert class="tcv-tip" type="info" :closable="false" show-icon>
       <template #title>
-        本页合并了 <b>4 个部门</b>的班级信息（初高部 / 大学部 / 实训 / 就业部）。
+        本页合并了 <b>3 个部门</b>的班级信息（初高部 / 大学部 / 就业部，实训班归就业部）。
         <span class="muted">
-          班级状态码三套一致（1 开放 / 2 封班 / 4 已结业）；
-          但「班级编号」「结业日期」只有实训有，「今日出勤率」只有初高有 —— 表单会按部门自动隐藏不适用的字段。
+          班级状态码（1 开放 / 2 封班 / 5 实训 / 6 待就业 / 7 已就业：升实训后自动为 5 实训、
+          升就业后为 6 待就业、【已就业】确认后为 7 已就业；封班即终态，可解封回开放）；
+          「班级编号」「结业日期」只有就业部有，「出勤率」初高按当日、其余部门按累计 —— 表单会按部门自动隐藏不适用的字段。
         </span>
       </template>
     </el-alert>
@@ -19,7 +26,13 @@
         <div class="tcv-card__x">
           <span class="ok">开放 {{ s.openCount }}</span>
           <span>封班 {{ s.closedCount }}</span>
-          <span class="danger">已结业 {{ s.graduatedCount }}</span>
+        </div>
+        <!-- ★ 2026-10-21 批注：升实训 / 升就业 / 已就业 会写入三个系统态，
+             卡片不加这三项，数字就和「班级总数」对不上。没有时才不显示。 -->
+        <div v-if="s.trainingCount || s.waitEmployCount || s.employedCount" class="tcv-card__x">
+          <span class="warn">实训 {{ s.trainingCount || 0 }}</span>
+          <span>待就业 {{ s.waitEmployCount || 0 }}</span>
+          <span class="ok">已就业 {{ s.employedCount || 0 }}</span>
         </div>
         <div class="tcv-card__x">在班学生 {{ s.studentCount }} 人</div>
       </div>
@@ -30,24 +43,33 @@
     </div>
 
     <!-- 筛选 -->
+    <!-- ★ 2026-10-21 批注：「将教学管理的所有筛选选择完成后，点击查询才可以进行查询」
+         → 部门 / 阶段 / 状态 三个下拉只改条件、不自动发请求，
+           全部选完由用户点【查询】才查（之前选完即查，一改条件列表就跳）。
+    ★ 2026-10-22 批注：「选择部门时不进行查询，点击查询，才可以按照所选内容进行查询」
+         → 光不自动发请求还不够：列表的列显隐 / 出勤率列头 / 部门列都跟着 query.stage 走，
+           选个部门列表当场就变样，看起来还是"选了就查"。
+           现在拆成两套状态：query = 正在填的条件（草稿），applied = 已生效的条件
+           （点【查询】/【重置】时快照过去）。列表、统计卡、列显隐一律只看 applied。 -->
     <el-form class="tcv-filter" inline>
-      <!-- 2026-10-16 按批注：原「学段」筛选改名「部门」（选项 = 初高部 / 大学部 / 实训）。
-           原来紧挨着的那个 deptCode「部门」下拉是**没接上接口的死筛选**
-           （query.deptCode 既没进查询参数、也没进 load），批注口径下两者重名，
-           这里把死掉的那个删掉，只留一个真正生效的。 -->
+      <!-- 2026-10-16 按批注：原「学段」筛选改名「部门」。
+           ★ 2026-10-22：选项 = 初高部 / 大学部 / 就业部（「实训」并入就业部，
+             见 api/class.ts#CLASS_DEPT_STAGES）。 -->
       <el-form-item label="部门">
         <el-select v-model="query.stage" clearable placeholder="全部部门" style="width: 130px" @change="onStageChange">
           <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>
       <el-form-item v-if="phaseOptions.length" label="阶段">
-        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 140px" @change="load(1)">
+        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 140px">
           <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
-        <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px" @change="load(1)">
+        <el-select v-model="query.classStatus" clearable placeholder="全部" style="width: 120px">
           <!-- 2026-10-19 批注：删除「待结业」选项 -->
+          <!-- 2026-10-21 批注：删除「已结业」选项 → 选项表见 api/class.ts#CLASS_STATUS_SELECTABLE -->
+          <!-- 2026-10-22 批注：「已结业」状态整体下线（后端流转表里也没有 4 了） -->
           <el-option v-for="s in CLASS_STATUS_SELECTABLE" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>
@@ -57,11 +79,11 @@
           placeholder="班级名 / 编号 / 班主任"
           clearable
           style="width: 180px"
-          @keyup.enter="load(1)"
+          @keyup.enter="applyQuery"
         />
       </el-form-item>
       <el-form-item>
-        <el-button type="primary" @click="load(1)">查询</el-button>
+        <el-button type="primary" @click="applyQuery">查询</el-button>
         <el-button @click="reset">重置</el-button>
         <el-button v-if="!isReadOnlyUser" type="success" @click="openCreate">新增班级</el-button>
         <!-- ★ 2026-10-22：阶段方案设计从「系统设置」搬到这里，只给校长 / 学管主任 -->
@@ -84,7 +106,7 @@
     <el-table v-loading="loading" :data="rows" border stripe size="small">
       <!-- 2026-10-16：原来「学段」与「部门」是两列（部门列取 row.deptName），
            批注口径下重名，合并成一列 —— 取部门名，没部门就退回学段名 -->
-      <el-table-column v-if="!query.stage" label="部门" width="70" align="center">
+      <el-table-column v-if="!applied.stage" label="部门" width="70" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain">{{ row.deptName || row.stageName }}</el-tag>
         </template>
@@ -112,10 +134,10 @@
         <template #default="{ row }">{{ row.assistantName || '—' }}</template>
       </el-table-column>
       <!-- ★ 只有大学/实训有交棒岗位（初高没有） -->
-      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="项目经理" min-width="80">
+      <el-table-column v-if="!applied.stage || applied.stage !== 'jh'" label="项目经理" min-width="80">
         <template #default="{ row }">{{ row.projectManagerName || '—' }}</template>
       </el-table-column>
-      <el-table-column v-if="!query.stage || query.stage !== 'jh'" label="就业老师" min-width="80">
+      <el-table-column v-if="!applied.stage || applied.stage !== 'jh'" label="就业老师" min-width="80">
         <template #default="{ row }">{{ row.employmentTeacherName || '—' }}</template>
       </el-table-column>
       <el-table-column label="人数" width="55" align="center">
@@ -140,12 +162,15 @@
       <el-table-column v-if="hasCloseDateCol" label="结业日期" min-width="100" align="center">
         <template #default="{ row }">{{ row.closeDate || '—' }}</template>
       </el-table-column>
-      <el-table-column label="状态" width="70" align="center">
+      <!-- ★ 2026-10-21 批注：状态列要能看见「实训 / 待就业 / 已就业」——
+           列多表宽，不固定的话会被挤到可视区外（截图里只剩半个字）。
+           固定在右侧、紧挨操作列，滚动时始终可见。 -->
+      <el-table-column label="状态" width="82" align="center" fixed="right">
         <template #default="{ row }">
           <el-tag :type="tagType(row.classStatus)" size="small">{{ row.classStatusName }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="280" fixed="right" align="center">
+      <el-table-column label="操作" width="340" fixed="right" align="center">
         <template #default="{ row }">
           <!-- 2026-10-19 批注：按钮「花名册」改名「详情」（抽屉里不只有名单，还有班级信息与交接记录） -->
           <el-button link type="primary" @click="openDetail(row)">详情</el-button>
@@ -161,27 +186,52 @@
           >
             升实训
           </el-button>
+          <!-- ★ 2026-10-21 批注：升实训之后出现【升就业】——
+               点一下弹确认，把该班学生状态改为「待就业」，班级状态也改「待就业」
+               （改完按钮自动变成【已就业】）。已经是待就业 / 已就业的班不再显示。 -->
+          <el-button
+            v-if="!isReadOnlyUser && row.stage === 'job' && canUpgradeEmployment(row)"
+            link
+            type="warning"
+            :loading="employmentSaving === row.classId"
+            @click="doEmploymentUpgrade(row)"
+          >
+            升就业
+          </el-button>
+          <!-- ★ 2026-10-21 批注第 3 条：【升就业】成功后该位置变成【已就业】。
+               点击 → 先识别整班学生状态 → 一次确认（全班已就业/退学）
+               或「提示各状态人数 + 强制确认 + 再次确认」→ 班级状态改「已就业」。 -->
+          <el-button
+            v-if="!isReadOnlyUser && row.stage === 'job' && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
+            link
+            type="success"
+            :loading="employedSaving === row.classId"
+            @click="doConfirmEmployed(row)"
+          >
+            已就业
+          </el-button>
           <el-button v-if="!isReadOnlyUser" link type="danger" @click="doDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
 
+    <!-- ★ 2026-10-20 批注：固定每页 20 条，去掉条数下拉（10/50/100），剩余的翻页看 -->
     <el-pagination
       class="tcv-page"
-      layout="total, sizes, prev, pager, next"
+      layout="total, prev, pager, next"
       :total="total"
-      :current-page="query.page"
-      :page-size="query.size"
-      :page-sizes="[10, 20, 50, 100]"
+      :current-page="applied.page"
+      :page-size="applied.size"
       @current-change="load"
-      @size-change="load(1)"
     />
 
     <!-- ============ 详情（原「花名册」，2026-10-19 改名） ============ -->
     <el-drawer v-model="detailVisible" :title="`${detail?.base.className || ''} · 详情`" size="560px">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="部门">{{ detail.base.stageName }}</el-descriptions-item>
+          <!-- ★ 2026-10-21 批注：「同步班级管理的部门」—— 列表「部门」列取的是 deptName（就业部），
+               详情原来取 stageName（实训），两边对不上；统一成 deptName 优先、无部门才退回学段名。 -->
+          <el-descriptions-item label="部门">{{ detail.base.deptName || detail.base.stageName }}</el-descriptions-item>
           <el-descriptions-item label="班级名称">{{ detail.base.className }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.base.classCode" label="班级编号">
             {{ detail.base.classCode }}
@@ -235,8 +285,23 @@
           <el-table-column label="入班日期" width="110" align="center">
             <template #default="{ row }">{{ row.joinDate || '—' }}</template>
           </el-table-column>
-          <el-table-column label="状态" width="80" align="center">
-            <template #default="{ row }">{{ row.inClassStatusName || '—' }}</template>
+          <!-- ★ 2026-10-21 批注：「更改同步学生档案的该学生的状态」
+               → 这一列显示**学生档案里的学生状态**（实训中 / 待就业 / 已就业…），
+                 不再固定显示花名册的「在班 / 已离班」。数据由后端 roster 回读学生主档下发。 -->
+          <el-table-column label="状态" width="100" align="center">
+            <template #default="{ row }">
+              <!-- ★ 2026-10-21 批注（红框圈整列）：「学生状态为【退学】的，任何操作都不可更改该状态」
+                   → 退学单独打灰标签 + 锁标记，把「这一条是终态、谁也不能改」显示出来
+                     （写保护在后端 teaching/shared/statusLock.ts：编辑档案 / 升实训 / 升就业 / 末班 全拦）。 -->
+              <el-tooltip
+                v-if="isQuitStatus(row)"
+                content="已退学：状态为终态，任何操作都不会更改该状态"
+                placement="top"
+              >
+                <el-tag type="info" size="small" effect="plain">退学 · 锁定</el-tag>
+              </el-tooltip>
+              <template v-else>{{ row.studentStatusName || row.inClassStatusName || '—' }}</template>
+            </template>
           </el-table-column>
         </el-table>
 
@@ -298,51 +363,40 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <!-- ★ 2026-10-16：阶段方案（选项按「部门」过滤；在 系统设置 · 阶段方案 页维护） -->
+          <!-- ★ 2026-10-16：阶段方案（选项按「部门」过滤；在 系统设置 · 阶段方案 页维护）
+               ★ 2026-10-20：数据源统一成后端 meta 的 planOptions（t_class_stage_plan +
+                 t_class_stage）。原「/api/teaching/class/scheme-options」读的
+                 t_class_stage_scheme 两张表从未建过，那套实现已整体删除。 -->
           <el-col :span="8">
             <el-form-item label="阶段方案">
               <el-select
-                v-model="form.schemeId"
+                v-model="formPlanId"
                 clearable
                 placeholder="请选择方案"
                 style="width: 100%"
-                @change="onSchemeChange"
+                @change="onPlanChange"
               >
-                <el-option v-for="s in formSchemeOptions" :key="s.id" :label="s.schemeName" :value="s.id" />
+                <el-option v-for="p in formPlanOptions" :key="p.id" :label="p.name" :value="p.id" />
               </el-select>
             </el-form-item>
           </el-col>
-          <!-- ★ 选了方案 → 阶段选项 = 方案里的阶段；没选方案 → 退回老的阶段选项（历史数据仍可编辑） -->
-          <el-col v-if="form.schemeId || formPhaseOptions.length" :span="8">
+          <!-- ★ 阶段选项 = 当前方案里的阶段；没选方案 → 退回该学段的阶段清单（历史数据仍可编辑） -->
+          <el-col v-if="formPhaseOptions.length" :span="8">
             <el-form-item label="阶段">
-              <el-select
-                v-if="form.schemeId"
-                v-model="form.schemeStageId"
-                clearable
-                placeholder="请选择阶段"
-                style="width: 100%"
-                @change="onSchemeStageChange"
-              >
-                <!-- 选中后只显示阶段名称（宽度有限）；下拉里带一列灰字「学制X月」 -->
-                <el-option v-for="p in formSchemeStageOptions" :key="p.id" :label="p.stageName" :value="p.id">
-                  <span>{{ p.stageName }}</span>
-                  <span v-if="p.studyMonths" class="stage-months">学制{{ p.studyMonths }}月</span>
-                </el-option>
-              </el-select>
-              <el-select v-else v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
+              <el-select v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
                 <el-option v-for="p in formPhaseOptions" :key="p.value" :label="p.label" :value="p.value" />
               </el-select>
             </el-form-item>
           </el-col>
           <!-- 2026-10-19 批注：原来的操作列【改状态】移到编辑弹窗里；
-               「待结业」已删除，封班后直接选「已结业」。已结业是终态，下拉禁用。 -->
+               「待结业」已删除。
+               ★ 2026-10-21：实训 / 待就业 / 已就业 是系统态，只读
+                 （只能由操作列的【升实训】【升就业】【已就业】写入）。
+               ★ 2026-10-22：「已结业」整体下线 —— 状态只剩 开放 ⇄ 封班，
+                 封班即终态（可解封回开放），下拉里不会再出现已结业。 -->
           <el-col v-if="form.id" :span="8">
             <el-form-item label="班级状态">
-              <el-select
-                v-model="form.classStatus"
-                style="width: 100%"
-                :disabled="editStatusFrom === 4"
-              >
+              <el-select v-model="form.classStatus" style="width: 100%" :disabled="editStatusLocked">
                 <el-option v-for="s in editStatusOptions" :key="s.value" :label="s.label" :value="s.value" />
               </el-select>
             </el-form-item>
@@ -682,7 +736,8 @@
  *   · 一个页面 + 学段筛选（不再 3 个页面各一套）
  *   · 「班级编号 / 结业日期 / 交棒岗位 / 备注」按学段自动显隐
  *     —— 由后端 /meta 下发的 hasClassCode / hasCloseDate 决定，**不写死学段判断**
- *   · 状态机统一（1 开放 / 2 封班 / 4 已结业；2026-10-19 起「待结业」下线），非法流转后端会拦
+ *   · 状态机统一（1 开放 / 2 封班 / 5 实训 / 6 待就业 / 7 已就业；
+ *     2026-10-19 起「待结业」下线、2026-10-22 起「已结业」整体下线），非法流转后端会拦
  *
  * 【★ 与学生档案页最大的不同：不按名字去重】
  *   「初高 G104」和「大学 G104」是两个不同的班，同名是常态。
@@ -697,7 +752,7 @@ import { visibleStageOptions } from '@/teaching/access';
 import { http } from '@/api/request';
 // ★ 2026-10-22：阶段方案设计从「系统设置」搬进班级管理，以弹窗呈现
 import StageSchemePanel from '@/teaching/components/StageSchemePanel.vue';
-import { DeptCode } from 'shared-types';
+import { DeptCode, StudentStatus } from 'shared-types';
 import type { PermUserListItem } from 'shared-types/perm';
 import {
   listClasses,
@@ -706,14 +761,17 @@ import {
   deleteClass,
   getClassMeta,
   getClassSummary,
-  getSchemeOptions,
   listClassHandovers,
   doClassHandover,
   upgradeClassToTraining,
+  upgradeClassToEmployment,
+  getEmploymentProgress,
+  confirmClassEmployed,
+  isSystemClassStatus,
   CLASS_STATUS_TAG,
   CLASS_STATUS_SELECTABLE,
   classStatusOptions,
-  CLASS_STAGES,
+  CLASS_DEPT_STAGES,
   DEPT_OPTIONS,
   type ClassDetail,
   type ClassHandoverPayload,
@@ -723,7 +781,6 @@ import {
   type ClassStage,
   type ClassStageMeta,
   type ClassSummary,
-  type SchemeOption,
   type StagePlanOption,
 } from '@/teaching/api/class';
 // 教室「楼栋-房间号」格式：归一 + 校验（前后端同一套规则，见文件头注释）
@@ -754,7 +811,11 @@ const STAGE_LABEL: Record<ClassStage, string> = {
   emp: '就业部',
 };
 
-const stageOptions = computed(() => visibleStageOptions('class', CLASS_STAGES, STAGE_LABEL));
+/**
+ * ★ 2026-10-22：部门下拉用 CLASS_DEPT_STAGES（初高部 / 大学部 / 就业部），
+ *   不用 CLASS_STAGES —— 后者含内部的 job（实训），只用于行排序与类型。
+ */
+const stageOptions = computed(() => visibleStageOptions('class', CLASS_DEPT_STAGES, STAGE_LABEL));
 
 /* ---------------- 列表 ---------------- */
 const loading = ref(false);
@@ -763,8 +824,21 @@ const total = ref(0);
 const summary = ref<ClassSummary[]>([]);
 const metaList = ref<ClassStageMeta[]>([]);
 
+/** 筛选条件（草稿）—— 只跟着下拉/输入框变，**不发请求** */
 const query = reactive({
-  // 「部门」筛选复用 stage：初高部 = jh、大学部 = class、实训 = job
+  // 「部门」筛选复用 stage：初高部 = jh、大学部 = class、就业部 = emp（实训 job 也归这一项）
+  stage: undefined as ClassStage | undefined,
+  classStatus: undefined as number | undefined,
+  phaseCode: undefined as number | undefined,
+  keyword: '',
+});
+
+/**
+ * 已生效的查询条件 —— 只有点【查询】/【重置】才从 query 快照过来。
+ * ★ 列表、统计卡、列显隐、出勤率列头全部只看这一份：
+ *   否则用户选了部门（条件还没提交），表格列就已经跟着变，看着仍像"选了就查"。
+ */
+const applied = reactive({
   stage: undefined as ClassStage | undefined,
   classStatus: undefined as number | undefined,
   phaseCode: undefined as number | undefined,
@@ -776,16 +850,18 @@ const query = reactive({
 /* 面包屑第 4 级：当前正在查看的学段（筛选器变化时自动同步，页面卸载自动清空） */
 useBreadcrumbStageKey(() => query.stage || '');
 
-/** 当前所选学段的 meta（列显隐/标签都靠它） */
-const curMeta = computed(() => metaList.value.find((m) => m.stage === query.stage) || null);
-const phaseOptions = computed(() => curMeta.value?.phaseOptions || []);
+/** 当前**已生效**学段的 meta（列显隐/标签都靠它） */
+const curMeta = computed(() => metaList.value.find((m) => m.stage === applied.stage) || null);
+/** 草稿学段的 meta —— 「阶段」下拉要跟着刚选的部门立刻换选项（但列表不动） */
+const draftMeta = computed(() => metaList.value.find((m) => m.stage === query.stage) || null);
+const phaseOptions = computed(() => draftMeta.value?.phaseOptions || []);
 
 /** 未选学段时，只要任一可见学段有编号/结业日期就显示该列 */
 const hasClassCodeCol = computed(() =>
-  query.stage ? !!curMeta.value?.hasClassCode : metaList.value.some((m) => m.hasClassCode),
+  applied.stage ? !!curMeta.value?.hasClassCode : metaList.value.some((m) => m.hasClassCode),
 );
 const hasCloseDateCol = computed(() =>
-  query.stage ? !!curMeta.value?.hasCloseDate : metaList.value.some((m) => m.hasCloseDate),
+  applied.stage ? !!curMeta.value?.hasCloseDate : metaList.value.some((m) => m.hasCloseDate),
 );
 
 /**
@@ -794,8 +870,8 @@ const hasCloseDateCol = computed(() =>
  *   （判断依据直接用初高这个固定事实，不去猜 meta 的其它标志位。）
  */
 const rateLabel = computed(() => {
-  if (!query.stage) return '出勤率';
-  return query.stage === 'jh' ? '今日出勤率' : '累计出勤率';
+  if (!applied.stage) return '出勤率';
+  return applied.stage === 'jh' ? '今日出勤率' : '累计出勤率';
 });
 
 function rateClass(row: ClassRow): string {
@@ -828,13 +904,20 @@ async function onSchemeChanged() {
   await load();
 }
 
+/** ★ 2026-10-21 批注：花名册「状态」列——退学(7) 是终态，任何操作都不能改（后端写保护） */
+function isQuitStatus(row: Record<string, any>): boolean {
+  return Number(row?.studentStatus) === StudentStatus.QUIT;
+}
+
+/** 拉数据：只认 applied（分页也走这里，翻页不会把草稿条件带上） */
 async function load(page?: number) {
-  if (page) query.page = page;
+  if (page) applied.page = page;
   loading.value = true;
   try {
+    const params = { ...applied };
     const [r, s, m] = await Promise.all([
-      listClasses({ ...query }),
-      getClassSummary({ ...query }),
+      listClasses(params),
+      getClassSummary(params),
       metaList.value.length ? Promise.resolve(metaList.value) : getClassMeta(),
     ]);
     rows.value = r.list || [];
@@ -848,11 +931,23 @@ async function load(page?: number) {
   }
 }
 
-/** 切学段：阶段码和状态都是学段内的，必须清掉，否则会带着上一个学段的筛选去查 */
+/**
+ * ★ 2026-10-22 批注：「点击查询，才可以按照所选内容进行查询」
+ *   → 把草稿条件提交成生效条件，再拉第一页。
+ */
+function applyQuery() {
+  applied.stage = query.stage;
+  applied.classStatus = query.classStatus;
+  applied.phaseCode = query.phaseCode;
+  applied.keyword = query.keyword;
+  load(1);
+}
+
+/** 切学段：阶段码和状态都是学段内的，必须清掉，否则会带着上一个学段的筛选去查
+ *  ★ 2026-10-21 批注：这里**不再自动查询** —— 筛选选完由用户点【查询】才查（见筛选区注释）。 */
 function onStageChange() {
   query.phaseCode = undefined;
   query.classStatus = undefined;
-  load(1);
 }
 
 function reset() {
@@ -860,7 +955,7 @@ function reset() {
   query.classStatus = undefined;
   query.phaseCode = undefined;
   query.keyword = '';
-  load(1);
+  applyQuery();
 }
 
 /* ---------------- 详情 / 花名册 ---------------- */
@@ -953,10 +1048,6 @@ function emptyForm(stage: ClassStage): ClassSaveBody {
     // 2026-10-19：实训与就业部都归「就业部」(3)，两者只靠学段区分
     deptCode: stage === 'jh' ? 1 : stage === 'class' ? 2 : 3,
     phaseCode: undefined,
-    // ★ 2026-10-16：阶段方案（null = 未选，老班级/不选方案时为 null）
-    schemeId: null,
-    schemeStageId: null,
-    schemeStageName: null,
     headTeacherId: '',
     headTeacherName: '',
     teacherId: '',
@@ -993,6 +1084,13 @@ const formPlanId = ref('');
 /** 打开编辑弹窗时的原始状态 —— 状态下拉的可选项按它算，选完不会越点越多 */
 const editStatusFrom = ref<number | null>(null);
 const editStatusOptions = computed(() => classStatusOptions(editStatusFrom.value));
+/**
+ * 状态是否只读：
+ *   实训(5) / 待就业(6) / 已就业(7) 是系统态 —— 不能在编辑弹窗里手工改
+ *   （只能由操作列三个按钮写入）。
+ *   ★ 2026-10-22：已结业(4) 已下线，不再有"终态只读"这条判断。
+ */
+const editStatusLocked = computed(() => isSystemClassStatus(editStatusFrom.value));
 
 const formPhaseOptions = computed(() => {
   const plan = planOptionsAll.value.find((p) => p.id === formPlanId.value);
@@ -1022,10 +1120,6 @@ function onFormDeptChange(v: number | undefined) {
   if (!formPlanOptions.value.some((p) => p.id === formPlanId.value)) formPlanId.value = '';
   // 2026-10-19 批注：清掉之后默认选中新部门的方案（不允许空着）
   if (!formPlanId.value) formPlanId.value = formPlanOptions.value[0]?.id || '';
-  // ★ 方案是按部门维护的：跨部门的选中值（方案 / 方案里的阶段 / 阶段名快照）一起清掉
-  form.schemeId = null;
-  form.schemeStageId = null;
-  form.schemeStageName = null;
   // 学段变了：阶段按新学段重选（onFormStageChange 会清编号/交棒/备注等学段特有字段）
   if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
   onFormStageChange();
@@ -1085,61 +1179,21 @@ function onStaffChange(kind: StaffKind, id: string) {
 
 /* ---------------- ★ 2026-10-16：阶段方案（方案 + 方案里的阶段） ---------------- */
 
-/**
- * 方案选项（系统设置 · 阶段方案页维护）
- *
- * 【为什么按部门过滤】
- *   方案分部门（1 初高部 / 2 大学部）—— 与表单里的「部门」联动：
- *   选了初高部的班，只会列出初高部的方案。
- * 【数据从哪来】统一接口 /api/teaching/class/scheme-options（三个学段共用一份）。
- */
-const schemeOptions = ref<SchemeOption[]>([]);
-
-async function loadSchemeOptions() {
-  try {
-    schemeOptions.value = await getSchemeOptions();
-  } catch {
-    // 拿不到方案不影响建班（退回老的「阶段」阶段码选项）
-    schemeOptions.value = [];
-  }
+/** 切换方案：上一个方案里选的阶段码，在新方案里未必还存在 → 清掉重选 */
+function onPlanChange() {
+  if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
 }
 
-/** 表单里按当前部门过滤后的方案 */
-const formSchemeOptions = computed(() =>
-  schemeOptions.value.filter((s) => !form.deptCode || s.deptCode === form.deptCode),
-);
-
-/** 当前选中方案里的阶段（=「阶段」下拉的选项来源） */
-const formSchemeStageOptions = computed(() => {
-  const scheme = schemeOptions.value.find((s) => s.id === form.schemeId);
-  return scheme?.stages || [];
-});
-
-/** 切换方案：清掉上一个方案选中的阶段（阶段是方案内的，不跨方案复用） */
-function onSchemeChange() {
-  form.schemeStageId = null;
-  form.schemeStageName = null;
-}
-
-/** 选中方案里的阶段：把阶段名冗余存一份（列表/详情直接回显） */
-function onSchemeStageChange(id: string | null) {
-  const hit = formSchemeStageOptions.value.find((s) => s.id === id);
-  form.schemeStageName = hit ? hit.stageName : null;
-}
-
-/** 列表/详情里「阶段」列的回显：优先方案阶段名，老班级退回阶段码名称 */
-function phaseTextOf(row: Pick<ClassRow, 'schemeStageName' | 'phaseName'>): string {
-  return row.schemeStageName || row.phaseName || '—';
+/** 列表/详情里「阶段」列的回显（阶段名由后端按阶段码解析下发） */
+function phaseTextOf(row: Pick<ClassRow, 'phaseName'>): string {
+  return row.phaseName || '—';
 }
 
 async function openCreate() {
   const stage = (query.stage || stageOptions.value[0]?.value || 'jh') as ClassStage;
   Object.assign(form, emptyForm(stage));
-  // ★ 方案选项每次打开弹窗都刷新（刚在系统设置里建完方案，回来就能选到）
-  await loadSchemeOptions();
   // 2026-10-19 批注：阶段方案要默认选中（该部门的那套方案），不用每次手点
   formPlanId.value = formPlanOptions.value[0]?.id || '';
-  form.schemeId = formSchemeOptions.value[0]?.id || null;
   editStatusFrom.value = null;
   editVisible.value = true;
 }
@@ -1148,7 +1202,13 @@ async function openEdit(row: ClassRow) {
   // ★ 2026-10-22：编辑弹窗也必须刷新方案选项 ——
   //   原来只有「新增班级」会刷新，方案里改了阶段名/加了阶段后，
   //   打开编辑还是旧选项（阶段列显示旧名字，甚至显示 uuid）。
-  await loadSchemeOptions();
+  // ★ 2026-10-23：方案选项已统一由 meta.planOptions 下发（旧 scheme-options 接口已删除），
+  //   所以这里刷新 meta 即可；拉取失败不阻塞编辑弹窗打开。
+  try {
+    metaList.value = (await getClassMeta()) || [];
+  } catch {
+    /* 忽略：沿用上一次的 meta */
+  }
   Object.assign(form, emptyForm(row.stage), {
     id: row.classId,
     className: row.className,
@@ -1156,9 +1216,6 @@ async function openEdit(row: ClassRow) {
     deptCode: row.deptCode ?? undefined,
     phaseCode: row.phaseCode ?? undefined,
     classStatus: row.classStatus,
-    schemeId: row.schemeId,
-    schemeStageId: row.schemeStageId,
-    schemeStageName: row.schemeStageName,
     headTeacherId: row.headTeacherId || '',
     headTeacherName: row.headTeacherName || '',
     teacherId: row.teacherId || '',
@@ -1175,23 +1232,11 @@ async function openEdit(row: ClassRow) {
     closeDate: row.closeDate || '',
     remark: row.remark || '',
   });
-  // ★ 2026-10-22：兜底修复「历史脏绑定」
-  //
-  //   老版本的保存方案是「全部软删 + 用新 id 重插」，班级上的
-  //   scheme_stage_id 会指向一条已删除的阶段行 —— 下拉里找不到这个 id，
-  //   el-select 就把 uuid 直接显示出来（用户看到的就是一串乱码）。
-  //   这里按「同名 → 同阶段码」在当前方案里找回真正的阶段行。
-  const curStages = schemeOptions.value.find((s) => s.id === form.schemeId)?.stages || [];
-  if (form.schemeStageId && !curStages.some((x) => x.id === form.schemeStageId)) {
-    const hit =
-      curStages.find((x) => x.stageName === row.schemeStageName) ||
-      curStages.find((x) => x.stageCode !== null && x.stageCode === row.phaseCode);
-    form.schemeStageId = hit ? hit.id : null;
-    if (hit) {
-      form.schemeStageName = hit.stageName;
-      if (hit.stageCode !== null && hit.stageCode !== undefined) form.phaseCode = hit.stageCode;
-    }
-  }
+  // ★ 2026-10-23：原「历史脏绑定兜底」已移除。
+  //   它依赖旧 scheme-options 机制（schemeOptions / form.schemeId / form.schemeStageId），
+  //   而该机制已整套删除（旧接口 /scheme-options 后端也没了）。
+  //   新机制存的是数字阶段码 phaseCode，不存在「指向已删除 uuid」的脏绑定问题，
+  //   方案回显改由下面的 planIdOfPhase(row.phaseCode) 负责。
 
   // ★ 2026-10-16 反查这个阶段属于哪个方案，让「阶段方案」下拉回显；
   //   2026-10-19 批注：查不到也要默认选中本部门的方案，不能空着
@@ -1237,14 +1282,43 @@ async function doSave() {
 }
 
 async function doDelete(row: ClassRow) {
-  await ElMessageBox.confirm(
-    `确定删除班级「${row.className}」吗？该班当前有 ${row.studentCount} 名学生，删除后不影响学生本人。`,
-    '删除确认',
-    { type: 'warning' },
-  );
-  await deleteClass(row.stage, row.classId);
-  ElMessage.success('已删除');
-  load();
+  /**
+   * ★ 2026-10-22 批注：**不可删除有人的班级**
+   *   原文（红字 + 红框）：「不可删除有人的班级」
+   *
+   * 【原实现的问题】
+   *   不管班里有没有学生，一律弹「确定删除班级吗…该班当前有 N 名学生」，
+   *   点【确定】班就删了 —— 提示语写着"有 3 名学生"却又让删，前后矛盾。
+   *
+   * 【改法】
+   *   有人（studentCount > 0，与列表「人数」列同口径 = 在读学生）→ 只给提示，不给删；
+   *   没人 → 才走原来的二次确认。
+   *   ⚠️ 后端 `service.removeClass` 也加了同一道拦截，这里只是提前给友好提示。
+   */
+  if (Number(row.studentCount || 0) > 0) {
+    await ElMessageBox.alert(
+      `「${row.className}」当前有 ${row.studentCount} 名学生，请先将学生转出或结业后再删除。`,
+      '不可删除有人的班级',
+      { type: 'warning', confirmButtonText: '我知道了' },
+    ).catch(() => {});
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定删除班级「${row.className}」吗？删除后不可恢复。`,
+      '删除确认',
+      { type: 'warning' },
+    );
+  } catch {
+    return; // 点了取消 / 关闭
+  }
+  try {
+    await deleteClass(row.stage, row.classId);
+    ElMessage.success('已删除');
+    load();
+  } catch {
+    // 失败提示由请求层统一弹出（后端还会兜底拦一次「有人的班级」）
+  }
 }
 
 /* ---------------- 班级交接（2026-10-19 批注） ---------------- */
@@ -1447,24 +1521,148 @@ async function doTrainingUpgrade() {
   }
 }
 
+/* ---------------- ★ 升就业 / 已就业（2026-10-21 批注第 2、3 条） ----------------
+ * 批注原文：
+ *   「2. 点击【升就业】，并且升就业成功之后，则班级状态改为【待就业】，
+ *     【升就业】按钮改为已就业」
+ *   「3. 点击【已就业】系统识别整个班级的学生状态，若状态都已经变为已就业、退学，
+ *     则提示整班都已就业并显示班级人数和就业人数，确认要将班级状态改为已就业吗，
+ *     确认之后，班级的状态该为【已就业】；若识别班级内仍存在其他状态的学生，
+ *     则进行提示班级各个状态的人数，并且提示确认要强制将本班状态改为【已就业】，
+ *     确认之后需要再次确认，再次确认之后状态改为已就业」
+ *
+ * 落地：
+ *   · 升就业 → 学生状态 实训中(8) → 待就业(9)，班级状态 实训(5) → 待就业(6)；
+ *     按钮自动换成【已就业】（v-if 看 classStatus === 6）。
+ *   · 已就业 → 先查整班学生状态分布：
+ *       settled（全班都是已就业/退学）→ 一次确认 → 班级状态改 已就业(7)；
+ *       否则 → 列出各状态人数 + 强制确认 + **再次确认** → 改 已就业(7)。
+ *   · 已就业只改**班级状态**，学生状态一个不动（学生档案里逐个点【已就业】才写 10）。
+ */
+const CLASS_STATUS_CODE = { TRAINING: 5, WAIT_EMPLOY: 6, EMPLOYED: 7 } as const;
+
+const employmentSaving = ref('');
+const employedSaving = ref('');
+
+/** 实训班还没到「待就业 / 已就业」→ 才显示【升就业】 */
+function canUpgradeEmployment(row: ClassRow): boolean {
+  const s = Number(row.classStatus);
+  return s !== CLASS_STATUS_CODE.WAIT_EMPLOY && s !== CLASS_STATUS_CODE.EMPLOYED;
+}
+
+async function doEmploymentUpgrade(row: ClassRow) {
+  try {
+    await ElMessageBox.confirm(
+      `是否将该班级（${escText(row.className)}，${row.studentCount ?? 0} 人）的<b>学生状态改为「待就业」</b>？` +
+        '<br/><br/><span>班级本身不搬动、不改名；已是「已就业」的学生不会被改动。<br/>' +
+        '确认后班级状态也会变为「待就业」，按钮变为【已就业】。</span>',
+      '升就业确认',
+      {
+        type: 'warning',
+        confirmButtonText: '确认升就业',
+        cancelButtonText: '取消',
+        dangerouslyUseHTMLString: true,
+      },
+    );
+  } catch {
+    return;
+  }
+  employmentSaving.value = row.classId;
+  try {
+    const r = await upgradeClassToEmployment({ classId: row.classId });
+    if (r.updated) ElMessage.success(`已将 ${r.updated} 名学生状态改为「待就业」，班级状态：${r.classStatusName}`);
+    else ElMessage.info(`该班学生都已是待就业 / 已就业，班级状态：${r.classStatusName}`);
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message || '升就业失败');
+  } finally {
+    employmentSaving.value = '';
+  }
+}
+
+/** 【已就业】：识别整班学生状态 → 确认（不满足时二次确认）→ 班级状态改「已就业」 */
+async function doConfirmEmployed(row: ClassRow) {
+  let p;
+  try {
+    p = await getEmploymentProgress(row.classId);
+  } catch (e) {
+    ElMessage.error((e as Error).message || '识别班级学生状态失败');
+    return;
+  }
+  // 「已就业 12 人　退学 2 人　待就业 3 人」
+  const lines = p.items.map((i) => `${escText(i.statusName)} ${i.count} 人`).join('　');
+  try {
+    if (p.settled) {
+      // 全班都已是「已就业 / 退学」→ 一次确认即可
+      await ElMessageBox.confirm(
+        `已识别整班 <b>${p.total}</b> 人：已就业 <b>${p.employed}</b> 人、退学 <b>${p.quit}</b> 人。` +
+          `<br/><br/>确认要将班级状态改为「已就业」吗？`,
+        '已就业确认',
+        {
+          type: 'success',
+          confirmButtonText: '确认改为已就业',
+          cancelButtonText: '取消',
+          dangerouslyUseHTMLString: true,
+        },
+      );
+    } else {
+      // 还有其它状态的学生 → 先提示各状态人数，再强制确认 + 再次确认
+      await ElMessageBox.confirm(
+        `本班共 <b>${p.total}</b> 人，当前学生状态：<br/><b>${lines}</b><br/><br/>` +
+          `其中还有 <b>${p.pending}</b> 人未到「已就业 / 退学」。<br/>` +
+          `确认要<b>强制</b>将本班状态改为「已就业」吗？`,
+        '已就业确认',
+        {
+          type: 'warning',
+          confirmButtonText: '确认强制改为已就业',
+          cancelButtonText: '取消',
+          dangerouslyUseHTMLString: true,
+        },
+      );
+      // 批注原文：「确认之后需要再次确认，再次确认之后状态改为已就业」
+      await ElMessageBox.confirm(
+        `再次确认：把「${escText(row.className)}」的班级状态改为「已就业」？<br/>` +
+          `<span>（学生档案里的学生状态不会被改动）</span>`,
+        '再次确认',
+        {
+          type: 'warning',
+          confirmButtonText: '再次确认',
+          cancelButtonText: '取消',
+          dangerouslyUseHTMLString: true,
+        },
+      );
+    }
+  } catch {
+    return;
+  }
+  employedSaving.value = row.classId;
+  try {
+    const r = await confirmClassEmployed({ classId: row.classId });
+    ElMessage.success(
+      r.changed ? `「${r.className}」的班级状态已改为「已就业」` : `「${r.className}」已经是「已就业」状态`,
+    );
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message || '改为已就业失败');
+  } finally {
+    employedSaving.value = '';
+  }
+}
+
+/** 弹窗里拼班级名用的极小转义（班级名是用户输入，直接拼 HTML 有注入风险） */
+function escText(v: unknown): string {
+  return String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+}
+
 onMounted(() => {
   load(1);
   loadStaff();
-  // 阶段方案选项（表单用）—— 先取一次，打开弹窗时还会再刷新
-  loadSchemeOptions();
 });
 </script>
 
 <style scoped>
 .tcv {
   padding: 12px;
-}
-/* 「阶段」下拉里右侧的学制标注 */
-.stage-months {
-  float: right;
-  margin-left: 12px;
-  color: #909399;
-  font-size: 12px;
 }
 .tcv-tip {
   margin-bottom: 10px;

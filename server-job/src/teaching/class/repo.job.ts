@@ -24,11 +24,12 @@
 
 import { randomUUID } from 'crypto';
 import { db } from '../../utils/db';
-import { RoleCode, hasRole } from 'shared-types';
+import { RoleCode, hasRole, STUDENT_STATUS_NAME } from 'shared-types';
 import {
   CLASS_STATUS,
   CLASS_STATUS_NAME,
   canTransitClassStatus,
+  isSystemClassStatus,
 } from '../shared/dto';
 import type {
   ClassListQuery,
@@ -100,10 +101,6 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
     phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase)),
-    // ★ 2026-10-16：阶段方案（新表单选择；老班级为 null，回显退回 phaseName）
-    schemeId: str(r.scheme_id),
-    schemeStageId: str(r.scheme_stage_id),
-    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -122,7 +119,8 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     studentCount: studentCount ?? Number(r.student_count ?? 0),
     classStatus: status,
     classStatusName: CLASS_STATUS_NAME[status] ?? '',
-    canChangeStatus: status !== CLASS_STATUS.GRADUATED,
+    // ★ 2026-10-22：已结业(4) 下线后，只有「已就业」是终态
+    canChangeStatus: status !== CLASS_STATUS.EMPLOYED,
     attendanceRate: numOrNull(r.attendance_rate),
     // 实训这张表是累计出勤率（初高才是 today_*）
     attendanceRateKind: 'total',
@@ -250,10 +248,6 @@ export const repo: ClassRepo = {
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
     set(phaseCodeCol(), body.phaseCode);
-    // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
-    set('scheme_id', body.schemeId);
-    set('scheme_stage_id', body.schemeStageId);
-    set('scheme_stage_name', body.schemeStageName);
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);
@@ -297,17 +291,19 @@ export const repo: ClassRepo = {
           | undefined;
         if (!cur) throw new Error('班级不存在');
         const from = Number(cur.class_status);
+        // ★ 2026-10-21：实训 / 待就业 / 已就业 是系统态，只能由操作列的三个按钮写入
+        if (from !== body.classStatus && isSystemClassStatus(body.classStatus)) {
+          throw new Error(
+            `「${CLASS_STATUS_NAME[body.classStatus]}」是系统自动标记的状态，不能手工修改`,
+          );
+        }
         if (from !== body.classStatus && !canTransitClassStatus(from, body.classStatus)) {
           throw new Error(
             `班级状态不可从「${CLASS_STATUS_NAME[from]}」流转为「${CLASS_STATUS_NAME[body.classStatus]}」`,
           );
         }
-        // ★ 2026-10-19：改状态挪进「编辑班级」后，保存这条路径也要补上原来
-        //   changeStatus 做的事 —— 结业写结业日期 + 记住上一个状态。
-        if (from !== body.classStatus && body.classStatus === CLASS_STATUS.GRADUATED) {
-          if (!payload.close_date) payload.close_date = now;
-          payload.prev_class_status = from;
-        }
+        // ★ 2026-10-22：已结业(4) 下线，「改成已结业自动写结业日期」的分支一并删除 ——
+        //   结业日期现在是表单里手填的字段，不再由状态变更隐式写入。
       }
       await tbl(db, 'sms_job', T, STAGE).where({ id: body.id }).update(payload);
       return { id: body.id };
@@ -368,14 +364,18 @@ export const repo: ClassRepo = {
       .where({ class_id: id, is_deleted: false })
       .orderBy('create_time', 'asc')) as Array<Record<string, any>>;
 
-    // 补性别：花名册表只有快照姓名/学号，性别要回学生主档取
+    // 补性别 + 学生状态：花名册表只有快照姓名/学号，这两项要回学生主档取
     const ids = rows.map((r) => String(r.student_id)).filter(Boolean);
     const genderMap = new Map<string, number>();
+    const statusMap = new Map<string, number>();
     if (ids.length) {
       const stus = (await tbl(db, 'sms_job', STUDENT_T, STAGE)
         .whereIn('id', ids)
-        .select('id', 'gender')) as Array<Record<string, any>>;
-      for (const s of stus) genderMap.set(String(s.id), Number(s.gender ?? 0));
+        .select('id', 'gender', 'student_status')) as Array<Record<string, any>>;
+      for (const s of stus) {
+        genderMap.set(String(s.id), Number(s.gender ?? 0));
+        statusMap.set(String(s.id), Number(s.student_status ?? 0));
+      }
     }
 
     const GENDER: Record<number, string> = { 0: '未知', 1: '男', 2: '女' };
@@ -383,6 +383,8 @@ export const repo: ClassRepo = {
       const st = Number(r.status ?? 1);
       const joinType = numOrNull(r.join_type);
       const gender = genderMap.get(String(r.student_id)) ?? 0;
+      // ★ 2026-10-21：状态列回读学生档案（学生主档没有该生时退回花名册的在班状态）
+      const sStatus = statusMap.get(String(r.student_id)) ?? null;
       return {
         studentId: String(r.student_id),
         studentNo: str(r.student_no),
@@ -394,6 +396,8 @@ export const repo: ClassRepo = {
         joinDate: str(fmtDate(r.join_date)),
         inClassStatus: st,
         inClassStatusName: st === 1 ? '在班' : '已离班',
+        studentStatus: sStatus,
+        studentStatusName: sStatus === null ? (st === 1 ? '在班' : '已离班') : STUDENT_STATUS_NAME[sStatus] ?? String(sStatus),
       };
     });
   },
@@ -405,6 +409,10 @@ export const repo: ClassRepo = {
     if (!cur) throw new Error('班级不存在');
     const from = Number(cur.class_status);
     if (from === to) return;
+    // ★ 2026-10-21：系统态不接受手工流转（升实训 / 升就业 / 已就业各有专用动作）
+    if (isSystemClassStatus(to)) {
+      throw new Error(`「${CLASS_STATUS_NAME[to]}」是系统自动标记的状态，不能手工修改`);
+    }
     if (!canTransitClassStatus(from, to)) {
       throw new Error(
         `班级状态不可从「${CLASS_STATUS_NAME[from]}」流转为「${CLASS_STATUS_NAME[to]}」`,
@@ -415,11 +423,6 @@ export const repo: ClassRepo = {
       update_time: new Date(),
       update_by: userId,
     };
-    // 结业要写结业日期（原实现口径）
-    if (to === CLASS_STATUS.GRADUATED) {
-      patch.close_date = new Date();
-      patch.prev_class_status = from;
-    }
     await tbl(db, 'sms_job', T, STAGE).where({ id }).update(patch);
   },
 
@@ -435,14 +438,19 @@ export const repo: ClassRepo = {
     let openCount = 0;
     let closedCount = 0;
     let graduatingCount = 0;
-    let graduatedCount = 0;
+    // ★ 2026-10-21：系统态计数（实训 / 待就业 / 已就业）—— 卡片里要和总数对得上
+    let trainingCount = 0;
+    let waitEmployCount = 0;
+    let employedCount = 0;
     for (const r of rows) {
       studentCount += counts.get(String(r.id)) ?? 0;
       const s = Number(r.class_status);
       if (s === CLASS_STATUS.OPEN) openCount++;
       else if (s === CLASS_STATUS.CLOSED) closedCount++;
       else if (s === CLASS_STATUS.GRADUATING) graduatingCount++;
-      else if (s === CLASS_STATUS.GRADUATED) graduatedCount++;
+      else if (s === CLASS_STATUS.TRAINING) trainingCount++;
+      else if (s === CLASS_STATUS.WAIT_EMPLOY) waitEmployCount++;
+      else if (s === CLASS_STATUS.EMPLOYED) employedCount++;
     }
     return {
       stage: STAGE,
@@ -451,7 +459,9 @@ export const repo: ClassRepo = {
       openCount,
       closedCount,
       graduatingCount,
-      graduatedCount,
+      trainingCount,
+      waitEmployCount,
+      employedCount,
       studentCount,
     };
   },
@@ -461,9 +471,13 @@ export const repo: ClassRepo = {
 function transitionsFrom(from: number): number[] {
   const map: Record<number, number[]> = {
     [CLASS_STATUS.OPEN]: [CLASS_STATUS.CLOSED],
-    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATED],
-    [CLASS_STATUS.GRADUATED]: [],
+    [CLASS_STATUS.CLOSED]: [CLASS_STATUS.OPEN],
+    // 历史状态：没有任何下一跳
+    [CLASS_STATUS.GRADUATING]: [],
+    // ★ 2026-10-21 系统态：实训 → 待就业 → 已就业（只给详情页展示用，编辑弹窗禁选）
+    [CLASS_STATUS.TRAINING]: [CLASS_STATUS.WAIT_EMPLOY],
+    [CLASS_STATUS.WAIT_EMPLOY]: [CLASS_STATUS.EMPLOYED],
+    [CLASS_STATUS.EMPLOYED]: [],
   };
   return map[from] ?? [];
 }

@@ -8,7 +8,8 @@
  *
  * 【口径 —— 这不是"新建一个实训班再把学生挪过去"，而是"这个班换部门"】
  *   ① 在 `sms_job.t_job_class` 建一个实训班（dept_code=3、stage_key='job'）：
- *      班级名称默认沿用原班名（可改）、阶段取「就业部阶段方案」、班级状态=开放；
+ *      班级名称默认沿用原班名（可改）、阶段取「就业部阶段方案」、
+ *      班级状态 = **实训(5)**（2026-10-21 批注：升实训成功后班级状态改为【实训】）；
  *      班主任 / 教员 / 助教 **全部为空**（批注要求），只填项目经理 + 就业老师。
  *   ② 原班学生整套搬到 `sms_job.t_student_base`（状态 → 实训中 8），
  *      同时写实训花名册 `t_job_class_student`（不写花名册，班级详情里就没人）。
@@ -24,11 +25,13 @@
  */
 
 import { randomUUID } from 'crypto';
-import { BizCode, ClassStatus, DeptCode, StudentStatus } from 'shared-types';
+import { BizCode, DeptCode, StudentStatus } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { db as classDb } from '../../class/db';
+import { CLASS_STATUS } from '../shared/dto';
 import { phaseCodeCol, tbl, tblInsTrx, tblTrx } from '../shared/uniTable';
 import { loadStagePlanOptions } from '../shared/stagePlans';
+import { isStatusLocked } from '../shared/statusLock';
 import { assertStageView } from './service';
 import { genClassCode } from './repo.job';
 
@@ -171,7 +174,9 @@ export async function upgradeClassToTraining(
       open_date: today,
       close_date: null,
       student_count: students.length,
-      class_status: ClassStatus.OPEN,
+      // ★ 2026-10-21 批注：「升实训成功后，班级状态改为【实训】」
+      //   新班一出生就是「实训」态（不是「开放」）—— 实训班本来就收不了新生。
+      class_status: CLASS_STATUS.TRAINING,
       attendance_rate: null,
       remark,
       is_deleted: 0,
@@ -201,7 +206,12 @@ export async function upgradeClassToTraining(
         teacher_name: null,
         assistant_id: null,
         assistant_name: null,
-        student_status: StudentStatus.TRAINING,
+        // ★ 2026-10-21 批注：「学生状态为【退学】的，任何操作都不可更改该状态」
+        //   整班搬迁时**照搬**退学学生的状态（人是搬过来的，档案留痕，但 7 不能被改成 8）
+        //   —— 见 shared/statusLock.ts。其余学生照旧写「实训中」。
+        student_status: isStatusLocked(s.student_status)
+          ? Number(s.student_status)
+          : StudentStatus.TRAINING,
         [phaseCodeCol()]: phaseCode,
         phone: s.phone ?? null,
         parent_name: s.parent_name ?? null,
