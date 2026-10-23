@@ -244,34 +244,54 @@ function reg(db, table, id) {
       : null;
     if (apJh) regUniApproval(apJh.id);
 
-    /* ============ B2. ★ 2026-10-23 防重复提交（学生维度，费用项不同也拦） ============
+    /* ============ B2. ★ 2026-10-23 防重复提交（**按费用项**判重，不是整学生） ============
      *
-     * 【用户报的问题】「该学生已有一条进行中的退费申请，费用项都不同也能重复提交」
-     *   根因不是费用项：判重只做在「新建」、且不认「待提交草稿」。
-     *   ① 建草稿 A（学费）→ ② 建草稿 B（住宿费，判重不看草稿 → 放过）
-     *   → ③ A、B 分别「提交」（提交接口只校验本单状态）→ 两条都在途。
+     * 【业务口径（用户明确）】
+     *   一个学生**可以有多条**退费申请：第 1 条退住宿费、第 2 条退学费 —— 这是正常业务。
+     *   只有**同一个费用项**不允许重复：已有「住宿费」在审批，再申请「住宿费」才拦，
+     *   提示「该费用类型已在审批」。
      *
-     * 这里三条断言分别钉：新建时进行中要拦 / 新建时草稿要拦 / 提交时他人草稿要拦。
+     * 【同时钉住的漏洞】判重范围必须含「待提交草稿」，否则
+     *   「建两条住宿费草稿 → 分别提交」能绕过去（修复前实测可绕过）。
      */
-    const dupActive = await req(`${API}/create`, {
+    const dupSameFee = await req(`${API}/create`, {
       method: 'POST',
       token: tJhHead,
       body: {
         stage: 'jh',
         studentId: jhStu.id,
-        items: [{ feeType: 3, amount: 20000 }], // ★ 故意换个费用项（餐费）
+        items: [{ feeType: 1, amount: 20000 }], // ★ 与在途单同为「学费」
         refundAmount: 20000,
-        refundReason: '自检-重复提交(进行中)',
+        refundReason: '自检-重复提交(同费用项)',
         submit: true,
       },
     });
     check(
-      '★ 防重复：该生已有进行中单 → 换费用项也不能再建(40016)',
-      dupActive.json?.code === 40016,
-      dupActive.json?.message || '',
+      '★ 防重复：该生已有「学费」在审批 → 再申请学费被拦(40016)',
+      dupSameFee.json?.code === 40016,
+      dupSameFee.json?.message || '',
     );
 
-    // 造第二个学生，验证「草稿」这条路
+    const dupOtherFee = await req(`${API}/create`, {
+      method: 'POST',
+      token: tJhHead,
+      body: {
+        stage: 'jh',
+        studentId: jhStu.id,
+        items: [{ feeType: 3, amount: 20000 }], // ★ 换个费用项（餐费）→ 应当放行
+        refundAmount: 20000,
+        refundReason: '自检-同学生换费用项(餐费)',
+        submit: true,
+      },
+    });
+    check(
+      '★ 防重复：同一学生换费用项（学费→餐费）必须放行 —— 一人可有多条退费单',
+      dupOtherFee.json?.code === 200,
+      dupOtherFee.json?.message || '',
+    );
+    if (dupOtherFee.json?.data?.id) regUniRefund(dupOtherFee.json.data.id);
+
+    // 第二个学生：验证「草稿」这条路
     const jhStu2 = await buildRow(dbJh, 't_class_student', {
       student_no: 'JT' + Math.random().toString(36).slice(2, 7).toUpperCase(),
       student_name: '自检-初高生2',
@@ -295,7 +315,7 @@ function reg(db, table, id) {
         submit: false,
       },
     });
-    check('防重复：先存一条草稿成功', draftA.json?.code === 200, draftA.json?.message || '');
+    check('防重复：先存一条草稿（学费）成功', draftA.json?.code === 200, draftA.json?.message || '');
     const draftAId = draftA.json?.data?.id;
     if (draftAId) regUniRefund(draftAId);
 
@@ -305,21 +325,59 @@ function reg(db, table, id) {
       body: {
         stage: 'jh',
         studentId: jhStu2.id,
-        items: [{ feeType: 2, amount: 20000 }], // ★ 不同费用项（住宿费）
+        items: [{ feeType: 2, amount: 20000 }], // ★ 不同费用项（住宿费）→ 应当放行
         refundAmount: 20000,
         refundReason: '自检-草稿B(住宿费)',
         submit: false,
       },
     });
     check(
-      '★ 防重复：已有待提交草稿 → 换费用项新建第二条要被拦(40016)',
-      draftB.json?.code === 40016,
+      '★ 防重复：同学生再存「住宿费」草稿要放行（不同费用项互不影响）',
+      draftB.json?.code === 200,
       draftB.json?.message || '',
     );
+    const draftBId = draftB.json?.data?.id;
+    if (draftBId) regUniRefund(draftBId);
 
-    /* 模拟「修复前留下的存量脏数据」：绕过接口直插一条同学生草稿，
-       用来验证「提交」这道闸是否独立生效（不能只靠新建拦） */
-    if (draftAId) {
+    const draftC = await req(`${API}/create`, {
+      method: 'POST',
+      token: tJhHead,
+      body: {
+        stage: 'jh',
+        studentId: jhStu2.id,
+        items: [{ feeType: 2, amount: 30000 }], // ★ 又是住宿费 → 与草稿 B 撞
+        refundAmount: 30000,
+        refundReason: '自检-草稿C(住宿费,重复)',
+        submit: false,
+      },
+    });
+    check(
+      '★ 防重复：同费用项（住宿费）已有草稿 → 再建被拦(40016)',
+      draftC.json?.code === 40016,
+      draftC.json?.message || '',
+    );
+
+    if (draftAId && draftBId) {
+      const subA = await req(`${API}/submit`, {
+        method: 'POST',
+        token: tJhHead,
+        body: { stage: 'jh', id: draftAId },
+      });
+      check('防重复：学费草稿提交成功', subA.json?.code === 200, subA.json?.message || '');
+
+      const subB = await req(`${API}/submit`, {
+        method: 'POST',
+        token: tJhHead,
+        body: { stage: 'jh', id: draftBId },
+      });
+      check(
+        '★ 防重复：住宿费草稿也能提交 —— 同一学生两条在途单（费用项不同）',
+        subB.json?.code === 200,
+        subB.json?.message || '',
+      );
+
+      /* 模拟「修复前留下的存量脏数据」：绕过接口直插一条**同费用项**草稿，
+         验证「提交」这道闸独立生效（不能只靠新建拦） */
       const legacyDraft = await buildRow(
         uniDb,
         't_uni_refund',
@@ -328,9 +386,9 @@ function reg(db, table, id) {
           student_id: jhStu2.id,
           student_no: jhStu2.student_no,
           student_name: jhStu2.student_name,
-          fee_type: 2,
+          fee_type: 2, // 住宿费（与已在途的草稿 B 撞）
           refund_amount: 30000,
-          refund_reason: '自检-存量草稿(直插)',
+          refund_reason: '自检-存量脏草稿(直插,住宿费)',
           apply_date: '2026-10-23',
           refund_status: 1, // 待提交（初高原码 1）
           is_deleted: 0,
@@ -340,28 +398,15 @@ function reg(db, table, id) {
       await uniDb('t_uni_refund').insert(legacyDraft);
       regUniRefund(legacyDraft.id);
 
-      const subA = await req(`${API}/submit`, {
+      const subLegacy = await req(`${API}/submit`, {
         method: 'POST',
         token: tJhHead,
-        body: { stage: 'jh', id: draftAId },
+        body: { stage: 'jh', id: legacyDraft.id },
       });
       check(
-        '★ 防重复：同学生已有另一条草稿 → 本单提交要被拦(40016)',
-        subA.json?.code === 40016,
-        subA.json?.message || '',
-      );
-      // 把脏数据清掉（软删），后面的用例不再受影响
-      await uniDb('t_uni_refund').where({ id: legacyDraft.id }).update({ is_deleted: 1 });
-
-      const subA2 = await req(`${API}/submit`, {
-        method: 'POST',
-        token: tJhHead,
-        body: { stage: 'jh', id: draftAId },
-      });
-      check(
-        '防重复：脏数据清掉后本单可正常提交',
-        subA2.json?.code === 200,
-        subA2.json?.message || '',
+        '★ 防重复：存量脏草稿与在途单同费用项 → 提交被拦(40016)',
+        subLegacy.json?.code === 40016,
+        subLegacy.json?.message || '',
       );
     }
 
@@ -393,6 +438,48 @@ function reg(db, table, id) {
     jobId = cJob.json?.data?.id;
     if (jobId) reg('sms_job', 't_job_refund', jobId);
     regUniRefund(jobId);
+
+    /* ★ 防重复（就业）：它与另两学段不同的地方是费用项落在老的三列/子表，
+       取值链（子表→三列→refund_type）必须同样判得住 */
+    const jobDupSame = await req(`${API}/create`, {
+      method: 'POST',
+      token: tPm,
+      body: {
+        stage: 'job',
+        studentId: jobStu.id,
+        items: [{ feeType: 1, amount: 50000 }], // 学费，与上面那条撞
+        refundAmount: 50000,
+        refundReason: '自检-实训重复提交(同费用项)',
+        submit: true,
+      },
+    });
+    check(
+      '★ 防重复（就业）：同费用项（学费）再申请被拦(40016)',
+      jobDupSame.json?.code === 40016,
+      jobDupSame.json?.message || '',
+    );
+
+    const jobOther = await req(`${API}/create`, {
+      method: 'POST',
+      token: tPm,
+      body: {
+        stage: 'job',
+        studentId: jobStu.id,
+        items: [{ feeType: 2, amount: 30000 }], // 住宿费 → 应放行
+        refundAmount: 30000,
+        refundReason: '自检-实训换费用项(住宿费)',
+        submit: true,
+      },
+    });
+    check(
+      '★ 防重复（就业）：换费用项（学费→住宿费）放行',
+      jobOther.json?.code === 200,
+      jobOther.json?.message || '',
+    );
+    if (jobOther.json?.data?.id) {
+      reg('sms_job', 't_job_refund', jobOther.json.data.id);
+      regUniRefund(jobOther.json.data.id);
+    }
 
     const jobRow1 = await jobRefundT().where({ id: jobId }).first();
     check(

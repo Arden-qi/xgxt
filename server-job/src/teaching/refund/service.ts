@@ -64,6 +64,7 @@ import type {
 } from '../shared/dto';
 import {
   REFUND_ACTIVE_STATUSES,
+  REFUND_FEE_TYPE_NAME,
   REFUND_ITEM_MAX_AMOUNT,
   REFUND_STATUS,
   REFUND_STATUS_NAME,
@@ -73,7 +74,7 @@ import {
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
 import { listClassesOfStages } from '../shared/classOptions';
 import { amountText, fmtDateTime } from '../shared/format';
-import type { PendingRef, RefundAggregate, RefundWriteInput, StudentOption } from './types';
+import type { FeeTypeConflict, RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import * as repoJh from './repo.classJh';
 import * as repoClass from './repo.class';
 import * as repoJob from './repo.job';
@@ -139,12 +140,18 @@ type Repo = {
     financeRefundNo: string | null,
   ) => Promise<void>;
   /**
-   * 找出该学生「未办结」的退费单（防重复提交）
+   * 找出「同一学生 + 同一费用项」的重复申请（防重复提交）
    *
-   * ★ 2026-10-23：原来叫 `hasPending`，只查「审批中」。现在含「待提交草稿」，
-   *   并返回单号 + 状态用于报错文案；`excludeId` 供提交时排除自身。
+   * ★ 2026-10-23：粒度从「整学生」改成「费用项」——
+   *   一个学生可以有多条退费单（住宿费一条、学费一条），只有同费用项重复才拦。
+   *   返回冲突明细（费用项 + 撞车的单号/状态），供报错文案说清是哪一项撞了。
+   *   `excludeId` 供提交时排除自身。
    */
-  findPending: (studentId: string, excludeId?: string) => Promise<PendingRef | null>;
+  findFeeTypeConflicts: (
+    studentId: string,
+    feeTypes: number[],
+    excludeId?: string,
+  ) => Promise<FeeTypeConflict[]>;
   /** 按 id 取学生（建单时做快照） */
   findStudent: (id: string) => Promise<{
     no: string;
@@ -347,22 +354,35 @@ export async function classOptions(user: any) {
  * ============================================================ */
 
 /**
- * 防重复提交的报错文案（区分「待提交草稿」与「进行中」两种挡路情形）
+ * 防重复提交的报错文案 —— 粒度是**费用项**，不是整张单
+ *
+ * 业务口径（用户明确）：一个学生可以有多条退费申请（第 1 条住宿费、第 2 条学费），
+ * 只有**同一个费用项**重复才拦，提示「该费用类型已在审批」。
  *
  * ⚠️ 只有大学那套表有 `apply_no`；初高/就业没有单号 → 文案里不带单号，
  *    让用户按「学生」去列表里找（列表支持按学生姓名/学号搜）。
  *
- * @param action create = 新建被挡；submit = 提交被挡（本单已建好，只能先处理另一单）
+ * @param action create = 新建被挡；submit = 提交被挡（本单已建好，得先处理撞车那一单）
  */
-function pendingText(p: PendingRef, action: 'create' | 'submit'): string {
-  const ref = p.applyNo ? `（${p.applyNo}）` : '';
-  const name = REFUND_STATUS_NAME[p.status] || '处理中';
-  if (p.status === REFUND_STATUS.DRAFT) {
+function conflictText(conflicts: FeeTypeConflict[], action: 'create' | 'submit'): string {
+  const names = [
+    ...new Set(conflicts.map((c) => REFUND_FEE_TYPE_NAME[c.feeType] || `费用项${c.feeType}`)),
+  ];
+  const feeText = names.length > 1 ? names.map((n) => `「${n}」`).join('、') : `「${names[0]}」`;
+  const ref = conflicts.find((c) => c.applyNo)?.applyNo;
+  const refText = ref ? `（${ref}）` : '';
+
+  // 挡路的都是草稿：提示「先提交或撤销」，而不是「在审批」
+  if (conflicts.every((c) => c.status === REFUND_STATUS.DRAFT)) {
     return action === 'create'
-      ? `该学生已有一条待提交的退费申请${ref}，请先提交或撤销后再新建`
-      : `该学生已有另一条待提交的退费申请${ref}，请先撤销后再提交本单`;
+      ? `该学生已有${feeText}的退费申请（待提交）${refText}，请先提交或撤销后再申请`
+      : `该学生已有${feeText}的退费申请（待提交）${refText}，请先撤销后再提交本单`;
   }
-  return `该学生已有一条进行中的退费申请${ref}（${name}），请勿重复提交`;
+
+  const active = conflicts.find((c) => c.status !== REFUND_STATUS.DRAFT);
+  const statusName = (active && REFUND_STATUS_NAME[active.status]) || '审批中';
+  const tail = action === 'submit' ? '本单' : '';
+  return `该学生已有${feeText}的退费申请在审批中（${statusName}）${refText}，请勿重复提交${tail}`;
 }
 
 export async function create(body: RefundSaveBody, user: any): Promise<{ id: string }> {
@@ -399,17 +419,31 @@ export async function create(body: RefundSaveBody, user: any): Promise<{ id: str
     }
   }
 
+  /**
+   * ★ 同一张单里同一个费用项只能出现一次 —— 先把它拦掉，
+   *   否则「学费 100 + 学费 200」这种等于绕过下面的按费用项判重。
+   */
+  const feeTypes = items.map((it) => Number(it.feeType));
+  if (new Set(feeTypes).size !== feeTypes.length) {
+    const dupType = feeTypes.find((t, i) => feeTypes.indexOf(t) !== i);
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `「${REFUND_FEE_TYPE_NAME[dupType!] || `费用项${dupType}`}」重复填写，请合并成一项后再提交`,
+    );
+  }
+
   const repo = REPOS[stage];
   /**
-   * 防重复：同一学生只允许有一条「未办结」的退费单
-   * （待提交草稿 / 待学管 / 待校长，口径见 dto.ts `REFUND_UNFINISHED_STATUSES`）
+   * 防重复：**同一学生 + 同一费用项**不允许同时有两条未办结的申请
+   * （未办结 = 待提交草稿 / 待学管 / 待校长，口径见 dto.ts `REFUND_UNFINISHED_STATUSES`）
    *
-   * ★ 2026-10-23 修复「费用项不同就能重复提交」：
-   *   原判重只认 2/3（进行中），草稿(1) 不算 → 先建两条草稿再分别提交即可绕过。
-   *   现在草稿也算未办结，且提交接口另有一道（见 `submit()`）。
+   * ★ 2026-10-23（用户明确的口径）：
+   *   学生**可以**有多条退费申请 —— 第 1 条退住宿费、第 2 条退学费，这是正常业务；
+   *   只有**同一个费用项**重复才拦（「住宿费已经在审批了，不能再申请一次住宿费」）。
+   *   之前是「整学生只能一条」，粒度过粗，已按费用项改回来。
    */
-  const dup = await repo.findPending(body.studentId);
-  if (dup) throw new BizError(BizCode.REFUND_DUPLICATE, pendingText(dup, 'create'));
+  const conflicts = await repo.findFeeTypeConflicts(body.studentId, feeTypes);
+  if (conflicts.length) throw new BizError(BizCode.REFUND_DUPLICATE, conflictText(conflicts, 'create'));
 
   // 学生 / 班级快照
   const stu = await findStudent(stage, body.studentId);
@@ -538,15 +572,19 @@ export async function submit(
   /**
    * ★ 2026-10-23：**提交这一道判重是必须的** —— 光在「新建」拦不够。
    *
-   * 实锤复现（修复前）：同一学生先建草稿 A（学费）、再建草稿 B（住宿费）；
-   * 因为「新建」的判重只认进行中(2/3)，两条草稿都落库成功；
-   * 之后 A、B 分别点「提交」，本接口只校验**本单**状态（是草稿就放行）
-   * → 两条同时进入「待学管审批」，同一学生出现两条在途退费单。
+   * 实锤复现（修复前）：「新建」判重不看草稿 → 同一学生能建出多条草稿；
+   * 之后逐条点「提交」，本接口只校验**本单**状态（是草稿就放行）
+   * → 同一学生同一费用项出现两条在途退费单。
    *
-   * 所以这里要按**学生维度**再查一次，并排除本单自身。
+   * 口径与 create 一致：按**本单的费用项**判，排除本单自身。
    */
-  const dup = await REPOS[stage].findPending(row.studentId, id);
-  if (dup) throw new BizError(BizCode.REFUND_DUPLICATE, pendingText(dup, 'submit'));
+  const feeTypes = (row.items || []).map((it) => Number(it.feeType));
+  if (feeTypes.length) {
+    const conflicts = await REPOS[stage].findFeeTypeConflicts(row.studentId, feeTypes, id);
+    if (conflicts.length) {
+      throw new BizError(BizCode.REFUND_DUPLICATE, conflictText(conflicts, 'submit'));
+    }
+  }
 
   await db.transaction(async (trx) => {
     const approvalId = await ensureApproval(trx, id, row, op);
