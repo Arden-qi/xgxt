@@ -337,9 +337,18 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
      * 学生在住。学生主档的 `dorm_id` 才是「谁住哪」的权威来源（和入住/退宿
      * 流程写的是同一列）。床位表数字只作为兜底（房间没有任何学生指向它时）。
      */
-    const staying = await tbl(db, SRC_DB, STUDENT_T, stage)
+    /**
+     * ★ 2026-10-23 修：已住人数改按【教学域学生档案 t_uni_student】统计。
+     *
+     *   原来走 tbl(...STUDENT_T, stage)——jh 学段会落到 t_uni_student_base_jh
+     *   （另一张投影表，恒空）→ 初高房间的「已住人数」永远数不出来，
+     *   只能靠床位表兜底；入住/退宿后学生档案变了、这里却不跟着变
+     *   （用户实测：退宿审批通过后已住人数不变）。
+     *   三学段学生档案现在统一在 t_uni_student（edu_stage 区分），改查这里。
+     */
+    const staying = await uniDb('t_uni_student')
       .whereIn('dorm_id', ids)
-      .where({ is_deleted: false })
+      .where({ is_deleted: false, edu_stage: stage })
       .whereIn('student_status', IN_SCHOOL_STATUS)
       .select('dorm_id');
     const occByDorm = new Map<string, number>();
