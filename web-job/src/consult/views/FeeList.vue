@@ -110,6 +110,16 @@ function resetQuery() {
 type FeeCategory = 'TRIAL' | 'FORMAL';
 
 /**
+ * ★ 2026-10-23 用户口径：费用类型筛选只留 3 个 —— 学费 / 试学费 / 补学费
+ *
+ * 住宿费 / 餐费 / 保险费 / 押金 / 校服 是「学费里的明细项」，
+ * 发起收费时作为勾选项（见 FORMAL_FEE_ITEMS），不再作为独立费用类型出现在筛选里。
+ */
+const FEE_TYPE_FILTER_OPTIONS = [FeeType.TUITION, FeeType.TRIAL_FEE, FeeType.SUPPLEMENT].map(
+  (v) => ({ value: v, label: FEE_TYPE_NAME[v] }),
+);
+
+/**
  * 正式学费的可选项（含试学费，共 7 项）
  *
  * ⚠️ fallback 只是【财务标准取不到时的兜底展示值】（单位：元），
@@ -992,11 +1002,12 @@ onMounted(load);
           @clear="search"
         />
         <el-select v-model="query.feeType" placeholder="全部费用类型" clearable style="width: 150px">
+          <!-- ★ 2026-10-23 只留学费 / 试学费 / 补学费（明细项不单独筛） -->
           <el-option
-            v-for="(name, val) in FEE_TYPE_NAME"
-            :key="val"
-            :value="Number(val)"
-            :label="name"
+            v-for="opt in FEE_TYPE_FILTER_OPTIONS"
+            :key="opt.value"
+            :value="opt.value"
+            :label="opt.label"
           />
         </el-select>
         <el-select v-model="query.status" placeholder="全部状态" clearable style="width: 140px">
