@@ -94,7 +94,7 @@
 
     <!-- 阶段方案设计（弹窗；组件与原来系统设置里的方案页是同一套逻辑） -->
     <el-dialog v-model="schemeVisible" title="阶段方案设计" width="900px" top="6vh" destroy-on-close>
-      <StageSchemePanel />
+      <StageSchemePanel @changed="onSchemeChanged" />
       <template #footer>
         <el-button @click="schemeVisible = false">关闭</el-button>
       </template>
@@ -880,6 +880,25 @@ function tagType(s: number): string {
   return (CLASS_STATUS_TAG[s] || 'info') as never;
 }
 
+/**
+ * ★ 2026-10-22：阶段方案改完之后要"同步"
+ *
+ * 方案名称 / 阶段名称 / 学制 改完，本页三处都依赖它：
+ *   ① 班级列表的「阶段」列（读班级上的 scheme_stage_name 快照）
+ *   ② 新增 / 编辑班级的「阶段方案 / 阶段」下拉（读 meta.planOptions）
+ *   ③ 升实训弹窗的就业部阶段下拉（同上）
+ * 班级快照由后端在保存方案时同步更新；前端只需把 meta 和列表重新拉一遍，
+ * 否则要刷新整页才看得到新名字。
+ */
+async function onSchemeChanged() {
+  try {
+    metaList.value = (await getClassMeta()) || [];
+  } catch {
+    /* meta 拉取失败不阻塞列表刷新 */
+  }
+  await load();
+}
+
 /** ★ 2026-10-21 批注：花名册「状态」列——退学(7) 是终态，任何操作都不能改（后端写保护） */
 function isQuitStatus(row: Record<string, any>): boolean {
   return Number(row?.studentStatus) === StudentStatus.QUIT;
@@ -1182,6 +1201,16 @@ async function openCreate() {
 }
 
 async function openEdit(row: ClassRow) {
+  // ★ 2026-10-22：编辑弹窗也必须刷新方案选项 ——
+  //   原来只有「新增班级」会刷新，方案里改了阶段名/加了阶段后，
+  //   打开编辑还是旧选项（阶段列显示旧名字，甚至显示 uuid）。
+  // ★ 2026-10-23：方案选项已统一由 meta.planOptions 下发（旧 scheme-options 接口已删除），
+  //   所以这里刷新 meta 即可；拉取失败不阻塞编辑弹窗打开。
+  try {
+    metaList.value = (await getClassMeta()) || [];
+  } catch {
+    /* 忽略：沿用上一次的 meta */
+  }
   Object.assign(form, emptyForm(row.stage), {
     id: row.classId,
     className: row.className,
@@ -1205,6 +1234,12 @@ async function openEdit(row: ClassRow) {
     closeDate: row.closeDate || '',
     remark: row.remark || '',
   });
+  // ★ 2026-10-23：原「历史脏绑定兜底」已移除。
+  //   它依赖旧 scheme-options 机制（schemeOptions / form.schemeId / form.schemeStageId），
+  //   而该机制已整套删除（旧接口 /scheme-options 后端也没了）。
+  //   新机制存的是数字阶段码 phaseCode，不存在「指向已删除 uuid」的脏绑定问题，
+  //   方案回显改由下面的 planIdOfPhase(row.phaseCode) 负责。
+
   // ★ 2026-10-16 反查这个阶段属于哪个方案，让「阶段方案」下拉回显；
   //   2026-10-19 批注：查不到也要默认选中本部门的方案，不能空着
   formPlanId.value = planIdOfPhase(row.phaseCode) || formPlanOptions.value[0]?.id || '';
@@ -1401,7 +1436,14 @@ const trainingForm = reactive({
   remark: '',
 });
 
-/** 就业部阶段方案里的阶段（deptCode = 3，只取这一套，不要混进初高/大学的阶段码） */
+/** 就业部阶段方案里的阶段（deptCode = 3，只取这一套，不要混进初高/大学的阶段码）
+ *
+ * ★ 2026-10-22：加兜底。原来只读 planOptions 里 dept=3 的 phases，
+ *   而方案阶段以前没有编码、靠名字反查字典，就业部「实训」查不到 →
+ *   phases 为空 → 升实训弹窗的阶段下拉显示「无数据」。
+ *   方案明细现在自带 stage_code，正常情况第一段就有值；
+ *   万一方案还没配阶段，再回落到 meta.phaseOptions 里的 3xx 段位。
+ */
 const trainingPhaseOptions = computed(() => {
   const plans = metaList.value.flatMap((m) => m.planOptions || []);
   const seen = new Map<number, string>();
@@ -1409,7 +1451,17 @@ const trainingPhaseOptions = computed(() => {
     if (pl.deptCode !== 3) continue;
     for (const p of pl.phases) if (!seen.has(p.value)) seen.set(p.value, p.label);
   }
-  return [...seen].map(([value, label]) => ({ value, label }));
+  if (seen.size) return [...seen].map(([value, label]) => ({ value, label }));
+
+  // 兜底：就业部（emp / job 学段）meta 里 3xx 段的阶段选项
+  const fallback = new Map<number, string>();
+  for (const m of metaList.value) {
+    if (m.stage !== 'emp' && m.stage !== 'job') continue;
+    for (const p of m.phaseOptions || []) {
+      if (p.value >= 300 && p.value < 400 && !fallback.has(p.value)) fallback.set(p.value, p.label);
+    }
+  }
+  return [...fallback].map(([value, label]) => ({ value, label }));
 });
 
 function openTraining(row: ClassRow) {

@@ -316,8 +316,30 @@ async function run() {
       }
       /* ⑤ ★ 值为 null 的 NOT NULL 列 → 删键，让数据库 DEFAULT 生效
        *    （与 tblIns() 的处理一致；不删会报 `Column 'x' cannot be null`）
-       *    edu_stage 例外：它 NOT NULL 且无默认，必须留着显式值。 */
+       *    edu_stage 例外：它 NOT NULL 且无默认，必须留着显式值。
+       *  ★ 2026-10-22：值为 **undefined** 的键必须删掉。
+       *    knex 对 undefined 不会给占位符，直接吐空位 → 生成
+       *      `values ('jh', , '2026-10-10 ...')`
+       *    这种 SQL 是**语法错**，报错信息只会说 `near ', '2026-10-10...'`，
+       *    完全看不出是哪个列（实测卡住 t_uni_exam 整表 25 行）。 */
       for (const k of Object.keys(row)) {
+        if (row[k] === undefined) {
+          delete row[k];
+          continue;
+        }
+        /* ⑥ ★ JSON 列必须显式转成字符串再插
+         *    mysql2 读 JSON 列会直接给 JS 数组/对象（例：`exam_content_types = []`）。
+         *    交给 knex 时，数组会被当成「值列表」格式化 —— **空数组直接吐空位** →
+         *      `values ('jh', , '2026-10-10 ...')` → 语法错，报错还只说 `near ', '...'`。
+         *    实测卡住 t_uni_exam 整表（25 行），排查成本极高，这里一次性统一处理。 */
+        if (
+          row[k] !== null &&
+          typeof row[k] === 'object' &&
+          !Buffer.isBuffer(row[k]) &&
+          !(row[k] instanceof Date)
+        ) {
+          row[k] = JSON.stringify(row[k]);
+        }
         if (row[k] === null && k !== 'edu_stage' && nn.has(k)) delete row[k];
       }
       payload.push(row);
@@ -343,6 +365,11 @@ async function run() {
       const msg = String(e?.message || e);
       const tail = msg.length > 220 ? '…' + msg.slice(-220) : msg;
       console.log(`  ✗ ${t.table} → ${t.uni} 失败：${tail}`);
+      /* ★ 2026-10-22：`ER_PARSE_ERROR` 这类**语法错**光看末尾定位不到位置，
+       *  必须把出错的 SQL 原文打出来（只截前 500 字符，足够看清列清单）。 */
+      if (e?.code === 'ER_PARSE_ERROR' && e?.sql) {
+        console.log(`     出错 SQL（前 500 字）：${String(e.sql).slice(0, 500)}`);
+      }
     }
   }
 

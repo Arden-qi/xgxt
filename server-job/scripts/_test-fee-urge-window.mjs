@@ -75,10 +75,30 @@ const FIXTURES = [
  *    也不能物理删（项目铁律）。存在就把 is_deleted 归零 + 到期日刷回目标值。
  */
 async function upsertRows(db, rows) {
-  for (const row of rows) {
-    const exists = await db('t_class_fee').where({ id: row.id }).first('id');
-    if (exists) await db('t_class_fee').where({ id: row.id }).update({ ...row, is_deleted: 0 });
-    else await db('t_class_fee').insert(row);
+  /**
+   * ★★ 2026-10-23：夹具必须**双写**（老表 + 统一表 `sms_common.t_uni_fee`）
+   *
+   *   催费列表走 `tbl()` → 统一表；只写老表 = 列表里一行都没有，
+   *   断言 19/22 全红但功能是好的（实测）。这正是 `_e2e-lib.mjs` 顶部
+   *   「自检夹具必须双写」那条纪律说的场景。
+   */
+  const uniDb = conn('sms_common');
+  try {
+    for (const row of rows) {
+      try {
+        const exists = await db('t_class_fee').where({ id: row.id }).first('id');
+        if (exists) await db('t_class_fee').where({ id: row.id }).update({ ...row, is_deleted: 0 });
+        else await db('t_class_fee').insert(row);
+      } catch (e) {
+        console.log(`（老表 t_class_fee 写入跳过：${e?.message || e}）`);
+      }
+      const uniRow = { ...row, edu_stage: 'jh' };
+      const uniExists = await uniDb('t_uni_fee').where({ id: row.id }).first('id');
+      if (uniExists) await uniDb('t_uni_fee').where({ id: row.id }).update({ ...uniRow, is_deleted: 0 });
+      else await uniDb('t_uni_fee').insert(uniRow);
+    }
+  } finally {
+    await uniDb.destroy();
   }
 }
 
@@ -102,7 +122,18 @@ async function upsertRows(db, rows) {
       /feeUrgeWindowDays[\s\S]{0,200}?窗口/.test(settingUtil) && /feeRemindDays[\s\S]{0,80}?标红/.test(settingUtil),
     );
     check('① 设置项有中文名（设置页直接展示）', /feeUrgeWindowDays:\s*'催费列表窗口天数/.test(settingRoute));
-    check('② 前端设置页按数字编辑该键', /NUMBER_KEYS\s*=\s*\[[^\]]*'feeUrgeWindowDays'/.test(settingPage));
+    /*
+     * ★ 2026-10-22 设置页的「系统设置 / 操作日志」两个页签已删除，页面上不再有设置表单，
+     *   所以这里改成校验「页面确实没有表单了」+「后端默认值兜底仍在」，
+     *   避免以后有人以为删漏了又把表单加回去。
+     */
+    check(
+      '② 设置页已移除系统设置表单，窗口天数只走后端默认值（20 天）',
+      !/NUMBER_KEYS/.test(settingPage) &&
+        !/label="系统设置"/.test(settingPage) &&
+        !/label="操作日志"/.test(settingPage) &&
+        /label="阶段方案"/.test(settingPage),
+    );
 
     const listBlock = /feeRouter\.get\(\s*'\/list'[\s\S]*?res\.json\(\{ \.\.\.page/.exec(feeRoute)?.[0] || '';
     const exportBlock = /feeRouter\.get\(\s*'\/export'[\s\S]*?res\.json\(ok\(withContact\)\)/.exec(feeRoute)?.[0] || '';
@@ -212,7 +243,11 @@ async function upsertRows(db, rows) {
     if (db) {
       try {
         await db('t_class_fee').whereIn('id', FIXTURES.map((f) => `${P}${f.key}`)).update({ is_deleted: 1 });
-        console.log(`\n（已逻辑删除 ${FIXTURES.length} 行自检夹具）`);
+        // ★ 双写就双清（统一表里那份不删，下次跑会被候选统计算进去）
+        const uniDb = conn('sms_common');
+        await uniDb('t_uni_fee').whereIn('id', FIXTURES.map((f) => `${P}${f.key}`)).update({ is_deleted: 1 });
+        await uniDb.destroy();
+        console.log(`\n（已逻辑删除 ${FIXTURES.length} 行自检夹具：老表 + 统一表）`);
       } catch (e) {
         console.log(`\n（清理失败，人工处理：${e?.message || e}）`);
       }
