@@ -231,6 +231,8 @@ export function approveRefund(stage: TeachingStage, id: string, comment?: string
     approvalStatus: number;
     approvalStatusName: string;
     pushed: boolean;
+    /** 推送财务失败的具体原因（成功时 null）—— 失败提示里直接带上，省得远端只能翻日志 */
+    pushError?: string | null;
   }>('/api/teaching/refund/approve', { stage, id, comment });
 }
 

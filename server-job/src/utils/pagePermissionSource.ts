@@ -329,8 +329,9 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
   [RoleCode.TEACH_ASSIST]: [...HEAD_TEACHER_JOB_PAGES, ...CLASS_STAFF_PAGES, ...CLASS_JH_STAFF_PAGES],
 
   // ★ 学管主任（2026-09-30 由「教质经理 + 学术经理」合并而来）
-  //   职责：退费审批第 1 步 + 休退学审批 + 催费 + 宿舍；
-  //   并且可以【代替校长审批】（见 approval.ts 的 MANAGER_ROLES）
+  //   职责：退费审批第 1 步 + 休退学审批 + 催费 + 宿舍。
+  //   ⚠️ 2026-10-23 口径变更：学管**不能**代替校长审批（见 shared-types/src/approval.ts
+  //      的 canApprove 注释）。第 1 步审完就交给校长，页面上的审批按钮也不再出现。
   [RoleCode.TEACH_DEAN]: [
     'job:class:view',
     'job:classTransfer:view',
