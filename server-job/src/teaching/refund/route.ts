@@ -15,6 +15,7 @@ import { BizCode } from 'shared-types';
 import { ok, page } from '../../utils/response';
 import { wrap } from '../../utils/wrap';
 import { BizError } from '../../middleware/errorHandler';
+import { config } from '../../config';
 import { REFUND_CHAIN_NODES, TEACHING_STAGES, type TeachingStage } from '../shared/dto';
 import * as svc from './service';
 
@@ -267,5 +268,49 @@ teachingRefundRouter.post(
       req.user,
     );
     res.json(ok(null, '出款已登记'));
+  }),
+);
+
+/* ============================================================
+ * ★ 2026-10-22：内部接口 —— 财务出款后自动回写（不走登录态）
+ *
+ *   POST /api/teaching/refund/internal/finance-paid
+ *   header: x-internal-token: <config.internalToken>
+ *
+ * 【为什么单开一个 router】
+ *   财务 `payRefund()` 出款成功后主动回调这里，把「出款时间 / 财务单号 / 账单号」
+ *   写回教务退费单 —— 用户口径「自动回写，上游不再人工点财务登记出款」。
+ *
+ * ⚠️ 挂载顺序：app.ts 里**必须挂在带 authMiddleware 的 `/api/teaching/refund` 之前**，
+ *   否则请求先被登录态拦掉，永远走不到这里（consult 的 /internal 同款坑）。
+ * ============================================================ */
+
+export const teachingRefundInternalRouter = Router();
+
+teachingRefundInternalRouter.use((req, res, next) => {
+  const expected = String(config.internalToken || '');
+  const got = String(req.header('x-internal-token') || '');
+  if (!expected || got !== expected) {
+    res.status(401).json({ code: BizCode.UNAUTHORIZED, message: '内部令牌校验失败', data: null });
+    return;
+  }
+  next();
+});
+
+teachingRefundInternalRouter.post(
+  '/finance-paid',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const stage = mustStage(b.stage);
+    if (!str(b.id)) throw new BizError(BizCode.PARAM_ERROR, '缺少退费单 id');
+    const r = await svc.applyFinancePayment(stage, String(b.id), {
+      financeRefundId: str(b.financeRefundId),
+      financeRefundNo: str(b.financeRefundNo),
+      billNo: str(b.billNo),
+      payTime: str(b.payTime),
+      payMethod: optNum(b.payMethod) ?? null,
+      remark: str(b.remark) ?? null,
+    });
+    res.json(ok(r, '财务出款已回写'));
   }),
 );

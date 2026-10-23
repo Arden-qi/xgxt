@@ -77,12 +77,14 @@ import { authMiddleware as classJhAuth } from './class-jh/middleware/auth';
 import { teachingAttendanceRouter } from './teaching/attendance/route';
 import { teachingExamRouter } from './teaching/exam/route';
 import { teachingScoreRouter } from './teaching/score/route';
-import { teachingRefundRouter } from './teaching/refund/route';
+import { teachingRefundRouter, teachingRefundInternalRouter } from './teaching/refund/route';
 import { teachingLeaveRouter } from './teaching/leave/route';
 import { teachingStudentRouter } from './teaching/student/route';
 import { teachingClassRouter } from './teaching/class/route';
 import { teachingTransferRouter } from './teaching/class/transfer.route';
 import { teachingDormRouter } from './teaching/dorm/route';
+// ★ 催费「批量上传到财务」（三部门统一，2026-10-22）
+import { teachingFeeRouter } from './teaching/fee/transfer.route';
 import { teachingDormAllocateRouter } from './teaching/dorm/allocate.route';
 // ★ 宿舍楼栋设置（系统设置页与宿舍管理共用的楼栋字典）
 import { teachingBuildingRouter } from './teaching/dorm/building.route';
@@ -676,6 +678,13 @@ app.use(
   teachingScoreRouter,
 );
 
+// ★ 2026-10-22：退费「财务出款自动回写」内部接口（不走登录态，改校验 x-internal-token）
+//   财务 `payRefund()` 出款成功后回调 `POST /api/teaching/refund/internal/finance-paid`，
+//   把出款时间 / 财务单号 / 账单号写回教务退费单（用户口径：上游不再人工登记出款）。
+//   ⚠️ 必须挂在下面带 authMiddleware 的 `/api/teaching/refund` **之前** ——
+//     Express 按注册顺序匹配，挂后面会被登录态先拦掉（consult /internal 同款坑）。
+app.use('/api/teaching/refund/internal', teachingRefundInternalRouter);
+
 // ★ 退费（第四个合并的业务域）
 //   ★★ 审批链统一采用「实训那一套」（斌哥 2026-10-09 拍板）：
 //      班主任/项目经理发起 → 学管审批 → 校长审批 → 通过后通知财务出款。
@@ -689,8 +698,22 @@ app.use(
   teachingRefundRouter,
 );
 
-// ★ 休学 / 退学 / 复学审批（第五个合并的业务域）
-//   ★ 审批链同样统一采用实训那一套（休学/复学 1 步；退学 2 步：学管 → 校长）
+// ★ 催费「批量上传到财务」（2026-10-22 用户要求扩到大学部 / 就业部）
+//   ★ 原来只有初高能做：`/api/class-jh/fee/transfer/*` 里硬判断 dept_code=1，
+//     前端按钮也只在「初高 / 全部部门」时显示。现在三部门统一走这里：
+//       GET  /api/teaching/fee/transfer/candidates?dept=jh|class|employ|all
+//       POST /api/teaching/fee/transfer       { items: [{ dept, feeId }] }
+//   权限码：classjh:fee:view / class:urge:view / job:feeCall:view（三部门催费页的码）
+//   ⚠️ 老接口 /api/class-jh/fee/transfer/* 保留不动 —— 向后兼容，别删。
+app.use(
+  '/api/teaching/fee',
+  authMiddleware,
+  denyReadOnlyAdmin,
+  requireAnyPage(['classjh:fee:view', 'class:urge:view', 'job:feeCall:view']),
+  teachingFeeRouter,
+);
+
+// ★ 休学 / 退学 / 复学审批（第五个合并的业务域）//   ★ 审批链同样统一采用实训那一套（休学/复学 1 步；退学 2 步：学管 → 校长）
 //   权限码：classjh:approval:view / class:suspend:view / job:suspendApproval:view
 app.use(
   '/api/teaching/leave',

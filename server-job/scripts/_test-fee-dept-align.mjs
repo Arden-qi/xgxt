@@ -103,6 +103,11 @@ async function columnsOf(schema, table) {
      * 夹具：库里现在只有 is_deleted=1 的自检旧夹具（真实业务数据为空），
      * 而登记接口只认未删除的行 → 各插一条**未删除**的夹具（跑完标回已删除，
      * 不物理删除，与项目铁律一致）。
+     *
+     * ★★ 2026-10-22：夹具必须**双写**（老表 + 统一表）
+     *   切读打开后，仓储读的是统一表（`t_uni_urge` / `t_uni_fee`），
+     *   只写老表 → 接口报「催费记录不存在或已失效」/「催费单不存在」，
+     *   断言全红（实测 8/12）。这与 `_e2e-lib.mjs` 顶部「双写」注释是同一件事。
      */
     const FIX_URGE = 'testdeptalign-urge';
     const FIX_CALL = 'testdeptalign-call';
@@ -119,6 +124,26 @@ async function columnsOf(schema, table) {
          (id, create_time, is_deleted, fee_type, student_id, student_no, student_name,
           class_name, due_date, call_status)
        VALUES (?, NOW(), 0, 2, 'test-student', 'T0001', '自检部门对齐', '自检班', DATE_ADD(NOW(), INTERVAL 5 DAY), 1)
+       ON DUPLICATE KEY UPDATE is_deleted = 0`,
+      [FIX_CALL],
+    );
+    // ★ 统一表同步插一份（切读模式下仓储读的就是它）
+    //   ⚠️ t_uni_urge.urge_count 是 NOT NULL 且无默认值 → 必须显式给
+    await db.query(
+      `INSERT INTO sms_common.t_uni_urge
+         (id, edu_stage, create_time, is_deleted, source_system, source_id, sync_status,
+          student_id, student_no, student_name, fee_type, amount, expire_date, pay_status, urge_count)
+       VALUES (?, 'class', NOW(), 0, 'finance', 'testdeptalign-src', 2,
+              'test-student', 'T0001', '自检部门对齐', 1, 66000, DATE_ADD(NOW(), INTERVAL 5 DAY), 1, 0)
+       ON DUPLICATE KEY UPDATE is_deleted = 0`,
+      [FIX_URGE],
+    );
+    await db.query(
+      `INSERT INTO sms_common.t_uni_fee
+         (id, edu_stage, create_time, is_deleted, source_system, source_id, sync_status,
+          student_id, student_no, student_name, fee_type, fee_amount, expire_date, pay_status)
+       VALUES (?, 'job', NOW(), 0, 'finance', 'testdeptalign-src', 2,
+              'test-student', 'T0001', '自检部门对齐', 2, 66000, DATE_ADD(NOW(), INTERVAL 5 DAY), 1)
        ON DUPLICATE KEY UPDATE is_deleted = 0`,
       [FIX_CALL],
     );
@@ -150,7 +175,10 @@ async function columnsOf(schema, table) {
     );
 
     /* ---------- D. live：列表接口带出登记缴费字段（列才有东西可显示） ---------- */
-    const lu = await req(`${BASE}/api/class/urge/list?page=1&size=5`, { token });
+    // ★ 2026-10-23：原来取「第 1 页 5 条」再找夹具 —— 列表按 expire_date 升序，
+    //   库里逾期单攒到 6 条后，夹具（到期日 +5 天）就掉出前 5 条，断言假红。
+    //   改成按学号 keyword 精确定位，与库里的数据量无关。
+    const lu = await req(`${BASE}/api/class/urge/list?page=1&size=20&keyword=T0001`, { token });
     const urgeItem = (lu.json?.data?.list || []).find((x) => x.id === FIX_URGE) || {};
     check(
       '★ 大学催缴列表返回 payMethodName / paidAmount / voucherUrl（实缴/方式列有数据源）',
@@ -171,6 +199,9 @@ async function columnsOf(schema, table) {
     try {
       await db.query("UPDATE sms_common.t_class_urge_sync SET is_deleted=1 WHERE id LIKE 'testdeptalign-%'");
       await db.query("UPDATE sms_job.t_job_fee_call SET is_deleted=1 WHERE id LIKE 'testdeptalign-%'");
+      // ★ 统一表那份也要标回已删除（切读模式下仓储读的就是它）
+      await db.query("UPDATE sms_common.t_uni_urge SET is_deleted=1 WHERE id LIKE 'testdeptalign-%'");
+      await db.query("UPDATE sms_common.t_uni_fee SET is_deleted=1 WHERE id LIKE 'testdeptalign-%'");
     } catch { /* 忽略 */ }
     try { await db.end(); } catch { /* 忽略 */ }
     const ok = summary();

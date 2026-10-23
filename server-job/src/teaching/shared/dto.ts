@@ -576,6 +576,12 @@ export interface RefundRow {
   /** 已通过后财务侧信息 */
   financeRemark: string | null;
   refundTime: string | null;
+  /**
+   * ★ 2026-10-22：财务退费单号（`TF20260001`）
+   *
+   * 推送到财务时回写；有值 = 财务侧已建单。出款完成看 `refundTime`。
+   */
+  financeRefundNo?: string | null;
 
   createTime: string | null;
 

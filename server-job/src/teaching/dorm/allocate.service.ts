@@ -118,10 +118,18 @@ interface ClassBase {
 
 /** 三学段班级表（班级管理的权威来源） */
 async function teachingClasses(): Promise<ClassBase[]> {
+  /**
+   * ★ 2026-10-23 修：这三个 specs 还指着已 DROP 的老表
+   *   （sms_class_jh.t_class_info / sms_class.t_class_info / sms_job.t_job_class…），
+   *   每个学段的查询抛错被 `catch { continue }` 吞掉 → 分派宿舍页的
+   *   「班级列表」整个为空（校长也看不见任何班，新建的班自然也选不了）。
+   *   三学段的班级/学生在 P8 后都归一到 t_uni_class / t_uni_student，
+   *   用 edu_stage 区分学段即可；列名与老表同名兼容。
+   */
   const specs = [
-    { stage: 'jh', cls: 'sms_class_jh.t_class_info', stu: 'sms_class_jh.t_class_student' },
-    { stage: 'class', cls: 'sms_class.t_class_info', stu: 'sms_class.t_class_student' },
-    { stage: 'job', cls: 'sms_job.t_job_class', stu: 'sms_job.t_student_base' },
+    { stage: 'jh', cls: 'sms_common.t_uni_class', stu: 'sms_common.t_uni_student', edu: 'jh' },
+    { stage: 'class', cls: 'sms_common.t_uni_class', stu: 'sms_common.t_uni_student', edu: 'class' },
+    { stage: 'job', cls: 'sms_common.t_uni_class', stu: 'sms_common.t_uni_student', edu: 'job' },
   ];
 
   const out: ClassBase[] = [];
@@ -129,7 +137,7 @@ async function teachingClasses(): Promise<ClassBase[]> {
     let classes: any[] = [];
     try {
       classes = await db(s.cls)
-        .where({ is_deleted: false })
+        .where({ is_deleted: false, edu_stage: s.edu })
         .select('id', 'class_name', 'head_teacher_name', 'class_status');
     } catch {
       // 表不存在（环境没迁移）→ 跳过该学段，不阻塞另外两个
@@ -140,7 +148,7 @@ async function teachingClasses(): Promise<ClassBase[]> {
     let counts: any[] = [];
     try {
       counts = await db(s.stu)
-        .where({ is_deleted: false })
+        .where({ is_deleted: false, edu_stage: s.edu })
         .whereNotNull('class_id')
         .whereNot('class_id', '')
         .groupBy('class_id')
