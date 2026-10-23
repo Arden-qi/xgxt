@@ -414,109 +414,87 @@
             </el-form-item>
           </el-col>
           <!-- 2026-10-15 改版：删除「班主任/教员/助教」工号/ID 输入框，
-               姓名字段直接接入权限管理的用户列表，下拉选择（选人自动带 ID） -->
+               姓名字段直接接入权限管理的用户列表，下拉选择（选人自动带 ID）
+               ★ 2026-10-23 批注：标签去掉「姓名」（班主任姓名 → 班主任），
+                 下拉按「职位 + 部门」过滤 —— 部门选初高部就只显示初高部的班主任。
+                 规则与兜底见 @/teaching/classStaff.ts（staffOf）。 -->
           <el-col :span="8">
-            <el-form-item label="班主任姓名">
+            <el-form-item label="班主任">
               <el-select
                 v-model="form.headTeacherId"
                 clearable
                 filterable
-                placeholder="接入权限管理，请选择"
+                placeholder="按职位选人，请选择"
                 :loading="staffLoading"
                 style="width: 100%"
                 @change="onStaffChange('headTeacher', $event)"
               >
-                <el-option
-                  v-for="u in withFallback(staffOptions, form.headTeacherId, form.headTeacherName)"
-                  :key="u.id"
-                  :label="u.userName"
-                  :value="u.id"
-                />
+                <el-option v-for="u in formStaff('headTeacher')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="教员姓名">
+            <el-form-item label="教员">
               <el-select
                 v-model="form.teacherId"
                 clearable
                 filterable
-                placeholder="接入权限管理，请选择"
+                placeholder="按职位选人，请选择"
                 :loading="staffLoading"
                 style="width: 100%"
                 @change="onStaffChange('teacher', $event)"
               >
-                <el-option
-                  v-for="u in withFallback(staffOptions, form.teacherId, form.teacherName)"
-                  :key="u.id"
-                  :label="u.userName"
-                  :value="u.id"
-                />
+                <el-option v-for="u in formStaff('teacher')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="助教姓名">
+            <el-form-item label="助教">
               <el-select
                 v-model="form.assistantId"
                 clearable
                 filterable
-                placeholder="接入权限管理，请选择"
+                placeholder="按职位选人，请选择"
                 :loading="staffLoading"
                 style="width: 100%"
                 @change="onStaffChange('assistant', $event)"
               >
-                <el-option
-                  v-for="u in withFallback(staffOptions, form.assistantId, form.assistantName)"
-                  :key="u.id"
-                  :label="u.userName"
-                  :value="u.id"
-                />
+                <el-option v-for="u in formStaff('assistant')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
-          <!-- 2026-10-16 按批注：加回「项目经理姓名 / 就业老师姓名」——不再是工号/ID 输入框，
-               而是和 班主任/教员/助教 同一套规则：下拉取自「权限管理」用户列表，选人自动带 ID。
+          <!-- 2026-10-16 按批注：加回「项目经理 / 就业老师」——不再是工号/ID 输入框，
+               而是和 班主任/教员/助教 同一套规则：下拉按「职位 + 部门」过滤，选人自动带 ID。
                ★ 只有「阶段 = 实训」时才必填（见 isTrainPhase / rules）。
                ⚠️ 初高部的表没有这几列，所以只对 大学部 / 实训 显示（与「大学学号」下线的口径一致）。 -->
           <template v-if="form.stage !== 'jh'">
             <el-col :span="8">
-              <el-form-item label="项目经理姓名" prop="projectManagerName">
+              <el-form-item label="项目经理" prop="projectManagerName">
                 <el-select
                   v-model="form.projectManagerId"
                   clearable
                   filterable
-                  placeholder="接入权限管理，请选择"
+                  placeholder="按职位选人，请选择"
                   :loading="staffLoading"
                   style="width: 100%"
                   @change="onStaffChange('projectManager', $event)"
                 >
-                  <el-option
-                    v-for="u in withFallback(staffOptions, form.projectManagerId, form.projectManagerName)"
-                    :key="u.id"
-                    :label="u.userName"
-                    :value="u.id"
-                  />
+                  <el-option v-for="u in formStaff('projectManager')" :key="u.id" :label="u.userName" :value="u.id" />
                 </el-select>
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="就业老师姓名" prop="employmentTeacherName">
+              <el-form-item label="就业老师" prop="employmentTeacherName">
                 <el-select
                   v-model="form.employmentTeacherId"
                   clearable
                   filterable
-                  placeholder="接入权限管理，请选择"
+                  placeholder="按职位选人，请选择"
                   :loading="staffLoading"
                   style="width: 100%"
                   @change="onStaffChange('employmentTeacher', $event)"
                 >
-                  <el-option
-                    v-for="u in withFallback(staffOptions, form.employmentTeacherId, form.employmentTeacherName)"
-                    :key="u.id"
-                    :label="u.userName"
-                    :value="u.id"
-                  />
+                  <el-option v-for="u in formStaff('employmentTeacher')" :key="u.id" :label="u.userName" :value="u.id" />
                 </el-select>
               </el-form-item>
             </el-col>
@@ -573,7 +551,7 @@
           type="info"
           :closable="false"
           show-icon
-          title="班主任 / 教员 / 助教 均为可选，姓名来自「权限管理」的用户列表；初高部的表没有「项目经理姓名 / 就业老师姓名 / 大学学号」这几列，所以这个学段不显示"
+          title="班主任 / 教员 / 助教 均为可选，下拉按「职位 + 部门」过滤（如部门选初高部，班主任只列初高部的班主任；该部门没有该职位时退回只按职位列人）；初高部的表没有「项目经理 / 就业老师」这两列，所以这个学段不显示"
         />
       </el-form>
       <template #footer>
@@ -625,7 +603,8 @@
                 style="width: 100%"
                 @change="onHandoverPick(row)"
               >
-                <el-option v-for="u in staffOptions" :key="u.id" :label="u.userName" :value="u.id" />
+                <!-- ★ 2026-10-23：每个岗位只列「该职位 + 该部门」的人 -->
+                <el-option v-for="u in row.options" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </template>
           </el-table-column>
@@ -695,7 +674,7 @@
                 :loading="staffLoading"
                 style="width: 100%"
               >
-                <el-option v-for="u in staffOptions" :key="u.id" :label="u.userName" :value="u.id" />
+                <el-option v-for="u in trainingStaff('projectManager')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -708,7 +687,7 @@
                 :loading="staffLoading"
                 style="width: 100%"
               >
-                <el-option v-for="u in staffOptions" :key="u.id" :label="u.userName" :value="u.id" />
+                <el-option v-for="u in trainingStaff('employmentTeacher')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -765,7 +744,6 @@ import { http } from '@/api/request';
 // ★ 2026-10-22：阶段方案设计从「系统设置」搬进班级管理，以弹窗呈现
 import StageSchemePanel from '@/teaching/components/StageSchemePanel.vue';
 import { DeptCode, StudentStatus } from 'shared-types';
-import type { PermUserListItem } from 'shared-types/perm';
 import {
   listClasses,
   getClassDetail,
@@ -779,6 +757,7 @@ import {
   upgradeClassToEmployment,
   getEmploymentProgress,
   confirmClassEmployed,
+  getStaffOptions,
   isSystemClassStatus,
   CLASS_STATUS_TAG,
   CLASS_STATUS_SELECTABLE,
@@ -794,8 +773,11 @@ import {
   type ClassStageMeta,
   type ClassSummary,
   type EmploymentProgress,
+  type StaffOption,
   type StagePlanOption,
 } from '@/teaching/api/class';
+// ★ 2026-10-23：岗位选人 —— 按「职位 + 部门」过滤（见文件头注释）
+import { staffOf, STAGE_DEPT_CODE, type StaffKind } from '@/teaching/classStaff';
 // 教室「楼栋-房间号」格式：归一 + 校验（前后端同一套规则，见文件头注释）
 import {
   CLASSROOM_EXAMPLE,
@@ -1119,10 +1101,16 @@ function onFormDeptChange(v: number | undefined) {
   onFormStageChange();
 }
 
-/* ============ 2026-10-15 改版：班主任/教员/助教接入「权限管理」用户列表 ============ */
+/* ============ 2026-10-15 改版：班主任/教员/助教接入「权限管理」用户列表 ============
+ * ★ 2026-10-23 批注：下拉不再是「全部账号」，改成**按职位 + 部门**过滤 ——
+ *   班主任只列「职位 = 班主任」的人，且部门是当前班级部门的人；
+ *   该部门下没这个职位（典型：项目经理只在实训教学部）→ 退回只按职位筛。
+ *   规则与兜底集中在 @/teaching/classStaff.ts（staffOf），这里只负责喂数据。
+ */
 
 const staffLoading = ref(false);
-const staffOptions = ref<PermUserListItem[]>([]);
+/** 全量人员（含职位 / 部门码），三处下拉共用一份，部门一改即时重算 */
+const staffOptions = ref<StaffOption[]>([]);
 
 async function loadStaff() {
   staffLoading.value = true;
@@ -1133,14 +1121,9 @@ async function loadStaff() {
      *   初高 / 大学 / 就业账号一进班级管理就 403：
      *   ① 拦截器弹「您没有该操作的权限」（用户报障：每个账号登录都弹没有权限）；
      *   ② 更实际的问题：staffOptions 被清空 → 新建班级选不了班主任/教员/助教。
-     *   新接口跟着班级页面权限走，只返回 id + 姓名，够下拉用。
+     *   新接口跟着班级页面权限走，只返回 id + 姓名（★ 10-23 起再加职位 / 部门码），够下拉用。
      *   拉取仍带 silent：万一以后某个账号连班级页面权限都没有，也只是下拉空着，不弹窗。 */
-    const rows = await http.get<Array<{ id: string; userName: string }>>(
-      '/api/teaching/class/staff-options',
-      undefined,
-      { silent: true },
-    );
-    staffOptions.value = (rows || []) as unknown as PermUserListItem[];
+    staffOptions.value = (await getStaffOptions()) || [];
   } catch {
     staffOptions.value = [];
   } finally {
@@ -1148,18 +1131,24 @@ async function loadStaff() {
   }
 }
 
-/** 编辑老班级时，原工号/ID 可能不在权限用户列表里 —— 兜底补一个选项，避免显示成裸 ID */
-function withFallback(
-  list: PermUserListItem[],
-  id: string | null | undefined,
-  name: string | null | undefined,
-): PermUserListItem[] {
-  if (!id || list.some((u) => u.id === id)) return list;
-  return [{ id, userName: name || id } as PermUserListItem, ...list];
+/** 班级表单里某个岗位的可选人（按表单当前部门过滤；已选的人不在候选里也补一条） */
+function formStaff(kind: StaffKind): StaffOption[] {
+  const picked: Record<StaffKind, [string | null | undefined, string | null | undefined]> = {
+    headTeacher: [form.headTeacherId, form.headTeacherName],
+    teacher: [form.teacherId, form.teacherName],
+    assistant: [form.assistantId, form.assistantName],
+    projectManager: [form.projectManagerId, form.projectManagerName],
+    employmentTeacher: [form.employmentTeacherId, form.employmentTeacherName],
+  };
+  const [id, name] = picked[kind];
+  return staffOf(staffOptions.value, kind, form.deptCode, id, name);
 }
 
-/** 岗位种类：前三个是建班岗位，后两个是交棒岗位（阶段=实训时必填） */
-type StaffKind = 'headTeacher' | 'teacher' | 'assistant' | 'projectManager' | 'employmentTeacher';
+/** 升实训弹窗两个岗位：部门固定按「就业部(3)」过滤 */
+function trainingStaff(kind: 'projectManager' | 'employmentTeacher'): StaffOption[] {
+  const id = kind === 'projectManager' ? trainingForm.projectManagerId : trainingForm.employmentTeacherId;
+  return staffOf(staffOptions.value, kind, DeptCode.EMPLOYMENT, id, null);
+}
 
 /** 选人自动带姓名；清空时姓名一并清掉 */
 function onStaffChange(kind: StaffKind, id: string) {
@@ -1310,6 +1299,8 @@ interface HandoverRoleItem {
   /** 留空 = 该岗位不换人 */
   newId: string;
   newName: string;
+  /** ★ 2026-10-23：该岗位的可选人（按职位 + 部门过滤，打开弹窗时算好） */
+  options: StaffOption[];
 }
 
 const handoverVisible = ref(false);
@@ -1338,13 +1329,18 @@ function openHandover(row: ClassRow) {
     handoverDate: todayStr(),
     reason: '',
   });
-  const all: HandoverRoleItem[] = [
+  const seeds: Array<Omit<HandoverRoleItem, 'options'>> = [
     { key: 'headTeacher', label: '班主任', oldId: row.headTeacherId || '', oldName: row.headTeacherName || '', newId: '', newName: '' },
     { key: 'teacher', label: '教员', oldId: row.teacherId || '', oldName: row.teacherName || '', newId: '', newName: '' },
     { key: 'assistant', label: '助教', oldId: row.assistantId || '', oldName: row.assistantName || '', newId: '', newName: '' },
     { key: 'projectManager', label: '项目经理', oldId: row.projectManagerId || '', oldName: row.projectManagerName || '', newId: '', newName: '' },
     { key: 'employmentTeacher', label: '就业老师', oldId: row.employmentTeacherId || '', oldName: row.employmentTeacherName || '', newId: '', newName: '' },
   ];
+  const all: HandoverRoleItem[] = seeds.map((r) => ({
+    ...r,
+    // ★ 2026-10-23：每个岗位的下拉按「该职位 + 该班部门」过滤，原负责人兜底保留
+    options: staffOf(staffOptions.value, r.key, STAGE_DEPT_CODE[row.stage], r.oldId, r.oldName),
+  }));
   // 初高没有后两个岗位（那两张表没这两列），不展示
   handoverRoles.value = row.stage === 'jh' ? all.slice(0, 3) : all;
   handoverVisible.value = true;

@@ -274,6 +274,29 @@ export function getClassOptions() {
   return http.get<ClassOption[]>('/api/teaching/class/options');
 }
 
+/* ---------------- ★ 2026-10-23：岗位选人（按「职位 + 部门」过滤） ---------------- */
+
+/**
+ * 下拉人员：除 id / 姓名外，后端还下发职位与部门
+ *   deptCodes 是**换算后的教学部门码**（1 初高部 / 2 大学部 / 3 就业部），
+ *   权限管理那套部门树（教学部 → 初中/高中/大学部、实训教学部、就业管理部）由后端换算，
+ *   前端只按 1/2/3 过滤，见 @/teaching/classStaff.ts。
+ */
+export interface StaffOption {
+  id: string;
+  userName: string;
+  deptId: string | null;
+  deptName: string | null;
+  roleNames: string[];
+  roleCodes: string[];
+  deptCodes: number[];
+}
+
+/** 教职员工（建班 / 交接 / 升实训 的岗位下拉共用） */
+export function getStaffOptions() {
+  return http.get<StaffOption[]>('/api/teaching/class/staff-options');
+}
+
 /* ★ 2026-10-20：原 getSchemeOptions（/api/teaching/class/scheme-options）已删除 ——
  *   它读的 t_class_stage_scheme / t_class_stage_scheme_stage 两张表从未建过，
  *   页面一打开就弹「数据表不存在」。表单的「阶段方案」统一改用
