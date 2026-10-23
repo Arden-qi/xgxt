@@ -60,6 +60,8 @@ import { syncFeeCallToClass } from '../services/urge-sync.service';
 //   开关关时与原实现等价。
 import { tbl, tblAs, tblInsTrx, tblRef } from '../teaching/shared/uniTable';
 import { checkPayDate, saveVoucherImage, PAY_METHOD, PAY_METHOD_NAME } from '../utils/feeVoucher';
+// ★ 2026-10-23 登记缴费反写财务（待缴 → 已缴），与财务 attachVoucher 同口径
+import { pushVoucherToFinance } from '../finance/utils/voucher-push';
 
 export const feeCallRouter = Router();
 
@@ -738,6 +740,25 @@ feeCallRouter.post(
     if (voucherUrl) patch.voucher_url = voucherUrl;
 
     await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update(patch);
+
+    /**
+     * ★ 2026-10-23：反写财务缴费单（best-effort，失败不阻断登记）
+     *
+     * 这张催费单如果是财务推来的（`source_system='finance'` + `source_id`），
+     * 财务那张单可能还是「待缴(1)」→ 财务点「核对」会被拦「尚未缴费，无法核对」，
+     * 就业催费就永远停在「已缴(2)」到不了「已核对(3)」。
+     * 只推收款事实 + 1→2，与财务 `attachVoucher()` 同口径；不改其它状态。
+     */
+    const srcRow = row as Record<string, any>;
+    if (srcRow.source_system === 'finance' && srcRow.source_id) {
+      await pushVoucherToFinance({
+        financeFeeId: String(srcRow.source_id),
+        voucherUrl: voucherUrl ?? null,
+        payDate: body.payDate,
+        remark: body.remark || null,
+        operatorId: operator.userId,
+      });
+    }
 
     // 催缴状态变了 → 推给班级管理（只读副本），与 /handle 同口径
     await syncFeeCallToClass(body.id);
