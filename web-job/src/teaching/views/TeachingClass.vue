@@ -187,12 +187,14 @@
           >
             升实训
           </el-button>
-          <!-- ★ 2026-10-21 批注：升实训之后出现【升就业】——
+          <!-- ★ 2026-10-23 批注第 2 条：「**就业部**才有【升就业】」——
+               就业部在库里是 job（实训班）/ emp（就业部自建班）两个学段，
+               两个都要出现按钮（见 isEmploymentStage）。
                点一下弹确认，把该班学生状态改为「待就业」，班级状态也改「待就业」。
-               ★ 2026-10-23 批注：升就业成功后这个按钮**变成【待就业】**（只表示当前态，
-                 不可再点），后面再出现【已就业】。已是待就业 / 已就业的班不再显示【升就业】。 -->
+               升就业成功后这个按钮**变成【待就业】**（只表示当前态，不可再点），
+               后面再出现【已就业】。已是待就业 / 已就业的班不再显示【升就业】。 -->
           <el-button
-            v-if="!isReadOnlyUser && row.stage === 'job' && canUpgradeEmployment(row)"
+            v-if="!isReadOnlyUser && isEmploymentStage(row.stage) && canUpgradeEmployment(row)"
             link
             type="warning"
             :loading="employmentSaving === row.classId"
@@ -202,7 +204,7 @@
           </el-button>
           <!-- ★ 2026-10-23：升就业成功后的【待就业】——纯状态位，不可点击 -->
           <el-button
-            v-if="!isReadOnlyUser && row.stage === 'job' && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
+            v-if="!isReadOnlyUser && isEmploymentStage(row.stage) && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
             link
             type="info"
             disabled
@@ -214,7 +216,7 @@
                  全部「已就业 / 退学」→ 提示班级人数 / 就业人数 → 确认改「已就业」；
                  还有别的状态 → 只提示各状态人数及人员，**不可操作**。 -->
           <el-button
-            v-if="!isReadOnlyUser && row.stage === 'job' && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
+            v-if="!isReadOnlyUser && isEmploymentStage(row.stage) && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
             link
             type="success"
             :loading="employedSaving === row.classId"
@@ -1555,8 +1557,9 @@ async function doTrainingUpgrade() {
  *     则进行提示班级各个状态的人数及人员，**不可进行【已就业】操作**」
  *
  * 落地：
- *   · 升就业 → 学生状态 实训中(8) → 待就业(9)，班级状态 实训(5) → 待就业(6)；
+ *   · 升就业 → 学生状态 实训中(8) → 待就业(9)，班级状态 原状态 → 待就业(6)；
  *     操作列按钮从【升就业】变【待就业】（灰、不可点），并出现【已就业】。
+ *     ★ 2026-10-23：入口放开到整个「就业部」（job 实训班 + emp 就业部自建班）。
  *   · 已就业 → 先查整班学生状态分布：
  *       settled（全班都是已就业/退学）→ 提示班级人数 / 就业人数 → 一次确认 → 班级状态改 已就业(7)；
  *       否则 → 只弹提示，逐条列出「状态 人数：姓名、姓名…」+ 明确「不可操作」，
@@ -1568,7 +1571,21 @@ const CLASS_STATUS_CODE = { TRAINING: 5, WAIT_EMPLOY: 6, EMPLOYED: 7 } as const;
 const employmentSaving = ref('');
 const employedSaving = ref('');
 
-/** 实训班还没到「待就业 / 已就业」→ 才显示【升就业】 */
+/**
+ * ★ 2026-10-23 批注第 2 条：「**就业部**才有【升就业】」
+ *
+ *   界面上「就业部」是一张卡，但行的 stage 有两个内部值（同一张表分开存）：
+ *     job —— 升实训造出来的实训班
+ *     emp —— 直接在就业部建的班
+ *   三个按钮（升就业 / 灰【待就业】/ 已就业）都只对这两个学段出现；
+ *   初高部、大学部一个都不出现。原来只判断 'job'，就业部里 emp 的班
+ *   （如 SX2601 / SX2602）操作列没有任何按钮。
+ */
+function isEmploymentStage(stage: string): boolean {
+  return stage === 'job' || stage === 'emp';
+}
+
+/** 就业部班级还没到「待就业 / 已就业」→ 才显示【升就业】 */
 function canUpgradeEmployment(row: ClassRow): boolean {
   const s = Number(row.classStatus);
   return s !== CLASS_STATUS_CODE.WAIT_EMPLOY && s !== CLASS_STATUS_CODE.EMPLOYED;
