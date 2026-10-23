@@ -7,7 +7,7 @@ import { db } from '../db';
 // ★ 2026-10-05：内部服务令牌统一从 config 读（默认值非空 → 校验永远生效）
 import { config } from '../config';
 // ★ 2026-10-06：复用主包的「按登录名查权限模块拿业务角色」（与 class-jh 同一出口）
-import { resolveBusinessRoles } from '../../middleware/auth';
+import { resolveBusinessRoles, resolveBusinessProfile } from '../../middleware/auth';
 // ★ 第 4 期第 8 批：补切读层（本文件原来写死 `db('t_class_info')`）
 //   【为什么这一处特别关键 —— 它决定「老师能看到哪些班」】
 //   登录中间件在这里查一次班主任/教员/助教负责的班级，填进 `user.classIds`，
@@ -32,24 +32,26 @@ const JH_SRC = 'sms_class_jh';
  *   （班级自己的 JWT 里本来就带 classIds，那条路不用查）
  */
 async function fillClassIds(user: AuthUser): Promise<void> {
-  console.log('[DBG2] fillClassIds 调用: userId=', user.userId, '| token自带classIds=', JSON.stringify(user.classIds), '| account=', (user as any).account);
-  if (!user.userId) return;
+  /**
+   * ★ 2026-10-23 ID 统一改造（第 1 批：读取层兼容两套 ID）
+   *
+   *   业务表的责任人列有两种历史写法：门户账号 UUID 与权限库用户号（U004…）。
+   *   原来这里只拿 `user.userId`（门户 UUID）去比 → 大学部/就业部
+   *   （存的是 U 号）永远比不中 → classIds 恒为空 →
+   *   「待接收学员」一条都看不到、班级模块的花名册/催费也全空。
+   *
+   *   过渡期做法：把「我」的所有可能 ID 都拿去比；
+   *   数据清洗完（第 4 批）后只剩 U 号，第 5 批再把这里收成单一口径。
+   */
+  const me = [...new Set([user.userId, user.businessUserId, (user as any).portalUserId]
+    .map((x) => String(x || '')).filter(Boolean))];
+  if (!me.length) return;
   const ids = new Set<string>(user.classIds || []);
 
-  /* ★ 2026-10-23：按账号反查权限库 id —— 三岗 id 两种口径（门户 UUID / U00x），
-     远端新代码建班存的是后者，只按门户 UUID 匹配会漏掉新带的班
-     （宿舍分派/待接收/数据范围全部受影响）。 */
-  let permUid = '';
-  if ((user as any).account) {
-    try {
-      const pu = (await db('sms_perm.t_perm_user')
-        .where({ account: String((user as any).account) })
-        .first()) as any;
-      if (pu?.id) permUid = String(pu.id);
-    } catch {
-      /* 权限库不可用 → 只按 userId 匹配 */
-    }
-  }
+  /** 责任人列：大学部是班主任三岗；就业/实训还多两岗 */
+  const ownerClause = (q: any, cols: string[]) => {
+    for (const c of cols) q.orWhereIn(c, me);
+  };
 
   if (!ids.size) {
     try {
@@ -69,23 +71,13 @@ async function fillClassIds(user: AuthUser): Promise<void> {
          *   数据**不删**，学管/校长/管理员（DataScope=ALL）仍可查看。
          *
          * ⚠️ 交棒只对「教师三岗」生效：学管/校长/管理员的数据范围是 ALL，不受本过滤影响。
+         * ★ 2026-10-23：补上 project_manager / employment_teacher 两列 ——
+         *   就业老师、项目经理也是"这个班归我"，原来压根没被算进 classIds。
          */
         .whereNot('class_status', ClassStatus.TRAINING)
-        .andWhere((q: any) => {
-          /**
-           * ★ 2026-10-23 修：三岗 id 存在**两种口径**——
-           *   老数据/宿舍域存门户 UUID，远端新代码建班存权限库 id（U004）。
-           *   只按 user.userId 单口径匹配 → 新建的班（U004 口径）不进 classIds，
-           *   班主任在宿舍管理/待接收里都看不到自己新带的班。
-           *   这里两个口径都试（token 里有 businessUserId 时一并匹配）。
-           */
-          const matchIds = [...new Set([user.userId, permUid, (user as any).businessUserId].filter(Boolean))];
-          for (const id of matchIds) {
-            q.orWhere('head_teacher_id', id)
-              .orWhere('teacher_id', id)
-              .orWhere('assistant_id', id);
-          }
-        })
+        .andWhere((q: any) =>
+          ownerClause(q, ['head_teacher_id', 'teacher_id', 'assistant_id', 'project_manager_id', 'employment_teacher_id']),
+        )
         .select('id')) as Array<{ id: string }>;
       for (const r of rows) ids.add(r.id);
     } catch {
@@ -104,16 +96,23 @@ async function fillClassIds(user: AuthUser): Promise<void> {
    *   ⚠️ 两个库的班级 id 都是 UUID，不会撞；大学部的数据范围过滤按 id 匹配，
    *      多出来这些初高 id 不会让任何大学部的行"意外可见"。
    *   ⚠️ 查不到（初高库不可用）只影响初高的待接收，不影响大学部 —— 因此不吞掉上面的结果。
+   *   ★ 2026-10-23：统一表 t_uni_class 可能还没有初高数据（历史遗留），
+   *      这里在"统一表查不到"时回落到初高业务表，避免整段失效。
    */
   try {
-    const jhRows = (await tbl(jhDb, JH_SRC, 't_class_info', 'jh')
-      .where('is_deleted', 0)
-      .andWhere((q: any) => {
-        q.where('head_teacher_id', user.userId)
-          .orWhere('teacher_id', user.userId)
-          .orWhere('assistant_id', user.userId);
-      })
-      .select('id')) as Array<{ id: string }>;
+    const queryJh = () =>
+      tbl(jhDb, JH_SRC, 't_class_info', 'jh')
+        .where('is_deleted', 0)
+        .andWhere((q: any) => ownerClause(q, ['head_teacher_id', 'teacher_id', 'assistant_id']))
+        .select('id');
+    let jhRows = (await queryJh()) as Array<{ id: string }>;
+    if (!jhRows.length) {
+      // 统一表没同步初高数据时，回落到业务表（同一实例、不同库）
+      jhRows = (await jhDb('t_class_info')
+        .where('is_deleted', 0)
+        .andWhere((q: any) => ownerClause(q, ['head_teacher_id', 'teacher_id', 'assistant_id']))
+        .select('id')) as Array<{ id: string }>;
+    }
     for (const r of jhRows) ids.add(r.id);
   } catch {
     /* 初高库查不到 → 只影响初高的待接收，静默跳过 */
@@ -152,11 +151,19 @@ async function resolvePortalRoles(user: AuthUser, payload: Record<string, unknow
     user.dataScope = DataScope.ALL;
     return;
   }
-  const roles = account ? await resolveBusinessRoles(account) : [];
+  const profile = account ? await resolveBusinessProfile(account) : null;
+  const roles = profile?.roles ?? [];
   user.roles = roles;
-  /* ★ 2026-10-23：把账号带给 fillClassIds —— 三岗 id 有门户 UUID / 权限库 id
-     两种口径，补 classIds 时要按账号反查权限库 id 才能两种都匹配。 */
-  (user as any).account = account;
+  /**
+   * ★ 2026-10-23：把权限库用户号挂到用户对象上。
+   *   业务表责任人列存的是它（U004…），没有它就只能拿门户 UUID 瞎比。
+   */
+  if (profile?.permUserId) {
+    // ★ 2026-10-23 收口：userId 改成权限库 U 号，门户 UUID 留一份
+    user.portalUserId = user.portalUserId || user.userId;
+    user.businessUserId = profile.permUserId;
+    user.userId = profile.permUserId;
+  }
   // 角色 → 数据范围：SYS_ADMIN / RM_PRINCIPAL / TEACH_DEAN → ALL；班主任/教员/助教 → CLASS
   user.dataScope = resolveDataScope(roles);
   user.deptCode = roles.length ? user.deptCode || 2 : 2;
