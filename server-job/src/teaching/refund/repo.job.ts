@@ -17,34 +17,74 @@
 import { randomUUID } from 'crypto';
 import { db } from '../../utils/db';
 import type { RefundListQuery, RefundRow } from '../shared/dto';
-import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME } from '../shared/dto';
+import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME, REFUND_UNFINISHED_STATUSES } from '../shared/dto';
 import { toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
-import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
-import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import type { FeeTypeConflict, RefundAggregate, RefundWriteInput, StudentOption } from './types';
+import { tbl, tblTrx, tblInsTrx, uniUpdCols } from '../shared/uniTable';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 import { hydrateWithArchive, ARCHIVE_TABLE } from '../shared/studentRef';
 
 const T = 't_job_refund';
+/**
+ * ★ 2026-10-22：费用项子表（与大学同名同结构）。
+ *   就业老表用三列表达学费/住宿/餐费，最多三项、加新类型得改表；
+ *   子表补上后与大学一致（任意多项）。读：子表优先，老单回落三列。
+ */
+const ITEM = 't_class_refund_item';
+const WITEM = 'sms_job.t_class_refund_item';
 /** 写路径显式声明的库名（conn 来自 job 库事务，表也在 sms_job） */
 const SRC = 'sms_job';
 const S = 't_student_base';
 const C = 't_job_class';
 const STAGE = 'job' as const;
 
+/**
+ * 取若干退费单的费用项（子表）→ Map<refund_id, 项[]>
+ * 子表缺表/缺数据都返回空 Map（调用方回落三列 / 单值），不让读列表因为一张子表挂掉。
+ */
+async function itemsOf(ids: string[]): Promise<Map<string, Array<{ fee_type: number; amount: number }>>> {
+  const out = new Map<string, Array<{ fee_type: number; amount: number }>>();
+  if (!ids.length) return out;
+  try {
+    const rows = (await db(ITEM).whereIn('refund_id', ids).where('is_deleted', 0)) as Array<
+      Record<string, any>
+    >;
+    for (const r of rows) {
+      const key = String(r.refund_id);
+      const arr = out.get(key) ?? [];
+      arr.push({ fee_type: Number(r.fee_type), amount: Number(r.amount || 0) });
+      out.set(key, arr);
+    }
+  } catch {
+    /* 子表不可用 → 走老口径兜底 */
+  }
+  return out;
+}
+
 /** 数据库行 → 统一结构 */
-async function decorate(row: Record<string, any>): Promise<RefundRow> {
-  // ★ 费用项：退学合并单拆成三项；普通单只有一项
+async function decorate(
+  row: Record<string, any>,
+  itemRows: Array<{ fee_type: number; amount: number }> = [],
+): Promise<RefundRow> {
+  /**
+   * ★ 2026-10-22：费用项取值优先级
+   *   ① 子表（新单，与大学同一套，可任意多项）
+   *   ② 老表的三个金额列（退学合并单）
+   *   ③ 主表单值 refund_type
+   */
   const hasDetail =
     row.tuition_amount != null || row.accommodation_amount != null || row.meal_amount != null;
 
-  const rawItems = hasDetail
-    ? [
-        { feeType: 1, amount: Number(row.tuition_amount ?? 0) },
-        { feeType: 2, amount: Number(row.accommodation_amount ?? 0) },
-        { feeType: 3, amount: Number(row.meal_amount ?? 0) },
-      ].filter((x) => x.amount > 0)
-    : [{ feeType: Number(row.refund_type), amount: Number(row.refund_amount ?? 0) }];
+  const rawItems = itemRows.length
+    ? itemRows.map((x) => ({ feeType: Number(x.fee_type), amount: Number(x.amount || 0) }))
+    : hasDetail
+      ? [
+          { feeType: 1, amount: Number(row.tuition_amount ?? 0) },
+          { feeType: 2, amount: Number(row.accommodation_amount ?? 0) },
+          { feeType: 3, amount: Number(row.meal_amount ?? 0) },
+        ].filter((x) => x.amount > 0)
+      : [{ feeType: Number(row.refund_type), amount: Number(row.refund_amount ?? 0) }];
 
   const items = rawItems.map((x) => ({
     feeType: x.feeType,
@@ -76,6 +116,8 @@ async function decorate(row: Record<string, any>): Promise<RefundRow> {
     currentHandlerHint: null, // 由 service 从审批单统一补
     financeRemark: row.finance_remark || null,
     refundTime: fmtDateTime(row.refund_time),
+    // ★ 2026-10-22：财务退费单号（推送成功即回写；出款状态靠 refundTime 判断）
+    financeRefundNo: row.finance_refund_no || null,
     createTime: fmtDateTime(row.create_time),
     canApprove: false,
     canCancel: false,
@@ -159,7 +201,11 @@ export async function list(q: RefundListQuery, user?: any): Promise<{ rows: Refu
 
   // ★ 2026-10-20：学生属性以档案最新值为准（快照列只留作审计）
   await hydrateWithArchive(STAGE, rows, { conn: db });
-  return { rows: await Promise.all(rows.map(decorate)), total: Number(total) };
+  const itemMap = await itemsOf(rows.map((r) => String(r.id)));
+  return {
+    rows: await Promise.all(rows.map((r) => decorate(r, itemMap.get(String(r.id)) || []))),
+    total: Number(total),
+  };
 }
 
 /** 单条 */
@@ -170,7 +216,8 @@ export async function detail(id: string): Promise<RefundRow | null> {
   if (!row) return null;
   // ★ 2026-10-20：详情与列表同口径（档案最新值）
   await hydrateWithArchive(STAGE, [row], { conn: db });
-  return decorate(row);
+  const itemMap = await itemsOf([String(row.id)]);
+  return decorate(row, itemMap.get(String(row.id)) || []);
 }
 
 /** 汇总 */
@@ -210,7 +257,12 @@ export async function aggregate(): Promise<RefundAggregate> {
  *    本表就在 sms_job，但切读层统一走 `sms_job.t_job_refund` 全限定名 ——
  *    与 `conn('t_job_refund')` 在当前连接下等价，切读时才会落到 sms_common 的 `t_uni_refund`。
  */
-export async function insert(conn: any, input: RefundWriteInput): Promise<string> {
+export async function insert(
+  conn: any,
+  input: RefundWriteInput,
+  /** ★ 2026-10-22：费用项明细（与大学同签名）。不传时按主单值兜底。 */
+  items: Array<{ feeType: number; amount: number }> = [],
+): Promise<string> {
   const id = randomUUID();
   const now = new Date();
   await tblInsTrx(conn, SRC, T, STAGE, {
@@ -239,6 +291,34 @@ export async function insert(conn: any, input: RefundWriteInput): Promise<string
     approval_status: 1, // 1 待提交（统一码）
     remark: input.remark || null,
   });
+
+  /**
+   * ★ 2026-10-22：写费用项子表（对齐大学「一笔可多项」）
+   *   老的三列（tuition/accommodation/meal）不再作为**权威**来源，
+   *   但为了兼容老的报表/导出，这里也按费用类型把金额填进对应列。
+   */
+  const list = items.length
+    ? items
+    : [{ feeType: Number(input.feeType), amount: Number(input.refundAmount) }];
+  for (const it of list) {
+    await conn(WITEM).insert({
+      id: randomUUID(),
+      create_time: now,
+      create_by: input.initiatorId,
+      is_deleted: false,
+      refund_id: id,
+      fee_type: it.feeType,
+      amount: it.amount,
+    });
+  }
+  const detailCols: Record<string, any> = {};
+  for (const it of list) {
+    if (it.feeType === 1) detailCols.tuition_amount = it.amount;
+    else if (it.feeType === 2) detailCols.accommodation_amount = it.amount;
+    else if (it.feeType === 3) detailCols.meal_amount = it.amount;
+  }
+  if (Object.keys(detailCols).length) await conn(T).where({ id }).update(detailCols);
+
   return id;
 }
 
@@ -270,11 +350,84 @@ export async function setFinance(
     });
 }
 
-/** 校验：该学生是否有进行中的退费单（大学那条"禁止重复"规则的统一版） */
-export async function hasPending(studentId: string): Promise<boolean> {
-  const row = await tbl(db, SRC, T, STAGE)
+/**
+ * ★ 2026-10-22：回写财务退费单（推送成功后立刻写）
+ *
+ * 用途两件：
+ *   ① 溯源 —— 财务出款后按 `finance_refund_id` 对回这张单并自动回写
+ *   ② 展示 —— 列表/详情能看到财务单号（TF20260001 这类），不用去财务系统翻
+ *
+ * ⚠️ 列只在统一表 `t_uni_refund` 上（迁移 `_migrate-finance-refund-20261022`），
+ *   所以走 `uniUpdCols` 过滤；失败只 warn —— 财务单已经建好了，回写失败不该让审批报错。
+ */
+export async function setPushInfo(
+  id: string,
+  financeRefundId: string | null,
+  financeRefundNo: string | null,
+): Promise<void> {
+  try {
+    const patch = await uniUpdCols(db, SRC, T, {
+      finance_refund_id: financeRefundId,
+      finance_refund_no: financeRefundNo,
+      update_time: new Date(),
+    });
+    await tbl(db, SRC, T, STAGE).where({ id }).update(patch as never);
+  } catch (err: any) {
+    // eslint-disable-next-line no-console
+    console.warn('[退费] 回写财务单号失败', STAGE, id, err?.message);
+  }
+}
+
+/**
+ * 找出「同一学生 + 同一费用项」的重复申请 —— 防重复提交的唯一口径
+ *
+ * ★ 2026-10-23（用户明确的口径）：
+ *   一个学生**可以有多条**退费申请 —— 第 1 条退住宿费、第 2 条退学费；
+ *   只有**同一个费用项**不允许重复：已有「住宿费」在审批，再申请「住宿费」要拦。
+ *
+ * ⚠️ 判重范围 = 未办结（1 待提交 / 2 待学管 / 3 待校长）；草稿也算占位。
+ * ⚠️ 这张表的 `approval_status` **本身就是统一码**（蓝本），不需要翻译。
+ * 费用项取值：子表优先，子表没有回落老的三列，最后回落主表 `refund_type`。
+ */
+export async function findFeeTypeConflicts(
+  studentId: string,
+  feeTypes: number[],
+  excludeId?: string,
+): Promise<FeeTypeConflict[]> {
+  const wanted = [...new Set(feeTypes.map((x) => Number(x)))].filter((n) => Number.isFinite(n));
+  if (!wanted.length) return [];
+
+  const q = tbl(db, SRC, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
-    .whereIn('approval_status', [2, 3])
-    .first();
-  return !!row;
+    .whereIn('approval_status', REFUND_UNFINISHED_STATUSES);
+  if (excludeId) q.andWhereNot('id', excludeId);
+  const rows = (await q) as Array<Record<string, any>>;
+  if (!rows.length) return [];
+
+  const itemMap = await itemsOf(rows.map((r) => String(r.id)));
+  const out: FeeTypeConflict[] = [];
+  for (const r of rows) {
+    const id = String(r.id);
+    const own = itemMap.get(id);
+    /** 与 decorate() 同口径：子表 → 老的三列（退学合并单）→ 主表单值 */
+    const hasDetail =
+      r.tuition_amount != null || r.accommodation_amount != null || r.meal_amount != null;
+    const types = own?.length
+      ? own.map((x) => Number(x.fee_type))
+      : hasDetail
+        ? [
+            { feeType: 1, amount: r.tuition_amount }, // 学费
+            { feeType: 2, amount: r.accommodation_amount }, // 住宿费
+            { feeType: 3, amount: r.meal_amount }, // 餐费
+          ]
+            .filter((x) => x.amount != null && Number(x.amount) > 0)
+            .map((x) => x.feeType)
+        : [Number(r.refund_type)];
+    const status = Number(r.approval_status);
+    const applyNo = String(r.apply_no || '');
+    for (const t of new Set(types)) {
+      if (wanted.includes(t)) out.push({ feeType: t, refundId: id, applyNo, status });
+    }
+  }
+  return out;
 }

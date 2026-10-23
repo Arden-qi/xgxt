@@ -47,6 +47,7 @@ import { fetchStudentFeeRecords, summarizeFees } from '../../utils/financeFeeRef
 //   t_class_exam_score / t_class_flow / t_class_repeat）均已归一，
 //   全部走 tbl()/tblIns() 路由；开关关时与原实现逐字节等价。
 import { tbl, tblIns, phaseCodeCol, readPhaseCode } from '../../teaching/shared/uniTable';
+import { actorId } from '../../utils/actor';
 
 export const studentRouter = Router();
 
@@ -1187,8 +1188,12 @@ studentRouter.post(
      * 坑：建档时写的 `source_id = push.consult_no`，而 consultNo 在「学生还没学号」时
      *   等于咨询学生 id；等学号生成并回写后，咨询侧再拿 `stu.student_no` 来调本接口，
      *   传的就是学号了 —— 只匹配 source_id 会一条都找不到（实测学籍停在试学中）。
+     *
+     * ★ 2026-10-22 第二个坑：必须走 `tbl()` 统一表路由。
+     *   教学域老表已废弃（数据在 sms_common.t_uni_student），直接 db(TABLE)
+     *   查老表会 0 条命中，同样表现为「学籍不动」。
      */
-    const stu = (await db(TABLE)
+    const stu = (await tbl(db, DB, TABLE, STAGE)
       .where({ source_system: 'consult', is_deleted: false })
       .andWhere((q: any) => q.where('source_id', body.consultNo).orWhere('student_no', body.consultNo))
       .first()) as Record<string, unknown> | undefined;
@@ -1203,7 +1208,7 @@ studentRouter.post(
       return;
     }
 
-    await db(TABLE).where({ id: stu.id }).update({
+    await tbl(db, DB, TABLE, STAGE).where({ id: stu.id }).update({
       student_status: body.studentStatus,
       update_time: new Date(),
       update_by: 'consult-sync',
@@ -1360,7 +1365,7 @@ studentRouter.post(
       bizType: '升学',
       bizId: stu.id,
       studentId: stu.id,
-      opUserId: user.userId,
+      opUserId: actorId(user),
       opUserName: user.userName,
       opDesc: `升学：${stu.student_name} 已推送至大学部班级（待班主任接收）`,
       afterValue: { studentNo: stu.student_no, targetClassId: body.targetClassId, inserted },

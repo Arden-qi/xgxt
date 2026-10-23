@@ -207,6 +207,8 @@
               <span v-else class="muted">{{ b.bedStatusName }}</span>
             </div>
             <div class="tdv-bed__ops">
+              <!-- ★ 2026-10-23 用户口径：班主任的床位界面与教务一致，可自己分配床位
+                   （原来「本班封班后空床交回教务」的限制取消；封班提示条一并移除） -->
               <el-button
                 v-if="b.bedStatus === 1 && canEdit(curDorm)"
                 link
@@ -236,6 +238,10 @@
             <el-table-column label="床位" prop="bedLabel" width="90" />
             <el-table-column label="学号" prop="studentNo" width="110" />
             <el-table-column label="姓名" prop="studentName" />
+            <!-- ★ 2026-10-21 新增班级列（按学生反查，快照缺失显示 —） -->
+            <el-table-column label="班级" min-width="110">
+              <template #default="{ row }">{{ row.className || '—' }}</template>
+            </el-table-column>
             <el-table-column label="性别" prop="genderName" width="60" align="center" />
             <el-table-column label="入住日期" prop="checkInDate" width="110" align="center" />
           </el-table>
@@ -350,6 +356,26 @@
         <el-form-item label="床位">
           <span>{{ assignBedRow?.bedLabel }}</span>
         </el-form-item>
+        <!-- ★ 2026-10-21 班级下拉：与下面的学生选择联动（选班 → 学生只出该班的）；
+             班主任登录时选项只有名下班级（后端按数据范围下发） -->
+        <el-form-item label="班级">
+          <el-select
+            v-model="assignClassId"
+            clearable
+            filterable
+            placeholder="全部班级"
+            :loading="assignClassLoading"
+            style="width: 100%"
+            @change="onAssignClassChange"
+          >
+            <el-option
+              v-for="c in assignClasses"
+              :key="c.classId ?? c.className"
+              :label="c.className"
+              :value="c.classId ?? c.className"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="学生" required>
           <el-select
             v-model="assignStudentId"
@@ -359,7 +385,7 @@
             reserve-keyword
             :remote-method="searchAssignStudents"
             :loading="assignLoading"
-            placeholder="输入学号或姓名搜索（本班未入住学生）"
+            placeholder="输入学号或姓名搜索（本班未入住 · 性别需与宿舍一致）"
             style="width: 100%"
             @change="onAssignStudentChange"
           >
@@ -563,13 +589,19 @@
 
       <!-- ★ 2026-10-20 新增：教务给各班分派宿舍（左右两栏男寝 / 女寝）
            ★ 2026-10-21：班主任不显示该子页面（班级层面的分派归教务） -->
-      <el-tab-pane v-if="!isOnlyHeadTeacher" label="班级分派" name="allocate" lazy>
+      <el-tab-pane v-if="!isOnlyHeadTeacher" label="分派宿舍" name="allocate" lazy>
         <DormAllocate />
       </el-tab-pane>
 
       <!-- ★ 2026-10-21：申请审批（班主任提交的换宿/退宿单；通过后自动改床位与学生宿舍） -->
       <el-tab-pane v-if="canApproveDorm" label="申请审批" name="approval" lazy>
         <DormChangeApproval />
+      </el-tab-pane>
+
+      <!-- ★ 2026-10-22：楼栋设置（从「系统设置」原样搬来，同一个 BuildingSettingPanel 组件）
+           排在申请审批后面；只给教务/学管等非班主任角色看 -->
+      <el-tab-pane v-if="!isOnlyHeadTeacher" label="楼栋设置" name="building" lazy>
+        <BuildingSettingPanel />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -649,11 +681,13 @@ import type { FormInstance, FormRules } from 'element-plus';
 import { RoleCode } from 'shared-types';
 import { isReadOnlyUser, isSuperTest, myRoles } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
-/** ★ 2026-10-20 宿舍管理的第二个子页面：班级分派 */
+/** ★ 2026-10-20 宿舍管理的第二个子页面：分派宿舍 */
 import DormAllocate from './DormAllocate.vue';
 /** ★ 2026-10-21 第三个子页面：申请审批（接收班主任的换宿/退宿申请） */
 import DormChangeApproval from './DormChangeApproval.vue';
-/** ★ 2026-10-20 调宿弹窗：班级 / 学生搜索 / 楼栋床位（与班级分派同一套接口） */
+/** ★ 2026-10-22 第四个子页面：楼栋设置（与「系统设置」页签同一个组件，原样搬来） */
+import BuildingSettingPanel from '@/class-jh/components/setting/BuildingSettingPanel.vue';
+/** ★ 2026-10-20 调宿弹窗：班级 / 学生搜索 / 楼栋床位（与分派宿舍同一套接口） */
 import {
   listAllocateClasses,
   listAllocateBuildings,
@@ -676,6 +710,8 @@ import {
   listDormChanges,
   listDormOccupancyRates,
   listDormCandidates,
+  listDormCheckinClasses,
+  type DormCheckinClassRow,
   saveDorm,
   deleteDorm,
   assignBed,
@@ -701,11 +737,11 @@ import {
 } from '@/teaching/api/dorm';
 
 /* ---------------- 学段可见性（第 3 期：判权不再依赖旧路由） ---------------- */
-/** ★ 2026-10-20 子页面页签：宿舍房间（原页面） / 班级分派（教务给各班分宿舍） */
-const mainTab = ref<'rooms' | 'allocate' | 'approval'>('rooms');
+/** ★ 2026-10-20 子页面页签：宿舍房间（原页面） / 分派宿舍（教务给各班分宿舍） */
+const mainTab = ref<'rooms' | 'allocate' | 'approval' | 'building'>('rooms');
 
 /**
- * ★ 2026-10-21：班主任（且没有更高业务角色）不参与「建房间」和「班级分派」
+ * ★ 2026-10-21：班主任（且没有更高业务角色）不参与「建房间」和「分派宿舍」
  *
  * 业务口径：班主任在宿舍域只做「查看本班住宿 + 发起调宿/退宿申请」，
  * 房间由教务/学管统一建，班级层面的分派也归教务。
@@ -743,12 +779,13 @@ const canApproveDorm = computed(
   () => isSuperTest.value || myRoles.value.some((r) => APPROVER_ROLES.includes(r)),
 );
 
-/** 班主任若停留在「班级分派 / 申请审批」页签，角色判定生效后强制回到「宿舍房间」 */
+/** 班主任若停留在「分派宿舍 / 申请审批」页签，角色判定生效后强制回到「宿舍房间」 */
 watch(
   [isOnlyHeadTeacher, canApproveDorm],
   () => {
     if (mainTab.value === 'allocate' && isOnlyHeadTeacher.value) mainTab.value = 'rooms';
     if (mainTab.value === 'approval' && !canApproveDorm.value) mainTab.value = 'rooms';
+    if (mainTab.value === 'building' && isOnlyHeadTeacher.value) mainTab.value = 'rooms';
   },
   { immediate: true },
 );
@@ -958,12 +995,75 @@ const assignOptions = ref<DormCandidateRow[]>([]);
 const assignLoading = ref(false);
 const assignSelected = ref<DormCandidateRow | null>(null);
 
+/**
+ * ★ 2026-10-21 班级下拉（与学生联动）
+ * 选项后端按数据范围下发：校长/教务/学管/管理员 = 本学段「班级管理」全部班级；
+ * 班主任/教员/助教 = 只有名下班级。value 优先用 classId（演示快照可能只有班名，
+ * 后端两个字段都兜）。
+ */
+const assignClasses = ref<DormCheckinClassRow[]>([]);
+const assignClassLoading = ref(false);
+const assignClassId = ref<string>('');
+
+/** 当前选中的班（value 可能是 classId 也可能是 className 兜底值） */
+function assignClassFilter(): { classId?: string; className?: string } {
+  const picked = assignClasses.value.find(
+    (c) => (c.classId ?? c.className) === assignClassId.value,
+  );
+  if (!picked) return {};
+  return { classId: picked.classId ?? undefined, className: picked.className };
+}
+
+async function loadAssignClasses() {
+  const stage = curDorm.value?.stage;
+  if (!stage) return;
+  assignClassLoading.value = true;
+  try {
+    const list = (await listDormCheckinClasses(stage)) || [];
+    /**
+     * ★ 2026-10-22：房间已分派给某个班 → 班级下拉只留这个班
+     *
+     * 班主任可能同时带几个班，不分青红皂白列出全部班级时，
+     * 她会把学生填到「不属于本班」的房间里（后端虽会拦，但填完才报错很蠢）。
+     * → 分派给哪个班，入住弹窗就只出现哪个班，并直接预选上。
+     *   房间还没分派（如实训房间）时保持原样：列出数据范围内全部班级。
+     */
+    const owner = curDorm.value?.assignedClassName || '';
+    const scoped = owner ? list.filter((c) => c.className === owner) : list;
+    assignClasses.value = scoped.length ? scoped : list;
+
+    // 只有归属班一个选项时直接预选，省一次点击
+    if (assignClasses.value.length === 1 && !assignClassId.value) {
+      assignClassId.value = assignClasses.value[0].classId ?? assignClasses.value[0].className;
+      onAssignClassChange();
+    }
+  } catch {
+    assignClasses.value = [];
+  } finally {
+    assignClassLoading.value = false;
+  }
+}
+
+/** 选了班 → 清掉已选学生、按新班级重拉候选（保留关键字搜索） */
+function onAssignClassChange() {
+  assignStudentId.value = '';
+  assignSelected.value = null;
+  assignOptions.value = [];
+  searchAssignStudents();
+}
+
 async function searchAssignStudents(keyword?: string) {
   const stage = curDorm.value?.stage;
   if (!stage) return;
   assignLoading.value = true;
   try {
-    const list = await listDormCandidates({ stage, keyword: keyword || undefined });
+    const list = await listDormCandidates({
+      stage,
+      keyword: keyword || undefined,
+      // ★ 2026-10-22：男寝只出男生、女寝只出女生（房间 dorm_gender：1 男 / 2 女 / 0 不限）
+      gender: curDorm.value?.dormType || undefined,
+      ...assignClassFilter(),
+    });
     // 保留当前选中项，避免刷新候选后显示成 id
     const cur = assignSelected.value;
     assignOptions.value =
@@ -984,8 +1084,11 @@ async function openAssign(b: DormBedRow) {
   assignStudentId.value = '';
   assignSelected.value = null;
   assignOptions.value = [];
+  assignClassId.value = '';
   assignDate.value = todayStr();
   assignVisible.value = true;
+  // ★ 顺序执行：先定班级（房间归属班会自动预选），再按该班级拉学生候选
+  await loadAssignClasses();
   await searchAssignStudents();
 }
 
@@ -1207,7 +1310,14 @@ const changeBuildings = ref<string[]>([]);
 const changeRooms = ref<AllocateRoomRow[]>([]);
 const changeRoomsLoading = ref(false);
 /** 只保留还有空床位的房间，下拉里按房间分组列床位 */
-const changeRoomsWithBeds = computed(() => changeRooms.value.filter((r) => r.freeBeds.length > 0));
+const changeRoomsWithBeds = computed(() =>
+  changeRooms.value.filter(
+    (r) =>
+      r.freeBeds.length > 0 &&
+      // ★ 别的开放班的房间不能选（本班自己的、封班的都可以）
+      (!r.locked || r.assignedTo === curStudent.value?.className),
+  ),
+);
 
 /** 本地当天日期（不用 toISOString —— 那是 UTC，早上 8 点前会变成昨天） */
 function todayStr(): string {

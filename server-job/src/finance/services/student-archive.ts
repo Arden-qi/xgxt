@@ -33,6 +33,15 @@ import { db } from '../utils/db';
  *   Unknown column，try/catch 一吞就变成「静默少一个学段」，很难发现。
  */
 const ARCHIVE_TABLES = [
+  /**
+   * ★ 2026-10-22 必须放最前面：P8（10-19）之后教学域老表已废弃，
+   *   真实学籍在 `sms_common.t_uni_student`（统一表，`tbl()` 路由的唯一真源）。
+   *
+   *   只查下面三张老表会一条都命中不了 →
+   *   `applyArchiveToFeeRows` 判定「查无档案 = 还没分班」→ 把单据上的学号清空 →
+   *   财务缴费列表里已分班的学生也显示「—」（用户实测：张三 LZJ101002 看不到学号）。
+   */
+  { db: 'sms_common', table: 't_uni_student', hasSource: true },
   { db: 'sms_class_jh', table: 't_class_student', hasSource: true },
   { db: 'sms_class', table: 't_class_student', hasSource: true },
   { db: 'sms_job', table: 't_student_base', hasSource: false },

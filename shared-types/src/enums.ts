@@ -85,6 +85,20 @@ export enum PayStatus {
   UNPAID = 1,    // 待缴
   PAID = 2,      // 已缴
   VERIFIED = 3,  // 已核对
+  /**
+   * ★ 2026-10-22 补齐：4 逾期
+   *
+   * 库里三张催费表的 `pay_status` 列注释一直是「1待缴 2已缴 3已核对 4逾期 5冻结」，
+   * 演示数据里也确实有 4，但主包这份枚举一直漏了它 →
+   *   · `PAY_STATUS_NAME[4]` 取不到 → 状态列渲染成空标签；
+   *   · 未结清集合 [1,5] 不含 4 → 逾期行不标「紧急」。
+   * 之前只在 class-jh / class 两个子包里补过，主包（就业在用）漏了，这里补上。
+   *
+   * ⚠️ 财务侧**从不写 4**（它的枚举里没有「逾期」这个值），
+   *    过了到期日的单库里仍是 1。所以「逾期」必须靠**到期日派生**，
+   *    不能只查 pay_status = 4 —— 见各域的 effectivePayStatus()。
+   */
+  OVERDUE = 4,   // 逾期
   FROZEN = 5,    // 冻结
 }
 
@@ -302,6 +316,7 @@ export const PAY_STATUS_NAME: Record<number, string> = {
   [PayStatus.UNPAID]: '待缴',
   [PayStatus.PAID]: '已缴',
   [PayStatus.VERIFIED]: '已核对',
+  [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
 };
 

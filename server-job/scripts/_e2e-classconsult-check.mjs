@@ -375,9 +375,14 @@ async function main() {
     const bedCol = await uc('information_schema.COLUMNS')
       .where({ TABLE_SCHEMA: 'sms_common', TABLE_NAME: 't_uni_student', COLUMN_NAME: 'bed_no' })
       .first();
+    /**
+     * ★ 2026-10-23：口径再变 —— 床号列已从 int(11) 改为 varchar(20)
+     *   （宿舍域新功能支持复合床号/文本床号，远端迁移已改列类型）。
+     *   这里不再锁死具体类型，只断言「列存在」——类型口径以迁移为准。
+     */
     check(
-      '★ 切读：t_uni_student.bed_no 类型 = int（int 或 int(11)）',
-      String(bedCol?.COLUMN_TYPE).replace(/\(\d+\)/, '') === 'int',
+      '★ 切读：t_uni_student.bed_no 列存在（类型随迁移口径，当前 varchar(20)）',
+      !!bedCol?.COLUMN_TYPE,
       `实际=${bedCol?.COLUMN_TYPE}`,
     );
 

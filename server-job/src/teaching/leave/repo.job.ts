@@ -25,6 +25,7 @@ import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import { classNamesByIds } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { isStatusLocked } from '../shared/statusLock';
 import { hydrateWithArchive } from '../shared/studentRef';
 import { buildApplyNo } from '../shared/conf';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
@@ -53,7 +54,11 @@ async function decorate(
 ): Promise<LeaveRow> {
   const biz = (await toUnifiedLeaveBiz(STAGE, row.biz_type)) ?? 0;
   const st = (await toUnifiedLeaveStatus(STAGE, row.approval_status)) ?? 0;
-  const newClassId = row.new_class_id ? String(row.new_class_id) : null;
+  // ★ 2026-10-22：复学班级列名统一成 resume_class_id（与初高一致），老列 new_class_id 兜底
+  const newClassId =
+    (row.resume_class_id ?? row.new_class_id)
+      ? String(row.resume_class_id ?? row.new_class_id)
+      : null;
 
   return {
     stage: STAGE,
@@ -221,7 +226,7 @@ export async function list(q: LeaveListQuery, user?: any): Promise<{ rows: Leave
   // ★ 复学班名按页批量预取（快照为空时用它兜底）
   const names = await classNamesByIds(
     STAGE,
-    rows.map((r) => r.new_class_id),
+    rows.map((r) => r.resume_class_id ?? r.new_class_id),
   );
   return { rows: await Promise.all(rows.map((r) => decorate(r, names))), total: Number(total) };
 }
@@ -253,7 +258,7 @@ export async function detail(id: string): Promise<LeaveRow | null> {
   // ★ 2026-10-20：详情与列表同口径（档案最新值）
   await hydrateWithArchive(STAGE, [row], { conn: db });
   // ★ 复学班名快照为空时按 id 反查兜底
-  return decorate(row, await classNamesByIds(STAGE, [row.new_class_id]));
+  return decorate(row, await classNamesByIds(STAGE, [row.resume_class_id ?? row.new_class_id]));
 }
 
 /** 汇总 */
@@ -330,6 +335,8 @@ export async function insert(conn: any, input: LeaveWriteInput): Promise<string>
     leave_reason: input.leaveReason,
     remark: null,
 
+    // 2026-10-22：新列为主（与初高统一），老列同时写，兼容历史读取
+    resume_class_id: input.newClassId,
     new_class_id: input.newClassId,
     new_class_name: input.newClassName,
 
@@ -358,7 +365,7 @@ export async function setResumeClass(
   classId: string,
   className: string,
 ): Promise<void> {
-  await tblTrx(conn, SRC, T, STAGE).where({ id }).update({ new_class_id: classId, new_class_name: className });
+  await tblTrx(conn, SRC, T, STAGE).where({ id }).update({ resume_class_id: classId, new_class_id: classId, new_class_name: className });
 }
 
 /**
@@ -384,8 +391,19 @@ async function applyStudentStatus(conn: any, row: Record<string, any>, operatorI
     update_by: operatorId,
   };
   if (biz === 3) {
-    patch.class_id = row.new_class_id;
+    // ★ 2026-10-22：优先新列，老数据回落 new_class_id
+    patch.class_id = row.resume_class_id ?? row.new_class_id ?? patch.class_id;
     patch.class_name = row.new_class_name;
+  }
+  /* ★ 2026-10-21 批注：退学 = 学生状态永久锁（见 shared/statusLock.ts）
+   *   典型场景：先给在读学生开了一张休学单，单子还没审完人就退学了 ——
+   *   等休学单审批通过时，这里会把 7 改回 6，等于「退学被改掉了」。
+   *   锁定后**只跳过状态字段**，审批单本身照常通过。 */
+  const cur = (await tblTrx(conn, SRC, S, STAGE)
+    .where({ id: row.student_id })
+    .first('student_status')) as Record<string, any> | undefined;
+  if (isStatusLocked(cur?.student_status) && Number(cur?.student_status) !== newStatus) {
+    return;
   }
   await tblTrx(conn, SRC, S, STAGE).where({ id: row.student_id }).update(patch);
 

@@ -34,12 +34,19 @@
     "seed:all:dry": "node scripts/seed-all-demo.mjs --dry",
     "seed:teaching": "node scripts/seed-teaching-demo.mjs",
     "seed:teaching:dry": "node scripts/seed-teaching-demo.mjs --dry",
+    "seed:students": "node scripts/seed-teaching-students.mjs",
+    "seed:students:dry": "node scripts/seed-teaching-students.mjs --dry",
+    "seed:fee-dept": "npx tsx scripts/seed-fee-dept-demo.mts",
+    "check:deploy": "node scripts/_check-deploy-prereq.mjs",
     "fix:perm": "node scripts/fix-perm-accounts.mjs",
     "seed:perm-pages": "tsx scripts/seed-perm-pages.ts",
     "check:action-overlay": "tsx scripts/check-action-overlay.ts",
     "uni:migrate:plan": "tsx scripts/uni-migrate.ts --plan",
     "uni:migrate": "tsx scripts/uni-migrate.ts --run",
-    "uni:migrate:verify": "tsx scripts/uni-migrate.ts --verify"
+    "uni:migrate:verify": "tsx scripts/uni-migrate.ts --verify",
+    "id:audit": "node scripts/id-audit.mjs",
+    "id:unify": "node scripts/unify-user-ids.mjs",
+    "id:unify:apply": "node scripts/unify-user-ids.mjs --apply"
   },
   "dependencies": {
     "axios": "^1.7.2",

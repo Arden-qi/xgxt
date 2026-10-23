@@ -42,7 +42,7 @@ import {
   DORM_ROOMS_PER_FLOOR_MAX,
 } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
-import { USE_UNI_TABLE } from '../shared/uniTable';
+import { USE_UNI_TABLE, uniDb } from '../shared/uniTable';
 import type { DormCandidateRow, DormRepo } from './types';
 
 /**
@@ -136,6 +136,31 @@ function pick(stage: TeachingStage): DormRepo {
   const r = REPOS[stage];
   if (!r) throw new BizError(BizCode.PARAM_ERROR, `stage 只能是 jh / class / job`);
   return r;
+}
+
+/**
+ * ★ 2026-10-23：按 dormId 解析**房间自己的学段**。
+ *
+ *   分派弹窗给房不分学段（初高的房间 1号楼 也能分给大学班 Q20），
+ *   于是「页面学段 ≠ 房间学段」。床位/在住/入住/退宿这些**按 dormId 精确操作**
+ *   的接口，必须按房间自己的 edu_stage 取数，否则按页面学段过滤会查空 ——
+ *   实测：班主任（大学部页签）点开分派的初高房间，床位抽屉显示
+ *   「该房间还没有床位记录」。
+ *
+ *   模块授权仍按页面学段把关（那是「进页面」的门槛）；
+ *   数据范围由 assertRoomInScope 兜底（班主任只能动自己范围内的房间）。
+ */
+async function roomStageOf(dormId: string, fallback: TeachingStage): Promise<TeachingStage> {
+  try {
+    const room = (await uniDb('t_uni_dorm_room')
+      .where({ id: String(dormId), is_deleted: false })
+      .first()) as any;
+    const st = String(room?.edu_stage ?? '');
+    if (st === 'jh' || st === 'class' || st === 'job') return st;
+  } catch {
+    /* 查不到 → 用页面学段 */
+  }
+  return fallback;
 }
 
 export function assertStage(v: unknown): TeachingStage {
@@ -287,7 +312,7 @@ export async function getDormDetail(
   user: any,
 ): Promise<DormRow | null> {
   await assertStageView(user, stage);
-  return pick(stage).detail(id, user);
+  return pick(await roomStageOf(id, stage)).detail(id, user);
 }
 
 /** 床位（含在住学生） */
@@ -297,7 +322,8 @@ export async function listBeds(
   user: any,
 ): Promise<{ beds: Awaited<ReturnType<DormRepo['beds']>>; dorm: DormRow | null }> {
   await assertStageView(user, stage);
-  const r = pick(stage);
+  // ★ 床位按房间自己的学段查（页面学段 ≠ 房间学段时按页面学段会查空）
+  const r = pick(await roomStageOf(dormId, stage));
   const [beds, dorm] = await Promise.all([r.beds(dormId, user), r.detail(dormId, user)]);
   return { beds, dorm };
 }
@@ -317,15 +343,28 @@ export async function listResidents(
       ? [STAGE_KEEP_PRIORITY.find((s) => stages.includes(s)) ?? stages[0]]
       : stages;
 
-  const parts = await Promise.all(scanStages.map((s) => REPOS[s].residents(q, user)));
+  /**
+   * ★ 2026-10-23：按 dormId 查在住名单时，用**房间自己的学段**的 repo
+   *   （床位行跟随房间学段；页面学段 ≠ 房间学段时按页面学段查会漏）。
+   */
+  const residentStages: TeachingStage[] =
+    q.dormId ? [await roomStageOf(String(q.dormId), scanStages[0])] : scanStages;
+  const parts = await Promise.all(residentStages.map((s) => REPOS[s].residents(q, user)));
   return dedupResidents(parts.flat());
 }
 
-/** 办理入住的学生候选（按数据范围过滤；班主任只给自己的班） */
+/** 办理入住的学生候选（按数据范围过滤；班主任只给自己的班）；classId/className 用于班级-学生联动 */
 export async function listCandidates(
   stage: TeachingStage | undefined,
   keyword: string | undefined,
   user: any,
+  classId?: string,
+  className?: string,
+  /**
+   * ★ 2026-10-22：按性别过滤候选（男寝只出男生 / 女寝只出女生）
+   *   传 0 / undefined = 不限。调用方传的是房间的 dorm_gender。
+   */
+  gender?: number,
 ): Promise<DormCandidateRow[]> {
   const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
   if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有宿舍管理的访问权限');
@@ -337,7 +376,9 @@ export async function listCandidates(
       ? [STAGE_KEEP_PRIORITY.find((s) => stages.includes(s)) ?? stages[0]]
       : stages;
 
-  const parts = await Promise.all(scanStages.map((s) => REPOS[s].candidates({ keyword }, user)));
+  const parts = await Promise.all(
+    scanStages.map((s) => REPOS[s].candidates({ keyword, classId, className, gender }, user)),
+  );
   const seen = new Set<string>();
   const out: DormCandidateRow[] = [];
   for (const r of parts.flat()) {
@@ -347,6 +388,31 @@ export async function listCandidates(
     out.push(r);
   }
   return out.slice(0, 100);
+}
+
+/**
+ * ★ 2026-10-21：办理入住弹窗的「班级」下拉选项
+ *   · 校长/教务/学管/管理员 → 本学段「班级管理」的全部班级；
+ *   · 班主任/教员/助教 → 只返回名下班级。
+ */
+export async function listCheckinClasses(
+  stage: TeachingStage | undefined,
+  user: any,
+): Promise<Array<{ classId: string | null; className: string }>> {
+  const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
+  if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有宿舍管理的访问权限');
+  if (stage) await assertStageView(user, stage);
+  const parts = await Promise.all(stages.map((s) => REPOS[s].checkinClasses(user)));
+  // 跨学段合并去重（班主任的班可能跨学段；班级名相同视为同一项）
+  const seen = new Set<string>();
+  const out: Array<{ classId: string | null; className: string }> = [];
+  for (const r of parts.flat()) {
+    const key = r.classId ? `id:${r.classId}` : `name:${r.className}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
 }
 
 /** 楼栋下拉（合并三学段，同名去重 —— 楼栋名只是个标签，不是实体） */
@@ -432,7 +498,6 @@ export async function generateRoomsForBuilding(
   body: DormRoomGenBody,
   user: any,
 ): Promise<{ created: number; revived: number; skipped: number; total: number }> {
-  const stage = body.stage ?? DEFAULT_DORM_STAGE;
   /**
    * ★ 权限：有宿舍页权限的人按学段校验，纯「系统设置」入口的人放行
    *
@@ -442,13 +507,27 @@ export async function generateRoomsForBuilding(
    *   —— 而「新增楼栋自动生成房间」本来就是他在这个页面该做的事。
    *   → 所以：有宿舍权限的人仍按学段卡（防止跨学段乱写）；
    *     一个宿舍学段权限都没有的人 = 从设置页进来的，放行。
+   *
+   * 【2026-10-21 修】楼栋设置面板不传 stage，旧逻辑兜底 DEFAULT_DORM_STAGE='job'（实训），
+   *   导致「有部分学段宿舍权限」的人（如教务老师只有初高）保存楼栋必被 403
+   *   「没有实训宿舍管理的访问权限」—— 卡的恰恰是最该用这个功能的人。
+   *   → 现在分三种情况：
+   *     ① 显式传了 stage → 照旧严格校验；
+   *     ② 没传 + 有宿舍权限 → 用他可见的第一个学段（生成到他管得着的宿舍里）；
+   *     ③ 没传 + 没有任何宿舍权限 → 纯设置页入口，用默认学段。
    */
   const visible = await visibleStages(user);
-  if (visible.length && !visible.includes(stage)) {
-    throw new BizError(
-      BizCode.NO_OPERATION_PERMISSION,
-      `没有${TEACHING_STAGE_NAME[stage]}宿舍管理的访问权限`,
-    );
+  let stage: TeachingStage;
+  if (body.stage) {
+    stage = body.stage;
+    if (visible.length && !visible.includes(stage)) {
+      throw new BizError(
+        BizCode.NO_OPERATION_PERMISSION,
+        `没有${TEACHING_STAGE_NAME[stage]}宿舍管理的访问权限`,
+      );
+    }
+  } else {
+    stage = visible[0] ?? DEFAULT_DORM_STAGE;
   }
   assertWritable(stage);
 
@@ -518,7 +597,8 @@ export async function assignBed(body: DormAssignBody, user: any): Promise<void> 
   await assertStageView(user, body.stage);
   // ★ 大学床位是同步来的，只能走申请
   assertWritable(body.stage);
-  return pick(body.stage).assign(body, user?.userId || '');
+  // ★ 床位操作按房间自己的学段（跨学段分派时页面学段 ≠ 房间学段）
+  return pick(await roomStageOf(body.dormId, body.stage)).assign(body, user);
 }
 
 export async function checkoutBed(
@@ -529,7 +609,8 @@ export async function checkoutBed(
 ): Promise<void> {
   await assertStageView(user, stage);
   assertWritable(stage);
-  return pick(stage).checkout(dormId, bedId, user?.userId || '');
+  // ★ 床位操作按房间自己的学段（跨学段分派时页面学段 ≠ 房间学段）
+  return pick(await roomStageOf(dormId, stage)).checkout(dormId, bedId, user?.userId || '');
 }
 
 /* ============================================================

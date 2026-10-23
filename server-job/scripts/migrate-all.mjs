@@ -51,13 +51,27 @@ const ORDER = [
 ];
 
 /**
- * 迁移之后还要补的库 —— 咨询库（sms_consult）。
+ * 迁移之后还要补的库 —— 没有 knex env 的那几个（sms_consult / sms_finance）。
  *
- * 它不在这里跑 knex：sms_consult.knex_migrations 里记着 8 条已删除的一次性迁移，
- * knex 会判目录 corrupt 直接报错。所以改用独立脚本补列（幂等）。
+ * 咨询库（sms_consult）：不在这里跑 knex —— sms_consult.knex_migrations 里记着
+ * 8 条已删除的一次性迁移，knex 会判目录 corrupt 直接报错。所以改用独立脚本补列（幂等）。
+ *
+ * ★ 2026-10-23 新增财务库（sms_finance）：同理没有 knex env
+ *   （knexfile 里只有 job / edu / class / class-common / class-jh），
+ *   退费「校长审批 → 财务」这条链要的 3 列 + 明细表 + 唯一索引，全靠
+ *   `_migrate-finance-refund-20261022.mjs` 单独跑。
+ *
+ *   【它漏在 migrate 之外时会发生什么】
+ *     本地开发是手工跑过这个脚本的 → 一切正常；
+ *     别人 pull 代码 / 换台机器部署时只跑 `npm run migrate`（一键启动也是跑它）
+ *     → 财务库缺 `source_module/source_stage/source_refund_id` 与 `t_finance_refund_item`，
+ *       校长审批通过后推送财务 insert 直接 ER_BAD_FIELD_ERROR，
+ *       前端只显示「推送财务失败，请人工补录」—— 典型「本地好、远端坏」。
+ *   所以把它并入 POST_STEPS：`npm run migrate` 一次跑完，幂等可重复。
  */
 const POST_STEPS = [
   ['scripts/fix-consult-columns.mjs', '咨询表补列', 'sms_consult'],
+  ['scripts/_migrate-finance-refund-20261022.mjs', '财务退费结构', 'sms_finance', ['--apply']],
 ];
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
@@ -175,10 +189,13 @@ const uniSql = path.join(ROOT, 'sql', 'init', 'uni-tables.sql');
 
   // ---------- 迁移之外还要补的库 ----------
   if (!only.length) {
-    for (const [rel, label, dbName] of POST_STEPS) {
+    for (const [rel, label, dbName, extraArgs = []] of POST_STEPS) {
       const file = path.join(ROOT, rel);
       if (!fs.existsSync(file)) continue;
-      const r = spawnSync(process.execPath, [file], { cwd: ROOT, encoding: 'utf8' });
+      const r = spawnSync(process.execPath, [file, ...extraArgs], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
       const out = String(r.stdout || '').trim();
       if (out) console.log(out);
       if (r.status === 0) {

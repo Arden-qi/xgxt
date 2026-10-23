@@ -71,6 +71,7 @@ export async function visibleClassIds(
   const ids = [
     ...new Set([user?.userId, user?.businessUserId].map((x) => String(x || '')).filter(Boolean)),
   ];
+
   if (!ids.length) return [];
 
   /* ★ 2026-10-21：就业部（emp）独立学段，按「就业老师」隔离

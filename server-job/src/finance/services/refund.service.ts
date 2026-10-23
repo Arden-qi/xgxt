@@ -29,9 +29,21 @@ import { BizError } from '../middleware/errorHandler';
 import { nextRefundOrderNo, nextBillNoForRefund } from '../utils/orderNo';
 import { toDateStr, toTimeStr, isTempStudentNo } from './fee.service';
 import { REFUND_SOURCE_NAME } from 'shared-types/finance';
+import { config } from '../../config';
+import { remotePost } from '../../shared/http';
 
 export const REFUND_TABLE = 't_finance_refund';
 export const BILL_TABLE = 't_finance_bill';
+/**
+ * 退费费用项明细表（★ 2026-10-22 新增）
+ *
+ * 一笔退费单可含多个费用项（学费 / 住宿费 …），财务侧每个费用项对应一行。
+ * 主单 `t_finance_refund.refund_amount` 仍是总金额，出款也仍是一次（一张账单）。
+ */
+export const REFUND_ITEM_TABLE = 't_finance_refund_item';
+
+/** 财务只认 1~5 的费用类型（6 退学退费 / 9 其他 是上游内部码，不能进财务字典） */
+const FIN_FEE_TYPES = [1, 2, 3, 4, 5];
 
 /** 退费行 → 前端契约格式 */
 export function toRefundListItem(r: any) {
@@ -60,7 +72,49 @@ export function toRefundListItem(r: any) {
     // ⚠️ 只有「待财务出款」才能出款 —— 这是财务模块的权限边界
     canRefund: r.refund_status === RefundStatus.PENDING_FINANCE,
     isInBill: !!r.is_in_bill,
+    // ★ 2026-10-22：上游来源（教学内容推送的单才有值）→ 前端据此切换时间轴口径
+    sourceModule: r.source_module ?? undefined,
+    sourceStage: r.source_stage ?? undefined,
+    sourceRefundId: r.source_refund_id ?? undefined,
   };
+}
+
+/** 明细行 → 前端契约格式 */
+function toItemLine(it: any) {
+  return {
+    feeType: Number(it.fee_type),
+    feeTypeName: FEE_TYPE_NAME[it.fee_type] || '',
+    amount: Number(it.amount),
+  };
+}
+
+/**
+ * 批量读费用项明细（列表用：一次查一页，别在循环里查）
+ *
+ * @returns Map<退费单 id, 明细行[]>
+ */
+export async function loadRefundItems(ids: string[]): Promise<Map<string, any[]>> {
+  const map = new Map<string, any[]>();
+  const uniq = Array.from(new Set(ids.filter(Boolean)));
+  if (!uniq.length) return map;
+  const rows = await db(REFUND_ITEM_TABLE)
+    .whereIn('refund_id', uniq)
+    .andWhere('is_deleted', false)
+    .orderBy([{ column: 'fee_type', order: 'asc' }])
+    .select('*')
+    .catch(() => [] as any[]);
+  for (const r of rows) {
+    const list = map.get(r.refund_id) || [];
+    list.push(toItemLine(r));
+    map.set(r.refund_id, list);
+  }
+  return map;
+}
+
+/** 读单张退费单的明细（详情用） */
+export async function itemsOfRefund(refundId: string) {
+  const m = await loadRefundItems([refundId]);
+  return m.get(refundId) || [];
 }
 
 /** 退费行 → 详情（含审批链时间轴） */
@@ -103,6 +157,66 @@ export function buildRefundQuery(q: any) {
   return query;
 }
 
+/* ============================================================
+ * 费用项明细（★ 2026-10-22 新增）
+ * ============================================================ */
+
+/**
+ * 归一化「退费费用项」
+ *
+ * 三种入参形态，优先级从高到低：
+ *   ① `refundItemDetails`（带各自金额）—— 教学域推送上来的就是这种
+ *   ② `refundItems`（只有类型，没有金额）—— 老调用方
+ *   ③ 都没有 —— 落一行 feeType=1，金额 = 主单金额（保留改造前的兜底行为）
+ *
+ * ⚠️ 财务字典只认 1~5；上游的 6 退学退费 / 9 其他 会被过滤掉。
+ *   全部被过滤掉时退回 ①/③ 的兜底，避免明细表空着。
+ */
+function normalizeRefundItems(body: any): Array<{ feeType: number; amount: number }> {
+  const details = Array.isArray(body.refundItemDetails) ? body.refundItemDetails : [];
+  const fromDetails = details
+    .map((it: any) => ({ feeType: Number(it?.feeType), amount: Math.round(Number(it?.amount)) }))
+    .filter((it: any) => FIN_FEE_TYPES.includes(it.feeType) && Number.isFinite(it.amount) && it.amount > 0);
+  if (fromDetails.length) return fromDetails;
+
+  const types = (Array.isArray(body.refundItems) ? body.refundItems : [])
+    .map((t: any) => Number(t))
+    .filter((t: number) => FIN_FEE_TYPES.includes(t));
+  const total = Math.round(Number(body.refundAmount));
+  // 只有类型没有金额 → 无法拆行，落「主项 + 全额」一行（金额不能凭空猜）
+  if (!types.length) return [{ feeType: 1, amount: Number.isFinite(total) ? total : 0 }];
+  return [{ feeType: types[0], amount: Number.isFinite(total) ? total : 0 }];
+}
+
+/** 覆盖写某张退费单的明细（先软删旧行，再插新行 —— 满足「禁止物理删除」约定） */
+async function replaceRefundItems(
+  refundId: string,
+  items: Array<{ feeType: number; amount: number }>,
+  operator: { userId: string; userName: string },
+): Promise<void> {
+  const now = new Date();
+  await db(REFUND_ITEM_TABLE)
+    .where({ refund_id: refundId, is_deleted: false })
+    .update({ is_deleted: true, update_time: now, update_by: operator.userId });
+
+  if (!items.length) return;
+  await db(REFUND_ITEM_TABLE).insert(
+    items.map((it) => ({
+      id: randomUUID(),
+      refund_id: refundId,
+      fee_type: it.feeType,
+      amount: it.amount,
+      is_deleted: false,
+      create_time: now,
+      create_by: operator.userId,
+    })),
+  );
+}
+
+/* ============================================================
+ * 提交退费申请
+ * ============================================================ */
+
 /**
  * 提交退费申请（上游模块审批通过后上报；财务也可代提交）
  *
@@ -121,44 +235,153 @@ export function buildRefundQuery(q: any) {
  * 【为什么是 4 而不是别的】
  *   财务侧不需要再走一遍审批 —— 上游已经审过了，财务的职责只是「出款」。
  *   所以上报即落到「待财务出款」；财务点「退费」后由 payRefund 转「6 已退费」。
+ *
+ * ⭐ 2026-10-22 用户反馈修正（截图那个 bug）：
+ *   财务「退费管理」详情里的审批流转记录**除第一条外全是「待处理」**。
+ *   原因是这里只写了 `apply_time`，`pushed_time` / `principal_approve_time` 从未落库，
+ *   而前端时间轴是**纯按时间戳**渲染的（有值=已完成，无值=待处理）。
+ *
+ *   现在补三件事：
+ *     ① 写 `pushed_time = now` —— 「推送到财务」这一步就是此刻发生的
+ *     ② 写 `principal_approve_time/by`（上游校长审批真实时间/真实人）
+ *        —— 上游审批链最后一步就是校长审批，语义完全一致，不是假数据
+ *     ③ 写 `source_module / source_stage / source_refund_id` —— 出款后据此回写上游，
+ *        同时 `uk_source` 唯一索引保证**同一张上游单不会重复建单**
  */
 export async function applyRefund(
   body: any,
   operator: { userId: string; userName: string },
-): Promise<{ id: string; orderNo: string }> {
+): Promise<{ id: string; orderNo: string; duplicated: boolean }> {
+  const sourceModule = String(body.sourceModule || '').trim() || null;
+  const sourceStage = String(body.sourceStage || '').trim() || null;
+  const sourceRefundId = String(body.sourceRefundId || '').trim() || null;
+  const items = normalizeRefundItems(body);
+
+  // ---- 幂等：同一张上游单只落一条财务退费单 ----
+  if (sourceModule && sourceRefundId) {
+    const exists = await db(REFUND_TABLE)
+      .where({ source_module: sourceModule, source_refund_id: sourceRefundId })
+      .first();
+    if (exists) {
+      // 明细以本次推送为准（上游可能改过金额）→ 覆盖写，不新增单
+      await replaceRefundItems(exists.id, items, operator);
+      return { id: exists.id, orderNo: exists.order_no, duplicated: true };
+    }
+  }
+
   const orderNo = await nextRefundOrderNo();
   const id = randomUUID();
   const now = new Date();
 
-  await db(REFUND_TABLE).insert({
-    id,
-    create_time: now,
-    create_by: operator.userId,
-    is_deleted: false,
-    order_no: orderNo,
-    student_id: body.studentId,
-    student_no: body.studentNo,
-    student_name: body.studentName,
-    class_id: body.classId ?? null,
-    class_name: body.className ?? null,
-    dept_code: body.deptCode ?? null,
-    // 多选退费项目时，取第一个作为主项（数据字典里 refund_type 是单值）
-    refund_type: Array.isArray(body.refundItems) && body.refundItems.length
-      ? body.refundItems[0]
-      : 1,
-    refund_amount: body.refundAmount,
-    refund_reason: body.refundReason,
-    refund_status: RefundStatus.PENDING_FINANCE,
-    source_type: body.sourceType ?? 1,
-    apply_time: now,
-    applicant_id: operator.userId,
-    applicant_name: operator.userName,
-    is_in_bill: false,
-    attachment_url: body.attachmentUrl ?? null,
-    remark: body.remark ?? null,
+  // 上游校长审批时间（没传就按「此刻 = 上游刚批完」处理）
+  const upstreamRaw = body.upstreamApproveTime ? new Date(body.upstreamApproveTime) : now;
+  const upstreamAt = Number.isNaN(upstreamRaw.getTime()) ? now : upstreamRaw;
+  const upstreamBy = String(body.upstreamApproverName || '').trim() || null;
+
+  // 主项：多选时取第一个（数据字典里 refund_type 是单值）
+  const mainType = items.length ? items[0].feeType : 1;
+
+  await db.transaction(async (t) => {
+    await t(REFUND_TABLE).insert({
+      id,
+      create_time: now,
+      create_by: operator.userId,
+      is_deleted: false,
+      order_no: orderNo,
+      student_id: body.studentId,
+      student_no: body.studentNo,
+      student_name: body.studentName,
+      class_id: body.classId ?? null,
+      class_name: body.className ?? null,
+      dept_code: body.deptCode ?? null,
+      refund_type: mainType,
+      refund_amount: body.refundAmount,
+      refund_reason: body.refundReason,
+      refund_status: RefundStatus.PENDING_FINANCE,
+      source_type: body.sourceType ?? 1,
+      apply_time: now,
+      applicant_id: operator.userId,
+      applicant_name: operator.userName,
+      // ★ 2026-10-22：推送即「推送到财务」这一步的完成时刻
+      pushed_time: now,
+      // ★ 上游校长审批真实时间/人（前端时间轴据此点亮「校长审批」）
+      principal_approve_time: upstreamAt,
+      principal_approve_by: upstreamBy,
+      // ★ 上游溯源（出款回写 + 防重复推送）
+      source_module: sourceModule,
+      source_stage: sourceStage,
+      source_refund_id: sourceRefundId,
+      is_in_bill: false,
+      attachment_url: body.attachmentUrl ?? null,
+      remark: body.remark ?? null,
+    });
+
+    if (items.length) {
+      await t(REFUND_ITEM_TABLE).insert(
+        items.map((it) => ({
+          id: randomUUID(),
+          refund_id: id,
+          fee_type: it.feeType,
+          amount: it.amount,
+          is_deleted: false,
+          create_time: now,
+          create_by: operator.userId,
+        })),
+      );
+    }
   });
 
-  return { id, orderNo };
+  return { id, orderNo, duplicated: false };
+}
+
+/**
+ * 出款后回写上游（★ 2026-10-22 新增，用户要求「自动回写」）
+ *
+ * 为什么在事务外、且失败只 warn：
+ *   钱已经付出去了，上游教务没收到通知不能反过来让财务「出款失败」。
+ *   失败就留痕，人工补录（与推送方向「失败只 log」的策略对称）。
+ */
+async function notifyUpstreamPaid(
+  row: any,
+  billNo: string,
+  payTime: Date,
+  payMethod?: number,
+  remark?: string,
+): Promise<void> {
+  if (row.source_module !== 'teaching') return;
+  if (!row.source_stage || !row.source_refund_id) return;
+
+  try {
+    await remotePost(
+      'job',
+      '/api/teaching/refund/internal/finance-paid',
+      {
+        stage: row.source_stage,
+        id: row.source_refund_id,
+        financeRefundId: row.id,
+        financeRefundNo: row.order_no,
+        billNo,
+        payTime: toTimeStr(payTime),
+        payMethod: payMethod ?? null,
+        remark: remark ?? null,
+      },
+      {
+        timeout: 5000,
+        raw: true,
+        headers: { 'x-internal-token': config.internalToken },
+      },
+    );
+    // eslint-disable-next-line no-console
+    console.log(
+      `[退费出款回写] 成功：财务单 ${row.order_no} → 上游 ${row.source_stage}/${row.source_refund_id}`,
+    );
+  } catch (err: any) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[退费出款回写] 失败（不影响出款，需人工补录）：财务单 ${row.order_no}`,
+      err?.message,
+    );
+  }
 }
 
 /**
@@ -179,7 +402,7 @@ export async function payRefund(
   payMethod?: number,
   remark?: string,
 ): Promise<string> {
-  return db.transaction(async (t) => {
+  const done = await db.transaction(async (t) => {
     const row = await t(REFUND_TABLE).where({ id, is_deleted: false }).first();
     if (!row) {
       throw new BizError(BizCode.PARAM_ERROR, '退费单不存在或已被删除');
@@ -241,8 +464,13 @@ export async function payRefund(
       ...(remark ? { remark } : {}),
     });
 
-    return billNo;
+    return { billNo, row, paidAt: now };
   });
+
+  // ★ 2026-10-22：事务提交后再回写上游（用户要求「自动回写」，上游不再人工登记出款）
+  await notifyUpstreamPaid(done.row, done.billNo, done.paidAt, payMethod, remark);
+
+  return done.billNo;
 }
 
 /** 驳回退费单 */

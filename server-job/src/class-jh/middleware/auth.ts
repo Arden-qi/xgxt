@@ -38,7 +38,7 @@ import { config } from '../config';
 import { verifyToken } from '../utils/jwt';
 // ★ 2026-10-05：业务角色的唯一权威源在权限管理模块 —— 复用主包的解析函数，
 //   不要在本模块各写一套（门户 token 的 roles 只有门户级编码，见下方 ②'）。
-import { resolveBusinessRoles, type AuthUser } from '../../middleware/auth';
+import { resolveBusinessRoles, resolveBusinessProfile, type AuthUser } from '../../middleware/auth';
 // ★ 2026-10-07：接口级打通 —— 把「职位权限分配」的显式改动叠加到本模块的 POLICIES 上。
 //   ⚠️ 叠加层按 **role_code（新码）** 索引，而本模块的 user.roles 是归一化后的老码
 //      → 判定时用 user.businessRoles（原始新码），见 can() 内注释。
@@ -384,26 +384,49 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
   // 做法：与主包 middleware/auth.ts 完全一致 —— 拿登录名去权限模块查真实角色，
   //       再经 normalizeRoles 翻译成本模块的老编码（ROLE_*）。
   let businessRoles: string[];
+  let permUserId = '';
   if (kind === 'sys_admin') {
     businessRoles = ['SYS_ADMIN'];
   } else {
-    businessRoles = await resolveBusinessRoles(account);
+    /* ★ 2026-10-23：顺带拿权限库用户号（U004…），业务表责任人列存的是它 */
+    const profile = await resolveBusinessProfile(account);
+    businessRoles = profile.roles;
+    permUserId = profile.permUserId;
   }
   const roles = normalizeRoles(businessRoles);
 
+  /**
+   * ★ 2026-10-23：把数据范围从「硬编码 ALL」改回转真实计算
+   *
+   *   原来这里写死 `dataScope: ALL`，注释是"两套 ID 算不出我带的班，先不过滤"——
+   *   代价是**任何初高老师都能看到全部初高数据**（越权）。
+   *   现在两件事都解决了：
+   *     ① 责任人列统一成权限库 U 号（第 4 批清洗）
+   *     ② 统一表已补上初高班级数据（本批）
+   *   所以可以按角色给出正确范围：
+   *     · 校长 / 学管主任 / 学管 / 管理员 → 全部
+   *     · 班主任 / 教员 / 助教           → 本班级（自己带的班）
+   *     · 其他角色（教务/咨询/就业等）    → 保持全部，避免误伤未覆盖的页面
+   */
+  const FULL = [RoleCode.ADMIN, RoleCode.PRINCIPAL, RoleCode.QUALITY_MGR, RoleCode.ACADEMIC_MGR];
+  const TEACH = [RoleCode.HEAD_TEACHER, RoleCode.TEACHER, RoleCode.ASSISTANT];
+  const isFull = roles.some((r) => FULL.includes(r as never)) || kind === 'sys_admin';
+  const isTeacher = roles.some((r) => TEACH.includes(r as never));
+  const dataScope = isFull ? DataScope.ALL : isTeacher ? DataScope.CLASS : DataScope.ALL;
+
   req.user = {
-    userId: String(p.userId || ''),
+    /* ★ 2026-10-23 收口：userId = 权限库 U 号（查不到才退回门户 id） */
+    userId: permUserId || String(p.userId || ''),
+    /* ★ 2026-10-23：权限库用户号（业务表责任人列用它）；门户 UUID 单列保留 */
+    businessUserId: permUserId || undefined,
+    portalUserId: String(p.userId || ''),
     userName: String(p.userName || account || p.userId || ''),
     roles,
     // ★ 2026-10-07：叠加层（roleActionOverlay）按 **role_code 新码**索引，
     //   而上面的 roles 已被归一化成老码 → 这里保留一份原始业务角色码。
     businessRoles,
-    // ⚠️ 数据范围暂按「全部」处理（与并入前 DEV_MODE 的演示口径一致）：
-    //    门户账号 ID 与本模块班级表 head_teacher_id 是两套 ID，算不出「我带的班」，
-    //    先不过滤（否则初高班主任会因为 dept/班级过滤看到空列表）。
-    //    细化到 CLASS/DEPT 范围留待「门户账号 ↔ 本模块用户」映射接上后再做。
     deptCode: 0,
-    dataScope: DataScope.ALL,
+    dataScope,
     // ⚠️ 故意【不下发 token.permissions】：
     //    本模块 66 个接口用的是自己的权限点 `class:<资源>:<动作>`，
     //    门户权限模块里并没有注册它们（token 里只有 'module:class-jh' 这种），

@@ -7,16 +7,20 @@
  *   这两个报错在日志里只有一句 MySQL 原文，很难判断到底是
  *   "库没建"、"表没建"、"列没加"，还是"数据没填"。
  *
- *   本脚本把三件事分开检查，并直接给出下一步命令：
+ *   本脚本把四件事分开检查，并直接给出下一步命令：
  *     A. 9 个库是否都在
  *     B. 关键表 / 关键列是否存在（判断迁移有没有跑全）
  *     C. 班级编号是否为空（判断"新增学生"是不是卡在学号生成上）
+ *     D. 四个模块库的实库结构 vs 仓库里的建库 SQL
+ *        （2026-10-23 加：咨询库缺两张分期表就是这里漏掉的 ——
+ *          建库 SQL 只往"空库"里导，新表永远进不了已有环境）
  *
  * 用法：cd server-job && npm run db:check
  * 退出码：0 = 一切正常；1 = 有问题（详情见输出）
  */
 
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -245,6 +249,122 @@ const CLASS_CODE_TABLES = [
     }
   }
 
+  // ---------- D. 建库 SQL 与实库结构比对 ----------
+  console.log(C.bold('\n▶ D. 建库 SQL 与实库结构比对（模块库，缺表/缺列专用）'));
+  const SQL_FILES = ['sms_consult.sql', 'sms_finance.sql', 'sms_perm.sql', 'sms_portal.sql'];
+  for (const f of SQL_FILES) {
+    const file = path.join(ROOT, 'sql', 'init', f);
+    if (!fs.existsSync(file)) {
+      console.log(`  ${C.dim('—')} ${f}  ${C.dim('文件不存在，跳过')}`);
+      continue;
+    }
+    const text = fs.readFileSync(file, 'utf8');
+    const dbName = /USE `([a-z_]+)`;/.exec(text)?.[1];
+    if (!dbName) {
+      console.log(`  ${C.dim('—')} ${f}  ${C.dim('没解析出库名，跳过')}`);
+      continue;
+    }
+
+    // 解析文件里每张表的列（只取以 `` 开头的字段行）
+    const want = new Map();
+    for (const m of text.matchAll(/^CREATE TABLE `([a-z_0-9]+)` \($/gm)) {
+      const start = m.index + m[0].length;
+      const end = text.indexOf('\n) ENGINE', start);
+      const body = end > 0 ? text.slice(start, end) : '';
+      const cols = [...body.matchAll(/^\s{2}`([a-z_0-9]+)`\s/gm)].map((x) => x[1]);
+      if (cols.length) want.set(m[1], cols);
+    }
+    if (!want.size) {
+      console.log(`  ${C.dim('—')} ${f}  ${C.dim('文件里没有建表语句，跳过')}`);
+      continue;
+    }
+
+    let missTable = 0;
+    let missCol = 0;
+    const details = [];
+    for (const [t, cols] of want) {
+      const [rows] = await conn.query(
+        'SELECT column_name AS c FROM information_schema.columns WHERE table_schema = ? AND table_name = ?',
+        [dbName, t],
+      );
+      if (!rows.length) {
+        missTable++;
+        details.push(`缺表 ${t}`);
+        continue;
+      }
+      const have = new Set(rows.map((r) => r.c));
+      const missing = cols.filter((c) => !have.has(c));
+      if (missing.length) {
+        missCol++;
+        details.push(`${t} 缺列 ${missing.join('/')}`);
+      }
+    }
+
+    if (!missTable && !missCol) {
+      console.log(`  ${C.ok('✓')} ${dbName}  ${C.dim(`${want.size} 张表与建库 SQL 一致`)}`);
+    } else {
+      problems++;
+      console.log(
+        `  ${C.bad('✗')} ${dbName}  ${C.bad(`缺 ${missTable} 张表 / ${missCol} 张表缺列`)}`,
+      );
+      for (const d of details.slice(0, 6)) console.log(`      ${C.dim('- ' + d)}`);
+      if (details.length > 6) console.log(`      ${C.dim(`… 还有 ${details.length - 6} 项`)}`);
+    }
+  }
+
+  // ---------- E. 人员 ID 是否统一为权限库 U 号 ----------
+  //
+  // ★ 2026-10-23：业务表的人员列（班主任/申请人/审批人/操作人…）必须只存
+  //   权限库用户号（U004…）。混着门户 UUID 时，凡是"按人过滤"的查询
+  //   都会静默查空（班主任看不到自己的班、审批人看不到自己的单）。
+  console.log(C.bold('\n▶ E. 人员 ID 口径（是否统一为权限库 U 号）'));
+  {
+    const dbList = [DB.job, DB.edu, DB.cls, DB.jh, DB.common, DB.consult, DB.finance, DB.perm, DB.portal];
+    const PERSON_RE = /(teacher|manager|staff|approver|receiver|applicant|operator|creator|owner|advisor|consultant|recruit|handler)/;
+    const NOT_PERSON_RE = /^(scheme|class|student|plan|exam|dorm|bed)_/;
+
+    const [permRows] = await conn.query(`SELECT id FROM \`${DB.perm}\`.t_perm_user`);
+    const permIds = new Set(permRows.map((r) => String(r.id)));
+
+    const [personCols] = await conn.query(
+      `SELECT table_schema db, table_name t, column_name c
+         FROM information_schema.columns
+        WHERE table_schema IN (?) AND column_name LIKE '%\\_id'
+          AND data_type IN ('varchar','char','text')`,
+      [dbList],
+    );
+    const hits = personCols.filter((x) => PERSON_RE.test(x.c) && !NOT_PERSON_RE.test(x.c));
+
+    let badCols = 0;
+    const badList = [];
+    for (const h of hits) {
+      let vals = [];
+      try {
+        const [r] = await conn.query(
+          `SELECT DISTINCT \`${h.c}\` v FROM \`${h.db}\`.\`${h.t}\` WHERE \`${h.c}\` IS NOT NULL AND \`${h.c}\` <> ''`,
+        );
+        vals = r.map((x) => String(x.v));
+      } catch {
+        continue;
+      }
+      // 允许的"其他值"：角色码（如 TEACH_DEAN）、系统账号（system / SVC_*）
+      const bad = vals.filter((v) => !permIds.has(v) && !/^[A-Z][A-Z0-9_]{2,}$/.test(v) && !/^(system|SVC_)/i.test(v));
+      if (bad.length) {
+        badCols += 1;
+        badList.push(`${h.db}.${h.t}.${h.c}（${bad.length} 个值，如 ${bad.slice(0, 2).join('/')}）`);
+      }
+    }
+
+    if (!badCols) {
+      console.log(`  ${C.ok('✓')} 所有人员列都已统一为权限库 U 号（检查 ${hits.length} 列）`);
+    } else {
+      problems += 1;
+      console.log(`  ${C.bad('✗')} ${badCols} 个人员列仍存着旧 ID（门户 UUID 等）`);
+      for (const x of badList.slice(0, 5)) console.log(`      ${C.dim('- ' + x)}`);
+      if (badList.length > 5) console.log(`      ${C.dim(`… 还有 ${badList.length - 5} 项`)}`);
+    }
+  }
+
   await conn.end().catch(() => {});
 
   // ---------- 结论 ----------
@@ -255,6 +375,11 @@ const CLASS_CODE_TABLES = [
     console.log(C.bold('\n── 怎么修 ──────────────────────────────────'));
     console.log('  缺表 / 缺列  →  cd server-job && npm run migrate');
     console.log('                 （会逐个库跑，失败的那个库会单独报出来）');
+    console.log('  人员 ID 不统一 →  cd server-job && npm run id:audit    // 看清单');
+    console.log('                     npm run id:unify:apply             // 统一为权限库 U 号');
+    console.log('  模块库缺表缺列 →  该库是"导出即快照"的建库 SQL，不会自动补进已有库：');
+    console.log('                     按 sql/init/<库>.sql 里的建表语句增量补（先备份），');
+    console.log('                     或整库重建后回灌数据。');
     console.log('  班级没编号   →  进「班级管理」给这些班补上班级编号');
     console.log('                 学号规则是 LZ + 班级编号 + 三位序号，');
     console.log('                 班级没编号时新增学生会直接报错，这是设计如此。');

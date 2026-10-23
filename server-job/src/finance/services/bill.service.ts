@@ -452,7 +452,7 @@ export async function financeOverview(): Promise<{
     .where('is_verified', true)
     .count({ c: '*' });
 
-  // 待核对 = 有凭证 + 未核对 + 未打回
+  // 待核对 = 还挂在核对台上（有凭证，或已收款）+ 未核对 + 未打回
   //
   // ⚠️ 2026-10-04 修正：原来还多加了 `.where('pay_status', PayStatus.PAID)`，
   //    但「有没有凭证」才是待核对的判定依据 —— 上游传凭证时如果
@@ -463,8 +463,12 @@ export async function financeOverview(): Promise<{
   //    现在与列表页 canVerify 口径完全对齐。
   const [{ c: pendingFeeCount }] = await db(FEE_TABLE)
     .where('is_deleted', false)
-    .whereNotNull('voucher_url')
-    .andWhereNot('voucher_url', '')
+    .andWhere((qb: any) => {
+      // ★ 2026-10-23：与列表页硬约束同步 —— 有凭证 或 已收款（现金/线下无凭证）
+      qb.where((sub: any) => {
+        sub.whereNotNull('voucher_url').andWhereNot('voucher_url', '');
+      }).orWhere('pay_status', PayStatus.PAID);
+    })
     .where('is_verified', false)
     .where('is_rejected', false)
     .count({ c: '*' });

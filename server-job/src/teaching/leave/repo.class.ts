@@ -30,6 +30,7 @@ import {
 import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { isStatusLocked } from '../shared/statusLock';
 import { hydrateWithArchive } from '../shared/studentRef';
 import { buildApplyNo } from '../shared/conf';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
@@ -67,7 +68,11 @@ async function decorate(row: Record<string, any>): Promise<LeaveRow> {
     headTeacherName: row.applicant_name || null,
     leaveDate: fmtDate(row.effect_date) || null,
     expectResumeDate: fmtDate(row.expect_resume_date) || null,
-    newClassId: row.new_class_id ? String(row.new_class_id) : null,
+    // ★ 2026-10-22：复学班级列名统一成 resume_class_id（与初高一致），老列 new_class_id 兜底
+    newClassId:
+      (row.resume_class_id ?? row.new_class_id)
+        ? String(row.resume_class_id ?? row.new_class_id)
+        : null,
     newClassName: row.new_class_name || null,
     leaveReason: String(row.apply_reason || ''),
     attendedHours: null,
@@ -302,6 +307,8 @@ export async function insert(conn: any, input: LeaveWriteInput): Promise<string>
     expect_resume_date: input.expectResumeDate,
 
     // ★ 复学单：发起申请时必填的复学班（休学/退学单为 NULL）
+    // 2026-10-22：新列 resume_class_id 为主（与初高统一），老列 new_class_id 同时写，兼容历史读取
+    resume_class_id: input.newClassId,
     new_class_id: input.newClassId,
     new_class_name: input.newClassName,
 
@@ -338,7 +345,7 @@ export async function setResumeClass(
 ): Promise<void> {
   await tblTrx(conn, SRC, T, STAGE)
     .where({ id })
-    .update({ new_class_id: classId, new_class_name: className });
+    .update({ resume_class_id: classId, new_class_id: classId, new_class_name: className });
 }
 
 /**
@@ -363,7 +370,14 @@ export async function afterApproved(conn: any, id: string, operatorId: string): 
     update_by: operatorId,
   };
   // ★ 复学：回到复学班（service 在调本函数前已把复学班写进单据）
-  if (biz === 3 && row.new_class_id) patch.class_id = row.new_class_id;
+  // ★ 2026-10-22：优先新列，老数据回落 new_class_id
+  if (biz === 3) patch.class_id = row.resume_class_id ?? row.new_class_id ?? patch.class_id;
+  /* ★ 2026-10-21 批注：退学 = 学生状态永久锁（见 shared/statusLock.ts）
+   *   老单据在退学之后才审批通过时，不能把 7 改成别的值；审批单照常通过。 */
+  const cur = (await tblTrx(conn, SRC, S, STAGE)
+    .where({ id: row.student_id })
+    .first('student_status')) as Record<string, any> | undefined;
+  if (isStatusLocked(cur?.student_status) && Number(cur?.student_status) !== newStatus) return;
   await tblTrx(conn, SRC, S, STAGE).where({ id: row.student_id }).update(patch);
 }
 

@@ -86,6 +86,22 @@ const CLASS_STAFF_PAGES: string[] = [
   'class:grade:view',
   'class:urge:view',
   'class:dorm:view',
+  /**
+   * ★★ 2026-10-22 用户要求：「退费 / 催费 / 休学退学审批 要增加大学部与就业部的数据」
+   *
+   * 【根因】这两个页面码原来只给了学管主任和校长（CLASS_MANAGER_PAGES /
+   *   CLASS_PRINCIPAL_PAGES），班主任 / 教员 / 助教这份清单里**没有** →
+   *   `requireAnyPage(['classjh:refund:view','class:refund:view','job:refund:view'])`
+   *   三码全不命中 → 大学班主任进 `/teaching/refund` 直接 40302
+   *   → 退费页「部门」下拉里永远只有初高，大学部的单据一条也看不见。
+   *   异动页（`class:suspend:view`）同理。
+   *
+   * ⚠️ 页面码只决定「进不进得去」。大学部退费/异动的**发起权**另有闸：
+   *   `teaching/refund/service.ts` 的 canInitiate 只认班主任/项目经理，
+   *   审批权走 `canApprove()` 按角色算 —— 给页面码不会把审批权扩散出去。
+   */
+  'class:refund:view',
+  'class:suspend:view',
 ];
 
 /* ============================================================
@@ -246,12 +262,15 @@ const CLASS_JH_STAFF_PAGES: string[] = [
   'classjh:dorm:view',
 ];
 
-/** 教务老师：本模块只负责宿舍（调宿审批）与审批中心、楼栋字典 */
+/**
+ * 教务老师：本模块只负责宿舍（调宿审批）
+ *
+ * ★ 2026-10-22：按用户要求去掉「休学/退学审批」——
+ *   `classjh:approval:view` 不再给教务，左侧菜单的「休学 / 退学审批」随之消失。
+ */
 const CLASS_JH_ACAD_PAGES: string[] = [
   'classjh:dashboard:view',
   'classjh:dorm:view',
-  'classjh:approval:view',
-  'classjh:building:view',
 ];
 
 const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
@@ -310,8 +329,9 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
   [RoleCode.TEACH_ASSIST]: [...HEAD_TEACHER_JOB_PAGES, ...CLASS_STAFF_PAGES, ...CLASS_JH_STAFF_PAGES],
 
   // ★ 学管主任（2026-09-30 由「教质经理 + 学术经理」合并而来）
-  //   职责：退费审批第 1 步 + 休退学审批 + 催费 + 宿舍；
-  //   并且可以【代替校长审批】（见 approval.ts 的 MANAGER_ROLES）
+  //   职责：退费审批第 1 步 + 休退学审批 + 催费 + 宿舍。
+  //   ⚠️ 2026-10-23 口径变更：学管**不能**代替校长审批（见 shared-types/src/approval.ts
+  //      的 canApprove 注释）。第 1 步审完就交给校长，页面上的审批按钮也不再出现。
   [RoleCode.TEACH_DEAN]: [
     'job:class:view',
     'job:classTransfer:view',
@@ -407,9 +427,6 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
   [RoleCode.ACAD_STAFF]: [
     'edu:student:view',
     'edu:dorm:view',
-    'edu:fee:view',
-    // ★ 2026-10-05：教务发起催费的入口（见上方说明）
-    'job:feeCall:view',
     // ★★ 2026-10-08 修复「宿舍审批死结」：
     //   实训侧「就业管理 → 宿舍管理」（job:dorm:view）**本来就是班主任/教务共用页**——
     //   班主任只能「发起 + 撤回」，教务**只负责审批**（见 api/dorm.ts 头部说明、
@@ -420,7 +437,7 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
     //   与「教务管理 → 宿舍管理」是两套独立宿舍（实训基地 / 教务基地），互不影响。
     'job:dorm:view',
     // ★ 2026-10-05：教学管理（初高）—— 教务在该模块负责【调宿审批】，
-    //   所以给宿舍页与审批中心（其余页面属班主任/经理，不给他）
+    //   所以给宿舍页（其余页面属班主任/经理，不给他）
     ...CLASS_JH_ACAD_PAGES,
   ],
 
@@ -442,6 +459,24 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
     'job:statistics:view',
     'job:empDorm:view',
     'job:empArchive:view',
+    /**
+     * ★★ 2026-10-22 用户要求：「退费 / 催费 / 休学退学审批 要增加大学部与就业部的数据」
+     *
+     * 【为什么原来没有】就业老师这份清单是 2026-10-02 合并就业模块时定的，
+     *   当时只按「投递面试 + 就业档案」划范围，把这三张**单据页**漏了 →
+     *   实测 `zhouj` 进 `/teaching/refund`、`/teaching/approval`、
+     *   `/api/job/fee-call/page` 全部 40302，就业部的数据一条也看不见。
+     *
+     * 【为什么现在加】就业部和实训部共用 sms_job 一个库，用户口径里
+     *   「就业部的退费/催费/异动」就是这批数据，只有就业老师能看到和跟进。
+     *
+     * ⚠️ 只给「看」。发起权仍受各 service 的 canInitiate 限制
+     *   （退费 = 班主任/项目经理；异动 = 学管/项目经理），
+     *   就业老师进来是**看 + 跟进**，不会凭空多出发起/审批按钮。
+     */
+    'job:feeCall:view',         // 催费（就业部）
+    'job:refund:view',          // 退费（就业部）
+    'job:suspendApproval:view', // 休学/退学/复学审批（就业部）
   ],
 };
 

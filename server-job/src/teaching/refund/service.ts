@@ -33,6 +33,7 @@ import {
   BizCode,
   canApprove,
   canInitiate,
+  DeptCode,
   hasRole,
   isFinished,
   isMyApproval,
@@ -52,7 +53,7 @@ import {
 } from '../../utils/approval';
 import { applyRefundToFinance } from '../../utils/financeClient';
 // ★ 第 11 批：实训侧退费业务表切读（`t_job_refund` → `t_uni_refund`）
-import { tbl, tblTrx, uniUpdCols } from '../shared/uniTable';
+import { tbl, tblTrx } from '../shared/uniTable';
 import type {
   RefundDetail,
   RefundListQuery,
@@ -63,6 +64,7 @@ import type {
 } from '../shared/dto';
 import {
   REFUND_ACTIVE_STATUSES,
+  REFUND_FEE_TYPE_NAME,
   REFUND_ITEM_MAX_AMOUNT,
   REFUND_STATUS,
   REFUND_STATUS_NAME,
@@ -71,8 +73,8 @@ import {
 } from '../shared/dto';
 import { assertStageCode, visibleStagesBy } from '../shared/stageAccess';
 import { listClassesOfStages } from '../shared/classOptions';
-import { amountText } from '../shared/format';
-import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
+import { amountText, fmtDateTime } from '../shared/format';
+import type { FeeTypeConflict, RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import * as repoJh from './repo.classJh';
 import * as repoClass from './repo.class';
 import * as repoJob from './repo.job';
@@ -127,8 +129,29 @@ type Repo = {
     patch?: Record<string, any>,
   ) => Promise<void>;
   setFinance: (conn: any, id: string, remark: string | null, time: string | null) => Promise<void>;
-  /** 该学生是否有进行中的退费单（防重复提交） */
-  hasPending: (studentId: string) => Promise<boolean>;
+  /**
+   * ★ 2026-10-22：回写财务退费单（推送成功后写 `finance_refund_id / finance_refund_no`）
+   *
+   * 三仓储各自实现（库/表不同），签名一致 —— 内部失败只 warn，不抛。
+   */
+  setPushInfo: (
+    id: string,
+    financeRefundId: string | null,
+    financeRefundNo: string | null,
+  ) => Promise<void>;
+  /**
+   * 找出「同一学生 + 同一费用项」的重复申请（防重复提交）
+   *
+   * ★ 2026-10-23：粒度从「整学生」改成「费用项」——
+   *   一个学生可以有多条退费单（住宿费一条、学费一条），只有同费用项重复才拦。
+   *   返回冲突明细（费用项 + 撞车的单号/状态），供报错文案说清是哪一项撞了。
+   *   `excludeId` 供提交时排除自身。
+   */
+  findFeeTypeConflicts: (
+    studentId: string,
+    feeTypes: number[],
+    excludeId?: string,
+  ) => Promise<FeeTypeConflict[]>;
   /** 按 id 取学生（建单时做快照） */
   findStudent: (id: string) => Promise<{
     no: string;
@@ -330,6 +353,38 @@ export async function classOptions(user: any) {
  * 新建
  * ============================================================ */
 
+/**
+ * 防重复提交的报错文案 —— 粒度是**费用项**，不是整张单
+ *
+ * 业务口径（用户明确）：一个学生可以有多条退费申请（第 1 条住宿费、第 2 条学费），
+ * 只有**同一个费用项**重复才拦，提示「该费用类型已在审批」。
+ *
+ * ⚠️ 只有大学那套表有 `apply_no`；初高/就业没有单号 → 文案里不带单号，
+ *    让用户按「学生」去列表里找（列表支持按学生姓名/学号搜）。
+ *
+ * @param action create = 新建被挡；submit = 提交被挡（本单已建好，得先处理撞车那一单）
+ */
+function conflictText(conflicts: FeeTypeConflict[], action: 'create' | 'submit'): string {
+  const names = [
+    ...new Set(conflicts.map((c) => REFUND_FEE_TYPE_NAME[c.feeType] || `费用项${c.feeType}`)),
+  ];
+  const feeText = names.length > 1 ? names.map((n) => `「${n}」`).join('、') : `「${names[0]}」`;
+  const ref = conflicts.find((c) => c.applyNo)?.applyNo;
+  const refText = ref ? `（${ref}）` : '';
+
+  // 挡路的都是草稿：提示「先提交或撤销」，而不是「在审批」
+  if (conflicts.every((c) => c.status === REFUND_STATUS.DRAFT)) {
+    return action === 'create'
+      ? `该学生已有${feeText}的退费申请（待提交）${refText}，请先提交或撤销后再申请`
+      : `该学生已有${feeText}的退费申请（待提交）${refText}，请先撤销后再提交本单`;
+  }
+
+  const active = conflicts.find((c) => c.status !== REFUND_STATUS.DRAFT);
+  const statusName = (active && REFUND_STATUS_NAME[active.status]) || '审批中';
+  const tail = action === 'submit' ? '本单' : '';
+  return `该学生已有${feeText}的退费申请在审批中（${statusName}）${refText}，请勿重复提交${tail}`;
+}
+
 export async function create(body: RefundSaveBody, user: any): Promise<{ id: string }> {
   const stage = body.stage;
   if (!TEACHING_STAGES.includes(stage)) {
@@ -364,11 +419,31 @@ export async function create(body: RefundSaveBody, user: any): Promise<{ id: str
     }
   }
 
-  const repo = REPOS[stage];
-  // 防重复：同一学生不允许有两条进行中的退费单（大学原有规则，统一到三学段）
-  if (await repo.hasPending(body.studentId)) {
-    throw new BizError(BizCode.REFUND_DUPLICATE, '该学生已有一条进行中的退费申请，请勿重复提交');
+  /**
+   * ★ 同一张单里同一个费用项只能出现一次 —— 先把它拦掉，
+   *   否则「学费 100 + 学费 200」这种等于绕过下面的按费用项判重。
+   */
+  const feeTypes = items.map((it) => Number(it.feeType));
+  if (new Set(feeTypes).size !== feeTypes.length) {
+    const dupType = feeTypes.find((t, i) => feeTypes.indexOf(t) !== i);
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `「${REFUND_FEE_TYPE_NAME[dupType!] || `费用项${dupType}`}」重复填写，请合并成一项后再提交`,
+    );
   }
+
+  const repo = REPOS[stage];
+  /**
+   * 防重复：**同一学生 + 同一费用项**不允许同时有两条未办结的申请
+   * （未办结 = 待提交草稿 / 待学管 / 待校长，口径见 dto.ts `REFUND_UNFINISHED_STATUSES`）
+   *
+   * ★ 2026-10-23（用户明确的口径）：
+   *   学生**可以**有多条退费申请 —— 第 1 条退住宿费、第 2 条退学费，这是正常业务；
+   *   只有**同一个费用项**重复才拦（「住宿费已经在审批了，不能再申请一次住宿费」）。
+   *   之前是「整学生只能一条」，粒度过粗，已按费用项改回来。
+   */
+  const conflicts = await repo.findFeeTypeConflicts(body.studentId, feeTypes);
+  if (conflicts.length) throw new BizError(BizCode.REFUND_DUPLICATE, conflictText(conflicts, 'create'));
 
   // 学生 / 班级快照
   const stu = await findStudent(stage, body.studentId);
@@ -494,6 +569,23 @@ export async function submit(
     throw new BizError(BizCode.APPROVAL_ALREADY_SUBMITTED, '该单已提交，不能重复提交');
   }
 
+  /**
+   * ★ 2026-10-23：**提交这一道判重是必须的** —— 光在「新建」拦不够。
+   *
+   * 实锤复现（修复前）：「新建」判重不看草稿 → 同一学生能建出多条草稿；
+   * 之后逐条点「提交」，本接口只校验**本单**状态（是草稿就放行）
+   * → 同一学生同一费用项出现两条在途退费单。
+   *
+   * 口径与 create 一致：按**本单的费用项**判，排除本单自身。
+   */
+  const feeTypes = (row.items || []).map((it) => Number(it.feeType));
+  if (feeTypes.length) {
+    const conflicts = await REPOS[stage].findFeeTypeConflicts(row.studentId, feeTypes, id);
+    if (conflicts.length) {
+      throw new BizError(BizCode.REFUND_DUPLICATE, conflictText(conflicts, 'submit'));
+    }
+  }
+
   await db.transaction(async (trx) => {
     const approvalId = await ensureApproval(trx, id, row, op);
     await submitApproval(approvalId, op, trx);
@@ -511,7 +603,23 @@ export async function approve(
   id: string,
   comment: string | undefined,
   user: any,
-): Promise<{ finished: boolean; approvalStatus: number; approvalStatusName: string; pushed: boolean }> {
+): Promise<{
+  finished: boolean;
+  approvalStatus: number;
+  approvalStatusName: string;
+  pushed: boolean;
+  /**
+   * ★ 2026-10-23：推送失败的具体原因（成功时为 null）
+   *
+   * 【为什么要往接口里带】
+   *   `pushRefundToFinance` 是「失败不阻断」的：只记一行 console.error，接口只回 `pushed:false`。
+   *   远端测试时前端只能看到「推送财务失败，请人工补录」这句笼统提示，
+   *   真正原因（财务模块 500 / 连不上 / 超时 / 缺列）全在后端日志里，
+   *   于是「本地好、远端坏」的排查只能靠翻日志。
+   *   现在把原因原样带回前端，一眼就能定位是哪一环断了。
+   */
+  pushError: string | null;
+}> {
   await assertStageView(user, stage);
   const op = toOperator(user);
   const row = await mustGet(stage, id);
@@ -530,8 +638,11 @@ export async function approve(
   // ★ 审批链走完 → 通知财务建退费单（**事务外**：财务是外部模块，
   //   超时会把本地审批一起回滚，得不偿失；失败不回滚，人工补录）
   let pushed = false;
+  let pushError: string | null = null;
   if (finished) {
-    pushed = await pushRefundToFinance(stage, row, op);
+    const r = await pushRefundToFinance(stage, row, op);
+    pushed = r.ok;
+    pushError = r.error;
   }
 
   return {
@@ -539,6 +650,7 @@ export async function approve(
     approvalStatus: nextStatus,
     approvalStatusName: REFUND_STATUS_NAME[nextStatus] || '',
     pushed,
+    pushError,
   };
 }
 
@@ -608,20 +720,97 @@ export async function financeConfirm(
   return null;
 }
 
+/**
+ * ★ 2026-10-22：财务出款 → 自动回写教务退费单（内部接口专用，不走登录态）
+ *
+ * 【为什么要这个函数】
+ *   用户口径：「财务确认出款后自动回写，上游不用再人工点『财务登记出款』」。
+ *   原来财务 `payRefund` 只改自己的单，教务侧 `refund_time` 永远空着，
+ *   于是教务退费列表永远显示「已通过但还是没退钱」→ 财务还得让人再去点一次。
+ *
+ * 【它写什么】
+ *   · 出款时间（各学段列名不同：job `refund_time` / class·jh `pay_out_time`，由仓储兜）
+ *   · `finance_remark` 备注：`财务已出款（财务退费单 TF20260001 / 账单 ZT20260001）`
+ *     （初高表没有 finance_remark 列 → 仓储内部忽略，靠 finance_refund_no 呈现）
+ *   · 补一次 `finance_refund_id/no`（推送时回写失败过的单，这里兜住）
+ *
+ * ⚠️ 幂等：财务侧只有「出款」这一个动作会调它，而 payRefund 有状态闸
+ *   （已退费再点直接报错），所以这里不做额外去重；重复调用结果一致（覆盖写同一时间）。
+ */
+export async function applyFinancePayment(
+  stage: TeachingStage,
+  id: string,
+  body: {
+    financeRefundId?: string;
+    financeRefundNo?: string;
+    billNo?: string;
+    payTime?: string;
+    payMethod?: number | null;
+    remark?: string | null;
+  },
+): Promise<{ id: string; refundTime: string | null; financeRefundNo: string | null }> {
+  await mustGet(stage, id);
+
+  const trace: string[] = [];
+  if (body.financeRefundNo) trace.push(`财务退费单 ${body.financeRefundNo}`);
+  if (body.billNo) trace.push(`账单 ${body.billNo}`);
+  const auto = trace.length ? `财务已出款（${trace.join(' / ')}）` : '财务已出款';
+  const extra = body.remark ? String(body.remark).trim() : '';
+  const remark = [auto, extra].filter(Boolean).join('；').slice(0, 255);
+
+  const payTime = body.payTime || fmtDateTime(new Date()) || null;
+  await REPOS[stage].setFinance(db, id, remark, payTime);
+
+  // 推送阶段的回写可能失败过（例如当时财务侧还没那两列）→ 这里补一次
+  if (body.financeRefundId && body.financeRefundNo) {
+    await REPOS[stage].setPushInfo(id, body.financeRefundId, body.financeRefundNo);
+  }
+
+  return { id, refundTime: payTime, financeRefundNo: body.financeRefundNo ?? null };
+}
+
 /* ============================================================
  * 推送财务（统一实现；实训原逻辑搬过来，三学段共用）
  * ============================================================ */
+
+/**
+ * 学段 → 财务部门码
+ *
+ * ★ 2026-10-22：原来这条链路**不传 deptCode**，财务侧的退费单 `dept_code` 恒为 NULL
+ *   （实测 sms_finance.t_finance_refund 里 TF20260001/TF20260002 两单都是 NULL），
+ *   财务按部门核对时这两单会漏掉、也无法按部门筛选。
+ *   口径与 `shared-types` 的 DeptCode 一致：1 初高部 / 2 大学部 / 3 就业部
+ *   （用户口径的「就业」= 库里的 sms_job 学段 job，部门码 3）。
+ */
+const STAGE_DEPT_CODE: Record<TeachingStage, DeptCode> = {
+  jh: DeptCode.JUNIOR_SENIOR,
+  class: DeptCode.UNIVERSITY,
+  job: DeptCode.EMPLOYMENT,
+};
 
 async function pushRefundToFinance(
   stage: TeachingStage,
   row: RefundRow,
   op: Operator,
-): Promise<boolean> {
-  // 财务只认 1~5 的费用类型；「退学退费(6)」要展开成它包含的实际项
-  const feeTypes = row.items
-    .map((i) => i.feeType)
-    .filter((t) => t >= 1 && t <= 5);
-  const refundItems = feeTypes.length ? feeTypes : [1];
+): Promise<{ ok: boolean; error: string | null }> {
+  /**
+   * 费用项 → 财务明细行
+   *
+   * ★ 2026-10-22 用户要求「每一个费用项都要在财务那里对应一行」：
+   *   原来只传 `refundItems`（只有类型、没有金额），财务主表又只存第一个类型
+   *   → 学费 5000 + 住宿费 2000 的单子在财务侧变成「学费 7000」，明细彻底丢失。
+   *
+   * ⚠️ 财务字典只认 1~5（1 学费 / 2 住宿费 / 3 餐费 / 4 保险费 / 5 试学费）；
+   *   就业的「6 退学退费」是上游内部码 → 过滤掉；全被过滤时退回「主项 + 全额」一行，
+   *   与改造前行为等价（不凭空拆金额）。
+   */
+  const detailItems = row.items
+    .map((i) => ({ feeType: Number(i.feeType), amount: Number(i.amount || 0) }))
+    .filter((i) => i.feeType >= 1 && i.feeType <= 5 && i.amount > 0);
+  const items = detailItems.length
+    ? detailItems
+    : [{ feeType: 1, amount: Number(row.refundAmount) || 0 }];
+  const refundItems = Array.from(new Set(items.map((i) => i.feeType)));
 
   const rawReason = String(row.refundReason || '').trim();
   const refundReason = (!rawReason || /^\d+$/.test(rawReason)
@@ -636,35 +825,47 @@ async function pushRefundToFinance(
       studentName: row.studentName,
       classId: row.classId || undefined,
       className: row.className || undefined,
+      // ★ 2026-10-22 新增：带上部门，财务侧才能按部门核对（原来恒为 NULL）
+      deptCode: STAGE_DEPT_CODE[stage],
       refundItems,
+      // ★ 2026-10-22 新增：带金额的费用项明细 → 财务 `t_finance_refund_item` 一项一行
+      refundItemDetails: items,
       refundAmount: row.refundAmount,
       refundReason,
-      sourceType: 2, // 2 = 就业（非咨询）
+      // ★ 2 = 校长审批推送（见 shared-types/src/finance/api/finance.api.ts 的
+      //   RefundSourceType：1 班主任提交 / 2 校长审批推送）。
+      //   原注释写「2 = 就业（非咨询）」是错的，已更正 —— 财务列表里显示的就是「校长审批推送」。
+      sourceType: 2,
+      // ★ 2026-10-22 新增：上游幂等三元组 + 校长审批真实时间/人
+      //   · 幂等：财务侧 uk_source(source_module, source_refund_id) 唯一 → 重复推送不建新单
+      //   · 时间：财务时间轴的「校长审批」节点要显示真实完成时间（截图里全是「待处理」）
+      sourceModule: 'teaching',
+      sourceStage: stage,
+      sourceRefundId: row.id,
+      upstreamApproveTime: fmtDateTime(new Date()) || undefined,
+      upstreamApproverName: op.userName,
       remark: `${TEACHING_STAGE_NAME[stage]}退费单 ${row.id}（${row.feeTypeName}）`,
     });
     // eslint-disable-next-line no-console
-    console.log(`[退费推送财务] 成功：${stage} 单 ${row.id} → 财务单 ${res.orderNo}`);
+    console.log(
+      `[退费推送财务] 成功：${stage} 单 ${row.id} → 财务单 ${res.orderNo}` +
+        (res.duplicated ? '（幂等命中，未重复建单）' : ''),
+    );
 
-    // 实训表有专门的溯源列；初高/大学的这两列不存在 → 跳过
-    if (stage === 'job') {
-      // ★ 第 11 批：改走统一表路由层。
-      //   sms_job.t_job_refund（28 列）→ t_uni_refund（50 列），实测缺列 0。
-      //   update 路径必须过 uniUpdCols（铁律⑨）。
-      await tbl(db, 'sms_job', 't_job_refund', stage)
-        .where({ id: row.id })
-        .update(
-          (await uniUpdCols(db, 'sms_job', 't_job_refund', {
-            update_time: new Date(),
-            update_by: op.userId,
-          })) as never,
-        )
-        .catch(() => undefined);
-    }
-    return true;
+    /**
+     * ★ 2026-10-22：三学段统一回写财务单号
+     *
+     * 原来只有实训顺手 bump 了一下 `update_time`，初高/大学什么都没留
+     * → 财务出款后无法对回是哪张教务单，只能人工比对学号+金额。
+     * 现在回写 `finance_refund_id / finance_refund_no`（内部失败只 warn，不影响推送结果）。
+     */
+    await REPOS[stage].setPushInfo(row.id, res.id, res.orderNo);
+    return { ok: true, error: null };
   } catch (err: any) {
     // eslint-disable-next-line no-console
     console.error(`[退费推送财务] 失败：${stage} 单`, row.id, err?.message);
-    return false;
+    // ★ 2026-10-23：原因要能回到界面上，否则远端只能看到「推送财务失败」这种笼统提示
+    return { ok: false, error: String(err?.message || err || '未知错误') };
   }
 }
 

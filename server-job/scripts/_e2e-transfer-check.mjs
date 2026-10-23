@@ -12,7 +12,7 @@
  * 依赖：后端 8004 + 前端 5173 + 数据库可用
  */
 
-import { BASE, conn, killAll, login, req, startServices } from './_e2e-lib.mjs';
+import { BASE, conn, killAll, login, req, startServices, procs } from './_e2e-lib.mjs';
 
 const results = [];
 const check = (name, pass, detail = '') => {
@@ -39,7 +39,7 @@ async function seedClasses() {
   await db('t_uni_class').insert([
     { id: FIX_FROM, edu_stage: 'class', stage_code: 206, class_code: 'XFROM', class_name: '自检换班源班206',
       dept_code: 2, class_status: 2, student_count: 0, is_deleted: 0, create_time: new Date(),
-      head_teacher_id: '85a47f05-6f96-4602-944e-d5c29b0154ae', head_teacher_name: '张海涛' },
+      head_teacher_id: 'U004', head_teacher_name: '张海涛' },
     { id: FIX_TO, edu_stage: 'class', stage_code: 203, class_code: 'XTO', class_name: '自检换班目标班203',
       dept_code: 2, class_status: 2, student_count: 0, is_deleted: 0, create_time: new Date() },
   ]);
@@ -257,6 +257,9 @@ try {
   const empS2 = await db('t_uni_student').where({ id: empSid }).first();
   check('就业部：接收后班籍改为 303 班', empS2?.class_name === '自检就业三阶段班', empS2?.class_name);
 
+  const be = procs.find(p=>p.tag==='backend');
+  console.log('== DBG ==');
+  console.log(be.out().split('\n').filter(l=>l.includes('[DBG vc]')).slice(-4).join('\n'));
 } finally {
   await db('t_uni_consult_push').whereIn('origin_student_id', [sid, empSid]).del().catch(() => {});
   await db('t_uni_class').whereIn('id', [FIX_FROM, FIX_TO]).del().catch(() => {});

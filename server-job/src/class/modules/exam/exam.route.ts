@@ -11,6 +11,7 @@ import { ExamContentTypeName, ExamTypeName } from '../../lib/dict';
 import { applyDataScope, assertClassAccess } from '../../middleware/dataScope';
 import { wrap } from '../../middleware/error';
 import { tbl, tblIns, tblInsTrx, uniUpdCols } from '../../../teaching/shared/uniTable';
+import { actorId, actorIds, isActor } from '../../../utils/actor';
 
 /**
  * 考试管理（原型菜单「教务运行 / 考试管理」）
@@ -122,7 +123,7 @@ examRouter.post(
         id: examId,
         exam_name: b.examName,
         exam_type: b.examType,
-        creator_id: user.userId,
+        creator_id: actorId(user),
         creator_name: user.userName,
         exam_date: b.examDate ?? new Date().toISOString().slice(0, 10),
         class_id: b.classId ?? null,

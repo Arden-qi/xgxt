@@ -64,6 +64,30 @@ export function isApprovalAction(path: string): boolean {
   return APPROVAL_ACTION_RE.test(path);
 }
 
+/**
+ * ★ 2026-10-22 新增：学管主任**允许的写操作** —— 登记缴费
+ *
+ * 【为什么开这个口子】用户明确口径：「谁能登记缴费 —— 班主任、学管、校长」。
+ *   学管主任是「只读 + 仅审批」角色，写请求会被本闸一刀切拦住，
+ *   于是「学管能登记缴费」这条根本做不到。
+ *
+ * 【为什么只开三个路径】登记缴费是**代收款的事实录入**（学生交钱了就记一笔），
+ *   不是业务发起、也不改变审批结论。学管在催费场景里本来就要代班主任收款，
+ *   这与「学管不能建班/改班/发退费」的边界不冲突。
+ *   除这三条之外，学管的写请求仍然一律 403。
+ *
+ * ⚠️ 用 `originalUrl` 而不是 `req.path`：本中间件挂在各模块 `app.use` 内部，
+ *    `req.path` 已经被剥掉前缀（三个部门都只剩 `/voucher`），没法区分；
+ *    `originalUrl` 才是完整路径。
+ */
+const DEAN_WRITE_ALLOW_RE = /^(?:\/api)?\/(?:class-jh\/fee|class\/urge|job\/fee-call)\/voucher$/i;
+
+/** 该写请求是否属于「学管可以做的事」 */
+export function isDeanAllowedWrite(originalUrl: string): boolean {
+  const path = String(originalUrl || '').split('?')[0];
+  return DEAN_WRITE_ALLOW_RE.test(path);
+}
+
 /** 学管主任的写请求拦截中间件（挂在鉴权之后、业务路由之前） */
 export function denyApprovalOnlyWrite(req: Request, res: Response, next: NextFunction): void {
   const method = req.method.toUpperCase();
@@ -81,6 +105,12 @@ export function denyApprovalOnlyWrite(req: Request, res: Response, next: NextFun
 
   // 审批动作放行（同意 / 驳回 / 接收）
   if (isApprovalAction(req.path)) {
+    next();
+    return;
+  }
+
+  // ★ 2026-10-22：登记缴费放行（用户口径：班主任 / 学管 / 校长 都能登记缴费，三部门一致）
+  if (isDeanAllowedWrite(req.originalUrl || '')) {
     next();
     return;
   }

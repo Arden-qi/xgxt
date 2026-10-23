@@ -519,6 +519,26 @@ export const REFUND_ACTIVE_STATUSES: number[] = [
   REFUND_STATUS.PENDING_PRINCIPAL,
 ];
 
+/**
+ * ★ 2026-10-23：**未办结**状态 = 待提交草稿 + 进行中 —— 费用项判重的取值范围
+ *
+ * 【业务口径】一个学生**可以有多条**退费申请：第 1 条退住宿费、第 2 条退学费。
+ *   只有**同一个费用项**不允许同时有两条未办结的申请
+ *   （「住宿费已经在审批了，不能再申请一次住宿费」）。
+ *
+ * 【为什么要含「待提交」】
+ *   草稿也是一张没办完的单子，同样占着这个费用项。
+ *   不含草稿的话，「建两条住宿费草稿 → 分别点提交」就能绕过判重 —— 已实测复现。
+ *   与请假（异动）域的口径一致（见 `teaching/leave/repo.*.ts` 的 `PENDING_*_STATUS`）。
+ *
+ * ⚠️ 这里是**统一码**；各学段仓储用 `toRawRefundStatus` 翻译成自己的原码再查。
+ */
+export const REFUND_UNFINISHED_STATUSES: number[] = [
+  REFUND_STATUS.DRAFT,
+  REFUND_STATUS.PENDING_MANAGER,
+  REFUND_STATUS.PENDING_PRINCIPAL,
+];
+
 /** 退费费用类型（三套一致；实训另有 6 退学退费 / 9 其他） */
 export const REFUND_FEE_TYPE_NAME: Record<number, string> = {
   1: '学费',
@@ -576,6 +596,12 @@ export interface RefundRow {
   /** 已通过后财务侧信息 */
   financeRemark: string | null;
   refundTime: string | null;
+  /**
+   * ★ 2026-10-22：财务退费单号（`TF20260001`）
+   *
+   * 推送到财务时回写；有值 = 财务侧已建单。出款完成看 `refundTime`。
+   */
+  financeRefundNo?: string | null;
 
   createTime: string | null;
 
@@ -1264,46 +1290,85 @@ export interface SchemeStageOption {
  *   ④ 结业日期 `close_date` **只有实训有**
  *
  * 【✅ 好消息：班级状态码三套完全一致】（实测 t_job_class / 两个 t_class_info）
- *   1 开放 · 2 封班 · 3 待结业 · 4 已结业  → 直接用 `ClassStatus`，不需要映射表
+ *   1 开放 · 2 封班 · 5 实训 · 6 待就业 · 7 已就业  → 直接用 `ClassStatus`，不需要映射表
+ *   （3 待结业 / 4 已结业 均已下线，见下方 CLASS_STATUS 注释）
  *
  * 【⚠️ 状态机三套不同 —— 这是本域最需要小心的地方】
  *   初高（classInfo.route.ts）有显式流转表：
- *     开放 → 开放/封班/待结业；封班 → 封班/开放/待结业；
- *     待结业 → 待结业/已结业；已结业 → （终态）
+ *     开放 → 开放/封班；封班 → 封班/开放（封班即终态）
  *   实训只有「封班/解封」两个动作，且**"开放"已废弃**（能进实训的班只会是封班）；
  *   大学原实现没有独立的状态流转接口。
  *   → 统一成同一张流转表（取初高那套，最完整），
  *     实训的「解封」= 封班→开放，在统一流转表里天然合法。
  */
 
-/** 班级状态（三套一致，无需映射） */
+/**
+ * 班级状态（三套一致，无需映射）
+ *
+ * ★ 2026-10-21 批注：新增三个**系统态**（5 实训 / 6 待就业 / 7 已就业）
+ *   「升实训成功后班级状态改为【实训】」→ 升实训新建的实训班直接写 5；
+ *   「升就业成功后改为【待就业】、【升就业】按钮改为【已就业】」→ 6；
+ *   「【已就业】确认后班级状态改为【已就业】」→ 7。
+ *   ⚠️ 这三个值只能由上述三个动作写入，编辑弹窗 / 改状态接口都禁止手工选择
+ *      （见 isSystemClassStatus + repo.job 的 save / changeStatus 保护）。
+ */
 export const CLASS_STATUS = {
   OPEN: 1,
   CLOSED: 2,
+  /**
+   * ⚠️ 历史状态，已整体下线（2026-10-22 批注：班级状态里没有「已结业」）。
+   *   只为兼容老数据的读取保留名字，**不再作为任何流转的目标**。
+   */
   GRADUATING: 3,
-  GRADUATED: 4,
+  /** 实训（升实训成功后由系统写入） */
+  TRAINING: 5,
+  /** 待就业（升就业成功后由系统写入） */
+  WAIT_EMPLOY: 6,
+  /** 已就业（【已就业】二次确认后由系统写入，终态） */
+  EMPLOYED: 7,
 } as const;
 
 export const CLASS_STATUS_NAME: Record<number, string> = {
   [CLASS_STATUS.OPEN]: '开放',
   [CLASS_STATUS.CLOSED]: '封班',
   [CLASS_STATUS.GRADUATING]: '待结业',
-  [CLASS_STATUS.GRADUATED]: '已结业',
+  [CLASS_STATUS.TRAINING]: '实训',
+  [CLASS_STATUS.WAIT_EMPLOY]: '待就业',
+  [CLASS_STATUS.EMPLOYED]: '已就业',
 };
+
+/** 系统态：只能由「升实训 / 升就业 / 已就业」三个动作写入，不允许在编辑弹窗里手工选 */
+export const CLASS_SYSTEM_STATUSES: number[] = [
+  CLASS_STATUS.TRAINING,
+  CLASS_STATUS.WAIT_EMPLOY,
+  CLASS_STATUS.EMPLOYED,
+];
+
+/** 是否为系统写入的状态（手工改状态时要把这类目标状态拦掉） */
+export function isSystemClassStatus(s: number): boolean {
+  return CLASS_SYSTEM_STATUSES.includes(Number(s));
+}
 
 /**
  * ★ 统一班级状态流转表
- *   已结业是终态，不可回退 —— 撤销结业属于「结业撤销」专用动作，不走这里。
+ *   已就业是终态，不可回退。
  *
- * 2026-10-19 批注：「待结业」这个状态删除（页面下拉不再出现），
- *   封班之后直接进「已结业」。为兼容历史数据，3→已结业 的流转仍保留，
- *   但**不再作为任何状态的下一跳目标**（新数据不可能变成 3）。
+ * 2026-10-19 批注：「待结业」这个状态删除（页面下拉不再出现）。
+ * ★ 2026-10-22 批注：「班级状态没有已结业」→ 已结业(4) 整体下线：
+ *   状态字典 / 状态名 / 流转表 / 统计卡 / 编辑弹窗全部去掉，**封班即终态**
+ *   （封班后仍可解封回开放）。
+ *
+ * ★ 2026-10-21：系统态之间只留一条单向链 实训 → 待就业 → 已就业，
+ *   保证「改状态」这条老路径不会把 已就业 拉回 待就业（已就业是终态）。
  */
 export const CLASS_STATUS_TRANSITIONS: Record<number, number[]> = {
   [CLASS_STATUS.OPEN]: [CLASS_STATUS.OPEN, CLASS_STATUS.CLOSED],
-  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN, CLASS_STATUS.GRADUATED],
-  [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATING, CLASS_STATUS.GRADUATED],
-  [CLASS_STATUS.GRADUATED]: [CLASS_STATUS.GRADUATED],
+  [CLASS_STATUS.CLOSED]: [CLASS_STATUS.CLOSED, CLASS_STATUS.OPEN],
+  // 历史状态：不再有任何下一跳
+  [CLASS_STATUS.GRADUATING]: [CLASS_STATUS.GRADUATING],
+  [CLASS_STATUS.TRAINING]: [CLASS_STATUS.TRAINING, CLASS_STATUS.WAIT_EMPLOY],
+  [CLASS_STATUS.WAIT_EMPLOY]: [CLASS_STATUS.WAIT_EMPLOY, CLASS_STATUS.EMPLOYED],
+  [CLASS_STATUS.EMPLOYED]: [CLASS_STATUS.EMPLOYED],
 };
 
 /** 是否允许把班级从 from 改成 to */
@@ -1332,14 +1397,9 @@ export interface ClassRow {
   phaseCode: number | null;
   phaseName: string;
 
-  /**
-   * ★ 2026-10-16 新增：阶段方案（表单里「阶段方案 + 阶段」两个下拉的落库值）
-   *   老班级没有方案时为 null，回显退回 phaseName（阶段码名称）。
-   */
-  schemeId: string | null;
-  schemeStageId: string | null;
-  /** 方案里的阶段名称（冗余存一份，列表/详情直接回显） */
-  schemeStageName: string | null;
+  /* ★ 2026-10-20：原「阶段方案三字段」schemeId / schemeStageId / schemeStageName 已删除 ——
+   *   它们指向 t_class_stage_scheme 那套从未建表的实现，三张班级表里也从来没有这三列
+   *   （写进去会 Unknown column）。阶段只落 phase_code，方案名不下发。 */
 
   headTeacherId: string | null;
   headTeacherName: string | null;
@@ -1368,7 +1428,7 @@ export interface ClassRow {
    */
   studentCount: number;
 
-  /** 1 开放 / 2 封班 / 3 待结业 / 4 已结业（三套一致） */
+  /** 1 开放 / 2 封班 / 5 实训 / 6 待就业 / 7 已就业（三套一致） */
   classStatus: number;
   classStatusName: string;
   /** 由 classStatus + 流转表推出：这个班现在还能改状态吗 */
@@ -1434,7 +1494,10 @@ export interface ClassSummary {
   closedCount: number;
   /** 2026-10-19 起「待结业」已下线，恒为 0（保留字段兼容前端旧代码） */
   graduatingCount: number;
-  graduatedCount: number;
+  /** ★ 2026-10-21：系统态计数（只有实训 / 就业部会有；其它学段恒 0） */
+  trainingCount?: number;
+  waitEmployCount?: number;
+  employedCount?: number;
   /** 在班学生总数 */
   studentCount: number;
 }
@@ -1508,6 +1571,14 @@ export interface ClassRosterRow {
   /** 在班状态：1 在班 2 已离班（只有实训花名册有此概念） */
   inClassStatus: number | null;
   inClassStatusName: string;
+  /**
+   * ★ 2026-10-21 批注（班级详情 · 花名册状态列）：
+   *   「更改同步学生档案的该学生的状态」→ 花名册「状态」列不再只显示「在班 / 已离班」，
+   *   而是**回读学生档案里的学生状态**（实训中 / 待就业 / 已就业 …），
+   *   与「学生档案」页同一个来源，两处不会各说一套。
+   */
+  studentStatus: number | null;
+  studentStatusName: string;
 }
 
 /** 元信息：某学段支持哪些特性（前端据此隐藏不适用输入框） */
@@ -1693,6 +1764,8 @@ export const DORM_CHANGE_NAME: Record<number, string> = {
 /** 宿舍列表查询条件 */
 export interface DormListQuery {
   stage: TeachingStage;
+  /** ★ 2026-10-23：按房间查在住名单（residents 用），同时用于解析房间自己的学段 */
+  dormId?: string;
   /** 楼栋名（精确） */
   building?: string;
   /** 性别限制 0不限/1男/2女 */
@@ -1749,6 +1822,9 @@ export interface DormRow {
   ownerName: string | null;
   /** 所属班级（只有初高有） */
   className: string | null;
+  /** ★ 2026-10-22：该房间分派给哪个班 / 该班状态（1 开放 / 2 封班） */
+  assignedClassName?: string | null;
+  assignedClassStatus?: number | null;
   remark: string | null;
 }
 

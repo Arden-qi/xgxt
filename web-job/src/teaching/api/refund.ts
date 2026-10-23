@@ -123,6 +123,8 @@ export interface RefundRow {
   currentHandlerHint: string | null;
   financeRemark: string | null;
   refundTime: string | null;
+  /** ★ 2026-10-22：财务退费单号（推送成功即回写）；出款完成后 refundTime 由财务自动回写 */
+  financeRefundNo?: string | null;
   createTime: string | null;
   canApprove: boolean;
   canCancel: boolean;
@@ -229,6 +231,8 @@ export function approveRefund(stage: TeachingStage, id: string, comment?: string
     approvalStatus: number;
     approvalStatusName: string;
     pushed: boolean;
+    /** 推送财务失败的具体原因（成功时 null）—— 失败提示里直接带上，省得远端只能翻日志 */
+    pushError?: string | null;
   }>('/api/teaching/refund/approve', { stage, id, comment });
 }
 
