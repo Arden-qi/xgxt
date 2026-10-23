@@ -19,10 +19,10 @@
 import { randomUUID } from 'crypto';
 import { db } from '../../class-jh/utils/db';
 import type { RefundListQuery, RefundRow } from '../shared/dto';
-import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME } from '../shared/dto';
+import { REFUND_FEE_TYPE_NAME, REFUND_STATUS, REFUND_STATUS_NAME, REFUND_UNFINISHED_STATUSES } from '../shared/dto';
 import { toRawRefundStatus, toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
-import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
+import type { PendingRef, RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import { tbl, tblInsTrx, tblTrx, uniUpdCols } from '../shared/uniTable';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 import { hydrateWithArchive } from '../shared/studentRef';
@@ -372,11 +372,37 @@ export async function setPushInfo(
   }
 }
 
-/** 该学生是否有进行中的退费单 */
-export async function hasPending(studentId: string): Promise<boolean> {
-  const row = await tbl(db, DB, T, STAGE)
+/**
+ * 找出该学生「未办结」的退费单 —— 防重复提交的唯一口径
+ *
+ * ★ 2026-10-23 修复：原来只查 `refund_status IN (2,3,4,5)`（进行中），
+ *   **待提交草稿不算**，于是「先建两条草稿（费用项不同）→ 再分别提交」
+ *   能绕过判重，同一学生出现两条「待学管审批」的单。
+ *   现在口径 = 待提交 + 待学管 + 待校长（见 dto.ts `REFUND_UNFINISHED_STATUSES`）。
+ *
+ * @param excludeId 排除自身（提交时用：本单自己当然在库里）
+ * @returns 命中的单据引用（进行中优先于草稿）；没有则 null
+ */
+export async function findPending(studentId: string, excludeId?: string): Promise<PendingRef | null> {
+  const raw: number[] = [];
+  for (const u of REFUND_UNFINISHED_STATUSES) {
+    const r = await toRawRefundStatus(STAGE, u);
+    if (r !== null && r !== undefined && !raw.includes(r)) raw.push(r);
+  }
+  const q = tbl(db, DB, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
-    .whereIn('refund_status', [2, 3, 4, 5]) // 老码里所有"审批中"
-    .first();
-  return !!row;
+    .whereIn('refund_status', raw);
+  if (excludeId) q.andWhereNot('id', excludeId);
+  const rows = (await q.orderBy('create_time', 'desc')) as Array<Record<string, any>>;
+  if (!rows.length) return null;
+
+  // 进行中优先：真有脏数据（草稿 + 进行中各一条）时，先报进行中的那条
+  const mapped = await Promise.all(
+    rows.map(async (r) => ({
+      id: String(r.id),
+      applyNo: String(r.apply_no || r.applyNo || ''),
+      status: (await toUnifiedRefundStatus(STAGE, Number(r.refund_status))) ?? 0,
+    })),
+  );
+  return mapped.find((m) => m.status !== REFUND_STATUS.DRAFT) ?? mapped[0];
 }

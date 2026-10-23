@@ -17,10 +17,10 @@
 import { randomUUID } from 'crypto';
 import { db } from '../../utils/db';
 import type { RefundListQuery, RefundRow } from '../shared/dto';
-import { REFUND_FEE_TYPE_NAME, REFUND_STATUS_NAME } from '../shared/dto';
+import { REFUND_FEE_TYPE_NAME, REFUND_STATUS, REFUND_STATUS_NAME, REFUND_UNFINISHED_STATUSES } from '../shared/dto';
 import { toUnifiedRefundStatus } from '../shared/conf';
 import { amountText, fmtDate, fmtDateTime, todayStr } from '../shared/format';
-import type { RefundAggregate, RefundWriteInput, StudentOption } from './types';
+import type { PendingRef, RefundAggregate, RefundWriteInput, StudentOption } from './types';
 import { tbl, tblTrx, tblInsTrx, uniUpdCols } from '../shared/uniTable';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
 import { hydrateWithArchive, ARCHIVE_TABLE } from '../shared/studentRef';
@@ -378,11 +378,26 @@ export async function setPushInfo(
   }
 }
 
-/** 校验：该学生是否有进行中的退费单（大学那条"禁止重复"规则的统一版） */
-export async function hasPending(studentId: string): Promise<boolean> {
-  const row = await tbl(db, SRC, T, STAGE)
+/**
+ * 找出该学生「未办结」的退费单 —— 防重复提交的唯一口径
+ *
+ * ★ 2026-10-23 修复：原来只查 `approval_status IN (2,3)`（进行中），
+ *   **待提交草稿(1) 不算**，于是「先建两条草稿（费用项不同）→ 再分别提交」能绕过判重。
+ *   口径见 dto.ts `REFUND_UNFINISHED_STATUSES`（1 待提交 / 2 待学管 / 3 待校长）。
+ *   ⚠️ 就业这张表的 `approval_status` **本身就是统一码**（蓝本），不需要翻译。
+ */
+export async function findPending(studentId: string, excludeId?: string): Promise<PendingRef | null> {
+  const q = tbl(db, SRC, T, STAGE)
     .where({ student_id: studentId, is_deleted: 0 })
-    .whereIn('approval_status', [2, 3])
-    .first();
-  return !!row;
+    .whereIn('approval_status', REFUND_UNFINISHED_STATUSES);
+  if (excludeId) q.andWhereNot('id', excludeId);
+  const rows = (await q.orderBy('create_time', 'desc')) as Array<Record<string, any>>;
+  if (!rows.length) return null;
+
+  const mapped = rows.map((r) => ({
+    id: String(r.id),
+    applyNo: String(r.apply_no || r.applyNo || ''),
+    status: Number(r.approval_status),
+  }));
+  return mapped.find((m) => m.status !== REFUND_STATUS.DRAFT) ?? mapped[0];
 }

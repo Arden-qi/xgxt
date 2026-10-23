@@ -519,6 +519,28 @@ export const REFUND_ACTIVE_STATUSES: number[] = [
   REFUND_STATUS.PENDING_PRINCIPAL,
 ];
 
+/**
+ * ★ 2026-10-23：**未办结**状态 = 待提交草稿 + 进行中 —— 防重复提交的判重口径
+ *
+ * 【为什么要含「待提交」】
+ *   用户报的问题：「该学生已有一条进行中的退费申请，费用项都不同也能重复提交」。
+ *   实锤根因不是费用项，而是**判重只做在「新建」、且不认草稿**：
+ *     ① 先建草稿 A（学费，状态 1 待提交）
+ *     ② 再建草稿 B（住宿费）—— 「新建」的判重只看 2/3，草稿不算进行中 → 放过
+ *     ③ A、B 分别点「提交」—— 提交接口只校验**本单**状态，不看该学生别的单 → 双双进入「待学管审批」
+ *   → 同一学生出现两条进行中的退费单，后续出款/核算全是重复的。
+ *
+ *   与请假（异动）域已确立的口径一致：「草稿也是一张没办完的单子」
+ *   （见 `teaching/leave/repo.*.ts` 的 `PENDING_*_STATUS`）。
+ *
+ * ⚠️ 这里是**统一码**；各学段仓储用 `toRawRefundStatus` 翻译成自己的原码再查。
+ */
+export const REFUND_UNFINISHED_STATUSES: number[] = [
+  REFUND_STATUS.DRAFT,
+  REFUND_STATUS.PENDING_MANAGER,
+  REFUND_STATUS.PENDING_PRINCIPAL,
+];
+
 /** 退费费用类型（三套一致；实训另有 6 退学退费 / 9 其他） */
 export const REFUND_FEE_TYPE_NAME: Record<number, string> = {
   1: '学费',

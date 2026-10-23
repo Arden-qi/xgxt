@@ -36,6 +36,22 @@ export interface StudentOption {
   className: string | null;
 }
 
+/**
+ * 「未办结」退费单的引用（防重复提交的判重结果）
+ *
+ * ★ 2026-10-23：判重返回值从 boolean 升级为「带单号 + 状态」——
+ *   报错文案要能让用户知道是**哪一单**挡住的（「该学生已有一条待提交的退费申请（TF20261023001）」），
+ *   否则用户只知道被拒、不知道去哪处理。
+ */
+export interface PendingRef {
+  /** 单 id */
+  id: string;
+  /** 申请单号；初高 / 就业这两套表没有单号列 → 空串（文案里就不带单号） */
+  applyNo: string;
+  /** **统一码**状态（1 待提交 / 2 待学管 / 3 待校长） */
+  status: number;
+}
+
 /** 汇总（各学段各算一份） */
 export interface RefundAggregate {
   total: number;
