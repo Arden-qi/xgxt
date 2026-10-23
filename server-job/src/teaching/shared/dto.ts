@@ -1744,6 +1744,8 @@ export const DORM_CHANGE_NAME: Record<number, string> = {
 /** 宿舍列表查询条件 */
 export interface DormListQuery {
   stage: TeachingStage;
+  /** ★ 2026-10-23：按房间查在住名单（residents 用），同时用于解析房间自己的学段 */
+  dormId?: string;
   /** 楼栋名（精确） */
   building?: string;
   /** 性别限制 0不限/1男/2女 */

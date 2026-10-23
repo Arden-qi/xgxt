@@ -31,6 +31,8 @@ export interface ClassScope {
   type: DataScope;
   /** 本班级：当前用户 ID（可能命中班主任/教员/助教任一字段） */
   userId?: string;
+  /** ★ 2026-10-23：过渡期用 —— 权限库 U 号 + 门户 UUID 都带上 */
+  userIds?: string[];
   /** 本部门：部门编码 */
   deptCode?: number;
   /** 是否为「本班级」范围（需要按班级表 join/子查询） */
@@ -49,7 +51,14 @@ export function buildClassScope(req: Request): ClassScope {
 
   switch (user.dataScope) {
     case DataScope.CLASS:
-      return { type: DataScope.CLASS, userId: user.userId, isClassScope: true };
+      /* ★ 2026-10-23：责任人列有 UUID / U号 两种写法，这里用「任一匹配」 */
+      return {
+        type: DataScope.CLASS,
+        userId: user.userId,
+        userIds: [user.userId, (user as any).businessUserId, (user as any).portalUserId]
+          .map((x) => String(x || '')).filter(Boolean),
+        isClassScope: true,
+      } as ClassScope;
     case DataScope.DEPT:
       return { type: DataScope.DEPT, deptCode: user.deptCode, isClassScope: false };
     case DataScope.SELF:
@@ -100,15 +109,16 @@ export async function getScopedClassIds(
   stage: TeachingStage = 'jh',
 ): Promise<string[] | null> {
   if (!scope.isClassScope || !scope.userId) return null;
+  const me = scope.userIds?.length ? scope.userIds : [scope.userId];
   const base = dbName
     ? tbl(db, dbName, classTable, stage)
     : db(classTable);
   const rows = await base
     .where('is_deleted', false)
     .andWhere((qb: any) => {
-      qb.where('head_teacher_id', scope.userId)
-        .orWhere('teacher_id', scope.userId)
-        .orWhere('assistant_id', scope.userId);
+      qb.whereIn('head_teacher_id', me)
+        .orWhereIn('teacher_id', me)
+        .orWhereIn('assistant_id', me);
     })
     .select('id');
   return rows.map((r: any) => r.id);

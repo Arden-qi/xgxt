@@ -179,16 +179,6 @@
           title="该学段的宿舍数据由教务同步，不能在这里分派/退宿；请走「调宿/退宿申请」"
         />
 
-        <!-- ★ 2026-10-22：本班封班后，空床位分配权交回教务，班主任不再能填床 -->
-        <el-alert
-          v-if="isOnlyHeadTeacher && curDorm.assignedClassStatus === 2"
-          class="tdv-tip"
-          type="warning"
-          :closable="false"
-          show-icon
-          title="本班已封班：该宿舍空床位的分配权已交回教务，你仍可发起调宿/退宿申请"
-        />
-
         <div class="tdv-bed-head">
           <el-tag :type="DORM_STATUS_TAG[curDorm.roomStatus] || 'info'">
             {{ curDorm.roomStatusName }}
@@ -217,8 +207,10 @@
               <span v-else class="muted">{{ b.bedStatusName }}</span>
             </div>
             <div class="tdv-bed__ops">
+              <!-- ★ 2026-10-23 用户口径：班主任的床位界面与教务一致，可自己分配床位
+                   （原来「本班封班后空床交回教务」的限制取消；封班提示条一并移除） -->
               <el-button
-                v-if="b.bedStatus === 1 && canEdit(curDorm) && !(isOnlyHeadTeacher && curDorm?.assignedClassStatus === 2)"
+                v-if="b.bedStatus === 1 && canEdit(curDorm)"
                 link
                 type="primary"
                 size="small"

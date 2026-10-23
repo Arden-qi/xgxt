@@ -1037,12 +1037,27 @@ function onClassroomBlur() {
 
 function emptyForm(stage: ClassStage): ClassSaveBody {
   return {
+    /**
+     * ★ 2026-10-23 修：这里必须显式带上 id / classStatus。
+     *
+     *   表单清空用的是 Object.assign(form, emptyForm(stage))：
+     *   只有 emptyForm 里出现过的字段才会被重置，没出现的字段会**留在原值上**。
+     *   之前这里漏了 id，后果是：
+     *     先点过任意班级的「编辑」→ form.id 有值 → 再点「新增班级」
+     *     → 弹窗标题变成「编辑班级」、还带着上一个班的数据，
+     *       保存时按"编辑"去更新那个旧 id，后端查不到就报「班级不存在」。
+     */
+    id: undefined,
+    classStatus: undefined,
     stage,
     className: '',
     classCode: '',
     // 2026-10-19：实训与就业部都归「就业部」(3)，两者只靠学段区分
     deptCode: stage === 'jh' ? 1 : stage === 'class' ? 2 : 3,
     phaseCode: undefined,
+    schemeId: null,
+    schemeStageId: null,
+    schemeStageName: null,
     headTeacherId: '',
     headTeacherName: '',
     teacherId: '',

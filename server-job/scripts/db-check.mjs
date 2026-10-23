@@ -312,6 +312,59 @@ const CLASS_CODE_TABLES = [
     }
   }
 
+  // ---------- E. 人员 ID 是否统一为权限库 U 号 ----------
+  //
+  // ★ 2026-10-23：业务表的人员列（班主任/申请人/审批人/操作人…）必须只存
+  //   权限库用户号（U004…）。混着门户 UUID 时，凡是"按人过滤"的查询
+  //   都会静默查空（班主任看不到自己的班、审批人看不到自己的单）。
+  console.log(C.bold('\n▶ E. 人员 ID 口径（是否统一为权限库 U 号）'));
+  {
+    const dbList = [DB.job, DB.edu, DB.cls, DB.jh, DB.common, DB.consult, DB.finance, DB.perm, DB.portal];
+    const PERSON_RE = /(teacher|manager|staff|approver|receiver|applicant|operator|creator|owner|advisor|consultant|recruit|handler)/;
+    const NOT_PERSON_RE = /^(scheme|class|student|plan|exam|dorm|bed)_/;
+
+    const [permRows] = await conn.query(`SELECT id FROM \`${DB.perm}\`.t_perm_user`);
+    const permIds = new Set(permRows.map((r) => String(r.id)));
+
+    const [personCols] = await conn.query(
+      `SELECT table_schema db, table_name t, column_name c
+         FROM information_schema.columns
+        WHERE table_schema IN (?) AND column_name LIKE '%\\_id'
+          AND data_type IN ('varchar','char','text')`,
+      [dbList],
+    );
+    const hits = personCols.filter((x) => PERSON_RE.test(x.c) && !NOT_PERSON_RE.test(x.c));
+
+    let badCols = 0;
+    const badList = [];
+    for (const h of hits) {
+      let vals = [];
+      try {
+        const [r] = await conn.query(
+          `SELECT DISTINCT \`${h.c}\` v FROM \`${h.db}\`.\`${h.t}\` WHERE \`${h.c}\` IS NOT NULL AND \`${h.c}\` <> ''`,
+        );
+        vals = r.map((x) => String(x.v));
+      } catch {
+        continue;
+      }
+      // 允许的"其他值"：角色码（如 TEACH_DEAN）、系统账号（system / SVC_*）
+      const bad = vals.filter((v) => !permIds.has(v) && !/^[A-Z][A-Z0-9_]{2,}$/.test(v) && !/^(system|SVC_)/i.test(v));
+      if (bad.length) {
+        badCols += 1;
+        badList.push(`${h.db}.${h.t}.${h.c}（${bad.length} 个值，如 ${bad.slice(0, 2).join('/')}）`);
+      }
+    }
+
+    if (!badCols) {
+      console.log(`  ${C.ok('✓')} 所有人员列都已统一为权限库 U 号（检查 ${hits.length} 列）`);
+    } else {
+      problems += 1;
+      console.log(`  ${C.bad('✗')} ${badCols} 个人员列仍存着旧 ID（门户 UUID 等）`);
+      for (const x of badList.slice(0, 5)) console.log(`      ${C.dim('- ' + x)}`);
+      if (badList.length > 5) console.log(`      ${C.dim(`… 还有 ${badList.length - 5} 项`)}`);
+    }
+  }
+
   await conn.end().catch(() => {});
 
   // ---------- 结论 ----------
@@ -322,6 +375,8 @@ const CLASS_CODE_TABLES = [
     console.log(C.bold('\n── 怎么修 ──────────────────────────────────'));
     console.log('  缺表 / 缺列  →  cd server-job && npm run migrate');
     console.log('                 （会逐个库跑，失败的那个库会单独报出来）');
+    console.log('  人员 ID 不统一 →  cd server-job && npm run id:audit    // 看清单');
+    console.log('                     npm run id:unify:apply             // 统一为权限库 U 号');
     console.log('  模块库缺表缺列 →  该库是"导出即快照"的建库 SQL，不会自动补进已有库：');
     console.log('                     按 sql/init/<库>.sql 里的建表语句增量补（先备份），');
     console.log('                     或整库重建后回灌数据。');

@@ -146,6 +146,15 @@ const MODE = process.argv.includes('--run')
     ? 'verify'
     : 'plan';
 const OVERWRITE = process.argv.includes('--overwrite');
+/**
+ * ★ 2026-10-23：加 --stage=jh 之类，只搬某个学段的老表。
+ *   起因：业务表里还留着上一代演示班级（产品/U2601），全量搬会把它们"复活"到统一表。
+ *   补初高数据时用 `--stage=jh` 最安全。
+ */
+const STAGE_FILTER = (() => {
+  const hit = process.argv.find((a) => a.startsWith('--stage='));
+  return hit ? hit.slice(8).split(',').map((s) => s.trim()).filter(Boolean) : null;
+})();
 const ONLY = (() => {
   const hit = process.argv.find((a) => a.startsWith('--only='));
   return hit ? hit.slice(7).split(',').map((s) => s.trim()).filter(Boolean) : null;
@@ -210,6 +219,7 @@ function tasks() {
     const table = key.slice(dot + 1);
     const stage = STAGE_OF_DB[dbName] || null;
     if (ONLY && !ONLY.includes(uni)) continue;
+    if (STAGE_FILTER && (!stage || !STAGE_FILTER.includes(stage))) continue;
     list.push({ key, dbName, table, uni, stage });
   }
   return list;
