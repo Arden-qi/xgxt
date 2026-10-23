@@ -202,15 +202,9 @@
           >
             升就业
           </el-button>
-          <!-- ★ 2026-10-23：升就业成功后的【待就业】——纯状态位，不可点击 -->
-          <el-button
-            v-if="!isReadOnlyUser && isEmploymentStage(row.stage) && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
-            link
-            type="info"
-            disabled
-          >
-            待就业
-          </el-button>
+          <!-- ★ 2026-10-23 补充批注：「状态变为待就业就**不显示**【待就业】这个按钮了」
+               原来升就业成功后按钮变成灰的【待就业】占位，现在整块去掉 ——
+               待就业状态只由「状态」列的标签体现，操作列只留可点的【已就业】。 -->
           <!-- ★ 2026-10-23 批注第 3 条：【待就业】之后才有【已就业】。
                点击 → 识别整班学生状态 →
                  全部「已就业 / 退学」→ 提示班级人数 / 就业人数 → 确认改「已就业」；
@@ -641,6 +635,7 @@
         <template #title>
           升实训会把这个班<b>连同学生</b>整体转到就业部：新班<b>不再有班主任 / 教员 / 助教</b>，
           只保留项目经理与就业老师；原班级从大学部移除。学生状态统一变为「实训中」。
+          <br /><b>班级编号沿用原班级，不会重新生成</b>（编号只在新建班级时确定，之后任何操作都不改）。
         </template>
       </el-alert>
       <el-form label-width="100px" class="tv-form">
@@ -653,6 +648,13 @@
           <el-col :span="12">
             <el-form-item label="部门">
               <el-input model-value="就业部" disabled />
+            </el-form-item>
+          </el-col>
+          <!-- ★ 2026-10-23 批注：「班级编号只有新建班级时创建更改，后续任何操作都不可更改」
+               → 升实训**沿用原编号**，这里只读展示，不给编辑。 -->
+          <el-col :span="12">
+            <el-form-item label="班级编号">
+              <el-input :model-value="trainingForm.srcClassCode" disabled placeholder="升实训后保持不变" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -1445,6 +1447,8 @@ const trainingSaving = ref(false);
 const trainingForm = reactive({
   classId: '',
   srcName: '',
+  /** ★ 2026-10-23：源班编号 —— 升实训**沿用**它，弹窗里只读展示 */
+  srcClassCode: '',
   studentCount: 0,
   className: '',
   phaseCode: undefined as number | undefined,
@@ -1485,6 +1489,7 @@ function openTraining(row: ClassRow) {
   Object.assign(trainingForm, {
     classId: row.classId,
     srcName: row.className,
+    srcClassCode: row.classCode || '—',
     studentCount: row.studentCount ?? 0,
     // 批注：班级名称可以修改，也可以保持原班级名称不变
     className: row.className,

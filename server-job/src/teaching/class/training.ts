@@ -140,7 +140,16 @@ export async function upgradeClassToTraining(
   if (!students.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生，无法升实训');
 
   const newId = randomUUID();
-  const classCode = await genClassCode();
+  /**
+   * ★ 2026-10-23 批注：「【升实训】点击后**不更改班级编号**
+   *   （班级编号只有新建班级时进行创建更改，后续的任何操作都不可更改）」
+   *
+   *   → 新班**沿用源班的班级编号**，不再 genClassCode() 另生成一个
+   *     （原来升一次实训编号就从 U2601 变成 SX2026000x）。
+   *   源班编号为空（历史数据）时才生成一个兜底，避免 NOT NULL 约束报错。
+   *   编号在三部门全局唯一（见 shared/classCode.ts），源班紧接着会被删除，不会长期占用。
+   */
+  const classCode = String(src.class_code ?? '').trim() || (await genClassCode());
   const now = new Date();
   const today = ymd(now);
   const userId = user?.userId || 'system';

@@ -38,7 +38,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 import { applyClassScope } from '../shared/dataScope';
-import { resolvePhaseCodeFromScheme } from '../shared/stageSchemes';
+import { resolvePhaseCodeFromScheme, findSchemeStageByCode } from '../shared/stageSchemes';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -106,7 +106,12 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
-    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    // ★ 2026-10-23：阶段名优先取「方案里选的阶段」快照，老班级没有才退回阶段码名称
+    phaseName: str(r.scheme_stage_name) || (phase === null ? '' : (PHASE_NAME[phase] ?? '')),
+    // ★ 2026-10-23：把方案三列一起下发（编辑弹窗回显 + 前端判断用）
+    schemeId: str(r.scheme_id),
+    schemeStageId: str(r.scheme_stage_id),
+    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -272,11 +277,18 @@ export const repo: ClassRepo = {
     /* ★ 2026-10-22 与大学部同一口径：只选了方案阶段时按 sort_no 推导阶段码
      *   （初高方案：预科 101 / 初中部1~3期 102~104 / 高中部1~3期 105~107） */
     const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
-    set(phaseCodeCol(), body.phaseCode ?? derivedPhaseCode);
+    const phaseCode = body.phaseCode ?? derivedPhaseCode;
+    set(phaseCodeCol(), phaseCode);
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
-    set('scheme_id', body.schemeId);
-    set('scheme_stage_id', body.schemeStageId);
-    set('scheme_stage_name', body.schemeStageName);
+    //   ★ 2026-10-23：表单只传阶段码时，按 (部门, 阶段码) 反查方案阶段补上
+    //     方案三列 —— 否则列表「阶段」列显示的是空的，看着像"选了阶段没生效"。
+    const autoStage =
+      body.schemeStageId == null && phaseCode != null
+        ? await findSchemeStageByCode(body.deptCode, phaseCode)
+        : null;
+    set('scheme_id', body.schemeId ?? autoStage?.schemeId);
+    set('scheme_stage_id', body.schemeStageId ?? autoStage?.id);
+    set('scheme_stage_name', body.schemeStageName ?? autoStage?.name);
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);

@@ -43,6 +43,11 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import {
+  resolvePhaseCodeFromScheme,
+  findSchemeStageByCode,
+  FIRST_PHASE_OF_DEPT,
+} from '../shared/stageSchemes';
 import { applyClassScope } from '../shared/dataScope';
 import { assertClassCodeAvailable } from '../shared/classCode';
 
@@ -100,7 +105,15 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
-    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase)),
+    // ★ 2026-10-23：阶段名**优先方案里选的阶段**（新建/编辑班级时选的），
+    //   老班级没有方案快照才退回阶段码名称。否则就业部 304「实训」这类
+    //   方案阶段在列表里会显示成「—」（阶段码在老字典里已软删）。
+    phaseName:
+      str(r.scheme_stage_name) || (phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase))),
+    // ★ 2026-10-23：把方案三列一起下发（编辑弹窗回显 + 前端判断用）
+    schemeId: str(r.scheme_id),
+    schemeStageId: str(r.scheme_stage_id),
+    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -273,7 +286,22 @@ export const repo: ClassRepo = {
     };
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
-    set(phaseCodeCol(), body.phaseCode);
+    // ★ 2026-10-22 阶段码：显式传了 phaseCode 就用它；只选了「阶段方案阶段」时
+    //   按方案阶段的 sort_no 推导（否则就业部的班阶段码落空，列表「阶段」显示「—」）。
+    const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
+    const phaseCode = body.phaseCode ?? derivedPhaseCode;
+    set(phaseCodeCol(), phaseCode);
+    // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
+    //   ★ 2026-10-23：之前只有大学部仓储写这三列，就业部/实训漏写 → 列表阶段列空。
+    //   ★ 2026-10-23：表单只传阶段码时，按 (部门, 阶段码) 反查方案阶段补上
+    //     方案三列，保证「新建/编辑时选的阶段」立刻出现在列表「阶段」列。
+    const autoStage =
+      body.schemeStageId == null && phaseCode != null
+        ? await findSchemeStageByCode(body.deptCode, phaseCode)
+        : null;
+    set('scheme_id', body.schemeId ?? autoStage?.schemeId);
+    set('scheme_stage_id', body.schemeStageId ?? autoStage?.id);
+    set('scheme_stage_name', body.schemeStageName ?? autoStage?.name);
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);
@@ -361,7 +389,7 @@ export const repo: ClassRepo = {
       // ★ 新建默认封班（"开放"已废弃）
       class_status: body.classStatus ?? CLASS_STATUS.CLOSED,
       // ★ `stage`（阶段码）/ `dept_code` 在这张表都是 NOT NULL，前端没传时给兜底值
-      [phaseCodeCol()]: body.phaseCode ?? 1,
+      [phaseCodeCol()]: body.phaseCode ?? derivedPhaseCode ?? FIRST_PHASE_OF_DEPT[deptCode] ?? 1,
       dept_code: deptCode,
       student_count: 0,
       is_deleted: false,
