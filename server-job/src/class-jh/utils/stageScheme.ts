@@ -12,8 +12,8 @@
  *   ③ 实训/大学部的班级表单同样复用 ② 的接口 —— 方案虽然存在初高库里，
  *      但按部门区分（1 初高部 / 2 大学部），三个学段各自只看到本部门的方案。
  *
- * 【删除保护】方案被班级引用时禁止删除：三张班级表（初高/大学/实训）都查一遍。
- *   跨库查询用裸 SQL + try/catch —— 某张表不存在（未部署该学段）时跳过，不误伤。
+ * 【删除保护】方案被班级引用时禁止删除：查统一表 t_uni_class。
+ *   用裸 SQL + try/catch —— 表不存在（未部署）时跳过，不误伤。
  */
 
 import { randomUUID } from 'crypto';
@@ -30,17 +30,13 @@ const STAGE_DICT_TABLE = 't_class_stage';
 /** 各部门的阶段号段起点（1xx 初高 / 2xx 大学 / 3xx 就业） */
 const BASE_OF_DEPT: Record<number, number> = { 1: 100, 2: 200, 3: 300 };
 
-/** 方案被哪些班级表引用（跨库） */
-const CLASS_TABLES = ['sms_class_jh.t_class_info', 'sms_class.t_class_info', 'sms_job.t_job_class'];
-/**
- * ★ 2026-10-22：统一表也要同步
+/** 方案被哪些班级表引用（跨库）
  *
- *   教学域默认走统一表（`TEACHING_UNI_TABLE !== '0'`，见 teaching/shared/uniTable.ts），
- *   班级列表读的是 `sms_common.t_uni_class`。只更新三张业务表的话，
- *   页面上还是旧阶段名 —— 用户看到的就是"方案改了、班级没变"。
- *   注意统一表的阶段列叫 `stage_code`（业务表叫 `stage`）。
+ * ★ 2026-10-22：只查统一表。P8 之后这批老业务表（t_class_info / t_job_class）已 DROP，
+ *   统一表 `sms_common.t_uni_class` 是权威；继续裸查老表会报「Table doesn't exist」。
+ *   注意统一表的阶段码列叫 `stage_code`（老表叫 `stage`），UPDATE 时别用错列名。
  */
-const UNI_CLASS_TABLE = 'sms_common.t_uni_class';
+const CLASS_TABLES = ['sms_common.t_uni_class'];
 
 /* ============================================================
  * 类型
@@ -290,10 +286,10 @@ async function assignStageCodes(
   return out;
 }
 
-/** 某方案下的某个阶段是否已被班级引用（三张业务表 + 统一表） */
+/** 某方案下的某个阶段是否已被班级引用（查统一表） */
 async function stageUsedByClass(stageId: string): Promise<number> {
   let used = 0;
-  for (const table of [...CLASS_TABLES, UNI_CLASS_TABLE]) {
+  for (const table of CLASS_TABLES) {
     try {
       const rows = await db.raw(
         `SELECT COUNT(*) AS n FROM ${table} WHERE scheme_stage_id = ? AND is_deleted = 0`,
@@ -327,24 +323,12 @@ async function syncClassStageNames(
           `UPDATE ${table}
               SET scheme_stage_name = ?
             WHERE is_deleted = 0
-              AND (scheme_stage_id = ? OR (scheme_id = ? AND stage = ?))`,
+              AND (scheme_stage_id = ? OR (scheme_id = ? AND stage_code = ?))`,
           [r.stage_name, r.id, schemeId, r.stage_code],
         );
       } catch {
         /* 表不存在 / 列没迁移：跳过，不影响方案保存 */
       }
-    }
-    // 统一表（班级列表实际读的那张）：阶段列叫 stage_code
-    try {
-      await db.raw(
-        `UPDATE ${UNI_CLASS_TABLE}
-            SET scheme_stage_name = ?
-          WHERE is_deleted = 0
-            AND (scheme_stage_id = ? OR (scheme_id = ? AND stage_code = ?))`,
-        [r.stage_name, r.id, schemeId, r.stage_code],
-      );
-    } catch {
-      /* 统一表未启用：跳过 */
     }
   }
 }
@@ -499,9 +483,9 @@ export async function updateScheme(id: string, input: StageSchemeSaveInput, user
   return { id };
 }
 
-/** 方案是否仍被班级引用（三张业务表 + 统一表都查） */
+/** 方案是否仍被班级引用（查统一表） */
 export async function schemeUsedByClass(id: string): Promise<boolean> {
-  for (const table of [...CLASS_TABLES, UNI_CLASS_TABLE]) {
+  for (const table of CLASS_TABLES) {
     try {
       const rows = await db.raw(
         `SELECT id FROM ${table} WHERE scheme_id = ? AND is_deleted = 0 LIMIT 1`,
