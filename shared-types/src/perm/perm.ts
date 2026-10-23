@@ -232,6 +232,8 @@ export interface PermUserListItem {
   age: number;
   deptId: string;
   deptName: string;
+  /** ★ 2026-10-23：带上级的完整部门路径（「教学部-初中部」），界面展示统一用它 */
+  deptPath?: string;
   /** 职位 ID 数组 */
   roleIds: string[];
   /** 职位名称数组 */
@@ -306,6 +308,8 @@ export interface PermAuthProfile {
   account: string;
   deptId: string;
   deptName: string;
+  /** ★ 2026-10-23：带上级的完整部门路径（「教学部-初中部」），界面展示统一用它 */
+  deptPath?: string;
   userStatus: UserStatus;
   /** 职位编码数组，写进 token 的 roles[] */
   roles: string[];

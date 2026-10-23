@@ -46,6 +46,7 @@ import {
   avatarText,
   clientIp,
   collectDescendants,
+  deptPathMap,
   getUserEffectivePerms,
   joinRoleNames,
   maskPhone,
@@ -154,7 +155,10 @@ async function loadUserRoleBundle(userIds: string[]): Promise<UserRoleBundle> {
 
 /** 组装账号列表项 */
 async function buildUserListItems(rows: any[]) {
-  const depts = await db('t_perm_dept').where('is_deleted', false).select('id', 'dept_name');
+  const [depts, deptPaths] = await Promise.all([
+    db('t_perm_dept').where('is_deleted', false).select('id', 'dept_name'),
+    deptPathMap(),
+  ]);
   const deptMap = new Map(depts.map((d: any) => [d.id, d.dept_name]));
 
   // ★ 2026-10-16：批量带出门户账号的可访问模块（列表 / 编辑表单回显用）
@@ -184,6 +188,8 @@ async function buildUserListItems(rows: any[]) {
       age: r.age,
       deptId: r.dept_id,
       deptName: deptMap.get(r.dept_id) || '—',
+      /** ★ 2026-10-23：带上级的部门路径（「教学部-初中部」）—— 全站展示统一用它 */
+      deptPath: deptPaths.get(r.dept_id) || deptMap.get(r.dept_id) || '—',
       roleIds,
       roleNames,
       roleName: roleNames[0] || '—',
@@ -873,6 +879,7 @@ userRouter.get(
     if (!row) throw new BizError(BizCode.USER_NOT_FOUND, '账号不存在');
 
     const dept = row.dept_id ? await db('t_perm_dept').where({ id: row.dept_id }).first() : null;
+    const deptPaths = await deptPathMap();
 
     const links = await db('t_perm_user_role').where({ user_id: row.id, is_deleted: false });
     const roleIds = links.map((l: any) => l.role_id);
@@ -889,6 +896,8 @@ userRouter.get(
         account: row.account,
         deptId: row.dept_id,
         deptName: dept?.dept_name || '—',
+        /* 带上级的完整路径，登录后门户显示部门用 */
+        deptPath: (row.dept_id && deptPaths.get(row.dept_id)) || dept?.dept_name || '—',
         userStatus: row.user_status,
         roles: roles.map((r: any) => r.role_code),
         roleIds,

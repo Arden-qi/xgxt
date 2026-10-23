@@ -571,14 +571,11 @@ async function onUserEdited(): Promise<void> {
         <div class="n g">{{ overview?.stageTotal ?? '—' }}</div>
         <div class="l">下设子部门</div>
       </div>
-      <div class="k" @click="toast('全部门职位均在此列表')">
-        <div class="n p">{{ overview?.roleTotal ?? '—' }}</div>
-        <div class="l">归属职位数</div>
-      </div>
-      <div class="k" @click="toast(`共 ${overview?.userTotal ?? 0} 个账号已归属部门`)">
-        <div class="n w">{{ overview?.userTotal ?? '—' }}</div>
-        <div class="l">归属账号数</div>
-      </div>
+      <!-- ★ 2026-10-23 按用户要求删除「归属职位数 / 归属账号数」两张 KPI 卡：
+           这两个数是全部门（含下设子部门）去重后的总数，与表格里「职位数 / 账号数」两列不同源、
+           也不好在一屏内核对，留着容易被误读成"表格各行相加"。职位 / 账号规模请看下方表格，
+           或直接去「职位管理」「账号管理」两页看总数。
+           （后端 /dept/overview 仍返回 roleTotal / userTotal，本页不再展示。） -->
     </div>
 
     <!-- ==================== 部门结构（原型第 2693~2720 行） ==================== -->
@@ -656,6 +653,7 @@ async function onUserEdited(): Promise<void> {
                 </div>
               </td>
             </tr>
+            <!-- ★ 2026-10-23 按用户要求删除表格底部的「合计」行（含"去重，父行已含子部门"说明） -->
             <tr v-if="!rows.length">
               <td colspan="6">
                 <div class="empty">
@@ -782,7 +780,7 @@ async function onUserEdited(): Promise<void> {
           <tr v-for="u in deptUsersList" :key="u.id">
             <td><b>{{ u.userName }}</b></td>
             <td><code style="font-size: 11.5px">{{ u.account }}</code></td>
-            <td>{{ u.deptName }}</td>
+            <td>{{ u.deptPath || u.deptName }}</td>
             <td>
               <span
                 v-for="n in u.roleNames"
