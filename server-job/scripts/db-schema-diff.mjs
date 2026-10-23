@@ -163,7 +163,7 @@ if (!ONLY_CODE) {
   }
   lines.push('');
   lines.push('  提示：「库里多」多半是本机残留或 initialization SQL 没跟上，不算错误；');
-  lines.push('        「库里缺」会让对应功能报「数据表不存在」，必须补齐（见 sql/init/README.md）。');
+  lines.push('        「库里缺」会让对应功能报「数据表不存在」，必须补齐（见根目录「数据库变更约定.md」）。');
 }
 
 await conn.end();
@@ -173,7 +173,7 @@ if (QUIET && !problems.length) process.exit(0);
 console.log('\n================ 数据库表结构自检 ================');
 lines.forEach((l) => console.log(l));
 if (problems.length) {
-  console.log(`\n  → 共 ${problems.length} 处缺表。补法见 server-job/sql/init/README.md「缺表怎么补」。`);
+  console.log(`\n  → 共 ${problems.length} 处缺表。补法见仓库根目录「数据库变更约定.md」。`);
   console.log('=================================================\n');
   process.exit(1);
 }

@@ -651,7 +651,7 @@ async function ensureDatabases() {
       return;
     }
     warn('检测到库里有缺表 —— 相关页面会报「数据表不存在」');
-    console.log('    补法见 server-job/sql/init/README.md「缺表怎么补」一节；');
+    console.log('    补法见仓库根目录「数据库变更约定.md」（或 server-job/sql/init/README.md）；');
     console.log('    自查命令：cd server-job && npm run db:schema-diff');
   }
 
