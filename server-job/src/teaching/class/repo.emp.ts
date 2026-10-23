@@ -324,10 +324,15 @@ export const repo: ClassRepo = {
      *    班级交接（service.ts handover）也走 save()，不带编号字段；
      *    无条件要求必填会把交接拦死。表单提交时空串被 route 转成 null，仍会报必填。
      */
-    if (body.classCode !== undefined) {
+    /**
+     * ★ 2026-10-23 用户口径：「班级编号只能新建班级可创建，编辑班级里的班级编号不可更改」
+     *   → 只有**新增**（无 body.id）才写入/校验编号；编辑时传上来的编号一律忽略，
+     *     库里保持创建时的值（前端编辑弹窗也把该输入框 disabled 了）。
+     */
+    if (body.classCode !== undefined && !body.id) {
       const code = String(body.classCode ?? '').trim();
       if (!code) throw new Error('班级编号必填');
-      await assertClassCodeUnique(code, body.id);
+      await assertClassCodeUnique(code);
       payload.class_code = code;
     }
 

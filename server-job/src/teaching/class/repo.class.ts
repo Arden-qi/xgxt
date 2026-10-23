@@ -280,7 +280,12 @@ export const repo: ClassRepo = {
     set('room', body.classroom);
     set('open_date', body.openDate);
     // ★ 2026-10-21：班级编号（三部门统一必填 + 同表唯一）
-    set('class_code', body.classCode === undefined ? undefined : String(body.classCode ?? '').trim());
+    // ★ 2026-10-23：「班级编号只能新建班级可创建，编辑班级里的不可更改」
+    //   → 编辑（有 body.id）时忽略传上来的编号，库里保持创建时的值。
+    set(
+      'class_code',
+      body.id || body.classCode === undefined ? undefined : String(body.classCode ?? '').trim(),
+    );
     // ★ 这张表没 close_date / remark
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
 
@@ -291,10 +296,10 @@ export const repo: ClassRepo = {
      * 它的 saveBody 不带 classCode → 交接会被「班级编号必填」拦死。
      * 表单提交时空串被 route 转成 null（不是 undefined），所以「清空编号再保存」仍会报必填。
      */
-    if (body.classCode !== undefined) {
+    if (body.classCode !== undefined && !body.id) {
       const code = String(body.classCode ?? '').trim();
       if (!code) throw new Error('班级编号必填');
-      await assertClassCodeUnique(code, body.id);
+      await assertClassCodeUnique(code);
     }
 
     if (body.id) {

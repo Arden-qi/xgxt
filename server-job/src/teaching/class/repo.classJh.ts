@@ -299,7 +299,12 @@ export const repo: ClassRepo = {
     set('open_date', body.openDate);
     set('remark', body.remark);
     // ★ 2026-10-21：班级编号（三部门统一必填 + 同表唯一）
-    set('class_code', body.classCode === undefined ? undefined : String(body.classCode ?? '').trim());
+    // ★ 2026-10-23：「班级编号只能新建班级可创建，编辑班级里的不可更改」
+    //   → 编辑（有 body.id）时忽略传上来的编号，库里保持创建时的值。
+    set(
+      'class_code',
+      body.id || body.classCode === undefined ? undefined : String(body.classCode ?? '').trim(),
+    );
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
 
     /**
@@ -308,10 +313,10 @@ export const repo: ClassRepo = {
      * 原来这里无条件要求「编辑必填」，但班级交接（service.ts handover）也走 save()，
      * 它的 saveBody 不带 classCode → 交接会被「班级编号必填」拦死。
      */
-    if (body.classCode !== undefined) {
+    if (body.classCode !== undefined && !body.id) {
       const code = String(body.classCode ?? '').trim();
       if (!code) throw new Error('班级编号必填');
-      await assertClassCodeUnique(code, body.id);
+      await assertClassCodeUnique(code);
     }
 
     if (body.id) {
