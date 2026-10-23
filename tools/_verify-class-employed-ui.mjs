@@ -7,11 +7,14 @@
  *   · 实训部门统计卡片出现「实训 / 待就业 / 已就业」计数
  *   · 列表「状态」列分别显示 实训 / 待就业 / 已就业
  *   · 实训(5) 行 → 有【升就业】、没有【已就业】
- *   · 待就业(6) 行 → 有【已就业】、没有【升就业】
+ *   · 待就业(6) 行 → 有【待就业】(灰、不可点) + 【已就业】，没有【升就业】
  *   · 已就业(7) 行 → 两个按钮都没有
- *   · 点【已就业】→ 弹窗提示各学生状态人数（含「强制」），取消后数据不变
+ *   · 点【已就业】→ 识别整班学生状态：
+ *       全班已就业/退学（--settled）→ 显示班级人数 / 就业人数，一次确认；
+ *       还有别的状态              → 标题「不可改为已就业」，列出人数 + 姓名，只有「我知道了」
+ *       （★ 2026-10-23 批注推翻了原「强制确认 + 再次确认」的口径）
  *
- * 本脚本**只读**：所有确认框都点「取消」。
+ * 本脚本**只读**：弹窗一律点「我知道了 / 取消」关掉。
  * 前置：库里造好三种状态的实训班（见脚本注释 / SQL）。
  * 用法：node tools/_verify-class-employed-ui.mjs   （前后端需在跑：8004 + 5173）
  * 产物：tools/_out/verify_class_status_*.png
@@ -218,29 +221,40 @@ async function filterJobStage() {
   const b3 = await rowButtons('SX2601');
   check('实训行有【升就业】、无【已就业】', (b1 || []).includes('升就业') && !(b1 || []).includes('已就业'), JSON.stringify(b1));
   check('待就业行有【已就业】、无【升就业】', (b2 || []).includes('已就业') && !(b2 || []).includes('升就业'), JSON.stringify(b2));
+  /* ★ 2026-10-23：升就业成功后按钮变【待就业】（灰、不可点） */
+  check('待就业行还有灰的【待就业】', (b2 || []).includes('待就业'), JSON.stringify(b2));
   check('已就业行两个按钮都没有', !(b3 || []).includes('已就业') && !(b3 || []).includes('升就业'), JSON.stringify(b3));
 
   await shot(`verify_class_status_list_${Date.now()}.png`);
 
-  /* ---------- 点【已就业】：提示各状态人数 ---------- */
+  /* ---------- 点【已就业】：识别整班学生状态 ---------- */
   const settledMode = process.argv.includes('--settled');
   const clicked = await ev(`(()=>{const tr=[...document.querySelectorAll('.el-table__row')].find(x=>x.innerText.includes('SX20260002'));
     const b=tr&&[...tr.querySelectorAll('button')].find(x=>x.innerText.trim()==='已就业'); if(!b)return false; b.click(); return true;})()`);
   await sleep(2200);
   const box = await msgBoxText();
+  const boxTitle = await ev(`(()=>{const b=[...document.querySelectorAll('.el-message-box')].filter(x=>x.getBoundingClientRect().width>0).pop();
+    return b ? (b.querySelector('.el-message-box__title')?.innerText.trim()||'') : '';})()`);
   console.log(`  弹窗：${box}`);
-  check('点【已就业】弹出确认框', clicked && !!box);
+  check('点【已就业】弹出弹窗', clicked && !!box);
   if (settledMode) {
-    // 全班学生都已是「已就业 / 退学」→ 一次确认，不该出现「强制」字样
+    // 全班学生都已是「已就业 / 退学」→ 提示班级人数 / 就业人数，一次确认
     check('全班已就业 → 显示班级人数与就业人数', /共?\s*6\s*人/.test(box) && /已就业\s*6\s*人/.test(box), box);
     check('全班已就业 → 不出现「强制」', !box.includes('强制'), box);
   } else {
+    /* ★ 2026-10-23 批注改口径：班里还有别的状态 → 只提示人数 + 人员，**不可操作**
+     *   （原「强制确认 + 再次确认」两条弹窗已删除） */
+    check('标题是「不可改为已就业」', boxTitle === '不可改为已就业', boxTitle);
     check('弹窗列出各状态人数', /\d+\s*人/.test(box) && /待就业|实训中|已就业/.test(box), box);
-    check('弹窗提示要「强制」改状态', box.includes('强制'), box);
+    check('弹窗列出人员姓名', /请先在【教学管理/.test(box), '');
+    check('弹窗不再提供「强制」', !box.includes('强制'), box);
+    check('只有「我知道了」（没有确认按钮）', !box.includes('确认改为已就业'), '');
   }
   await shot(`verify_class_employed_dialog_${Date.now()}.png`);
-  await msgBoxClick('取消');
-  check('取消后弹窗关闭、数据不变', !(await msgBoxText()), '');
+  // 新口径下被拦时只有一个「我知道了」；settled 时仍有「取消」
+  await msgBoxClick('我知道了');
+  if (await msgBoxText()) await msgBoxClick('取消');
+  check('弹窗关闭、数据不变', !(await msgBoxText()), '');
 
   check('无页面异常', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
 

@@ -12,7 +12,8 @@
         本页合并了 <b>3 个部门</b>的班级信息（初高部 / 大学部 / 就业部，实训班归就业部）。
         <span class="muted">
           班级状态码（1 开放 / 2 封班 / 5 实训 / 6 待就业 / 7 已就业：升实训后自动为 5 实训、
-          升就业后为 6 待就业、【已就业】确认后为 7 已就业；封班即终态，可解封回开放）；
+          升就业后为 6 待就业（按钮变【待就业】并出现【已就业】）、
+          【已就业】确认后为 7 已就业（班内还有非「已就业 / 退学」学生时不可操作）；封班即终态，可解封回开放）；
           「班级编号」「结业日期」只有就业部有，「出勤率」初高按当日、其余部门按累计 —— 表单会按部门自动隐藏不适用的字段。
         </span>
       </template>
@@ -187,8 +188,9 @@
             升实训
           </el-button>
           <!-- ★ 2026-10-21 批注：升实训之后出现【升就业】——
-               点一下弹确认，把该班学生状态改为「待就业」，班级状态也改「待就业」
-               （改完按钮自动变成【已就业】）。已经是待就业 / 已就业的班不再显示。 -->
+               点一下弹确认，把该班学生状态改为「待就业」，班级状态也改「待就业」。
+               ★ 2026-10-23 批注：升就业成功后这个按钮**变成【待就业】**（只表示当前态，
+                 不可再点），后面再出现【已就业】。已是待就业 / 已就业的班不再显示【升就业】。 -->
           <el-button
             v-if="!isReadOnlyUser && row.stage === 'job' && canUpgradeEmployment(row)"
             link
@@ -198,9 +200,19 @@
           >
             升就业
           </el-button>
-          <!-- ★ 2026-10-21 批注第 3 条：【升就业】成功后该位置变成【已就业】。
-               点击 → 先识别整班学生状态 → 一次确认（全班已就业/退学）
-               或「提示各状态人数 + 强制确认 + 再次确认」→ 班级状态改「已就业」。 -->
+          <!-- ★ 2026-10-23：升就业成功后的【待就业】——纯状态位，不可点击 -->
+          <el-button
+            v-if="!isReadOnlyUser && row.stage === 'job' && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
+            link
+            type="info"
+            disabled
+          >
+            待就业
+          </el-button>
+          <!-- ★ 2026-10-23 批注第 3 条：【待就业】之后才有【已就业】。
+               点击 → 识别整班学生状态 →
+                 全部「已就业 / 退学」→ 提示班级人数 / 就业人数 → 确认改「已就业」；
+                 还有别的状态 → 只提示各状态人数及人员，**不可操作**。 -->
           <el-button
             v-if="!isReadOnlyUser && row.stage === 'job' && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
             link
@@ -781,6 +793,7 @@ import {
   type ClassStage,
   type ClassStageMeta,
   type ClassSummary,
+  type EmploymentProgress,
   type StagePlanOption,
 } from '@/teaching/api/class';
 // 教室「楼栋-房间号」格式：归一 + 校验（前后端同一套规则，见文件头注释）
@@ -1469,22 +1482,22 @@ async function doTrainingUpgrade() {
   }
 }
 
-/* ---------------- ★ 升就业 / 已就业（2026-10-21 批注第 2、3 条） ----------------
- * 批注原文：
+/* ---------------- ★ 升就业 / 已就业（2026-10-21 批注第 2、3 条，2026-10-23 改口径） ----------------
+ * 批注原文（2026-10-23）：
  *   「2. 点击【升就业】，并且升就业成功之后，则班级状态改为【待就业】，
- *     【升就业】按钮改为已就业」
+ *     【升就业】按钮改为【待就业】」
  *   「3. 点击【已就业】系统识别整个班级的学生状态，若状态都已经变为已就业、退学，
  *     则提示整班都已就业并显示班级人数和就业人数，确认要将班级状态改为已就业吗，
- *     确认之后，班级的状态该为【已就业】；若识别班级内仍存在其他状态的学生，
- *     则进行提示班级各个状态的人数，并且提示确认要强制将本班状态改为【已就业】，
- *     确认之后需要再次确认，再次确认之后状态改为已就业」
+ *     确认之后班级状态改为【已就业】；若识别班级内仍存在其他状态的学生，
+ *     则进行提示班级各个状态的人数及人员，**不可进行【已就业】操作**」
  *
  * 落地：
  *   · 升就业 → 学生状态 实训中(8) → 待就业(9)，班级状态 实训(5) → 待就业(6)；
- *     按钮自动换成【已就业】（v-if 看 classStatus === 6）。
+ *     操作列按钮从【升就业】变【待就业】（灰、不可点），并出现【已就业】。
  *   · 已就业 → 先查整班学生状态分布：
- *       settled（全班都是已就业/退学）→ 一次确认 → 班级状态改 已就业(7)；
- *       否则 → 列出各状态人数 + 强制确认 + **再次确认** → 改 已就业(7)。
+ *       settled（全班都是已就业/退学）→ 提示班级人数 / 就业人数 → 一次确认 → 班级状态改 已就业(7)；
+ *       否则 → 只弹提示，逐条列出「状态 人数：姓名、姓名…」+ 明确「不可操作」，
+ *              **不再有强制确认 / 再次确认**（2026-10-23 批注推翻了 10-21 那版口径）。
  *   · 已就业只改**班级状态**，学生状态一个不动（学生档案里逐个点【已就业】才写 10）。
  */
 const CLASS_STATUS_CODE = { TRAINING: 5, WAIT_EMPLOY: 6, EMPLOYED: 7 } as const;
@@ -1498,12 +1511,45 @@ function canUpgradeEmployment(row: ClassRow): boolean {
   return s !== CLASS_STATUS_CODE.WAIT_EMPLOY && s !== CLASS_STATUS_CODE.EMPLOYED;
 }
 
+/** 「已就业 10 人、退学 2 人」这种一句话摘要（settled 弹窗用） */
+function progressSummary(p: EmploymentProgress): string {
+  return `已就业 <b>${p.employed}</b> 人、退学 <b>${p.quit}</b> 人`;
+}
+
+/** 某个状态下的学生姓名串（太多时截断，避免弹窗撑爆） */
+function namesOf(item: { count: number; students: Array<{ studentName: string | null; studentNo: string | null }> }): string {
+  const MAX = 30;
+  const names = item.students
+    .slice(0, MAX)
+    .map((s) => escText(s.studentName || s.studentNo || '未命名'))
+    .join('、');
+  return item.count > MAX ? `${names} …等 ${item.count} 人` : names;
+}
+
+/**
+ * 未结清的状态块：一行一个状态，「待就业 3 人：甲、乙、丙」
+ *   已就业 / 退学 是允许的两态，不在这里重复列（弹窗正文会单独给出人数）。
+ */
+function unsettledHtml(p: EmploymentProgress): string {
+  const rows = p.items.filter(
+    (i) => i.status !== StudentStatus.EMPLOYED && i.status !== StudentStatus.QUIT,
+  );
+  return rows
+    .map(
+      (i) =>
+        `<div class="ec-row"><span class="ec-st">${escText(i.statusName)}</span>` +
+        `<span class="ec-ct">${i.count} 人</span>` +
+        `<span class="ec-nm">${namesOf(i)}</span></div>`,
+    )
+    .join('');
+}
+
 async function doEmploymentUpgrade(row: ClassRow) {
   try {
     await ElMessageBox.confirm(
       `是否将该班级（${escText(row.className)}，${row.studentCount ?? 0} 人）的<b>学生状态改为「待就业」</b>？` +
         '<br/><br/><span>班级本身不搬动、不改名；已是「已就业」的学生不会被改动。<br/>' +
-        '确认后班级状态也会变为「待就业」，按钮变为【已就业】。</span>',
+        '确认后班级状态也会变为「待就业」，按钮变为【待就业】。</span>',
       '升就业确认',
       {
         type: 'warning',
@@ -1528,58 +1574,56 @@ async function doEmploymentUpgrade(row: ClassRow) {
   }
 }
 
-/** 【已就业】：识别整班学生状态 → 确认（不满足时二次确认）→ 班级状态改「已就业」 */
+/**
+ * 【已就业】：识别整班学生状态
+ *   全部「已就业 / 退学」→ 确认 → 班级状态改「已就业」
+ *   还有别的状态       → 只提示（人数 + 人员），**不可操作**
+ */
 async function doConfirmEmployed(row: ClassRow) {
-  let p;
+  let p: EmploymentProgress;
   try {
     p = await getEmploymentProgress(row.classId);
   } catch (e) {
     ElMessage.error((e as Error).message || '识别班级学生状态失败');
     return;
   }
-  // 「已就业 12 人　退学 2 人　待就业 3 人」
-  const lines = p.items.map((i) => `${escText(i.statusName)} ${i.count} 人`).join('　');
+
+  if (!p.settled) {
+    /* ★ 2026-10-23 批注：仍有学生不是「已就业 / 退学」→ 提示各状态人数及人员，
+     *   不可进行【已就业】操作。这里只弹一个「我知道了」，没有任何确认按钮。
+     *   （后端 confirmClassEmployed 也做了同样的拦截，双保险） */
+    await ElMessageBox.alert(
+      `<div class="ec-tip">本班共 <b>${p.total}</b> 人，其中 ${progressSummary(p)}，` +
+        `还有 <b>${p.pending}</b> 人未到「已就业 / 退学」，<b>不可改为「已就业」</b>：</div>` +
+        `<div class="ec-box">${unsettledHtml(p)}</div>` +
+        `<div class="ec-tip2">请先在【教学管理 → 学生档案】里把这 ${p.pending} 人确认为「已就业」` +
+        `（或办理退学），再回来点【已就业】。</div>`,
+      '不可改为已就业',
+      {
+        type: 'warning',
+        confirmButtonText: '我知道了',
+        dangerouslyUseHTMLString: true,
+        customClass: 'ec-msgbox',
+      },
+    ).catch(() => undefined);
+    return;
+  }
+
+  // 全班都已是「已就业 / 退学」→ 提示班级人数 / 就业人数，一次确认
   try {
-    if (p.settled) {
-      // 全班都已是「已就业 / 退学」→ 一次确认即可
-      await ElMessageBox.confirm(
-        `已识别整班 <b>${p.total}</b> 人：已就业 <b>${p.employed}</b> 人、退学 <b>${p.quit}</b> 人。` +
-          `<br/><br/>确认要将班级状态改为「已就业」吗？`,
-        '已就业确认',
-        {
-          type: 'success',
-          confirmButtonText: '确认改为已就业',
-          cancelButtonText: '取消',
-          dangerouslyUseHTMLString: true,
-        },
-      );
-    } else {
-      // 还有其它状态的学生 → 先提示各状态人数，再强制确认 + 再次确认
-      await ElMessageBox.confirm(
-        `本班共 <b>${p.total}</b> 人，当前学生状态：<br/><b>${lines}</b><br/><br/>` +
-          `其中还有 <b>${p.pending}</b> 人未到「已就业 / 退学」。<br/>` +
-          `确认要<b>强制</b>将本班状态改为「已就业」吗？`,
-        '已就业确认',
-        {
-          type: 'warning',
-          confirmButtonText: '确认强制改为已就业',
-          cancelButtonText: '取消',
-          dangerouslyUseHTMLString: true,
-        },
-      );
-      // 批注原文：「确认之后需要再次确认，再次确认之后状态改为已就业」
-      await ElMessageBox.confirm(
-        `再次确认：把「${escText(row.className)}」的班级状态改为「已就业」？<br/>` +
-          `<span>（学生档案里的学生状态不会被改动）</span>`,
-        '再次确认',
-        {
-          type: 'warning',
-          confirmButtonText: '再次确认',
-          cancelButtonText: '取消',
-          dangerouslyUseHTMLString: true,
-        },
-      );
-    }
+    const headline = p.employed
+      ? `整班都已就业：本班 <b>${p.total}</b> 人，其中 ${progressSummary(p)}。`
+      : `本班 <b>${p.total}</b> 人已全部退学（已就业 0 人）。`;
+    await ElMessageBox.confirm(
+      `${headline}<br/><br/>确认要将班级状态改为「已就业」吗？`,
+      '已就业确认',
+      {
+        type: 'success',
+        confirmButtonText: '确认改为已就业',
+        cancelButtonText: '取消',
+        dangerouslyUseHTMLString: true,
+      },
+    );
   } catch {
     return;
   }
@@ -1697,5 +1741,64 @@ onMounted(() => {
 }
 .danger {
   color: #CD3A33;
+}
+</style>
+
+<!--
+  ★ 2026-10-23：【已就业】的「不可操作」提示框
+     ElMessageBox 渲染在 body 上（teleport），scoped 样式够不到，
+     所以这段必须是**非 scoped** 的全局样式；class 前缀 ec- 避免污染。
+-->
+<style>
+.ec-msgbox {
+  max-width: 560px;
+}
+.ec-msgbox .el-message-box__message {
+  max-height: 52vh;
+  overflow: auto;
+}
+.ec-msgbox .ec-tip {
+  line-height: 1.7;
+  color: #303133;
+}
+.ec-msgbox .ec-tip2 {
+  margin-top: 10px;
+  line-height: 1.7;
+  font-size: 12px;
+  color: #909399;
+}
+.ec-msgbox .ec-box {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #fafafa;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+}
+.ec-msgbox .ec-row {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  border-bottom: 1px dashed #ebeef5;
+}
+.ec-msgbox .ec-row:last-child {
+  border-bottom: none;
+}
+.ec-msgbox .ec-st {
+  flex: 0 0 auto;
+  min-width: 56px;
+  color: #C9852E;
+  font-weight: 600;
+}
+.ec-msgbox .ec-ct {
+  flex: 0 0 auto;
+  min-width: 34px;
+  color: #303133;
+}
+.ec-msgbox .ec-nm {
+  flex: 1 1 auto;
+  color: #606266;
+  word-break: break-all;
 }
 </style>

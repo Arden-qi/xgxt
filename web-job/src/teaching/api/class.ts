@@ -340,11 +340,19 @@ export function upgradeClassToEmployment(payload: { classId: string }) {
 
 /* ---------------- 已就业（2026-10-21 批注第 3 条） ---------------- */
 
-/** 一种学生状态 + 人数 */
+/** 一种学生状态 + 人数 + 名单 */
+export interface EmploymentProgressStudent {
+  studentId: string;
+  studentNo: string | null;
+  studentName: string | null;
+}
+
 export interface EmploymentProgressItem {
   status: number;
   statusName: string;
   count: number;
+  /** ★ 2026-10-23：被拦时弹窗要显示「人员」，后端直接带名字下发 */
+  students: EmploymentProgressStudent[];
 }
 
 export interface EmploymentProgress {
@@ -358,7 +366,10 @@ export interface EmploymentProgress {
   quit: number;
   /** 还没结清（既不是已就业也不是退学）的人数 */
   pending: number;
-  /** 全班都已是「已就业 / 退学」→ 一次确认即可；false → 强制改需要二次确认 */
+  /**
+   * 全班都已是「已就业 / 退学」→ 可以确认改「已就业」；
+   * false → **不可操作**（只提示各状态人数与人员）
+   */
   settled: boolean;
   items: EmploymentProgressItem[];
 }
