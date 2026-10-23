@@ -131,10 +131,22 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
   };
 }
 
-/** 数据范围（口径原样搬，见文件头说明） */
+/**
+ * 数据范围（与 `teaching/shared/dataScope.ts` 同一口径）
+ *
+ * ★ 2026-10-23 修两处「交接后新负责人看不到班级」的根因：
+ *   ① **责任人 id 有两个口径**：门户账号是 UUID，权限管理里是 `U_xxx`。
+ *      交接把 `U_xxx` 写进 *_teacher_id，而这里只拿 `user.userId`（门户 UUID）比 →
+ *      一条都对不上。两个都比。
+ *   ② **就业老师没有分支** → applyScope 直接放行，就业老师能看到就业部**所有**班级，
+ *      但详情走的是另一套校验 → 列表点进去就报「没有该班级的访问权限」。
+ *      补上 `employment_teacher_id = 我` 这一支（升就业 / 交接把班交给他之后就能看到）。
+ */
 async function applyScope(qb: any, user: any): Promise<void> {
   const roles = user?.roles || [];
-  const uid = user?.userId || '';
+  const ids = [
+    ...new Set([user?.userId, user?.businessUserId].map((x) => String(x || '')).filter(Boolean)),
+  ];
   if (
     hasRole(roles, RoleCode.SYS_ADMIN) ||
     hasRole(roles, RoleCode.TEACH_DEAN) ||
@@ -142,17 +154,31 @@ async function applyScope(qb: any, user: any): Promise<void> {
   ) {
     return;
   }
+  if (!ids.length) {
+    qb.whereRaw('1 = 0');
+    return;
+  }
   if (hasRole(roles, RoleCode.PROJECT_MANAGER)) {
     const mine = (await tbl(db, 'sms_job', T, STAGE)
-      .where({ project_manager_id: uid, is_deleted: false })
+      .whereIn('project_manager_id', ids)
+      .where('is_deleted', false)
       .select('id')) as Array<{ id: string }>;
-    const ids = mine.map((c) => c.id);
-    if (!ids.length) qb.whereRaw('1 = 0');
-    else qb.whereIn('id', ids);
+    const mineIds = mine.map((c) => c.id);
+    if (!mineIds.length) qb.whereRaw('1 = 0');
+    else qb.whereIn('id', mineIds);
+    return;
+  }
+  if (hasRole(roles, RoleCode.JOB_STAFF)) {
+    // 就业老师：只看自己接手的班（交接 / 升就业写入 employment_teacher_id）
+    qb.andWhere((w: any) => {
+      w.whereIn('employment_teacher_id', ids);
+    });
     return;
   }
   if (hasRole(roles, RoleCode.TEACH_HEAD)) {
-    qb.andWhere('head_teacher_id', uid);
+    qb.andWhere((w: any) => {
+      w.whereIn('head_teacher_id', ids);
+    });
   }
 }
 
