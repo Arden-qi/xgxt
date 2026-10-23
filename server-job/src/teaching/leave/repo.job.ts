@@ -25,6 +25,7 @@ import { fmtDate, fmtDateTime, todayStr } from '../shared/format';
 import { classNamesByIds } from '../shared/classOptions';
 import type { LeaveAggregate, LeaveWriteInput, StudentOption, StudentSnapshot } from './types';
 import { tbl, tblTrx, tblInsTrx } from '../shared/uniTable';
+import { isStatusLocked } from '../shared/statusLock';
 import { hydrateWithArchive } from '../shared/studentRef';
 import { buildApplyNo } from '../shared/conf';
 import { applyClassScope, applyClassScopeKeepNull } from '../shared/dataScope';
@@ -386,6 +387,16 @@ async function applyStudentStatus(conn: any, row: Record<string, any>, operatorI
   if (biz === 3) {
     patch.class_id = row.new_class_id;
     patch.class_name = row.new_class_name;
+  }
+  /* ★ 2026-10-21 批注：退学 = 学生状态永久锁（见 shared/statusLock.ts）
+   *   典型场景：先给在读学生开了一张休学单，单子还没审完人就退学了 ——
+   *   等休学单审批通过时，这里会把 7 改回 6，等于「退学被改掉了」。
+   *   锁定后**只跳过状态字段**，审批单本身照常通过。 */
+  const cur = (await tblTrx(conn, SRC, S, STAGE)
+    .where({ id: row.student_id })
+    .first('student_status')) as Record<string, any> | undefined;
+  if (isStatusLocked(cur?.student_status) && Number(cur?.student_status) !== newStatus) {
+    return;
   }
   await tblTrx(conn, SRC, S, STAGE).where({ id: row.student_id }).update(patch);
 

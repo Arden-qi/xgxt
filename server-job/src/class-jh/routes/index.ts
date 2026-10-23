@@ -61,8 +61,15 @@ export function buildRouters(): MountedRouter[] {
 
     // ---------- 系统设置 / 阶段（字典 + 方案）/ 操作日志 ----------
     { path: '/api/class-jh/setting', router: settingRouter },
+    // 阶段方案（方案 + 多阶段）也在 stageRouter 里：GET/POST/PUT/DELETE /plan/*
     { path: '/api/class-jh/stage', router: stageRouter },
-    // ★ 2026-10-16：阶段方案（阶段字典升级版）
+    /* ★ 2026-10-22：恢复 /api/class-jh/stage-scheme 一组路由 —— 阶段方案设计已从
+     *   「系统设置」搬到「班级管理」弹窗（StageSchemePanel.vue），走的就是这里。
+     *   读 t_class_stage_scheme + t_class_stage_scheme_stage。
+     *
+     *   沿革：这两张表 2026-10-20 曾判定「迁移从未执行、进来就报数据表不存在」而整组删除；
+     *   2026-10-22 合上游时恢复，并补跑 migrations-class-jh/20261016_001_create_stage_scheme
+     *   （建表 + 把老阶段字典搬成默认方案）。/stage/plan/*（t_class_stage_plan）保留不动。 */
     { path: '/api/class-jh/stage-scheme', router: stageSchemeRouter },
     { path: '/api/class-jh/opLog', router: opLogRouter },
 

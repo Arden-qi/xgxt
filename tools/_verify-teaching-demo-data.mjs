@@ -75,17 +75,39 @@ async function shot(name) {
   const r = await send('Page.captureScreenshot', { format: 'png' });
   fs.writeFileSync(path.join(OUTDIR, name), Buffer.from(r.data, 'base64'));
 }
+/**
+ * 导航到某个 hash 路由
+ * ★ 2026-10-22 修：原来拼成 `/?t=<时间戳>#/路由` —— 带 query 的地址会被
+ *   前端当成「重新进站」，落到工作台（首页），于是截出来是空白首页、断言 0 行。
+ *   去掉 query，直接用 `/#/路由`，hash 变化由 vue-router 正常接管。
+ */
 async function nav(hash, wait = 2800) {
-  await send('Page.navigate', { url: `${BASE}/?t=${Date.now()}#${hash}` }, 30000);
+  await send('Page.navigate', { url: `${BASE}/#${hash}` }, 30000);
   await sleep(wait);
 }
+/**
+ * 登录：**直接打登录接口拿 token 写 localStorage**，不再点登录页的演示账号卡片。
+ *
+ * ★ 2026-10-22 修：旧写法（点 `.demo-item` → 点 `.submit`）实测不可靠 ——
+ *   演示账号点击后表单没填上，脚本一路停在登录页，9 个页面全报「0 行」的假失败。
+ *   走接口 + 写 `sms_token`（路由守卫只认这一个键）后稳定通过。
+ */
 async function loginAs(account) {
   await ev(`(() => { try { localStorage.clear(); } catch(e){} return true; })()`);
-  await nav('/login', 2200);
-  await ev(`(() => { const el=[...document.querySelectorAll('.demo-item')].find(x=>x.innerText.includes('${account}')); if(el) el.click(); return !!el; })()`);
-  await sleep(500);
-  await ev(`(() => { const b=document.querySelector('.submit'); if(b) b.click(); return !!b; })()`);
-  await sleep(3400);
+  await nav('/', 2000);
+  const r = await ev(`(async () => {
+    const res = await fetch('/api/portal/account/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account: '${account}', password: '123456' }),
+    });
+    const j = await res.json();
+    if (j.code !== 200 || !j.data?.token) return 'FAIL:' + (j.message || j.code);
+    localStorage.setItem('sms_token', j.data.token);
+    return 'OK';
+  })()`);
+  if (r !== 'OK') throw new Error(`登录 ${account} 失败：${r}`);
+  await sleep(600);
 }
 
 const fails = [];
@@ -141,5 +163,8 @@ async function waitRows(timeout = 8000) {
 
   console.log(`\n${fails.length ? 'FAILED: ' + fails.join(' / ') : 'ALL PASS'}`);
   child.kill();
-  process.exitCode = fails.length ? 1 : 0;
-})().catch((e) => { console.error('脚本异常：', e.message); child.kill(); process.exitCode = 1; });
+  // ★ 2026-10-22：原来只设 process.exitCode —— ws 连接还开着，Node 不会自己退，
+  //   表现为「脚本跑完不返回、被外层超时杀掉」。这里显式退出。
+  ws?.close?.();
+  process.exit(fails.length ? 1 : 0);
+})().catch((e) => { console.error('脚本异常：', e.message); child.kill(); process.exit(1); });

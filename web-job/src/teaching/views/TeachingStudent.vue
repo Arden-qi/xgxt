@@ -167,6 +167,17 @@
           <el-button v-if="!isReadOnlyUser" link type="primary" size="small" @click="openEdit(row)">
             编辑
           </el-button>
+          <!-- ★ 2026-10-21 批注：编辑后面加【已就业】—— 点一下弹确认，把学生状态改为「已就业」；
+               确认后是终态，不可再改（已就业的行不再出现这个按钮）。 -->
+          <el-button
+            v-if="!isReadOnlyUser && canMarkEmployed(row)"
+            link
+            type="success"
+            size="small"
+            @click="doMarkEmployed(row)"
+          >
+            已就业
+          </el-button>
           <el-button v-if="!isReadOnlyUser" link type="danger" size="small" @click="doDelete(row)">
             删除
           </el-button>
@@ -703,9 +714,13 @@
           <!-- ★ 2026-10-22 用户口径：不再手选阶段，学生阶段跟随所在班级自动带出 -->
           <el-col :span="8">
             <el-form-item label="状态">
-              <el-select v-model="form.studentStatus" style="width: 100%">
+              <!-- ★ 2026-10-21 批注：下拉不再提供「已就业」（改由列表【已就业】按钮写入）；
+                   已经是「已就业」的学生是终态，状态字段直接锁死，不可改回其它状态。
+                   同批批注：「学生状态为【退学】的，任何操作都不可更改该状态」→ 退学一并锁死。 -->
+              <el-select v-model="form.studentStatus" style="width: 100%" :disabled="isStatusLocked">
                 <el-option v-for="(n, v) in formStatusOptions" :key="v" :label="n" :value="Number(v)" />
               </el-select>
+              <div v-if="statusLockTip" class="tsv-lock-tip">{{ statusLockTip }}</div>
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -773,6 +788,17 @@
           </el-col>
         </el-row>
 
+        <el-alert
+          v-if="isEmployedLocked"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="该学生已是「已就业」（终态）：状态不可再修改，其余档案字段仍可编辑"
+        />
+        <!-- ★ 2026-10-22 合并冲突处理：原本这里还有一条「教务来源改休学/退学会冻结缴费」的
+             提示（v-if form.stage === 'edu'）。远端已按用户口径把「教务」入口从学生档案下线，
+             StudentStage 只剩 jh / class / emp，该分支永远不会成立（TS2367），故整条删除；
+             它后面的部门字段提示原为 v-else，一并改为无条件显示。 -->
         <el-alert
           type="info"
           :closable="false"
@@ -906,6 +932,7 @@ import {
   getStudentSummary,
   listUpgradeTargets,
   upgradeToUniversity,
+  confirmStudentEmployed,
   type StudentDetail,
   type StudentExtras,
   type StudentPayments,
@@ -1371,12 +1398,16 @@ const formClassOptions = computed(() =>
  *  ★ 2026-10-16 按批注：去掉「预在读」（截图红框 + 红字「删除这个选择」）——
  *    新增 / 编辑学生时不再提供这个选项。
  *  ★ 2026-10-20 按批注：再删「待咨询 / 咨询中」，且大学部与初高部保持一致
- *    （口径见上面 STATUS_BY_STAGE 的注释）。 */
+ *    （口径见上面 STATUS_BY_STAGE 的注释）。
+ *  ★ 2026-10-21 按批注：「将所有的【编辑】操作的状态-已就业选项进行删除」
+ *    → 「已就业」不再出现在编辑/新增下拉里，只能走列表操作列的【已就业】按钮
+ *      （它是终态，进了就不能改回去，见 doMarkEmployed）。 */
 const formStatusOptions = computed(() => {
   const allow = STATUS_BY_STAGE[form.stage] || [];
   const out: Record<number, string> = {};
   for (const s of allow) {
     if (s === StudentStatus.PRE_STUDY) continue;
+    if (s === StudentStatus.EMPLOYED) continue;
     out[s] = STUDENT_STATUS_NAME[s] || String(s);
   }
   // 历史数据兜底：编辑老学生时，其状态可能已不在可选列表里（如「预在读 / 待咨询」），
@@ -1387,6 +1418,25 @@ const formStatusOptions = computed(() => {
 });
 /** 是否显示床位号：就业/教务表没有 bed_no 列 */
 const showBed = computed(() => form.stage === 'class' || form.stage === 'jh');
+
+/** ★ 2026-10-21：已就业 = 终态 → 编辑表单里状态字段锁死（避免从下拉改回去） */
+const isEmployedLocked = computed(
+  () => !!form.id && Number(form.studentStatus) === StudentStatus.EMPLOYED,
+);
+
+/** ★ 2026-10-21 批注：「学生状态为【退学】的，任何操作都不可更改该状态」
+ *  → 退学同样是终态锁，编辑弹窗里状态字段直接禁用（后端 saveStudent 也会拦）。 */
+const isQuitLocked = computed(() => !!form.id && Number(form.studentStatus) === StudentStatus.QUIT);
+
+/** 状态下拉是否锁定（退学 / 已就业） */
+const isStatusLocked = computed(() => isEmployedLocked.value || isQuitLocked.value);
+
+/** 锁定原因（给下拉旁的灰字提示用） */
+const statusLockTip = computed(() => {
+  if (isQuitLocked.value) return '已退学：状态为终态，不可更改';
+  if (isEmployedLocked.value) return '已就业：状态为终态，不可更改';
+  return '';
+});
 
 function openCreate() {
   Object.assign(form, emptyForm());
@@ -1638,6 +1688,47 @@ async function doDelete(row: StudentRow) {
   await deleteStudent(row.stage, row.studentId);
   ElMessage.success('已删除');
   load();
+}
+
+/* ---------------- ★ 已就业（2026-10-21 批注：编辑后面加【已就业】，终态） ----------------
+ * 批注原文：「在【编辑】后面加入【已就业】操作，点击【已就业】，弹出是否更改该学生状态为
+ *   【已就业】，该操作不可更改」
+ *
+ * 口径：
+ *   · 按钮只在**还没到已就业**的学生行上出现（已就业 = 终态，不再给入口）。
+ *     退学(7) / 流失(11) 是学籍终态，这类学生不适合再标就业，也一并不显示。
+ *   · 点一下先弹确认（把「当前状态 → 已就业」写清楚），确认后才提交，防误点。
+ *   · 提交后状态不可回退：编辑弹窗的状态下拉对已就业学生锁死、下拉里也没有该选项。
+ */
+function canMarkEmployed(row: StudentRow): boolean {
+  const s = Number(row.studentStatus);
+  return s !== StudentStatus.EMPLOYED && s !== StudentStatus.QUIT && s !== StudentStatus.LOST;
+}
+
+async function doMarkEmployed(row: StudentRow) {
+  const fromName = row.studentStatusName || STUDENT_STATUS_NAME[Number(row.studentStatus)] || '—';
+  try {
+    await ElMessageBox.confirm(
+      `确认把「${escHtml(row.studentName)}（${escHtml(row.studentNo)}）」的学生状态由「${escHtml(fromName)}」更改为「已就业」？` +
+        '<br/><br/><b>⚠️ 该操作不可更改</b>：确认后状态将固定为「已就业」，无法再改回其它状态。',
+      '已就业确认',
+      {
+        type: 'warning',
+        confirmButtonText: '确认已就业',
+        cancelButtonText: '取消',
+        dangerouslyUseHTMLString: true,
+      },
+    );
+  } catch {
+    return;
+  }
+  try {
+    const r = await confirmStudentEmployed(row.stage, row.studentId);
+    ElMessage.success(`学生状态已由「${r.fromStatusName}」改为「${r.toStatusName}」`);
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message || '标记已就业失败');
+  }
 }
 
 /* ---------------- ★ 升云（2026-10-20 批注） ----------------
@@ -2010,6 +2101,13 @@ async function doTrialQuit() {
 }
 .muted {
   color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+/* ★ 2026-10-21：状态被锁（退学 / 已就业）时，下拉下面那行灰提示 */
+.tsv-lock-tip {
+  margin-top: 2px;
+  line-height: 1.4;
+  color: var(--el-color-warning);
   font-size: 12px;
 }
 
