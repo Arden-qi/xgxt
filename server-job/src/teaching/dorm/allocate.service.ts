@@ -556,9 +556,9 @@ export interface AllocateStudentRow {
 
 /** 学生表来源（与班级列表同口径，逐张查再按学号去重） */
 const STUDENT_SOURCES = [
-  'sms_class_jh.t_class_student',
-  'sms_class.t_class_student',
-  'sms_job.t_student_base',
+  // ★ 2026-10-23：三学段学生档案已统一到 t_uni_student（新建学生只写这里），
+  //   老表已 DROP；不补这源的话「调宿/退宿弹窗」搜不到新建的学生。
+  'sms_common.t_uni_student',
   EDU_STUDENT,
   PERM_STUDENT,
 ];

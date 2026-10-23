@@ -752,6 +752,18 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
 
       if (!mine.names.length && !mine.ids.length) return [];
 
+      /**
+       * ★ 2026-10-23 修：学生表 distinct 出的班级要**∩ 本学段班级** ——
+       *   门户学生表（PERM_STUDENT）不分学段，初高班（G2601）的学生也在里面，
+       *   大学班主任的「办理入住/调宿」班级下拉因此冒出别的部门的班。
+       */
+      const stageClassNames = new Set<string>(
+        ((await db(STAGE_CLASS_TABLE[stage])
+          .where({ is_deleted: false, edu_stage: stage })
+          .select('class_name')) as any[])
+          .map((r) => str(r.class_name))
+          .filter((x): x is string => !!x),
+      );
       for (const table of ['stage', PERM_STUDENT]) {
         try {
           const base = table === PERM_STUDENT ? db(PERM_STUDENT) : tbl(db, SRC_DB, STUDENT_T, stage);
@@ -762,7 +774,11 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
               if (mine.names.length) b.orWhereIn('class_name', mine.names);
             })
             .distinct('class_id', 'class_name')) as any[];
-          for (const r of rows) add(r.class_id, r.class_name);
+          for (const r of rows) {
+            const cn: string = str(r.class_name) || '';
+            if (stageClassNames.size && !stageClassNames.has(cn)) continue;
+            add(r.class_id, cn);
+          }
         } catch {
           /* 跳过 */
         }
