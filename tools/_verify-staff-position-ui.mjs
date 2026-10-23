@@ -7,13 +7,14 @@
  *    班主任选择就只会显示初高部的班主任，例如若没有部门，项目经理，
  *    那就根据项目经理职位名称，同步职位只显示项目经理人员进行的选择」
  *
- * 断言（班级管理 → 新建班级弹窗，全程不改数据）：
+ * 断言（班级管理 → 新增班级弹窗，全程不改数据）：
  *   · 标签不再带「姓名」：班主任 / 教员 / 助教 / 项目经理 / 就业老师
- *   · 部门 = 初高部 → 班主任下拉只有初高部的人（教学部本部孙敏）
- *   · 部门 = 大学部 → 班主任下拉 = 孙敏 + 张海涛（孙敏在教学部本部，两学段共用）
+ *   · 部门 = 大学部 → 班主任下拉 = 张海涛（孙敏挂在「教学部」，不算任何教学部门）
+ *   · 部门 = 初高部 → 该部门没有挂「班主任」职位的人 → 按职位兜底列人
  *   · 部门 = 大学部 → 教员 = 陈晓峰、助教 = 赵梦雪
  *   · 大学部没有「项目经理」这个职位 → 兜底只按职位列人（孙建龙）
  *   · 部门 = 就业部 → 项目经理 = 孙建龙、就业老师 = 周杰
+ *   · 交接弹窗、升实训弹窗同样按职位过滤
  *
  * 前置：权限管理里这些账号的职位 / 部门要对得上（见脚本末尾注释）。
  * 用法：node tools/_verify-staff-position-ui.mjs   （前后端需在跑：8004 + 5173）
@@ -162,7 +163,11 @@ const eq=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
   const jhHead = await openSelectByLabel('班主任');
   await shot(`verify_staff_position_jh_${Date.now()}.png`);
   await closePopper();
-  check('初高部 · 班主任只列初高部的人', eq(jhHead, ['孙敏']), JSON.stringify(jhHead));
+  /* ★ 2026-10-23「没有教学部」：孙敏挂在「教学部」→ 不算任何教学部门（deptCodes 空）。
+   *   初高部里没有「挂班主任职位」的人 → 兜底①只取「没挂教学部门」的人 → 只剩孙敏，
+   *   不会把大学部的张海涛带进初高部。
+   *   （要让孙敏稳定出现在初高部，可在权限管理里把她的部门改成 初中部 / 高中部。） */
+  check('初高部 · 班主任只列初高部 / 未挂学段的人', eq(jhHead, ['孙敏']), JSON.stringify(jhHead));
 
   /* ---------- ③ 部门 = 大学部 → 班主任 / 教员 / 助教 ---------- */
   await openSelectByLabel('部门');
@@ -170,7 +175,7 @@ const eq=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
   await sleep(900);
   const uniHead = await openSelectByLabel('班主任');
   await closePopper();
-  check('大学部 · 班主任 = 孙敏 + 张海涛（教学部本部两学段共用）', eq(uniHead, ['孙敏', '张海涛']), JSON.stringify(uniHead));
+  check('大学部 · 班主任只列大学部的班主任', eq(uniHead, ['张海涛']), JSON.stringify(uniHead));
 
   const uniTeacher = await openSelectByLabel('教员');
   await closePopper();

@@ -17,9 +17,12 @@
  * 【过滤规则】
  *   一级：该账号的**职位**必须是这个岗位（按职位名；职位被改名时兜底按职位码）
  *   二级：该账号的**部门**要包含当前教学部门（1 初高部 / 2 大学部 / 3 就业部）
- *   兜底：该部门下这个职位一个人都没有（典型：项目经理只在实训教学部，
- *         而当前部门选的是大学部）→ **退回只按职位名筛**，否则下拉是空的选不了人。
- *         批注里「若没有部门，项目经理，那就根据项目经理职位名称」说的就是这个。
+ *   兜底（该部门下这个职位一个人都没有）：
+ *     ① 先只取「没挂任何教学部门」的人 —— 例如账号部门还停在「教学部」
+ *        （教学管理里没有这个部门，所以它不算 1/2/3 任何一档）；
+ *     ② ①也是空 → 才退回「只按职位名列人」。
+ *        典型：项目经理只挂在实训教学部，部门选大学部时仍要能选到人 ——
+ *        批注里「若没有部门，项目经理，那就根据项目经理职位名称」说的就是这个。
  *
  * 【为什么列表在前端过滤】
  *   账号总共十几个，staff-options 一次拉全量（含职位与部门码），
@@ -73,8 +76,15 @@ export function staffOf(
   const byPosition = (list || []).filter((u) => isStaffOfPosition(u, kind));
   const dc = Number(deptCode) || 0;
   let out = dc ? byPosition.filter((u) => (u.deptCodes || []).includes(dc)) : byPosition;
-  // 该部门没有这个职位的人 → 退回「只按职位」
-  if (!out.length) out = byPosition;
+  if (!out.length && dc) {
+    /* ★ 该部门下没有这个职位的人 → 两级兜底：
+     *   ① 先只取「没挂任何教学部门」的人（典型：账号部门还是「教学部」这种非教学部门）
+     *      —— 这样初高部里不会冒出大学部的班主任；
+     *   ② 一个都没有（典型：项目经理只挂在实训教学部）→ 才退回「只按职位名列人」。
+     *   批注原文：「若没有部门，项目经理，那就根据项目经理职位名称…只显示项目经理人员」。 */
+    const unassigned = byPosition.filter((u) => !(u.deptCodes || []).length);
+    out = unassigned.length ? unassigned : byPosition;
+  }
   if (keepId && !out.some((u) => u.id === keepId)) {
     out = [{ id: keepId, userName: keepName || keepId, deptId: null, deptName: null, roleNames: [], roleCodes: [], deptCodes: [] }, ...out];
   }
