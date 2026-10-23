@@ -43,10 +43,18 @@ import {
   loadClassStatuses,
 } from './classStatus';
 
-/** 宿舍房间 / 床位 / 学生（合并宿舍管理实际在用的三张表） */
-const ROOM = 'sms_job.t_job_dorm';
-const BED = 'sms_job.t_job_dorm_bed';
-const STUDENT = 'sms_job.t_student_base';
+/**
+ * ★ 2026-10-22 修：sms_job 的这三张老表在 P8 归一后**已 DROP**，
+ *   原来直接 `db('sms_job.t_job_dorm')` 裸查 → 打开「分派宿舍」就弹
+ *   「数据表不存在: sms_job.t_job_dorm」（一连 4 个红错）。
+ *   统一表列名与老表同名兼容（t_uni_dorm_room 就是从 t_job_dorm 归一的），
+ *   改指到 sms_common 即可。
+ *   ⚠️ 保留「sms_job 连接 + 库名前缀」的写法：下面有 sms_edu ⋈ 房间表的
+ *      跨库 join 依赖前缀；sms_edu / sms_perm 的表没归一、还在，不动。
+ */
+const ROOM = 'sms_common.t_uni_dorm_room';
+const BED = 'sms_common.t_uni_dorm_bed';
+const STUDENT = 'sms_common.t_uni_student';
 /** 楼栋字典（与「楼栋设置」同一份） */
 const BUILDING = 'sms_common.t_dorm_building';
 const ASSIGN = 'sms_edu.t_edu_dorm_assignment';

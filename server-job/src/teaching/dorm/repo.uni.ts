@@ -77,9 +77,7 @@ const ASSIGN_T = 'sms_edu.t_edu_dorm_assignment';
 /** ★ 学生主档的候选来源（本学段表 + 门户活数据），入住/候选都按这个顺序兜底 */
 const PERM_STUDENT = 'sms_perm.t_student_base';
 const STUDENT_SOURCES = [
-  'sms_class_jh.t_class_student',
-  'sms_class.t_class_student',
-  'sms_job.t_student_base',
+  'sms_common.t_uni_student',
   'sms_edu.t_student_base',
   PERM_STUDENT,
 ];
@@ -154,20 +152,22 @@ export function makeRepo(stage: TeachingStage): DormRepo {
   });
   
 /** ★ 班级表来源：三学段的班级表都要看（宿舍是合并页，班主任可能带别的学段的班） */
-const CLASS_SOURCES = [
-  'sms_class_jh.t_class_info',
-  'sms_class.t_class_info',
-  'sms_job.t_job_class',
-];
+const CLASS_SOURCES = ['sms_common.t_uni_class'];
 
 /**
  * ★ 2026-10-21：各学段「班级管理」的班级表（办理入住弹窗的班级下拉按学段取这里）
  *   班级下拉必须是**本学段**的班 —— 往初高宿舍里塞大学班的学生没有意义。
  */
+/**
+ * ★ 2026-10-22 修：三个学段的班级表都已归一到 t_uni_class（老表已 DROP），
+ *   原来按学段指向三张老表 → job 学段裸查 sms_job.t_job_class 报「表不存在」，
+ *   被消费处的 try/catch 吞掉 → 就业部班主任的「办理入住」班级下拉恒为空。
+ *   现在统一查 t_uni_class，学段由消费处的 edu_stage 条件区分。
+ */
 const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
-  jh: 'sms_class_jh.t_class_info',
-  class: 'sms_class.t_class_info',
-  job: 'sms_job.t_job_class',
+  jh: 'sms_common.t_uni_class',
+  class: 'sms_common.t_uni_class',
+  job: 'sms_common.t_uni_class',
 };
 
   /**
@@ -721,7 +721,7 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
       if (mine.privileged) {
         try {
           const rows = (await db(STAGE_CLASS_TABLE[stage])
-            .where({ is_deleted: false })
+            .where({ is_deleted: false, edu_stage: stage })
             .select('id', 'class_name')
             .orderBy('class_name', 'asc')) as any[];
           for (const r of rows) add(r.id, r.class_name);
@@ -750,7 +750,7 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
       }
       try {
         const rows = (await db(STAGE_CLASS_TABLE[stage])
-          .where({ is_deleted: false })
+          .where({ is_deleted: false, edu_stage: stage })
           .andWhere((b: any) => {
             if (mine.ids.length) b.whereIn('id', mine.ids);
             if (mine.names.length) b.orWhereIn('class_name', mine.names);

@@ -17,9 +17,8 @@
 import { db } from '../../utils/db';
 
 const STUDENT_TABLES = [
-  'sms_class_jh.t_class_student',
-  'sms_class.t_class_student',
-  'sms_job.t_student_base',
+  // ★ jh/class/job 三份投影已合并为 t_uni_student 一行（按 student_no 命中即全覆盖）
+  'sms_common.t_uni_student',
   'sms_edu.t_student_base',
   'sms_perm.t_student_base',
 ];

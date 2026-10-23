@@ -13,11 +13,11 @@
 
 import { db } from '../../utils/db';
 
-const CLASS_SOURCES = [
-  'sms_class_jh.t_class_info',
-  'sms_class.t_class_info',
-  'sms_job.t_job_class',
-];
+/* ★ 2026-10-22 修：sms_job / sms_class_jh / sms_class 的这些老表在 P8 归一后已 DROP，
+   裸查会报「数据表不存在」或被 try/catch 静默吞掉（表现为该学段查不到数据）。
+   全部改指 sms_common 统一表：班级=t_uni_class、学生=t_uni_student（列名同名兼容）。 */
+
+const CLASS_SOURCES = ['sms_common.t_uni_class'];
 
 export const CLASS_STATUS_OPEN = 1;
 export const CLASS_STATUS_CLOSED = 2;
