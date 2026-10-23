@@ -40,6 +40,7 @@ import {
   tblInsTrx,
   uniUpdCols,
 } from '../../../teaching/shared/uniTable';
+import { actorId, actorIds, isActor } from '../../../utils/actor';
 
 /**
  * ════════════════════════════════════════════════════════════════
@@ -1013,7 +1014,7 @@ dormRouter.post(
       apply_reason: b.applyReason,
       apply_status: ApplyStatus.PENDING,
       has_goods_checked: 0,
-      applicant_id: user.userId,
+      applicant_id: actorId(user),
       applicant_name: user.userName,
       apply_time: now(),
     } as never);
@@ -1133,7 +1134,7 @@ dormRouter.post(
       await APPLY().where({ id: b.applyId }).update({
         apply_status: ApplyStatus.REJECTED,
         reject_reason: b.opinion,
-        approver_id: user.userId,
+        approver_id: actorId(user),
         approver_name: user.userName,
         approve_time: now(),
         ...baseUpdate(user),
@@ -1149,7 +1150,7 @@ dormRouter.post(
       await APPLY_TRX(trx).where({ id: b.applyId }).update({
         apply_status: ApplyStatus.APPROVED,
         has_goods_checked: 1,
-        approver_id: user.userId,
+        approver_id: actorId(user),
         approver_name: user.userName,
         approve_time: now(),
         ...baseUpdate(user),
