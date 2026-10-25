@@ -197,7 +197,13 @@ teachingDormRouter.get(
 teachingDormRouter.get(
   '/buildings',
   wrap(async (req, res) => {
-    res.json(ok(await svc.listBuildings(optStage(req.query.stage), req.user), '查询成功'));
+    /* ★ 2026-10-25：支持按类别（1 男 / 2 女）过滤楼栋，供列表筛选区联动 */
+    res.json(
+      ok(
+        await svc.listBuildings(optStage(req.query.stage), req.user, numOrUndef(req.query.dormType)),
+        '查询成功',
+      ),
+    );
   }),
 );
 

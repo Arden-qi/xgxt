@@ -18,6 +18,8 @@
  *   jh classjh:dorm:view / class class:dorm:view / job job:dorm:view
  */
 
+import { scopedBuildingNames } from './myClasses';
+import { listBuildings as listBuildingDict } from './building.service';
 import { BizCode, hasRole, RoleCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { makeRepo } from './repo.uni';
@@ -419,6 +421,7 @@ export async function listCheckinClasses(
 export async function listBuildings(
   stage: TeachingStage | undefined,
   user: any,
+  dormType?: number,
 ): Promise<Array<{ value: string; label: string }>> {
   const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
   if (!stages.length) return [];
@@ -433,7 +436,38 @@ export async function listBuildings(
       out.push(b);
     }
   }
-  return out;
+
+  /**
+   * ★ 2026-10-25 修：楼栋下拉要跟着「类别（男寝/女寝）」过滤。
+   *
+   *   用户实测：班主任选「男寝」后，楼栋下拉里仍出现 5 号楼（女寝），
+   *   因为这里原来只按学段取楼栋，完全没看类别。
+   *   口径：类别在「系统设置 → 楼栋设置」的 t_dorm_building.category（1 男 / 2 女）；
+   *   该楼栋**没维护类别**（null/0）时保留 —— 不能因为没配置就把楼藏起来。
+   */
+  /**
+   * ★ 2026-10-25：班主任只看「教务分派给本班」的楼栋。
+   *   原来是全量楼栋，班主任能看到别班/女寝的楼（用户口径：下拉只出现分派给我的楼）。
+   *   教务/校长/学管/管理员（privileged）不受限制。
+   */
+  const scope = await scopedBuildingNames(user);
+  const filteredByScope = scope === null ? out : out.filter((b) => scope.includes(b.value));
+
+  if (!dormType) return filteredByScope;
+  try {
+    const dict = await listBuildingDict();
+    const catOf = new Map<string, number>();
+    for (const b of dict) {
+      if (b.category === null || b.category === undefined) continue;
+      catOf.set(b.buildingName, Number(b.category));
+    }
+    return filteredByScope.filter((b) => {
+      const c = catOf.get(b.value);
+      return c === undefined || c === 0 || c === Number(dormType);
+    });
+  } catch {
+    return filteredByScope;
+  }
 }
 
 /** 元信息：只返回当前用户可见的学段 */

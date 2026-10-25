@@ -348,8 +348,10 @@ export async function listDormCheckinClasses(stage?: DormStage) {
 }
 
 /** 5. 楼栋下拉 */
-export async function listDormBuildings(stage?: DormStage) {
-  const r = await http.get(`${BASE}/buildings${qs({ stage })}`);
+export async function listDormBuildings(stage?: DormStage, dormType?: number) {
+  /* ★ 2026-10-25：传 dormType 时后端只回该类别（1 男 / 2 女）的楼栋，
+     不传 = 全部（楼栋设置页仍然要全量）。 */
+  const r = await http.get(`${BASE}/buildings${qs({ stage, dormType })}`);
   return r as unknown as Array<{ value: string; label: string }>;
 }
 

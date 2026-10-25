@@ -36,7 +36,13 @@
         />
       </el-form-item>
       <el-form-item label="类别">
-        <el-select v-model="query.dormType" clearable placeholder="全部" style="width: 110px">
+        <el-select
+          v-model="query.dormType"
+          clearable
+          placeholder="全部"
+          style="width: 110px"
+          @change="refreshFilterOptions"
+        >
           <el-option
             v-for="d in DORM_CATEGORY_OPTIONS"
             :key="d.value"
@@ -46,7 +52,13 @@
         </el-select>
       </el-form-item>
       <el-form-item label="楼栋">
-        <el-select v-model="query.building" clearable placeholder="全部楼栋" style="width: 140px">
+        <el-select
+          v-model="query.building"
+          clearable
+          placeholder="全部楼栋"
+          style="width: 140px"
+          @change="refreshFilterOptions"
+        >
           <el-option v-for="b in buildings" :key="b.value" :label="b.label" :value="b.value" />
         </el-select>
       </el-form-item>
@@ -893,6 +905,40 @@ function rateClass(row: DormRow): string {
   return 'danger';
 }
 
+/**
+ * ★ 2026-10-25：筛选联动 —— 类别 / 楼栋一改，**楼栋下拉和入住率下拉都要跟着变**。
+ *
+ *   用户口径：「入住率也要像楼栋一样，与男寝、女寝关联」。
+ *   原来只有点【查询】才重拉入住率选项 → 选了男寝，入住率里还挂着女寝房间的百分比。
+ *   现在：
+ *     · 楼栋下拉 —— 按类别（男寝/女寝）过滤，班主任再叠加「分派给本班」的范围（后端算）；
+ *     · 入住率下拉 —— 按当前「类别 + 楼栋」重新统计，只保留实际存在的百分比；
+ *     · 选中的楼栋若已不在新列表里则清空；选中的入住率若已不存在也清空，避免查空。
+ */
+async function refreshFilterOptions(): Promise<void> {
+  try {
+    const [list, rates] = await Promise.all([
+      listDormBuildings(query.stage, query.dormType),
+      listDormOccupancyRates({ ...query, occupancyRate: undefined } as never),
+    ]);
+    buildings.value = list || [];
+    occupancyRates.value = rates || [];
+    if (query.building && !buildings.value.some((b) => b.value === query.building)) {
+      query.building = '';
+    }
+    if (
+      query.occupancyRate !== undefined &&
+      query.occupancyRate !== null &&
+      query.occupancyRate !== ('' as never) &&
+      !occupancyRates.value.some((r) => Number(r.value) === Number(query.occupancyRate))
+    ) {
+      query.occupancyRate = undefined as never;
+    }
+  } catch {
+    /* 拉不到就保持原下拉，不阻断查询 */
+  }
+}
+
 async function load(page?: number) {
   if (page) query.page = page;
   loading.value = true;
@@ -901,7 +947,7 @@ async function load(page?: number) {
     const [r, m, b, rs, rates] = await Promise.all([
       listDorms(q),
       metaList.value.length ? Promise.resolve(metaList.value) : getDormMeta(),
-      listDormBuildings(query.stage),
+      listDormBuildings(query.stage, query.dormType),
       listDormResidents(q),
       /**
        * ★ 入住率选项每次都重拉（需求：实时更新）
