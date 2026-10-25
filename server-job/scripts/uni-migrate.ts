@@ -206,6 +206,20 @@ async function countOf(c: any, table: string, where?: [string, any][]): Promise<
   return Number(r?.n || 0);
 }
 
+/**
+ * 日期 → 'YYYY-MM-DD'（本地时区）
+ *
+ * ⚠️ 主库连接没开 `dateStrings`，DATE 列读出来是 JS Date（本机 +08:00 下
+ *   `2026-10-06` 会变成 `2026-10-05T16:00:00.000Z`）。
+ *   直接 `String(v).slice(0,10)` 会得到 `Fri Oct 03` 这种垃圾，必须按本地字段拼。
+ */
+function ymd(v: any): string {
+  if (!v) return '';
+  if (typeof v === 'string') return v.slice(0, 10);
+  const d = v instanceof Date ? v : new Date(v);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 /* ============================================================
  * 2. 主流程
  * ============================================================ */
@@ -306,6 +320,20 @@ async function run() {
     );
 
     const payload: any[] = [];
+    /* ★ 2026-10-23：实训出勤明细必须挂到「当天汇总行」下
+     *   `t_uni_attendance_detail` 的唯一键是 (attendance_id, student_id, edu_stage)，
+     *   而老表 `t_job_attendance` 没有 attendance_id 列 → 不补的话所有行都是默认值 ''，
+     *   同一个学生第二天就会撞键（`Duplicate entry ... for key 'uk_attendance_detail'`）。
+     *   取不到对应汇总行时退化为「用行自己的 id」，保证唯一、且不影响按班按日的查询。 */
+    let sumIdByClassDate: Map<string, string> | null = null;
+    if (t.key === 'sms_job.t_job_attendance') {
+      const sums = await conn('sms_common')('t_uni_attendance_summary')
+        .where('edu_stage', 'job')
+        .select('id', 'class_id', 'attend_date');
+      sumIdByClassDate = new Map(
+        sums.map((s: any) => [`${s.class_id}|${ymd(s.attend_date)}`, String(s.id)]),
+      );
+    }
     for (const old of rows) {
       if (!OVERWRITE && have.has(old.id)) {
         stat.skipped++;
@@ -323,6 +351,11 @@ async function run() {
         for (const [k, v] of Object.entries(extra(old))) {
           if (uniCols.has(k)) row[k] = v;
         }
+      }
+      /* ④-b 实训出勤明细：attendance_id 指向当天汇总行（见上方 sumIdByClassDate 说明） */
+      if (sumIdByClassDate && uniCols.has('attendance_id')) {
+        const key = `${(old as any).class_id}|${ymd((old as any).attend_date)}`;
+        row.attendance_id = sumIdByClassDate.get(key) ?? String((old as any).id);
       }
       /* ⑤ ★ 值为 null 的 NOT NULL 列 → 删键，让数据库 DEFAULT 生效
        *    （与 tblIns() 的处理一致；不删会报 `Column 'x' cannot be null`）

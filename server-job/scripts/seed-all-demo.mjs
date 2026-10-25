@@ -560,7 +560,21 @@ async function seedFinance(conn) {
       dept_code: s.dept, head_teacher_id: cls?.head.id ?? null, head_teacher_name: cls?.head.name ?? null,
       fee_type: feeType, amount: feeStd(s.dept, feeType),
       pay_status: payStatus, pay_date: payStatus >= E.PAY_PAID ? D(offsetDays) : null,
-      expire_date: D(offsetDays + 180), period,
+      /**
+       * ★ 2026-10-23：未缴 / 逾期的应缴日必须落在「催费窗口」内（默认 20 天）
+       *
+       * 原来统一写 D(offsetDays + 180) —— 学费 offset=-90 → 应缴日在 90 天后，
+       * 而催费列表的口径是「应缴日距今 ≤ feeUrgeWindowDays（默认 20）天才进列表」。
+       * 结果：演示库里未缴的学费一条都不显示，催费页恒为 0 行，看着像「模块没数据」。
+       * → 已缴的仍按 180 天后（历史单据，不进催费）；未缴的排到 6 天后；
+       *   逾期的排到 3 天前（派生状态会显示为「逾期」）。
+       */
+      expire_date:
+        payStatus >= E.PAY_PAID
+          ? D(offsetDays + 180)
+          : payStatus === E.PAY_OVERDUE
+            ? D(-3)
+            : D(6), period,
       voucher_url: hasVoucher ? `/uploads/seed/${voucherFile}` : null,
       voucher_no: hasVoucher ? `PZ${s.no}${feeType}` : null,
       is_verified: payStatus === E.PAY_VERIFIED ? 1 : 0,

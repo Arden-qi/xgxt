@@ -1063,6 +1063,46 @@ export async function countUsersOfDept(deptId: string): Promise<number> {
   return Number(rows[0]?.n || 0);
 }
 
+/**
+ * 部门 id → 带上级的完整路径（「教学部-初中部」「就业部-就业管理」）
+ *
+ * 【为什么统一在后端算】
+ *   账号/职位挂的是**具体学段**（初中部 / 高中部 / 大学部 / 实训管理 / 就业管理），
+ *   但界面各处（账号详情抬头、所属部门、列表部门列、职位下人员）都要显示成
+ *   「教学部-初中部」这种带上级的路径 —— 单看「初中部」不知道是哪条线下的。
+ *   以前只有职位管理一处在拼路径，别处仍是光秃秃的部门名，同一个账号两个页面
+ *   显示不一致。现在收敛到这里，前端只负责展示。
+ *
+ * 【口径】
+ *   · 根节点「全部门（校级）」不写进路径 —— 否则会变成「全部门-教学部-初中部」；
+ *   · 账号本身挂在根节点上（如「校长」）时，路径就是「全部门」。
+ */
+export async function deptPathMap(): Promise<Map<string, string>> {
+  const rows: any[] = await db('t_perm_dept')
+    .where('is_deleted', false)
+    .select('id', 'dept_name', 'parent_id', 'dept_level');
+  const byId = new Map<string, any>(rows.map((r: any) => [r.id, r]));
+  const out = new Map<string, string>();
+
+  rows.forEach((r: any) => {
+    const names: string[] = [r.dept_name];
+    let cur: any = r;
+    /* guard 防脏数据成环：部门层级目前最深 3 级，10 次足够 */
+    for (let guard = 0; guard < 10; guard++) {
+      if (!cur.parent_id) break;
+      const parent = byId.get(cur.parent_id);
+      if (!parent) break;
+      /* 根节点不入路径 */
+      if (Number(parent.dept_level) < DEPT_LEVEL_DEPT) break;
+      names.unshift(parent.dept_name);
+      cur = parent;
+    }
+    out.set(r.id, names.join('-'));
+  });
+
+  return out;
+}
+
 /** 收集某部门及其全部后代部门 id */
 export function collectDescendants(
   all: { id: string; parent_id: string | null }[],

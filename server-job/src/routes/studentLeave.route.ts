@@ -93,7 +93,16 @@ import {
 //   t_job_class_student / t_job_attendance / t_job_refund / sms_class.t_class_student）
 //   都已归一，全部走 tbl()/tblAs()/tblRef()/tblTrx()/tblInsTrx() 路由；
 //   开关关时与原实现逐字节等价。
-import { tbl, tblAs, tblInsTrx, tblRef, tblTrx } from '../teaching/shared/uniTable';
+import { tbl, tblAs, tblInsTrx, tblRef, tblTrx, USE_UNI_TABLE } from '../teaching/shared/uniTable';
+
+/**
+ * ★ 2026-10-23：实训出勤明细已改挂统一表 `t_uni_attendance_detail`
+ *   （原先错挂台账表 `t_uni_attendance`，见 uniTable.ts 的 ② 说明）。
+ *   老表列名 `attend_status` / `attend_date` → 统一表 `attendance_status` / `attendance_date`。
+ *   `tbl()` 只换表名不换列名，所以这里按开关取列名。
+ */
+const ATT_STATUS_COL = USE_UNI_TABLE ? 'attendance_status' : 'attend_status';
+const ATT_DATE_COL = USE_UNI_TABLE ? 'attendance_date' : 'attend_date';
 
 export const studentLeaveRouter = Router();
 
@@ -204,8 +213,8 @@ function toApprovalBizType(bizType: number): string {
 async function calcAttendedHours(studentId: string, conn: any = db): Promise<number> {
   const row = await tbl(conn, DB, ATT_TABLE, STAGE)
     .where({ student_id: studentId, is_deleted: false })
-    .whereIn('attend_status', [...ATTEND_STATUS_PRESENT_SET])
-    .countDistinct({ c: 'attend_date' })
+    .whereIn(ATT_STATUS_COL, [...ATTEND_STATUS_PRESENT_SET])
+    .countDistinct({ c: ATT_DATE_COL })
     .first();
   return Number(row?.c || 0);
 }

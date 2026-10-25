@@ -689,7 +689,6 @@ import DormChangeApproval from './DormChangeApproval.vue';
 import BuildingSettingPanel from '@/class-jh/components/setting/BuildingSettingPanel.vue';
 /** ★ 2026-10-20 调宿弹窗：班级 / 学生搜索 / 楼栋床位（与分派宿舍同一套接口） */
 import {
-  listAllocateClasses,
   listAllocateBuildings,
   listAllocateRooms,
   searchAllocateStudents,
@@ -1298,7 +1297,7 @@ const changeLoading = ref(false);
 const changeSaving = ref(false);
 
 /** 班级下拉（来自班级管理已建班级） */
-const changeClasses = ref<AllocateClassRow[]>([]);
+const changeClasses = ref<DormCheckinClassRow[]>([]);
 /** 学生搜索结果（姓名 / 学号前后模糊） */
 const changeStudents = ref<AllocateStudentRow[]>([]);
 const studentLoading = ref(false);
@@ -1366,7 +1365,13 @@ async function openChange() {
    */
   void onChangeCategory();
   try {
-    changeClasses.value = (await listAllocateClasses()) || [];
+    /**
+     * ★ 2026-10-23 修：班级下拉换成「按登录人可见学段」的班级
+     *   （listCheckinClasses：班主任=自己名下的班、教务=可见学段全部班）。
+     *   原来用 listAllocateClasses()（跨三学段全量 + 不做数据范围过滤）→
+     *   大学部班主任的下拉里冒出初高班（G2601），看到了别的部门的数据。
+     */
+    changeClasses.value = (await listDormCheckinClasses()) || [];
   } catch (e) {
     ElMessage.error((e as Error).message || '加载班级失败');
     changeClasses.value = [];
