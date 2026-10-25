@@ -134,6 +134,9 @@ function effectivePayStatus(row: any): number {
   const raw = row.pay_status == null ? null : Number(row.pay_status);
   // 老数据还没回填 pay_status 时，按 call_status 折算兜底
   const base = raw ?? (Number(row.call_status) === FeeCallStatus.PAID ? PayStatus.PAID : PayStatus.UNPAID);
+  // ★ 2026-10-25：核对失败(6) 原样返回 —— 钱交过了、只是凭证被财务打回，
+  //   不能掉进下面的「未结清 → 逾期」分支里变成 4
+  if (base === PayStatus.REJECTED) return PayStatus.REJECTED;
   if (base === PayStatus.PAID || base === PayStatus.VERIFIED || base === PayStatus.FROZEN) return base;
   if (base === PayStatus.OVERDUE) return PayStatus.OVERDUE;
   // 未结清 + 过了应缴日 → 逾期

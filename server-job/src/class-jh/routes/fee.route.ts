@@ -557,9 +557,13 @@ feeRouter.post(
     };
     // 未结清（待缴/逾期）→ 已缴；已缴/已核对保持（只补凭证与实缴信息）
     const rawStatus = Number(row.pay_status ?? 1);
-    const nextStatus = rawStatus === PayStatus.UNPAID || rawStatus === PayStatus.OVERDUE
-      ? PayStatus.PAID
-      : rawStatus;
+    const nextStatus =
+      rawStatus === PayStatus.UNPAID ||
+      rawStatus === PayStatus.OVERDUE ||
+      // ★ 2026-10-25：核对失败(6) 重新登记 = 重传凭证 → 回到已缴，等财务再核一遍
+      rawStatus === PayStatus.REJECTED
+        ? PayStatus.PAID
+        : rawStatus;
 
     const updateFields: Record<string, any> = {
       pay_method: body.payMethod,

@@ -68,6 +68,20 @@ export enum PayStatus {
    */
   OVERDUE = 4,   // 逾期
   FROZEN = 5,    // 冻结
+  /**
+   * 核对失败（财务把凭证打回了）
+   *
+   * ★ 2026-10-25 新增：财务侧打回时 `t_finance_fee` 会把 pay_status 退回 2（已缴）
+   *   并置 `is_rejected = 1`。催费列表若照搬 2，班主任看到的还是「已缴」，
+   *   根本不知道自己交的截图被打回了，也就不去重传 →
+   *   于是催费侧单独用 6 表示「核对失败」，由 `finance/services/class-sync.ts`
+   *   在同步时按「is_rejected ? 6 : 财务 pay_status」换算。
+   *
+   * 口径：**钱已经交过，只是凭证/信息有问题**，所以
+   *   · 不算「未结清」，不参与逾期派生（别把它变成 4 逾期）；
+   *   · 班主任重新登记缴费（重传截图）后回到「已缴 2」。
+   */
+  REJECTED = 6,  // 核对失败（财务打回，待重新上传凭证）
 }
 
 /** 退费状态（审批链，顺序不可变） */
@@ -349,6 +363,8 @@ export const PAY_STATUS_NAME: Record<number, string> = {
   [PayStatus.VERIFIED]: '已核对',
   [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
+  // ★ 2026-10-25：财务打回 → 催费列表显示「核对失败」
+  [PayStatus.REJECTED]: '核对失败',
 };
 
 export const REFUND_STATUS_NAME: Record<number, string> = {

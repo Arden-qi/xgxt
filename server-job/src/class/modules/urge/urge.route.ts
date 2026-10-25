@@ -269,7 +269,14 @@ urgeRouter.get(
     }
     if (query.startDate) base.where('expire_date', '>=', query.startDate);
     if (query.endDate) base.where('expire_date', '<=', query.endDate);
-    if (query.onlyOverdue) base.where('expire_date', '<', t).whereNot('pay_status', PayStatus.PAID);
+    // 仅看紧急（= 未结清 且 已过应缴日）
+    // ★ 2026-10-25：原来是 `whereNot(pay_status, PAID)`，把「已核对(3)」「核对失败(6)」
+    //   也算进紧急了 —— 钱都交过了不该催。改成与就业 `feeCall.route.ts` 同口径的白名单。
+    if (query.onlyOverdue) {
+      base
+        .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.OVERDUE])
+        .andWhere('expire_date', '<', t);
+    }
     if (query.keyword) {
       const k = query.keyword;
       base.where(function (this: Knex.QueryBuilder) {
@@ -478,8 +485,13 @@ urgeRouter.post(
     }
 
     const rawStatus = Number(rec.pay_status ?? PayStatus.UNPAID);
+    // ★ 2026-10-25：核对失败(6) 重新登记 = 重传凭证 → 回到已缴，等财务再核一遍
     const nextStatus =
-      rawStatus === PayStatus.UNPAID || rawStatus === PayStatus.OVERDUE ? PayStatus.PAID : rawStatus;
+      rawStatus === PayStatus.UNPAID ||
+      rawStatus === PayStatus.OVERDUE ||
+      rawStatus === PayStatus.REJECTED
+        ? PayStatus.PAID
+        : rawStatus;
 
     const patch: Record<string, unknown> = {
       pay_method: b.payMethod,

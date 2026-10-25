@@ -78,6 +78,8 @@ export function payStatusTagType(status: number): TagType {
   if (status === 3) return 'success'; // 已核对
   // 2026-10-20 补：逾期原来是灰的（落到冻结的 info），看着像「状态没了」
   if (status === 4) return 'danger'; // 逾期
+  // ★ 2026-10-25：核对失败（财务打回）→ 红色，班主任得一眼看见才去重传凭证
+  if (status === 6) return 'danger'; // 核对失败
   return 'info'; // 冻结(5)
 }
 
