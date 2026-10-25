@@ -42,6 +42,8 @@ import { listClassesByStage } from '../shared/classOptions';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { loadSchemeStagesForStage } from '../shared/stageSchemes';
 import { nextStudentNoForClass, phaseCodeOfClass } from '../shared/studentNo';
+// ★ 2026-10-25 学籍状态变更（休学/复学）要通知财务冻结/解冻
+import { syncStudentStatusToFinance } from '../../utils/financeClient';
 import { db } from '../../utils/db';
 import { StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
 import { CONSULT_TO_STUDENT_STATUS } from 'shared-types/consult';
@@ -459,8 +461,10 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
    *     ① 库里已经是退学(7) → 传上来的状态必须还是 7，想改就报错（前端下拉也已 disabled）；
    *     ② 顺便把 payload 里的状态钉成 7，防止绕过前端改出别的值。
    *   ⚠️ 新增（没有 id）不受影响，见 statusLock.ts 的说明。 */
+  let prevStatus: number | null = null;
   if (body.id) {
     const current = await getStudentStatus(body.stage, body.id);
+    prevStatus = Number(current);
     if (isStatusLocked(current)) {
       if (body.studentStatus !== undefined && Number(body.studentStatus) !== Number(current)) {
         throw new BizError(BizCode.PARAM_ERROR, lockedStatusMessage('该学生'));
@@ -477,14 +481,50 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
     const phase = await phaseCodeOfClass(body.stage, body.classId);
     if (phase !== null) body.phaseCode = phase;
   }
+  let saved: StudentSaveResult;
   try {
-    return await REPOS[body.stage].save(body, user?.userId || 'system');
+    saved = await REPOS[body.stage].save(body, user?.userId || 'system');
   } catch (e) {
     // 仓储抛的 Error 多为「学号已存在」这类业务校验 → 转成 40302/400 让前端能显示原文
     const msg = (e as Error).message || '保存失败';
     if (/学号/.test(msg)) throw new BizError(BizCode.STUDENT_NO_EXISTS, msg);
     throw new BizError(BizCode.PARAM_ERROR, msg);
   }
+
+  /**
+   * ★ 2026-10-25 学籍状态变更 → 通知财务冻结/解冻
+   *
+   * 财务 `/api/finance/freeze/sync` 早就有「休学 → 自动冻结餐费/住宿费、
+   * 非休学 → 解冻」的实现，咨询侧也会调，但教学侧一直没接：
+   * 实测把学生改成休学(6)，`t_finance_freeze` 一条记录都没有。
+   *
+   * 只在**状态真的变了**时才调（保存一次不传状态就调，会平白多一次跨模块请求）；
+   * 失败不阻断保存（财务挂了不能让学生档案存不进去）。
+   */
+  const nextStatus =
+    body.studentStatus !== undefined && body.studentStatus !== null
+      ? Number(body.studentStatus)
+      : prevStatus;
+  if (prevStatus !== null && nextStatus !== null && prevStatus !== nextStatus) {
+    try {
+      const r = await syncStudentStatusToFinance({
+        studentId: String(body.id),
+        studentStatus: nextStatus,
+        studentNo: body.studentNo || undefined,
+        studentName: body.studentName || undefined,
+        classId: body.classId || undefined,
+        className: body.className || undefined,
+        deptCode: body.deptCode ?? undefined,
+      });
+      if (r.freezeCount) saved.frozenCount = r.freezeCount;
+      if (r.unfreezeCount) saved.unfrozenCount = r.unfreezeCount;
+    } catch (e) {
+      // 跨模块失败只记日志，不回滚学籍
+      console.warn('[teaching] 学籍状态同步财务失败（不阻断）：', (e as Error).message);
+    }
+  }
+
+  return saved;
 }
 
 export async function removeStudent(
