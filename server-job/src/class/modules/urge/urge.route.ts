@@ -503,6 +503,13 @@ urgeRouter.post(
     };
     // 现金且没传截图：保留原来的凭证，不要把它清空
     if (voucherUrl) patch.voucher_url = voucherUrl;
+    /**
+     * ★ 2026-10-25：重新登记 → 清掉「已上传财务时间」，让它重新回到
+     *   「批量上传到财务」候选（详见 class-jh/routes/fee.route.ts 同款注释）。
+     *   ⚠️ 只清时间，不清 `finance_fee_id`（那是财务那张单的唯一凭据，
+     *      清掉会再建一张新单 → 财务重复记账）。
+     */
+    if (rec.finance_fee_id) patch.finance_transfer_time = null;
 
     await SYNC()
       .where({ id: b.urgeId })

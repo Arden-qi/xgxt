@@ -584,6 +584,11 @@ interface TransferRow {
   payMethodName: string;
   payDate: string | null;
   voucherUrl: string | null;
+  /**
+   * ★ 2026-10-25：已经上传过财务，但之后又重新登记过 →
+   * 本次提交是「更新财务那张单」，不是新建。
+   */
+  retransfer: boolean;
 }
 
 const transferVisible = ref(false);
@@ -669,6 +674,7 @@ async function openTransfer() {
       payMethodName: r.payMethodName,
       payDate: r.payDate,
       voucherUrl: r.voucherUrl,
+      retransfer: !!r.retransfer,
     }));
   } catch {
     /* 错误已统一处理 */
@@ -699,7 +705,12 @@ async function submitTransfer() {
     // ★ 三部门统一入口：按 dept 分组回传，后端各写各的表
     const res = await transferFeesAll(targets.map((r) => ({ dept: r.dept, feeId: r.feeId })));
     const parts = [`成功 ${res.success} 条`];
-    if (res.voucherOnly) parts.push(`其中 ${res.voucherOnly} 条财务已有原单、只补了凭证`);
+    if (res.voucherOnly) {
+      parts.push(
+        `其中 ${res.voucherOnly} 条财务已有原单、已更新凭证信息` +
+          (res.retransferred ? `（含 ${res.retransferred} 条重新登记后重传）` : ''),
+      );
+    }
     if (res.skipped.length) parts.push(`跳过 ${res.skipped.length} 条`);
     if (res.failed.length) parts.push(`失败 ${res.failed.length} 条`);
     ElMessage.success(`转交完成：${parts.join('，')}`);
@@ -989,14 +1000,17 @@ onMounted(() => {
       批量上传到财务缴费管理
       ★ 2026-10-20 用户要求：全选 / 只选未上传过 / 序号前复选框
       ★ 2026-10-23 用户要求：**列表只显示还没上传过财务的**
-        → 候选接口已在 SQL 里过滤掉已转交的行，所以这里不再需要
+        → 候选接口已在 SQL 里过滤掉已上传到位的行，所以这里不再需要
           「只选未上传过」和「转交状态」列（列表里每一条都是可转交的）。
+      ★ 2026-10-25 用户要求：**重新登记也要出现在列表里并传到财务**
+        → 候选接口放宽成「没上传过 OR 上传后又重新登记过」，
+          后者带 retransfer 标记，新增「上传状态」列区分（提交是更新财务原单，不新建）。
     -->
     <el-dialog v-model="transferVisible" title="批量上传到财务缴费管理" width="1000px">
       <div class="transfer-toolbar">
         <el-button size="small" @click="selectAllTransfer">全选</el-button>
         <span class="field-unit">
-          已选 {{ transferSelected.length }} 条 · 列表只显示还没上传到财务的缴费单
+          已选 {{ transferSelected.length }} 条 · 列表显示「还没上传到财务」和「上传后又重新登记」的缴费单
         </span>
       </div>
       <!-- ★ 2026-10-22：把「这个部门共几单 / 其中已登记缴费几单」摆在明面上。
@@ -1052,6 +1066,19 @@ onMounted(() => {
                 这里不能只写「未上传」，否则会以为是漏传了。
             -->
             <el-tag v-else type="info" size="small">无（现金）</el-tag>
+          </template>
+        </el-table-column>
+        <!--
+          ★ 2026-10-25 用户要求：重新登记也要出现在这个列表里并传到财务。
+            这些行财务那边**已有原单**，本次上传是更新那张单（不会新建），
+            标出来免得班主任以为是重复上传。
+        -->
+        <el-table-column label="上传状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.retransfer" type="warning" size="small" title="财务已有原单，本次为更新">
+              重新登记
+            </el-tag>
+            <el-tag v-else type="info" size="small">未上传</el-tag>
           </template>
         </el-table-column>
       </el-table>
