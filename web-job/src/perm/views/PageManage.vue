@@ -49,7 +49,7 @@
  *    所以颜色一律写实色，不要引用 var(--xxx)。
  * ============================================================
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import type {
   PermPageBoard,
   PermRolePagesResult,
@@ -160,6 +160,21 @@ function seedRoleDraft(rp: PermRolePagesResult): void {
   roleDraft.value = { ...roleDraft.value, [rp.roleId]: d };
 }
 
+/**
+ * 把「已缓存」的职位全部按库里的最新值重灌草稿
+ *
+ * ★ 2026-10-23 修：保存后红色「保存改动（N 个职位）」一直不消失。
+ *   原因是保存后只重取了**当前选中职位**，而且 `loadRolePages` 命中缓存会直接 return，
+ *   其它刚保存过的职位草稿还停在旧值 → `roleDirty()` 恒为 true。
+ *   这里对所有已缓存职位强制重取，草稿与库对齐，脏标记自然归零。
+ */
+async function refreshCachedRoles(): Promise<void> {
+  const ids = Object.keys(rolePagesMap.value);
+  for (const rid of ids) {
+    await loadRolePages(rid, true);
+  }
+}
+
 async function load(keepCurrent = true): Promise<void> {
   loading.value = true;
   try {
@@ -172,9 +187,7 @@ async function load(keepCurrent = true): Promise<void> {
       activeKey.value = list.boards[0]?.moduleKey || '';
     }
     // 已加载过的职位：把服务端最新值重新灌一遍草稿（保存后要的是「以库为准」）
-    if (activeRoleId.value && rolePagesMap.value[activeRoleId.value]) {
-      await loadRolePages(activeRoleId.value);
-    }
+    await refreshCachedRoles();
   } catch {
     /* 错误提示由 @/perm/api/request 统一弹出 */
   } finally {
@@ -384,6 +397,18 @@ function selectBoard(moduleKey: string): void {
   scrollToBoard(moduleKey);
 }
 
+/**
+ * 右侧页面清单容器（★ 2026-10-23：右栏改为独立滚动，见 shared-ui.css 的 .split-page）
+ * 从「板块模式」切到某个职位时把右栏滚回顶部 —— 否则会停在上一屏滚到的位置
+ * （板块模式可能刚被 scrollToBoard 滚到很深的地方），看着像没切过来。
+ */
+const rgtEl = ref<HTMLElement | null>(null);
+function resetRgtScroll(): void {
+  nextTick(() => {
+    if (rgtEl.value) rgtEl.value.scrollTop = 0;
+  });
+}
+
 /** 点板块下的职位 → 职位模式 */
 async function selectRole(role: PermRoleSummary): Promise<void> {
   mode.value = 'role';
@@ -396,6 +421,7 @@ async function selectRole(role: PermRoleSummary): Promise<void> {
   } finally {
     loading.value = false;
   }
+  resetRgtScroll();
 }
 
 function scrollToBoard(moduleKey: string): void {
@@ -496,11 +522,16 @@ function roleItems(roleId: string): Array<{ moduleKey: string; pagePath: string;
   boards.value.forEach((b) => {
     b.pages.forEach((p) => {
       const k = flagKey(b.moduleKey, p.pagePath);
-      items.push({
-        moduleKey: b.moduleKey,
-        pagePath: p.pagePath,
-        enabled: k in d ? !!d[k] : (base.get(k) ?? false),
-      });
+      /* ★ 2026-10-23 防御：草稿里没有、服务端也没给这一页时**不提交**这一页。
+       *   原写法 `base.get(k) ?? false` 会把它当成「取消勾选」提交上去，
+       *   后端是「全量覆盖 + 差异存储」→ 直接写成 enabled=0（显式禁用），
+       *   于是「只是保存了别的板块，顺手把没加载到的页面关掉了」。
+       *   少提一页 = 该页保持默认（差异行被清掉），比误关安全得多。 */
+      if (k in d) {
+        items.push({ moduleKey: b.moduleKey, pagePath: p.pagePath, enabled: !!d[k] });
+      } else if (base.has(k)) {
+        items.push({ moduleKey: b.moduleKey, pagePath: p.pagePath, enabled: !!base.get(k) });
+      }
     });
   });
   return items;
@@ -616,8 +647,9 @@ const currentBoardName = computed(
 </script>
 
 <template>
-  <div>
+  <div class="split-page">
     <!-- ==================== 主体 ==================== -->
+    <!-- ★ 2026-10-23：根节点加 .split-page —— 整页锁高，左板块/职位树固定、右页面清单自己滚 -->
     <div class="card">
       <div class="card-h">
         <div class="t"><span class="bar"></span>页面管理</div>
@@ -644,8 +676,12 @@ const currentBoardName = computed(
           >
             恢复默认
           </button>
+          <!-- ★ 2026-10-23 用户口径：没有未保存改动时**不要显示红色**，
+               保存完就回到和「刷新 / 恢复默认」一样的普通按钮（灰白、不可点）。
+               有改动时才变成红色主按钮并带上「（N 个职位）」。 -->
           <button
-            class="btn pri"
+            class="btn"
+            :class="{ pri: hasPending }"
             type="button"
             :disabled="!hasPending || saving"
             @click="saveOpen = true"
@@ -772,7 +808,7 @@ const currentBoardName = computed(
           </div>
 
           <!-- ---------- 右：全部板块的页面 ---------- -->
-          <div class="rgt">
+          <div ref="rgtEl" class="rgt">
             <!-- 总览头：随模式切换 -->
             <div class="pg-head">
               <div class="pg-ic">{{ mode === 'board' ? '🗂️' : '👤' }}</div>

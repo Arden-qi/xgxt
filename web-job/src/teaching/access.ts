@@ -171,12 +171,40 @@ export const STAGE_ACCESS = {
 export type StageDomain = keyof typeof STAGE_ACCESS;
 
 /**
+ * ★★ 2026-10-23「域级通行码」—— 不属于任何学段、但业务上等于「整域可见」的权限码
+ *
+ * 【为什么需要 —— 用户 2026-10-23 报的问题】
+ *   管理员在「职位权限分配」里给教务老师勾了「学生档案」「宿舍管理」两页，
+ *   教务登录后侧栏却只有「宿舍管理」，「学生档案」整项不见。
+ *
+ * 【根因】
+ *   教务这个角色在权限库里拿到的「学生档案」页面码是 `edu:student:view`
+ *   （原教务档案页的口径：**全校**学生名单）。而 `STAGE_ACCESS.student` 里
+ *   只有初高 / 大学 / 就业部三个学段码，`edu:student:view` 一个都不匹配
+ *   → `stageVisible()` 恒 false → `mergedDomainMenuAllowed()` 恒 false
+ *   → 菜单被静默过滤（权限明明勾了）。宿舍管理之所以在，是因为教务同时持有
+ *   `classjh:dorm:view` / `job:dorm:view`，正好命中宿舍域的两个学段。
+ *
+ * 【口径】通行码命中 = 该域**全部学段**可见：菜单显示，学段/部门下拉给全，
+ *   与后端 `teaching/student/service.ts` 的「全校通行码」完全同一口径。
+ *   ⚠️ 只登记**确实是整域语义**的码，且必须与后端同步改，否则会出现
+ *      「前端给菜单、后端 403」。
+ */
+export const DOMAIN_PASS_CODES: Partial<Record<StageDomain, readonly string[]>> = {
+  // 教务老师的学籍档案 = 全校学生名单（三个真实部门都能看）
+  student: ['edu:student:view'],
+};
+
+/**
  * 判断某学段在某业务域下是否可见（**只按权限码判**）
  *
  * @param domain 业务域，如 'class' / 'dorm'
  * @param stage  学段，如 'jh' / 'class' / 'job' / 'edu'
  */
 export function stageVisible(domain: StageDomain, stage: string): boolean {
+  // ★ 2026-10-23：域级通行码优先（见 DOMAIN_PASS_CODES）
+  const pass = DOMAIN_PASS_CODES[domain];
+  if (pass?.some((c) => hasPerm(c))) return true;
   const m = (STAGE_ACCESS[domain] as Record<string, { code: StageCode; path: string | null }>)[stage];
   if (!m) return false;
   // path 为 null = 该学段的旧路由已下线，没有兜底，只能靠权限码

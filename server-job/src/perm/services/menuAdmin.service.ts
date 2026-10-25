@@ -33,6 +33,7 @@ import { db } from '../utils/db';
 import { clearTreeCache, loadModules, refreshRolePermCount } from './perm.service';
 import { clearRoleDefaultCache } from '../../utils/rolePageDefaults';
 import { clearRoleActionCache } from '../../utils/roleActionOverlay';
+import { clearAssignScopeCache } from './assignScope';
 
 /** 新建板块时用的 key 前缀（与预置的 market/teach/... 区分开，一眼看得出是自建） */
 const CUSTOM_MODULE_PREFIX = 'custom_';
@@ -96,6 +97,8 @@ function invalidateAll(): void {
   clearTreeCache();
   clearRoleDefaultCache();
   clearRoleActionCache();
+  // ★ 2026-10-23：权限树的页面增删会改变「页面上限」
+  clearAssignScopeCache();
 }
 
 /* ============================================================

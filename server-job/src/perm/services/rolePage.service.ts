@@ -39,6 +39,9 @@ import { effectivePathsByRoleId } from '../../utils/rolePageEffective';
 import { clearRolePageCache } from '../../utils/rolePageLedger';
 import { clearRoleDefaultCache } from '../../utils/rolePageDefaults';
 import { clearRoleActionCache } from '../../utils/roleActionOverlay';
+import { clearAssignScopeCache } from './assignScope';
+/* ★ 2026-10-24：页面勾选变化 → 联动同步动作行（见 pageActionSync.ts 头注释） */
+import { syncRolePageActions } from './pageActionSync';
 
 export const ROLE_PAGE_TABLE = 't_perm_role_page';
 
@@ -321,6 +324,8 @@ function invalidateCache(): void {
   clearRoleDefaultCache();
   // ★ 2026-10-07：职位页面改完，按钮级的权限树叠加也要跟着失效
   clearRoleActionCache();
+  // ★ 2026-10-23：页面上限变了 → 分配树的可分配范围必须重算
+  clearAssignScopeCache();
 }
 
 /**
@@ -405,6 +410,20 @@ export async function saveRolePages(
 
   invalidateCache();
 
+  /* ★★ 2026-10-24 联动（用户口径：「页面管理给了权限，职位权限分配就应该显示出授权来」）：
+   *   · 新可见的页面若一条动作都没有 → 自动补「查看」动作行（分配页随之显示已授权）；
+   *   · 不再可见的页面 → 删光其动作行（动作行 ⊆ 可见页面的不变量自动维护）。
+   *   必须在 invalidateCache() 之后跑，effectiveKeysOfRole 才能读到新台账。 */
+  const sync = await syncRolePageActions(roleId, operator.id || 'system').catch((e) => {
+    console.error('[pageActionSync] 保存页面可见性后联动失败：', e?.message || e);
+    return { added: [], removed: 0, permCount: 0 };
+  });
+  if (sync.added.length || sync.removed) {
+    console.log(
+      `[pageActionSync] ${role.role_name}(${roleId}) 补动作 ${sync.added.length} 条、删动作 ${sync.removed} 条，perm_count=${sync.permCount}`,
+    );
+  }
+
   return {
     roleId,
     configured: toWrite.length > 0,
@@ -423,6 +442,11 @@ export async function resetRolePages(
   void operator;
   const affected = await db(ROLE_PAGE_TABLE).where({ role_id: roleId }).del();
   invalidateCache();
+  /* ★ 2026-10-24：恢复默认后同样联动一次 —— 台账删光后，
+   *   原先靠台账打勾才可见的页面不再可见，其动作行要跟着删掉。 */
+  await syncRolePageActions(roleId, operator.id || 'system').catch((e) => {
+    console.error('[pageActionSync] 恢复默认后联动失败：', e?.message || e);
+  });
   return { affected: Number(affected) || 0 };
 }
 

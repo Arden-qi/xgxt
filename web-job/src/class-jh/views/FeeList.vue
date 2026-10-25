@@ -6,7 +6,11 @@
  *   ① 催费推送 / 催费记录下线 → 操作列整列移除；
  *   ② 操作列**恢复**，只放「上传缴费凭证」= 登记缴费（缴费方式 / 金额 / 时间 / 备注 / 截图）。
  *   后端 /fee/share、/fee/notify/list 接口**保留但页面不再有入口**（将来接真实短信发送时复用；
- *   数据表 t_class_fee_notify 也照旧保留，「催费次数」列仍按它统计）。
+ *   数据表 t_class_fee_notify 也照旧保留）。
+ *
+ * ★ 2026-10-25 用户要求：列表删掉「紧急」「催费次数」两列（筛选里的「仅看紧急」保留）；
+ *   「剩余天数」三部门统一按「应缴日期 − 今天」计算（原来只有逾期行才有值，
+ *   大学只下发 overdueDays、就业压根没有，用户看到的是一片「—」）。
  *
  * ★ 2026-10-21 用户要求：**大学 / 就业两个部门的功能与初高对齐**。
  *   对齐前：大学、就业的行在操作列只有一个「—」，导出按钮也只对初高显示，
@@ -55,8 +59,6 @@ type FeeRow = FeeRecord & {
   dept?: string;
   /** 原始行（就业催费单的回填字段在 raw 上） */
   raw?: any;
-  /** 催费次数（初高=催费记录数；大学=催缴次数；就业无此概念显示 —） */
-  urgeCount?: number;
   /** 就业原始催缴状态名（待催缴 / 催缴中 / 已缴清）：列表按统一缴费状态展示，这个值挂 title 备查 */
   callStatusName?: string;
 };
@@ -142,6 +144,42 @@ function isPastDate(dateStr?: string | null): boolean {
   return d < today;
 }
 
+/**
+ * 剩余天数 = 应缴日期 − 今天（按自然日算，今天到期 = 0，已逾期为负数）
+ *
+ * ★ 2026-10-25 用户要求：「剩余天数」对三个部门都要有值（原来只有逾期行才有）。
+ *   口径与初高后端 `class-jh/routes/fee.route.ts::calcRemainDays` 完全一致：
+ *   两边都把时分秒抹掉再算，避免「今天 23:00 看」和「明天 01:00 看」差一天。
+ *   ⚠️ 大学 / 就业后端只下发「是否逾期」（overdueDays / overdue 布尔），
+ *     没有剩余天数，所以这两个部门在这里按应缴日期自己算。
+ */
+function calcRemainDays(expireDate?: string | null): number | undefined {
+  if (!expireDate) return undefined;
+  const raw = String(expireDate).slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!m) return undefined;
+  // 用「当天 0 点」的本地时间算，避开时区把日期整体挪一天
+  const due = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(due.getTime())) return undefined;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((due.getTime() - today.getTime()) / (24 * 3600 * 1000));
+}
+
+/** 优先用后端下发的剩余天数（初高有），没有就按应缴日期自己算 */
+function pickRemainDays(backendValue: unknown, expireDate?: string | null): number | undefined {
+  if (typeof backendValue === 'number' && !Number.isNaN(backendValue)) return backendValue;
+  return calcRemainDays(expireDate);
+}
+
+/** 剩余天数配色：已逾期红、7 天内橙、其余不标色 */
+function remainDaysClass(value?: number | null): string {
+  if (value === null || value === undefined) return '';
+  if (value < 0) return 'remain-overdue';
+  if (value <= 7) return 'remain-soon';
+  return '';
+}
+
 /** 大学催缴行 → 台账行形状（公共列直接复用现有表格） */
 function urgeToRow(r: any): FeeRow {
   return {
@@ -160,9 +198,10 @@ function urgeToRow(r: any): FeeRow {
     payStatus: r.payStatus,
     payStatusName: r.payStatusName || '',
     expireDate: r.expireDate || undefined,
-    remainDays: r.overdueDays ? -r.overdueDays : undefined,
+    // ★ 2026-10-25：大学催缴副本没有剩余天数（只有 overdueDays），按应缴日期自己算
+    remainDays: pickRemainDays(r.remainDays, r.expireDate),
     isUrgent: !!r.isOverdue,
-    urgeCount: Number(r.urgeCount || 0),
+    // ★ 2026-10-25：「催费次数」列已删除，这里不再搬 urgeCount（后端接口照旧返回，只是列表不展示）
     // ★ 2026-10-21：大学也能登记缴费了（与初高同款五列），这里把登记信息搬上游标
     payMethod: r.payMethod ?? null,
     payMethodName: r.payMethodName || null,
@@ -198,6 +237,8 @@ function callToRow(r: any): FeeRow {
       PAY_STATUS_NAME[callStatusToPayStatus(r.callStatus, r.dueDate, r.payStatus)] || '',
     callStatusName: r.callStatusName || '',
     expireDate: r.dueDate || undefined,
+    // ★ 2026-10-25：就业催费单原来完全没有剩余天数，按应缴日期（dueDate）自己算
+    remainDays: pickRemainDays(r.remainDays, r.dueDate),
     isUrgent: !!r.overdue,
     // ★ 2026-10-21：就业也能登记缴费了（与初高同款五列）
     payMethod: r.payMethod ?? null,
@@ -705,7 +746,6 @@ const EXPORT_HEADERS = [
   '缴费日期',
   '备注',
   '剩余天数',
-  '是否紧急',
 ];
 
 function toExportRow(r: FeeRow) {
@@ -725,7 +765,6 @@ function toExportRow(r: FeeRow) {
     formatDate(r.payDate),
     r.payRemark || '',
     r.remainDays ?? '',
-    r.isUrgent ? '是' : '否',
   ];
 }
 
@@ -912,18 +951,12 @@ onMounted(() => {
           <template #default="{ row }">{{ formatDate(row.payDate) }}</template>
         </el-table-column>
         <el-table-column label="剩余天数" width="100" align="center">
-          <template #default="{ row }">{{ dash(row.remainDays) }}</template>
-        </el-table-column>
-        <el-table-column label="紧急" width="80" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.isUrgent" type="danger" size="small">紧急</el-tag>
-            <span v-else>—</span>
+            <!-- ★ 2026-10-25：三部门统一给值（今天到期 = 0，逾期为负数） -->
+            <span :class="remainDaysClass(row.remainDays)">{{ dash(row.remainDays) }}</span>
           </template>
         </el-table-column>
-        <!-- ★ 催费次数（2026-10-19 用户要求）：初高=催费推送记录数；大学=催缴次数；就业催费单无此概念 -->
-        <el-table-column label="催费次数" width="90" align="center">
-          <template #default="{ row }">{{ row.urgeCount ?? '—' }}</template>
-        </el-table-column>
+        <!-- ★ 2026-10-25 用户要求：「紧急」与「催费次数」两列删除（筛选里的「仅看紧急」保留）。 -->
         <!-- ★ 2026-10-20 用户要求：操作列恢复，只放「上传缴费凭证」（= 登记缴费）；
              催费推送 / 催费记录 / 催缴记录已下线，不要再加回来。
              ★ 2026-10-21 用户要求：大学 / 就业与初高对齐 —— 这三个按钮对三个部门都出现
@@ -1168,6 +1201,14 @@ onMounted(() => {
 .dept-hint {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+/* 剩余天数：已逾期（负数）标红，7 天内到期标橙，其余常规色 */
+.remain-overdue {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
+.remain-soon {
+  color: var(--el-color-warning);
 }
 /* 登记缴费弹窗内的说明文字 / 凭证预览 */
 .field-unit {

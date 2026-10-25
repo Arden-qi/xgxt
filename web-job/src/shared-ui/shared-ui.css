@@ -563,6 +563,22 @@ select.inp{cursor:pointer;padding-right:26px;appearance:none;-webkit-appearance:
 .tree .act.on .bx{background:#CD3A33;border-color:#CD3A33}
 
 /* ============================================================
+ * ★ 2026-10-23 未授权页面（职位权限分配）
+ *
+ * 【背景】一个职位只能在「页面管理 → 职位」里已授权的页面内分配动作。
+ *   未授权的页面在分配树里整行锁死（.n.locked + .act.off），
+ *   视觉上要一眼看出「这里不能点」，但不能看起来像坏了 ——
+ *   所以只降饱和度、保留文字可读，并配合行尾的「🔒 未授权」标签。
+ * ============================================================ */
+.tree .n.locked .nm{color:#B3A69F;cursor:not-allowed}
+.tree .n.locked input[type=checkbox]{cursor:not-allowed;opacity:.5}
+.tree .n.locked:hover{background:transparent}
+.tree .act.off{opacity:.55;border-style:dashed;cursor:not-allowed;color:#A99C95;background:#F8F5F2}
+.tree .act.off:hover{border-color:#E2D7D1;background:#F8F5F2;color:#A99C95}
+.tree .act.off.on{background:#F8F5F2;border-color:#E2D7D1;color:#8A7E77;font-weight:600}
+.tree .act.off.on .bx{background:#C4B8B1;border-color:#C4B8B1}
+
+/* ============================================================
  * ★ 2026-10-06 补齐：权限模块原型类名里【一直缺失】的几个
  *
  * 【背景】上面「权限模块原型类名补齐」那一段只映射了颜色/字号，
@@ -582,6 +598,38 @@ select.inp{cursor:pointer;padding-right:26px;appearance:none;-webkit-appearance:
 .split{display:flex;align-items:flex-start;gap:14px}
 .split > .lft{width:252px;flex:none;min-width:0}
 .split > .rgt{flex:1;min-width:0}
+
+/* ============================================================
+ * ★ 2026-10-23 左栏固定 / 右栏独立滚动（仅 .split-page 两页生效）
+ *
+ * 【问题】原来整页只有 .main 一根滚动条：右侧权限内容滚到下面时，
+ *   左侧职位列表跟着滚出视野，用户看不到自己选的是哪个职位。
+ *
+ * 【做法】整页吃满内容区剩余高度，再把高度一路传下去，
+ *   最后让左右两栏各自 overflow-y:auto —— 右边滚，左边纹丝不动；
+ *   左栏职位多（现在 15 个，以后还会加）时左栏自己滚，也不挤走右栏。
+ *
+ * 【链路】.main(flex 列) → .split-page → .card → .card-b → .split → .lft/.rgt
+ *   ⚠️ 这条链上任何一环漏了 min-height:0，都会被内容顶高，
+ *     自动退回「整页滚动」的旧行为（症状：左边又跟着滚走了）。
+ *   ⚠️ 页面根节点必须带 class="split-page"（目前：PermAssign、PageManage）。
+ *     其它页面仍是整页滚动，不受影响。
+ * ============================================================ */
+.split-page{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+.split-page > .card{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;margin-bottom:0}
+.split-page > .card > .card-b{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.split-page .split{flex:1 1 auto;min-height:0;align-items:stretch}
+.split-page .split > .lft,
+.split-page .split > .rgt{overflow-y:auto;overscroll-behavior:contain}
+/* 两栏各滚各的，滚动条做细一点，别把内容挤太窄 */
+.split-page .split > .lft::-webkit-scrollbar,
+.split-page .split > .rgt::-webkit-scrollbar{width:8px}
+.split-page .split > .lft::-webkit-scrollbar-thumb,
+.split-page .split > .rgt::-webkit-scrollbar-thumb{background:#E6DCD5;border-radius:4px}
+.split-page .split > .lft::-webkit-scrollbar-thumb:hover,
+.split-page .split > .rgt::-webkit-scrollbar-thumb:hover{background:#D3C5BC}
+.split-page .split > .lft::-webkit-scrollbar-track,
+.split-page .split > .rgt::-webkit-scrollbar-track{background:transparent}
 
 /* ---- 左栏列表项 ----
  * ⚠️⚠️ 两个限制字号不要动：

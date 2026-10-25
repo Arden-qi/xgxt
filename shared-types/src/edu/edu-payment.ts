@@ -194,11 +194,13 @@ export const OCR_ACCEPT = '.jpg,.jpeg,.png,.bmp,.webp';
 /** 截图大小上限：10MB */
 export const OCR_MAX_SIZE_MB = 10;
 
-/** 缴费总记录页「状态」筛选项：值和后端 list 接口的 frozenFilter 对应 */
+/** 缴费总记录页「状态」筛选项：值和后端 list 接口的 frozenFilter 对应
+ *  ★ 2026-10-24 用户口径：状态选项文字不带「已」（冻结，不是已冻结）；
+ *    PAY_STATUS_FROZEN 常量（'已冻结'）仍用于表格 tag 等展示位，别混用。 */
 export const PAY_STATUS_FILTERS = [
   { label: '全部', value: 'all' },
   { label: PAY_STATUS_NORMAL, value: 'normal' },
-  { label: PAY_STATUS_FROZEN, value: 'frozen' },
+  { label: '冻结', value: 'frozen' },
 ] as const;
 
 /* ============================================================

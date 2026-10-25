@@ -40,6 +40,9 @@ import { BizError } from '../middleware/errorHandler';
 import { tbl, tblIns, uniUpdCols } from '../../teaching/shared/uniTable';
 // ★ 2026-10-20 批量转交财务：直接复用财务自己的建单服务（凭证唯一性等规则不重复实现）
 import { addFee as financeAddFee } from '../../finance/services/fee.service';
+// ★ 2026-10-23 登记缴费反写财务：与财务 attachVoucher 同口径（待缴 → 已缴），
+//   否则财务侧的待缴单点「核对」会被拦「尚未缴费，无法核对」
+import { pushVoucherToFinance } from '../../finance/utils/voucher-push';
 
 export const feeRouter = Router();
 
@@ -463,8 +466,10 @@ feeRouter.get(
  *   只写副本的话，财务下次把这张单再推一遍会把 voucher_url 覆盖回去，用户登记的凭证就"消失"了。
  *   财务那张单能不能找到，靠 `source_system='finance'` + `source_id` 判断；
  *   演示数据是 `source_system='local'`（没有财务单），就只写副本，不算失败。
- *   ⚠️ 财务侧 pay_status 不在这里流转（那是财务核对流程的事，财务侧还有"凭证唯一性""已核对不许改"等规则），
- *     本接口只负责把凭证和信息登记进去。
+ *   ⚠️ 财务侧 pay_status 只做「待缴(1) → 已缴(2)」这一步推进（2026-10-23 起），
+ *     **不**替财务核对（3 已核对只由财务核对流程写）。原因：财务 `verifyFee()`
+ *     第一步就拦「该缴费单尚未缴费，无法核对」，不推这一步财务根本点不动核对按钮。
+ *     与财务自己 `attachVoucher()`（上游回传凭证）的口径完全一致。
  *
  * 【状态怎么变】
  *   登记了「金额 + 时间 + 截图」就等于报缴了 → 未结清（待缴 1 / 逾期 4）推进成「已缴(2)」，
@@ -576,23 +581,17 @@ feeRouter.post(
     const patch = await uniUpdCols(db, DB, FEE_TABLE, updateFields);
     await FEE().where({ id: row.id }).update(patch as never);
 
-    /* ---- 4. 财务侧反写（best-effort）：只写凭证/日期/备注，状态交给财务核对流程 ---- */
+    /* ---- 4. 财务侧反写（best-effort）：凭证/日期/备注 + 待缴→已缴，财务才点得动「核对」 ---- */
     let financeSynced = false;
     if (row.source_system === 'finance' && row.source_id) {
-      try {
-        const finFields: Record<string, any> = {
-          pay_date: body.payDate,
-          remark: body.remark ?? null,
-        };
-        if (voucherUrl) finFields.voucher_url = voucherUrl;
-        const affected = await db('sms_finance.t_finance_fee')
-          .where({ id: String(row.source_id), is_deleted: false })
-          .update(finFields);
-        financeSynced = Number(affected) > 0;
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[fee-payment] 反写财务缴费单失败（不影响本次登记）：', (e as Error).message);
-      }
+      const pushed = await pushVoucherToFinance({
+        financeFeeId: String(row.source_id),
+        voucherUrl: voucherUrl ?? null,
+        payDate: body.payDate,
+        remark: body.remark ?? null,
+        operatorId: operator?.userId ?? null,
+      });
+      financeSynced = pushed.ok;
     }
 
     /* ---- 5. 留痕 ---- */

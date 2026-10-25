@@ -219,11 +219,10 @@ export enum RoleStatus {
   DISABLED = '停用',
 }
 
-/** 账号状态 */
+/** 账号状态（★ 2026-10-25：「已锁定」档全系统移除，只剩正常/已停用两档） */
 export enum UserStatus {
   NORMAL = '正常',
   DISABLED = '已停用',
-  LOCKED = '已锁定',
 }
 
 /** 部门层级 */

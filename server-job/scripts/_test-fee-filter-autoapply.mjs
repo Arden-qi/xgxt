@@ -86,10 +86,30 @@ function unwired(section) {
         !feeSrc.includes('openNotify'),
     );
 
-    /* ---------- A3. 催费次数列（2026-10-19 用户要求） ---------- */
+    /* ---------- A3. 列表列口径（2026-10-25 用户要求：删「紧急」「催费次数」，剩余天数三部门都给值） ---------- */
     check(
-      '★ 催费列表有「催费次数」列（初高=催费记录数；大学=催缴次数）',
-      feeSrc.includes('label="催费次数"') && feeSrc.includes('urgeCount'),
+      '★ 催费列表已删除「催费次数」列',
+      !feeSrc.includes('label="催费次数"') && !feeSrc.includes("row.urgeCount"),
+      'FeeList.vue 里不应再有催费次数列',
+    );
+    check(
+      '★ 催费列表已删除「紧急」列（筛选里的「仅看紧急」保留）',
+      !feeSrc.includes('label="紧急"') &&
+        !feeSrc.includes('v-if="row.isUrgent"') &&
+        feeSrc.includes('label="仅看紧急"'),
+      'FeeList.vue 里不应再有紧急列，但筛选要有',
+    );
+    check(
+      '★ 剩余天数三部门统一按「应缴日期 − 今天」算（大学/就业后端没有该字段）',
+      feeSrc.includes('function calcRemainDays(') &&
+        feeSrc.includes('pickRemainDays(r.remainDays, r.expireDate)') &&
+        feeSrc.includes('pickRemainDays(r.remainDays, r.dueDate)'),
+      '两个部门 mapper 都要调 pickRemainDays',
+    );
+    check(
+      '★ 剩余天数导出列仍在（导出与页面同口径）',
+      feeSrc.includes("'剩余天数'") && !feeSrc.includes("'是否紧急'"),
+      '导出表头应保留剩余天数、去掉是否紧急',
     );
     const feeRouteSrc = readFileSync(
       path.join(ROOT, 'server-job', 'src', 'class-jh', 'routes', 'fee.route.ts'),
