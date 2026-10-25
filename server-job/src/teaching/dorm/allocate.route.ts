@@ -56,7 +56,7 @@ teachingDormAllocateRouter.get(
   '/buildings',
   wrap(async (req, res) => {
     const category = reqCategory(req.query.category);
-    res.json(ok(await svc.listAllocateBuildings(category), '查询成功'));
+    res.json(ok(await svc.listAllocateBuildings(category, req.user), '查询成功'));
   }),
 );
 
@@ -65,7 +65,7 @@ teachingDormAllocateRouter.get(
   '/rooms',
   wrap(async (req, res) => {
     const category = reqCategory(req.query.category);
-    res.json(ok(await svc.listAllocateRooms(category, str(req.query.building)), '查询成功'));
+    res.json(ok(await svc.listAllocateRooms(category, str(req.query.building), req.user), '查询成功'));
   }),
 );
 

@@ -37,6 +37,10 @@ const EMP_CODE = 301;
 exports.up = async function up(knex) {
   const hasCol = await knex.schema.hasColumn(SCHEME_STAGE_T, 'stage_code');
   if (!hasCol) return;
+  /* ★ 2026-10-23 补守卫：本迁移要回查旧阶段字典 t_class_stage，
+     该老表在 P8 归一后已 DROP（统一表模式用 t_uni_stage_def）。
+     表不存在 → 跳过，migrate 不再因此失败。 */
+  if (!(await knex.schema.hasTable(STAGE_T))) return;
 
   const schemes = await knex(SCHEME_T).where('is_deleted', 0).select('id', 'dept_code');
   if (!schemes.length) return;

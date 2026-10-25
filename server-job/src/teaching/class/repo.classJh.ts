@@ -38,7 +38,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 import { applyClassScope } from '../shared/dataScope';
-import { resolvePhaseCodeFromScheme } from '../shared/stageSchemes';
+import { resolvePhaseCodeFromScheme, resolveSchemeStageName } from '../shared/stageSchemes';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -106,7 +106,14 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
-    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    /**
+     * ★ 2026-10-23 修：阶段名**以方案为准**。
+     *   班级绑定方案后，同一编码在不同方案里叫法不同（201 在全局字典叫「一阶段」，
+     *   在方案「大学2」里叫「拉丝机」）。原来字典优先 → 用户改完方案里的阶段，
+     *   表格仍显示字典名（「一阶段」），以为“阶段没保存”。
+     *   现在：方案阶段名优先，字典名兜底（老班级没绑方案时才用字典）。
+     */
+    phaseName: phase === null ? '' : (str(r.scheme_stage_name) || PHASE_NAME[phase] || ''),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -276,7 +283,11 @@ export const repo: ClassRepo = {
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
     set('scheme_id', body.schemeId);
     set('scheme_stage_id', body.schemeStageId);
-    set('scheme_stage_name', body.schemeStageName);
+    set(
+      'scheme_stage_name',
+      // ★ 2026-10-23：前端漏传阶段名时服务端按「方案 + 阶段码」反查兜底
+      body.schemeStageName ?? (await resolveSchemeStageName(body.schemeId, body.phaseCode)),
+    );
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);
