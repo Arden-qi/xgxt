@@ -100,6 +100,15 @@ export enum PayStatus {
    */
   OVERDUE = 4,   // 逾期
   FROZEN = 5,    // 冻结
+  /**
+   * 核对失败（财务把凭证打回了）—— 2026-10-25 新增，与 class-jh / class 两个子包同步
+   *
+   * 财务打回时财务单是 `pay_status = 2 已缴 + is_rejected = 1`；
+   * 催费列表照搬 2 的话班主任看不到「被打回」，所以催费侧用 6 表示「核对失败」，
+   * 由 `finance/services/class-sync.ts::urgePayStatusOf` 换算。
+   * 钱已经交过（不算未结清），重新登记缴费后回到「已缴 2」。
+   */
+  REJECTED = 6,  // 核对失败（财务打回，待重新上传凭证）
 }
 
 /** 退费状态（审批链，顺序不可变） */
@@ -318,6 +327,8 @@ export const PAY_STATUS_NAME: Record<number, string> = {
   [PayStatus.VERIFIED]: '已核对',
   [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
+  // ★ 2026-10-25：财务打回 → 催费列表显示「核对失败」
+  [PayStatus.REJECTED]: '核对失败',
 };
 
 export const REFUND_STATUS_NAME: Record<number, string> = {

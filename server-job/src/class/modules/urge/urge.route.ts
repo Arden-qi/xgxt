@@ -269,7 +269,14 @@ urgeRouter.get(
     }
     if (query.startDate) base.where('expire_date', '>=', query.startDate);
     if (query.endDate) base.where('expire_date', '<=', query.endDate);
-    if (query.onlyOverdue) base.where('expire_date', '<', t).whereNot('pay_status', PayStatus.PAID);
+    // 仅看紧急（= 未结清 且 已过应缴日）
+    // ★ 2026-10-25：原来是 `whereNot(pay_status, PAID)`，把「已核对(3)」「核对失败(6)」
+    //   也算进紧急了 —— 钱都交过了不该催。改成与就业 `feeCall.route.ts` 同口径的白名单。
+    if (query.onlyOverdue) {
+      base
+        .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.OVERDUE])
+        .andWhere('expire_date', '<', t);
+    }
     if (query.keyword) {
       const k = query.keyword;
       base.where(function (this: Knex.QueryBuilder) {
@@ -478,8 +485,13 @@ urgeRouter.post(
     }
 
     const rawStatus = Number(rec.pay_status ?? PayStatus.UNPAID);
+    // ★ 2026-10-25：核对失败(6) 重新登记 = 重传凭证 → 回到已缴，等财务再核一遍
     const nextStatus =
-      rawStatus === PayStatus.UNPAID || rawStatus === PayStatus.OVERDUE ? PayStatus.PAID : rawStatus;
+      rawStatus === PayStatus.UNPAID ||
+      rawStatus === PayStatus.OVERDUE ||
+      rawStatus === PayStatus.REJECTED
+        ? PayStatus.PAID
+        : rawStatus;
 
     const patch: Record<string, unknown> = {
       pay_method: b.payMethod,
@@ -491,6 +503,13 @@ urgeRouter.post(
     };
     // 现金且没传截图：保留原来的凭证，不要把它清空
     if (voucherUrl) patch.voucher_url = voucherUrl;
+    /**
+     * ★ 2026-10-25：重新登记 → 清掉「已上传财务时间」，让它重新回到
+     *   「批量上传到财务」候选（详见 class-jh/routes/fee.route.ts 同款注释）。
+     *   ⚠️ 只清时间，不清 `finance_fee_id`（那是财务那张单的唯一凭据，
+     *      清掉会再建一张新单 → 财务重复记账）。
+     */
+    if (rec.finance_fee_id) patch.finance_transfer_time = null;
 
     await SYNC()
       .where({ id: b.urgeId })

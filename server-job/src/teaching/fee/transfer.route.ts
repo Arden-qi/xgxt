@@ -6,12 +6,20 @@
  *   「催费列表里大学部和就业部也要能上传凭证、批量上传到财务」
  *
  * ★★ 2026-10-23 用户追加两条：
- *   ① 「列表只显示没有上传过的内容」→ 候选接口在 SQL 里过滤 `finance_fee_id IS NULL`，
+ *   ① 「列表只显示没有上传过的内容」→ 候选接口在 SQL 里过滤掉「已上传到位」的行，
  *      前端拿到的每一条都是可转交的（不再靠「只选未上传过」按钮绕）。
  *   ② 「大学部上传到财务时，财务那里没有对应信息」→ 不是转交没生效，而是财务
  *      「缴费管理」的硬约束是「必须有凭证」，而大学/就业的现金收款本来就没有截图
  *      （登记缴费允许现金不传图）→ 单建出来了但列表里查不到。
  *      修在 `finance/services/fee.service.ts::buildFeeQuery`：已收款的单也进核对台。
+ *
+ * ★★ 2026-10-25 用户追加：
+ *   「重新登记也要出现在批量上传到财务列表中，传到财务」。
+ *   原来「已上传」是靠 `finance_fee_id` 一票否决的 → 班主任重新登记（改金额/换截图）
+ *   之后那条永远回不来，财务那张单收不到更新。
+ *   现在：登记缴费会把 `finance_transfer_time` 清空（`finance_fee_id` 保留）→
+ *   候选条件放宽成「没上传过 OR 上传后又重新登记过」，
+ *   提交时对这类行走「回写财务原单」，**不会新建第二张单**。
  *
  * 【改造前是什么样】
  *   只有初高能做：`class-jh/routes/fee.route.ts` 的 `/transfer/candidates` + `/transfer`
@@ -138,6 +146,23 @@ function isTransferred(row: any, _dept: Dept): boolean {
   return !!row.finance_fee_id;
 }
 
+/**
+ * 是否「已上传过财务、且之后没再重新登记」
+ *
+ * ★ 2026-10-25 用户要求：「重新登记也要出现在批量上传到财务列表中，传到财务」。
+ *
+ *   `finance_fee_id` = 财务那张单是谁（**永久**，转交/回写都靠它防重复建单）；
+ *   `finance_transfer_time` = 最近一次把凭证交到财务的时间。
+ *
+ *   登记缴费（三部门的 `/voucher`）在「该行已有 finance_fee_id」时会把
+ *   `finance_transfer_time` 清空 —— 等价于「有新登记、待上传」。
+ *   所以只有**两者都有值**才算「已同步到位」，可以从候选里排除；
+ *   有 id 但时间为空 = 重新登记过，必须重新出现在列表里。
+ */
+function isUploadedUpToDate(row: any): boolean {
+  return !!row.finance_fee_id && !!row.finance_transfer_time;
+}
+
 /** 已转交时用于展示/回填的财务单 id（`source_id` 只有初高能当兜底，理由同上） */
 function transferredFinanceId(row: any, dept: Dept): string {
   if (row.finance_fee_id) return String(row.finance_fee_id);
@@ -175,6 +200,8 @@ interface TransferCandidate {
   voucherUrl: string | null;
   payRemark: string | null;
   transferred: boolean;
+  /** ★ 2026-10-25：已有财务单、但转交后又重新登记过 → 本次是「更新财务原单」 */
+  retransfer: boolean;
   /** 已转交时：财务侧缴费单 id */
   financeFeeId: string;
 }
@@ -202,6 +229,8 @@ function base(row: any, dept: Dept): TransferCandidate {
     voucherUrl: row.voucher_url || null,
     payRemark: row.pay_remark || null,
     transferred: isTransferred(row, dept),
+    // 有财务单、但上传时间是空的 = 重新登记过（见 isUploadedUpToDate 注释）
+    retransfer: !!row.finance_fee_id && !row.finance_transfer_time,
     financeFeeId: transferredFinanceId(row, dept),
   };
 }
@@ -255,7 +284,9 @@ const paidCond = (qb: any) => {
  * ★★ 2026-10-23 用户要求：**列表只显示还没上传过财务的**。
  *   改造前候选接口把 `transferred=true` 的行也返回，靠前端「只选未上传过」按钮规避，
  *   结果弹窗里一半是躺在那里点不动的历史行，看着像「重复列出」。
- *   现在直接在 SQL 里 `finance_fee_id IS NULL` 过滤 —— 前端拿到的每一条都是可转交的。
+ *
+ * ★★ 2026-10-25：条件放宽成「没上传过 **或** 上传后又重新登记过」，
+ *   见 `isUploadedUpToDate()` 的注释。
  *
  *   `transferred` 计数仍要单独查：弹窗顶部要能说清
  *   「共 66 单 · 已登记缴费 5 单 · 待上传 3 单」，否则「只剩 3 条」会被当成查询漏了数据。
@@ -268,13 +299,22 @@ async function candidatesOf(dept: Dept): Promise<CandidateScan> {
   const [scannedRow, paidRow, transferredRow, rows] = await Promise.all([
     base0().count({ c: '*' }) as any as Promise<any[]>,
     base0().andWhere(paidCond).count({ c: '*' }) as any as Promise<any[]>,
+    // 「已上传到位」= 有财务单 且 上传时间非空（重新登记会把时间清空，见 isUploadedUpToDate）
     base0()
       .andWhere(paidCond)
       .whereNotNull('finance_fee_id')
+      .whereNotNull('finance_transfer_time')
       .count({ c: '*' }) as any as Promise<any[]>,
     base0()
       .andWhere(paidCond)
-      .whereNull('finance_fee_id')
+      /**
+       * ★ 2026-10-25：候选 = 没上传过 的 + 上传后又重新登记过 的。
+       *   原来只 `whereNull('finance_fee_id')` → 重新登记的单调不回来，
+       *   用户改完金额/换完截图，财务那张单永远收不到更新。
+       */
+      .andWhere((qb: any) =>
+        qb.whereNull('finance_fee_id').orWhereNull('finance_transfer_time'),
+      )
       .orderBy('pay_date', 'desc')
       .orderBy(spec.dateCol, 'desc')
       .limit(500) as any as Promise<any[]>,
@@ -506,8 +546,10 @@ teachingFeeRouter.post(
     const skipped: Array<{ dept: Dept; deptName: string; feeId: string; reason: string }> = [];
     const failed: Array<{ dept: Dept; deptName: string; feeId: string; reason: string }> = [];
     let success = 0;
-    /** 大学部：财务里已有单 → 只补凭证的条数（单独统计，便于验收时区分） */
+    /** 财务里已有这张单 → 回写（只更新凭证/方式/实缴，不新建）的条数 */
     let voucherOnly = 0;
+    /** 其中「重新登记后再次上传」的条数（★ 2026-10-25） */
+    let retransferred = 0;
 
     // 按部门分组，一次查完
     const grouped = new Map<Dept, string[]>();
@@ -535,8 +577,8 @@ teachingFeeRouter.post(
         skipped.push({ dept, deptName, feeId, reason: '还没登记缴费，没有凭证可转交' });
         continue;
       }
-      if (isTransferred(row, dept)) {
-        skipped.push({ dept, deptName, feeId, reason: '已转交过财务' });
+      if (isUploadedUpToDate(row)) {
+        skipped.push({ dept, deptName, feeId, reason: '已上传过财务，重新登记后才会再出现' });
         continue;
       }
 
@@ -574,13 +616,20 @@ teachingFeeRouter.post(
          *   见文件头「★ 大学部为什么要按财务单号判重」。
          */
         /**
-         * 这张催费单对应的**财务原始缴费单**（有 → 回写财务，没有 → 在财务新建）
+         * 这张催费单对应的**财务缴费单**（有 → 回写那张单，没有 → 在财务新建）
          *
          * ★ 2026-10-22：原来只判大学部。现在三部门的单都从财务同步
          *   （催费单怎么来，就业同初高），所以三部门统一按 source_system/source_id 认。
+         * ★ 2026-10-25：**优先用 `finance_fee_id`**。
+         *   重新登记的行 `source_system` 可能是 'edu'（就业推来的），
+         *   只看 source_* 会判成「财务没有这张单」→ 再建一张 → 财务重复记账。
+         *   `finance_fee_id` 是上次转交时记下的那张财务单，最可靠。
          */
-        const existFinanceId =
-          row.source_system === 'finance' && row.source_id ? String(row.source_id) : '';
+        const existFinanceId = String(
+          row.finance_fee_id ||
+            (row.source_system === 'finance' && row.source_id ? row.source_id : '') ||
+            '',
+        );
 
         if (existFinanceId) {
           /**
@@ -604,6 +653,8 @@ teachingFeeRouter.post(
           );
           await markTransferred(dept, feeId, existFinanceId, operator.userId);
           voucherOnly += 1;
+          // 上次已经传过这张财务单 → 这次是重新登记后的更新
+          if (row.finance_fee_id) retransferred += 1;
           success += 1;
           continue;
         }
@@ -649,16 +700,26 @@ teachingFeeRouter.post(
       opUserId: operator.userId || undefined,
       opUserName: operator.userName || undefined,
       opDesc:
-        `批量转交财务：提交 ${uniq.length} 条，成功 ${success}（其中只补凭证 ${voucherOnly}），` +
-        `跳过 ${skipped.length}，失败 ${failed.length}`,
-      afterValue: { success, voucherOnly, skipped: skipped.length, failed: failed.length },
+        `批量转交财务：提交 ${uniq.length} 条，成功 ${success}（其中回写财务原单 ${voucherOnly}，` +
+        `含重新登记后再传 ${retransferred}），跳过 ${skipped.length}，失败 ${failed.length}`,
+      afterValue: { success, voucherOnly, retransferred, skipped: skipped.length, failed: failed.length },
     });
 
     const parts = [`成功 ${success} 条`];
-    if (voucherOnly) parts.push(`其中 ${voucherOnly} 条财务已有原单、只补了凭证`);
+    if (voucherOnly) {
+      parts.push(
+        `其中 ${voucherOnly} 条财务已有原单、已更新凭证信息` +
+          (retransferred ? `（含 ${retransferred} 条重新登记后重传）` : ''),
+      );
+    }
     if (skipped.length) parts.push(`跳过 ${skipped.length} 条`);
     if (failed.length) parts.push(`失败 ${failed.length} 条`);
 
-    res.json(ok({ total: uniq.length, success, voucherOnly, skipped, failed }, `转交完成：${parts.join('，')}`));
+    res.json(
+      ok(
+        { total: uniq.length, success, voucherOnly, retransferred, skipped, failed },
+        `转交完成：${parts.join('，')}`,
+      ),
+    );
   }),
 );
