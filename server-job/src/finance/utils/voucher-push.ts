@@ -85,13 +85,21 @@ export async function pushVoucherToFinance(opt: PushVoucherOptions): Promise<Pus
     if (opt.payDate) patch.pay_date = opt.payDate;
     if (opt.remark !== undefined) patch.remark = opt.remark ?? null;
 
+    /**
+     * ★ 2026-10-25：**每次登记缴费都清「打回」痕迹**（不再只在重传截图时清）。
+     *
+     *   财务打回会把单置 `is_rejected = 1`，催费列表据此显示「核对失败」（6）。
+     *   如果班主任这次按「现金」登记（没有截图），只清凭证相关字段就会漏掉
+     *   `is_rejected` → 催费侧刚推回「已缴」，下一次同步又被换算回「核对失败」，
+     *   班主任会以为点了没用。
+     */
+    patch.is_rejected = false;
+    patch.reject_reason = null;
+
     if (opt.voucherUrl) {
       patch.voucher_url = opt.voucherUrl;
       patch.voucher_by = operator;
       patch.voucher_time = now;
-      // 重新上传 = 重新提交，把「打回」痕迹清掉
-      patch.is_rejected = false;
-      patch.reject_reason = null;
     }
 
     /**

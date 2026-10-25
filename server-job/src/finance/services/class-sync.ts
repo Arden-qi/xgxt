@@ -26,6 +26,8 @@
 
 import { db } from '../utils/db';
 import { classSync } from '../../utils/classSync';
+// ★ 2026-10-25：催费侧「核对失败(6)」由财务「打回(is_rejected)」换算而来，见 urgePayStatusOf
+import { PayStatus } from 'shared-types/class-jh';
 // ★ P3 切读层：推给初高的两张表（`sms_class_jh.t_class_student` / `t_class_fee`）
 //   都已归一 → 读走 tbl()、写走 tblIns()。本文件 `db` 连的是 sms_job，
 //   属于**跨库**调用，`tbl()` 会自动补库名前缀（与改造前的 `db('库.表')` 一致）。
@@ -45,6 +47,27 @@ function dateOnly(v: any): string | null {
 }
 
 /**
+ * 财务单 → 催费侧展示状态
+ *
+ * ★ 2026-10-25：财务「打回」在催费侧要显示成「核对失败(6)」。
+ *
+ *   财务打回（`fee.service.ts::rejectFee`）的做法是把单退回
+ *   `pay_status = 2 已缴` + `is_rejected = 1` + `reject_reason`，
+ *   等班主任重传凭证。如果催费侧照搬 2，班主任打开催费列表看到的还是
+ *   「已缴」，压根不知道截图被打回，也就不会去重传。
+ *
+ *   所以这里做一次换算：**有打回标记 → 6 核对失败**，其余原样透传。
+ *   ⚠️ 6 不算「未结清」：钱确实交过了，只是凭证有问题 →
+ *      初高的 `UNPAID_STATUSES` 不含 6，不会被派生成「逾期 4」。
+ *   ⚠️ 班主任重新登记缴费后，`voucher-push` 会清掉 `is_rejected`，
+ *      催费侧同时把状态推回 2，这条换算自然恢复。
+ */
+function urgePayStatusOf(row: Record<string, any>): number {
+  const raw = Number(row.pay_status ?? PayStatus.UNPAID);
+  return row.is_rejected ? PayStatus.REJECTED : raw;
+}
+
+/**
  * 缴费单 → class 侧 SyncRequest 的 item
  *
  * ⚠️ 状态码是【数字契约】，两个模块的 PayStatus 取值完全一致（1待缴…5冻结），
@@ -54,7 +77,7 @@ function dateOnly(v: any): string | null {
  *    （见 class/modules/shared/studentRef.ts）。
  */
 export function feeToSyncItem(row: Record<string, any>): Record<string, unknown> {
-  const payStatus = Number(row.pay_status ?? 1);
+  const payStatus = urgePayStatusOf(row);
   const amount = Number(row.amount ?? 0);
   return {
     sourceId: String(row.id),
@@ -272,7 +295,7 @@ export async function syncFeeToJh(feeId: string): Promise<void> {
       dept_code: 1,
       fee_type: feeType,
       fee_amount: Number(row.amount ?? 0),
-      pay_status: Number(row.pay_status ?? 1),
+      pay_status: urgePayStatusOf(row),
       expire_date: dateOnly(row.expire_date),
       source_system: 'finance',
       source_id: String(row.id),
@@ -418,7 +441,8 @@ export async function syncFeeToClassUrge(feeId: string): Promise<void> {
     if (!stu) return;
 
     const now = new Date();
-    const payStatus = Number(row.pay_status ?? 1);
+    // ★ 财务打回 → 6 核对失败（见 urgePayStatusOf）
+    const payStatus = urgePayStatusOf(row);
 
     /**
      * 财务侧事实 —— **每次同步都覆盖**（update / insert 共用）
@@ -553,7 +577,8 @@ export async function syncFeeToJob(feeId: string): Promise<void> {
     if (!stu) return;
 
     const now = new Date();
-    const payStatus = Number(row.pay_status ?? 1);
+    // ★ 财务打回 → 6 核对失败（见 urgePayStatusOf）
+    const payStatus = urgePayStatusOf(row);
     const feeType = Number(row.fee_type ?? 2);
 
     /**
@@ -624,8 +649,15 @@ export async function syncFeeToJob(feeId: string): Promise<void> {
         /**
          * 新建时才补「催收进度」初值。
          * ⚠️ 不能进 facts：update 时它会把班主任改过的催收进度冲掉。
+         * ★ 核对失败(6) 也算「已缴清」：钱交过了，只是凭证被打回，
+         *   不该在催收进度上显示成「待催缴」。
          */
-        call_status: payStatus === 2 || payStatus === 3 ? 3 : 1,
+        call_status:
+          payStatus === PayStatus.PAID ||
+          payStatus === PayStatus.VERIFIED ||
+          payStatus === PayStatus.REJECTED
+            ? 3
+            : 1,
         call_reason: '财务缴费单同步',
         applicant_id: 'finance-sync',
         applicant_name: '财务同步',

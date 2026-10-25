@@ -134,6 +134,9 @@ function effectivePayStatus(row: any): number {
   const raw = row.pay_status == null ? null : Number(row.pay_status);
   // 老数据还没回填 pay_status 时，按 call_status 折算兜底
   const base = raw ?? (Number(row.call_status) === FeeCallStatus.PAID ? PayStatus.PAID : PayStatus.UNPAID);
+  // ★ 2026-10-25：核对失败(6) 原样返回 —— 钱交过了、只是凭证被财务打回，
+  //   不能掉进下面的「未结清 → 逾期」分支里变成 4
+  if (base === PayStatus.REJECTED) return PayStatus.REJECTED;
   if (base === PayStatus.PAID || base === PayStatus.VERIFIED || base === PayStatus.FROZEN) return base;
   if (base === PayStatus.OVERDUE) return PayStatus.OVERDUE;
   // 未结清 + 过了应缴日 → 逾期
@@ -738,6 +741,12 @@ feeCallRouter.post(
     };
     // 现金且没传截图：保留原来的凭证，不要把它清空
     if (voucherUrl) patch.voucher_url = voucherUrl;
+    /**
+     * ★ 2026-10-25：重新登记 → 清掉「已上传财务时间」，让它重新回到
+     *   「批量上传到财务」候选（详见 class-jh/routes/fee.route.ts 同款注释）。
+     *   ⚠️ 只清时间，不清 `finance_fee_id`（清掉会再建一张财务单 → 重复记账）。
+     */
+    if (row.finance_fee_id) patch.finance_transfer_time = null;
 
     await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update(patch);
 

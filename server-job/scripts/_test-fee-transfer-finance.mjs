@@ -178,7 +178,14 @@ function baseRow(over = {}) {
     check(
       '② 前端：不再靠前端过滤已转交（服务端候选接口已过滤）',
       !/filter\(\(r\) => !r\.transferred\)/.test(feeList) &&
-        /列表只显示还没上传到财务的缴费单/.test(feeList),
+        /还没上传到财务/.test(feeList),
+    );
+    // ★ 2026-10-25 用户要求：重新登记的行要回到候选列表，并标明「重新登记」（不新建单）
+    check(
+      '★ ② 前端：转交弹窗能区分「重新登记」（retransfer），并说明会更新财务原单',
+      /retransfer/.test(feeList) &&
+        /重新登记/.test(feeList) &&
+        /(更新财务原单|上传后又重新登记)/.test(feeList),
     );
     check(
       '③ 上传缴费金额默认带出「应缴金额」',
@@ -328,7 +335,7 @@ function baseRow(over = {}) {
     const r2 = res2.json?.data || {};
     const finCount = await dbFin('t_finance_fee').where({ id: finIdOf(aRow) }).count({ n: '*' });
     check(
-      '★ 重复转交 → 跳过「已转交过财务」，财务侧不会多出一张单',
+      '★ 重复转交 → 跳过（已上传到位），财务侧不会多出一张单',
       r2.success === 0 && r2.skipped?.some((x) => x.reason.includes('已转交')),
       `success=${r2.success} skipped=${JSON.stringify(r2.skipped)}`,
     );
@@ -341,10 +348,10 @@ function baseRow(over = {}) {
     /* ---- 前端编译产物 ---- */
     const fe = await req(`${BASE}/src/class-jh/views/FeeList.vue`, { timeout: 15000 });
     check(
-      '★ 催费页编译通过，且产物里有「批量上传到财务」与「只显示还没上传」提示',
+      '★ 催费页编译通过，且产物里有「批量上传到财务」与「还没上传到财务」提示',
       fe.status === 200 &&
         fe.raw.includes('批量上传到财务') &&
-        fe.raw.includes('列表只显示还没上传到财务的缴费单'),
+        fe.raw.includes('还没上传到财务'),
       `status=${fe.status} len=${fe.raw.length}`,
     );
   } catch (e) {

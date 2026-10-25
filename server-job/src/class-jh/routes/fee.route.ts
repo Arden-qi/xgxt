@@ -557,9 +557,13 @@ feeRouter.post(
     };
     // 未结清（待缴/逾期）→ 已缴；已缴/已核对保持（只补凭证与实缴信息）
     const rawStatus = Number(row.pay_status ?? 1);
-    const nextStatus = rawStatus === PayStatus.UNPAID || rawStatus === PayStatus.OVERDUE
-      ? PayStatus.PAID
-      : rawStatus;
+    const nextStatus =
+      rawStatus === PayStatus.UNPAID ||
+      rawStatus === PayStatus.OVERDUE ||
+      // ★ 2026-10-25：核对失败(6) 重新登记 = 重传凭证 → 回到已缴，等财务再核一遍
+      rawStatus === PayStatus.REJECTED
+        ? PayStatus.PAID
+        : rawStatus;
 
     const updateFields: Record<string, any> = {
       pay_method: body.payMethod,
@@ -572,6 +576,18 @@ feeRouter.post(
     };
     // 现金且没传截图：保留原来的凭证，不要把它清空
     if (voucherUrl) updateFields.voucher_url = voucherUrl;
+    /**
+     * ★ 2026-10-25 用户要求：「重新登记也要出现在批量上传到财务列表中，传到财务」。
+     *
+     *   已经上传过财务的单（`finance_fee_id` 有值）重新登记后，原来因为
+     *   「已转交」被永久排除在候选之外，班主任改完金额/换了截图，财务那张单收不到。
+     *   这里把「已上传时间」清掉 = 标记成「有新登记、待上传」，
+     *   候选查询（`teaching/fee/transfer.route.ts`）据此把它重新放回列表。
+     *
+     *   ⚠️ 只清时间、**不清 `finance_fee_id`** —— 那个 id 是「财务那张单是谁」的
+     *      唯一凭据，清掉后转交会再建一张新单，财务就重复记账了。
+     */
+    if (row.finance_fee_id) updateFields.finance_transfer_time = null;
     /**
      * ★ 2026-10-23：写入必须走 `FEE()`（统一表）+ `uniUpdCols()`。
      *   原来写裸 `db(FEE_TABLE)`（老表），而列表读统一表 →
