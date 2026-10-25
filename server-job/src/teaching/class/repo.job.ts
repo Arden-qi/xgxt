@@ -22,6 +22,7 @@
  *      兜底等于「全放开」。
  */
 
+import { resolveSchemeStageName } from '../shared/stageSchemes';
 import { randomUUID } from 'crypto';
 import { db } from '../../utils/db';
 import { RoleCode, hasRole, STUDENT_STATUS_NAME } from 'shared-types';
@@ -249,6 +250,17 @@ export const repo: ClassRepo = {
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
     set(phaseCodeCol(), body.phaseCode);
+    /**
+     * ★ 2026-10-25 补：就业部班级也要落「阶段方案」三字段（初高/大学早就在写）。
+     *   漏了这三列 → 选了方案里的「实训/就业」保存后，列表只能按阶段码查字典
+     *   （301/302 在字典里叫「一阶段/二阶段」），用户看到「阶段301」。
+     */
+    set(
+      'scheme_stage_name',
+      body.schemeStageName ?? (await resolveSchemeStageName(body.schemeId, body.phaseCode)),
+    );
+    set('scheme_id', body.schemeId);
+    set('scheme_stage_id', body.schemeStageId);
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);

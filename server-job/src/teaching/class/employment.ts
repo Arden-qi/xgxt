@@ -37,12 +37,23 @@ import { BizCode, STUDENT_STATUS_NAME, StudentStatus } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { db } from '../../utils/db';
 import { CLASS_STATUS, CLASS_STATUS_NAME } from '../shared/dto';
-import { tbl } from '../shared/uniTable';
+import { tbl, uniDb } from '../shared/uniTable';
 import { LOCKED_STUDENT_STATUSES } from '../shared/statusLock';
 import { assertStageView } from './service';
 
 const T = 't_job_class';
 const ROSTER_T = 't_job_class_student';
+
+/**
+ * ★ 2026-10-25：就业部在库里有两个学段 —— `job`（实训，升实训造的班）
+ *   与 `emp`（就业，班级管理里「部门=就业部」直接建的班）。
+ *   本文件原来所有取数都用 tbl(...,'job')，会被注入 edu_stage='job'：
+ *   → emp 班级 loadJobClass 直接报「该操作只能用于实训班级」
+ *   → rosterStudentIds 查不到人、学生状态更新 0 行、班级状态改不动。
+ *   升就业/已就业对两种学段都必须生效，统一走下面两个 helper。
+ */
+const empStudentQb = () =>
+  uniDb('t_uni_student').whereIn('edu_stage', ['job', 'emp']).andWhere('dept_code', 3);
 const STUDENT_T = 't_student_base';
 const STAGE = 'job' as const;
 
@@ -110,22 +121,26 @@ export interface EmployedConfirmResult {
 
 /** 取实训班（只认 stage_key='job'，越权与不存在都按同一句话回） */
 async function loadJobClass(classId: string): Promise<Record<string, any>> {
-  const cls = (await tbl(db, 'sms_job', T, STAGE)
+  const cls = (await uniDb('t_uni_class')
     .where({ id: classId, is_deleted: 0 })
     .first()) as Record<string, any> | undefined;
   if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在或已删除');
-  if (String(cls.stage_key ?? '') !== 'job') {
-    throw new BizError(BizCode.PARAM_ERROR, '该操作只能用于实训班级');
+  /* 就业部两种学段都允许（job=实训班、emp=就业班） */
+  const key = String(cls.stage_key ?? cls.edu_stage ?? '');
+  if (key !== 'job' && key !== 'emp') {
+    throw new BizError(BizCode.PARAM_ERROR, '该操作只能用于就业部班级');
   }
   return cls;
 }
 
 /** 花名册里的学生 id 列表 */
 async function rosterStudentIds(classId: string): Promise<string[]> {
-  const roster = (await tbl(db, 'sms_job', ROSTER_T, STAGE)
+  /* ★ 2026-10-25：改为按学生档案的 class_id 取。
+     就业班（emp）在建班时没有写花名册表，按花名册查会「该班级没有学生」。 */
+  const roster = (await empStudentQb()
     .where({ class_id: classId, is_deleted: 0 })
-    .select('student_id')) as Array<Record<string, any>>;
-  return roster.map((r) => String(r.student_id)).filter(Boolean);
+    .select('id')) as Array<Record<string, any>>;
+  return roster.map((r) => String(r.id)).filter(Boolean);
 }
 
 export async function upgradeClassToEmployment(
@@ -149,7 +164,7 @@ export async function upgradeClassToEmployment(
   //   退学(7) 虽然也落在 whereNotIn 里，但它是**永久锁** → 必须单独排除，
   //   否则一次【升就业】就把退学学生改成「待就业」，花名册里那条退学记录凭空消失。
   //   见 shared/statusLock.ts（LOCKED_STUDENT_STATUSES）。
-  const updated = await tbl(db, 'sms_job', STUDENT_T, STAGE)
+  const updated = await empStudentQb()
     .whereIn('id', ids)
     .whereNotIn('student_status', [
       StudentStatus.WAIT_EMPLOY,
@@ -168,7 +183,7 @@ export async function upgradeClassToEmployment(
   let classStatus = from;
   if (from !== CLASS_STATUS.EMPLOYED && from !== CLASS_STATUS.WAIT_EMPLOY) {
     classStatus = CLASS_STATUS.WAIT_EMPLOY;
-    await tbl(db, 'sms_job', T, STAGE).where({ id: classId }).update({
+    await uniDb('t_uni_class').where({ id: classId }).update({
       class_status: classStatus,
       prev_class_status: from,
       update_time: new Date(),
@@ -211,7 +226,7 @@ async function buildProgress(
   cls: Record<string, any>,
   ids: string[],
 ): Promise<EmploymentProgressResult> {
-  const rows = (await tbl(db, 'sms_job', STUDENT_T, STAGE)
+  const rows = (await empStudentQb()
     .whereIn('id', ids)
     .select('id', 'student_no', 'student_name', 'student_status')) as Array<Record<string, any>>;
 
@@ -306,7 +321,7 @@ export async function confirmClassEmployed(
     );
   }
 
-  await tbl(db, 'sms_job', T, STAGE).where({ id: classId }).update({
+  await uniDb('t_uni_class').where({ id: classId }).update({
     class_status: CLASS_STATUS.EMPLOYED,
     prev_class_status: from,
     update_time: new Date(),
