@@ -28,6 +28,8 @@ import type {
   PermTreeStats,
   AssignRoleItem,
   AssignTreeData,
+  AssignSaveResult,
+  AssignCopyResult,
   RolePermMap,
   PermLog,
   LogOverview,
@@ -99,7 +101,7 @@ export const userApi = {
   setStatus: (id: string, userStatus: string) => http.put<null>(`${P}/user/status`, { id, userStatus }),
   resetPwd: (payload: { userId: string; newPassword?: string; needChangePwd?: boolean }) =>
     http.put<{ newPassword: string }>(`${P}/user/reset-pwd`, payload),
-  unlock: (id: string) => http.put<null>(`${P}/user/unlock`, { id }),
+  // ★ 2026-10-25：unlock 接口已随「锁定」状态全系统移除而删除
   overview: () => http.get<UserOverview>(`${P}/user/overview`),
   /** 跨模块：登录模块用；本页用于「查看权限」抽屉 */
   authProfile: (account: string) => http.get<PermAuthProfile>(`${P}/user/auth-profile`, { account }),
@@ -134,9 +136,9 @@ export const assignApi = {
   roleList: () => http.get<AssignRoleItem[]>(`${P}/assign/role-list`),
   tree: (roleId: string) => http.get<AssignTreeData>(`${P}/assign/tree`, { roleId }),
   save: (roleId: string, perms: RolePermMap) =>
-    http.put<{ permCount: number }>(`${P}/assign/save`, { roleId, perms }),
+    http.put<AssignSaveResult>(`${P}/assign/save`, { roleId, perms }),
   copy: (targetRoleId: string, sourceRoleId: string) =>
-    http.post<{ permCount: number; sourceRoleName: string }>(`${P}/assign/copy`, {
+    http.post<AssignCopyResult>(`${P}/assign/copy`, {
       targetRoleId,
       sourceRoleId,
     }),

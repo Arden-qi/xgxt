@@ -334,16 +334,19 @@ async function doExport(): Promise<void> {
           <table class="tb">
             <thead>
               <tr>
-                <th style="width: 142px">操作时间</th>
-                <th style="width: 130px">操作人</th>
-                <th style="width: 118px">所属职位</th>
-                <th style="width: 100px">操作模块</th>
-                <th style="width: 80px">操作类型</th>
-                <th>操作对象</th>
-                <th style="width: 112px">操作前 → 后</th>
-                <th style="width: 118px">IP 地址</th>
-                <th style="width: 70px">结果</th>
-                <th style="width: 70px">操作</th>
+                <!-- ★ 2026-10-24：删掉「操作前 → 后」列后，「操作对象」成了唯一不定宽的列，
+                     把表格剩余宽度全吃掉，右侧出现一大块空白（用户指出间隙太大）。
+                     现在所有列都给定宽（与「账号管理」同一做法），多余宽度由浏览器按比例
+                     均摊到各列，间距协调。 -->
+                <th style="width: 150px">操作时间</th>
+                <th style="width: 120px">操作人</th>
+                <th style="width: 130px">所属职位</th>
+                <th style="width: 110px">操作模块</th>
+                <th style="width: 90px">操作类型</th>
+                <th style="width: 160px">操作对象</th>
+                <th style="width: 130px">IP 地址</th>
+                <th style="width: 90px">结果</th>
+                <th style="width: 90px">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -372,9 +375,6 @@ async function doExport(): Promise<void> {
                   <span :class="actionTagClass(l.actionType)">{{ l.actionType }}</span>
                 </td>
                 <td>{{ l.targetObj || '—' }}</td>
-                <td class="desc" style="font-size: 11.5px">
-                  {{ l.beforeValue || '—' }} → {{ l.afterValue || '—' }}
-                </td>
                 <td class="desc num">{{ l.ip || '—' }}</td>
                 <td>
                   <span v-if="!isFail(l.result)" class="tag g">成功</span>
@@ -385,7 +385,7 @@ async function doExport(): Promise<void> {
                 </td>
               </tr>
               <tr v-if="!list.length">
-                <td colspan="10">
+                <td colspan="9">
                   <div class="empty">
                     <div class="ic">📜</div>
                     {{ loading ? '加载中…' : '没有符合条件的日志' }}

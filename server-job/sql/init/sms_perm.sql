@@ -277,7 +277,7 @@ CREATE TABLE `t_perm_user` (
   `dept_id` varchar(36) DEFAULT NULL COMMENT '所属部门ID',
   `password` varchar(128) NOT NULL COMMENT '密码（演示用明文，接入登录模块后改哈希）',
   `pwd_algo` varchar(20) NOT NULL DEFAULT 'plain' COMMENT '密码算法 plain/bcrypt',
-  `user_status` varchar(10) NOT NULL DEFAULT '正常' COMMENT '账号状态 正常/已停用/已锁定',
+  `user_status` varchar(10) NOT NULL DEFAULT '正常' COMMENT '账号状态 正常/已停用（锁定档已于 2026-10-25 移除）',
   `need_change_pwd` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否待改初始密码',
   `pwd_error_count` int NOT NULL DEFAULT '0' COMMENT '连续密码错误次数（登录模块维护）',
   `last_login_time` datetime DEFAULT NULL COMMENT '最近登录时间',

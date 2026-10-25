@@ -12,7 +12,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { BizCode, ApiResponse, RoleCode, DataScope } from 'shared-types';
+import { BizCode, ApiResponse, RoleCode, DataScope, normalizeRoles } from 'shared-types';
 // ⚠️ 主包 RoleCode 的【枚举名】与班级包不一致（主包 SYS_ADMIN，班级包 ADMIN）。
 //   下面这张别名表要用班级的枚举名，所以单独引一份并改名，别混着用。
 import { RoleCode as ClassRoleCode } from 'shared-types/class';
@@ -404,6 +404,22 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     }
   }
   const portalUserId = String(payload.userId || payload.accountId || '');
+  /* ★★★ 2026-10-24：教学域角色放开「部门闸」
+   *   【根因】门户登录给所有非管理员账号发 dataScope=DEPT（本部门），
+   *     `applyDataScope` 的 DEPT 分支按 `user.deptCode` 硬过滤 →
+   *     班主任张海涛（部门=大学部）永远看不到初高部学生（dept_code=1），
+     部门混管的老师「权限勾了、数据为空」。
+   *   【口径】教学域本就有更细的「责任人交棒」隔离（visibleClassIds：
+   *     班主任/教员/助教只看自己带的班、项目经理只看实训班、就业老师只看就业班），
+   *     部门闸对这批角色是**多余的第二道过滤**，只会误伤。
+   *   → 这些角色一律提升为 ALL，隔离仍由 visibleClassIds 精确执行。 */
+  const TEACHING_SCOPE_ROLES: readonly string[] = [
+    RoleCode.TEACH_HEAD, RoleCode.TEACH_TUTOR, RoleCode.TEACH_ASSIST,
+    RoleCode.PROJECT_MANAGER, RoleCode.JOB_STAFF,
+    RoleCode.TEACH_DEAN, RoleCode.TEACH_QTY, RoleCode.ACAD_STAFF,
+  ];
+  const forceAll =
+    profileDeptId === 'D_ALL' || roles.some((r) => TEACHING_SCOPE_ROLES.includes(r));
   req.user = {
     userId: businessUserId || portalUserId,
     // ★ 业务侧用户 id（U004…），业务表责任人列用它做「我带的班」过滤
@@ -420,10 +436,9 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     deptCode: DEPT_CODE_BY_PERM_DEPT[profileDeptId] ?? 1,
     /* ★ 「全部门」（D_ALL，如校长 qiansy）→ 直接提升为「不过滤」，
      *   否则会被映射成某个具体部门码、反而只看得到一部分。 */
-    dataScope:
-      profileDeptId === 'D_ALL'
-        ? DataScope.ALL
-        : ((payload.dataScope as DataScope) ?? DataScope.ALL),
+    dataScope: forceAll
+      ? DataScope.ALL
+      : ((payload.dataScope as DataScope) ?? DataScope.ALL),
     permissions: kind === 'sys_admin' ? ['*'] : [],
     classIds: [],
     token,
@@ -513,8 +528,31 @@ async function resolveAccountProfile(account: string): Promise<AccountProfile> {
       { timeout: 2500, raw: true },
     );
     const roles = body?.data?.roles;
+    /* ★★ 2026-10-24：职位编码归一化（自建职位全链路生效的唯一收口）
+     *   【背景】2026-10-24 起「班主任/教员/助教/教质经理/学术经理」按学段拆成
+     *     初中部/高中部/大学部的自建职位（如 BZR_G 班主任（高中部）），
+     *     通过 t_perm_role.equiv_role_code 声明等价内置职位。
+     *   【为什么必须在这里归一】全系统几十处 `roles.includes(RoleCode.TEACH_HEAD)`
+     *     的裸比较（class/classInfo/feeCall/approvalOnly/部门闸…）都拿
+     *     req.user.roles 直接比内置码 —— 自建码原样透传会**全部失配**，
+     *     表现就是「职位建好了、账号挂上了，登录后权限判定处处落空」。
+     *   normalizeRoles 会按等价声明把 BZR_G → TEACH_HEAD，业务代码零改动。
+     *
+     * ★ 2026-10-25（第二轮修正）：**原始码 ∪ 归一化码 并集下发** ——
+     *   【踩坑】第一轮只发归一化码（RM_PROJECT → PROJECT_MANAGER），
+     *     结果「页面推导层」全线落空：rolePageDefaults / 台账 t_perm_role_page /
+     *     权限点都挂在**权限库原始码**名下，拿 PROJECT_MANAGER 去查 →
+     *     my-paths 只剩工作台、my-pages 只剩默认三页，
+     *     表现就是「账号详情里权限明明是齐的，登录进来却『暂无可用页面』」
+     *     （孙敏/孙建龙 实测复现）。
+     *   【口径】并集下发：裸比较类消费方（几十处 roles.includes(内置码)）
+     *     命中归一化码；台账/默认页面类消费方命中原始码。两套都喂到。 */
+    await ensureRoleEquivLoaded();
+    const rawRoles = Array.isArray(roles)
+      ? roles.filter((r: any) => typeof r === 'string')
+      : [];
     return {
-      roles: Array.isArray(roles) ? roles.filter((r: any) => typeof r === 'string') : [],
+      roles: [...new Set([...rawRoles, ...normalizeRoles(rawRoles)])],
       permUserId: String(body?.data?.permUserId || ''),
       deptId: String(body?.data?.deptId || ''),
       deptName: String(body?.data?.deptName || ''),

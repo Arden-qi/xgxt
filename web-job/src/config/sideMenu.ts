@@ -34,8 +34,10 @@ import { myPages, hasPage } from '@/store/permission';
 import { useAuthStore as usePortalStore } from '@/portal/stores/auth';
 import { pageModuleAllowed } from '@/store/modules';
 /* ★ 2026-10-06 新增：板块 → 页面 台账（权限管理 → 页面管理）
- *   被取消勾选的页面 = 该板块没有这个页面 → 不渲染。 */
-import { pageEnabled } from '@/store/pageConfig';
+ *   被取消勾选的页面 = 该板块没有这个页面 → 不渲染。
+ * ★ 2026-10-24 新增 pageGranted：my-paths 明确下发的 /teaching/* 页面
+ *   也能点亮合并域菜单（修「页面管理勾了、登录却看不到」—— 见下方用法处注释）。 */
+import { pageEnabled, pageGranted } from '@/store/pageConfig';
 
 /** 门户模块图标（按模块 key） */
 const MODULE_ICON: Record<string, string> = {
@@ -161,7 +163,21 @@ export function useSideMenu() {
         if (c.stages?.length) return anyStageAccessible(c.stages);
         // ★★ 2026-10-12：合并域（第 2 期清空了 stages）改按 STAGE_ACCESS 权限码判。
         const merged = mergedDomainMenuAllowed(c.stageDomain);
-        if (merged !== null) return merged;
+        if (merged !== null) {
+          /* ★★ 2026-10-24：追加第二条可见依据 pageGranted(c.path)
+           *
+           * 【修的是什么】孙敏（项目经理）案例 —— 职位权限分配/页面管理里
+           *   给她勾了 8 个 /teaching/* 页面（后端 my-paths 正确下发），
+           *   但她的旧页面权限码是 job:*，且账号级 modules 历史残留 class-jh
+           *   → my-pages 下发 0 页 0 码 → stageVisible 恒 false
+           *   → 合并域菜单被静默过滤，登录后侧栏只剩「工作台」。
+           *
+           * 【口径】旧权限码判定（merged）**或** 职位页面台账明确授权
+           *   （pageGranted = my-paths 里真的有这条 /teaching/<域>）任一成立即显示。
+           *   没被授予的账号 pageGranted 恒 false，行为与原来完全一致。 */
+          if (merged) return true;
+          return pageGranted(c.path);
+        }
         if (!c.path) return true;
         if (!hasPage(c.path)) return false;
         // ★ 2026-10-06 页面台账：被「页面管理」取消勾选的页面 = 该板块没有这个页面

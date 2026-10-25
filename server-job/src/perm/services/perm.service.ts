@@ -256,9 +256,18 @@ export async function getUserEffectivePerms(userId: string): Promise<{
     return { roleIds: [], permissions: [], dataScope: DataScope.SELF };
   }
 
-  const rows = await db('t_perm_role_perm')
-    .whereIn('role_id', roleIds)
-    .andWhere('is_deleted', false);
+  /**
+   * ★ 2026-10-23：这里必须按「页面上限」过滤后再算权限点。
+   *
+   *   本函数是**跨模块鉴权的总源头**（/auth-profile → 各业务模块 token 的
+   *   permissions[]）。以前它把 t_perm_role_perm 里的行全部算进去，
+   *   于是「页面管理里财务 0/6 的咨询经理」手里仍攥着
+   *   `finance:缴费管理:view` —— 前端菜单藏了，接口照样放行。
+   *
+   *   现在与页面管理 / 职位权限分配 / 账号详情同一口径：
+   *   页面没授权 → 这一页的动作不参与并集、也不参与数据范围抬升。
+   */
+  const rows = await loadScopedPermRows(roleIds);
 
   const set = new Set<string>();
   let widest = DataScope.SELF;
@@ -270,6 +279,35 @@ export async function getUserEffectivePerms(userId: string): Promise<{
   }
 
   return { roleIds, permissions: Array.from(set), dataScope: widest };
+}
+
+/**
+ * 读一批职位的动作行，并剔除「该职位在页面管理里没有授权」的页面（★ 2026-10-23）
+ *
+ * ⚠️ 用动态 import 引 assignScope：它内部又会动态回引本文件的 getRolePermMap
+ *    （算有效集合时要读原始行）。静态互相 import 会在模块初始化时打转，
+ *    动态引入把这一圈推迟到调用期，安全。
+ */
+async function loadScopedPermRows(roleIds: string[]): Promise<any[]> {
+  if (!roleIds.length) return [];
+  const rows = await db('t_perm_role_perm').whereIn('role_id', roleIds).andWhere('is_deleted', false);
+  try {
+    const { assignScopeOfRole } = await import('./assignScope');
+    const scopes = new Map<string, { restricted: boolean; allowedItems: Set<string> }>();
+    await Promise.all(
+      Array.from(new Set(roleIds)).map(async (rid) => {
+        scopes.set(rid, await assignScopeOfRole(String(rid)));
+      }),
+    );
+    return rows.filter((r: any) => {
+      const s = scopes.get(r.role_id);
+      if (!s?.restricted) return true;
+      return s.allowedItems.has(`${r.module_key}||${r.item_name}`);
+    });
+  } catch {
+    // 降级：范围算不出来 → 按原样返回（宁可放宽，不能让全站鉴权挂掉）
+    return rows;
+  }
 }
 
 /** 行级数据范围动作 → 数据范围枚举值 */
@@ -516,6 +554,19 @@ export async function retirePortalAccount(account: string, renamedAccount?: stri
   return updatePortalByAccount(account, patch);
 }
 
+/**
+ * ★ 2026-10-24：职位变更后【同步刷新门户头衔】。
+ *
+ * 头衔原来只在为空时补一次 —— 之后职位改了，t_sys_account.title 还停在旧值，
+ * 登录后顶栏 / 欢迎语就一直显示旧职位（孙敏：库里已是项目经理，头衔还是「班主任」）。
+ * 现在凡职位有增删，就把头衔刷成最新职位名（多职位用「、」连接）。
+ */
+export async function syncPortalAccountTitle(account: string, title: string): Promise<boolean> {
+  const t = String(title || '').trim();
+  if (!t) return false;
+  return updatePortalByAccount(account, { title: t });
+}
+
 /** 按登录名更新门户账号（内部工具，只改传进来的列） */
 async function updatePortalByAccount(account: string, patch: Record<string, any>): Promise<boolean> {
   const acc = String(account || '').trim();
@@ -607,7 +658,7 @@ export interface AccountPermProfile {
   deptId: string;
   /** 部门中文名 */
   deptName: string;
-  /** 用户状态：正常 / 已停用 / 已锁定 */
+  /** 用户状态：正常 / 已停用（「已锁定」档已于 2026-10-25 全系统移除） */
   userStatus: string;
   /** 职位编码数组（如 ['FIN_STAFF']） */
   roles: string[];
@@ -685,9 +736,9 @@ export async function getAccountPermProfile(account: string): Promise<AccountPer
   const { permissions, dataScope } = await getUserEffectivePerms(row.id);
 
   // ---- ⭐ 按模块聚合功能点（供各业务模块算可见页面）----
-  const rpRows: any[] = roleIds.length
-    ? await db('t_perm_role_perm').whereIn('role_id', roleIds).andWhere('is_deleted', false)
-    : [];
+  // ★ 2026-10-23：同样只算「页面已授权」的动作行 —— 否则业务模块会按
+  //   moduleItems 给账号开出它根本没有的页面（例如咨询经理的财务管理）。
+  const rpRows: any[] = await loadScopedPermRows(roleIds);
   const moduleItems: Record<string, string[]> = {};
   for (const rp of rpRows) {
     const list = moduleItems[rp.module_key] || (moduleItems[rp.module_key] = []);

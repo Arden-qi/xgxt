@@ -1,0 +1,11 @@
+import mysql from '../server-job/node_modules/mysql2/promise.js';
+import fs from 'node:fs';
+const env = fs.readFileSync(new URL('../server-job/.env', import.meta.url), 'utf8');
+const g = (k) => (env.match(new RegExp(`^${k}=(.*)$`, 'm')) || [])[1]?.trim();
+const db = await mysql.createConnection({ host: '127.0.0.1', port: Number(g('DB_PORT') || 3306), user: g('DB_USER'), password: g('DB_PASSWORD') });
+const q = async (s, a = []) => (await db.query(s, a))[0];
+const r = await q(`update sms_perm.t_perm_role_perm set create_by='fix-script', update_by='fix-script' where create_by='test'`);
+console.log('updated rows:', r.affectedRows);
+const rows = await q(`select role_id, module_key, item_name, action_code, action_name, create_by from sms_perm.t_perm_role_perm where is_deleted=0 and role_id in ('R01','R02') and module_key='finance'`);
+console.log(JSON.stringify(rows, null, 1));
+await db.end();
