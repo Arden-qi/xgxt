@@ -36,6 +36,8 @@ import type {
 } from '../shared/dto';
 import { STUDENT_DEDUP_PRIORITY, STUDENT_STAGES, STUDENT_STAGE_NAME } from '../shared/dto';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
+// ★ 2026-10-23：学生档案的「全校学籍通行码」要读账号的真实页面码集合
+import { getUserPagePermissions } from '../../utils/pagePermissionSource';
 import { listClassesByStage } from '../shared/classOptions';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { loadSchemeStagesForStage } from '../shared/stageSchemes';
@@ -85,14 +87,48 @@ const MODULE: Record<StudentStage, string> = {
 
 const LABEL = '学生档案';
 
+/**
+ * ★★ 2026-10-23「全校学籍通行码」—— 教务老师（ACAD_STAFF）看学生档案的口径
+ *
+ * 【问题】教务老师在「职位权限分配」里被授予「学生档案」页，
+ *   它在权限库里拿到的页面码是 `edu:student:view`（原教务档案页：**全校**学生名单）。
+ *   而本页的三个学段各自只需 `classjh:/class:/job:` 前缀的码 ——
+ *   `edu:student:view` 一个都不匹配 →
+ *     · 前端菜单判定（教学域学段码）恒 false → 侧栏没有「学生档案」
+ *     · 后端 requireAnyPage 直接 403
+ *   表象就是「权限勾了，教务却看不到这个页面」（用户 2026-10-23 反馈）。
+ *
+ * 【口径】把 `edu:student:view` 当作**本页的全校通行码**：
+ *   命中它 = 三个真实部门（初高部 / 大学部 / 就业部）全部可见，
+ *   与「档案 = 全校学生名单」的原始业务定义一致。
+ *
+ * ⚠️ 只作用于**学生档案**这一页（其它域没有这个通行码），
+ *    也不会给账号凭空补出别的页面码 —— 不动权限库的既有口径。
+ * ⚠️ 不加「教务」部门页签：2026-10-21 用户口径（edu 只是教务宿舍模块的学生副本，
+ *    在档案里再列一遍既重复又对不上号）仍然有效，这里只是把数据范围放开到三个真实部门。
+ */
+const FULL_SCHOOL_PASS_CODES: readonly string[] = ['edu:student:view'];
+
+/** 该账号是否持有「全校学籍」通行码 */
+async function hasFullSchoolPass(user: any): Promise<boolean> {
+  if (!user) return false;
+  if (user.permissions?.includes('*')) return true;
+  const allowed = await getUserPagePermissions(user.roles || []);
+  return FULL_SCHOOL_PASS_CODES.some((c) => allowed.includes(c));
+}
+
 const nameOf = (s: StudentStage): string => STUDENT_STAGE_NAME[s];
 const moduleOf = (s: StudentStage): string => MODULE[s];
 
-export function assertStageView(user: any, stage: StudentStage): Promise<void> {
+export async function assertStageView(user: any, stage: StudentStage): Promise<void> {
+  // 通行码 → 全校三个部门都可进（不再看单个学段码与学段所属模块）
+  if (await hasFullSchoolPass(user)) return;
   return assertStageCodeEx(user, stage, CODES, LABEL, nameOf, moduleOf);
 }
 
-export function visibleStages(user: any): Promise<StudentStage[]> {
+export async function visibleStages(user: any): Promise<StudentStage[]> {
+  // 通行码 → 三个真实部门全给（顺序沿用 STUDENT_STAGES，界面顺序不受影响）
+  if (await hasFullSchoolPass(user)) return [...STUDENT_STAGES];
   return visibleStagesEx(user, STUDENT_STAGES, CODES, LABEL, nameOf, moduleOf);
 }
 

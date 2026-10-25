@@ -15,10 +15,11 @@
  * ⚠️ 保存语义是【全量覆盖】：提交整棵树的勾选状态，后端先清空再插入。
  *    取消勾选 = 收回权限，系统没有「拒绝」这一层语义。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import type { CSSProperties } from 'vue';
 import type {
   AssignRoleItem,
+  AssignScopeInfo,
   PermItem,
   PermModule,
   PermRoleDetail,
@@ -150,6 +151,13 @@ interface TreeRow {
   children: PermItem[];
   /** 本行（含子项）的全部动作编码，去重 */
   codes: string[];
+  /**
+   * ★ 2026-10-23：本职位能不能分配这一页
+   *
+   * 由「页面管理 → 职位」里该职位的页面授权决定（后端 assignable）。
+   * false = 这一页该职位根本没有 → 勾不动，也不能勾（勾了保存也会被丢掉）。
+   */
+  assignable: boolean;
 }
 
 interface ModuleRow {
@@ -172,6 +180,8 @@ const treeRows = computed<ModuleRow[]>(() =>
         // ⚠️ 不做并集去重：父项自身 0 个动作 + 2 个子项各 3 个 = 6 个槽位，
         //    去重会让模块总数从 16 掉到 13，与原型 treeStats() 不符。
         codes: [...codesOf(it), ...children.flatMap((c) => codesOf(c))],
+        // 未传 = 可以分配（兼容旧接口）；显式 false 才锁
+        assignable: it.assignable !== false,
       };
     });
     return { mod: m, rows };
@@ -179,6 +189,65 @@ const treeRows = computed<ModuleRow[]>(() =>
 );
 
 const childKey = (row: TreeRow, c: PermItem): string => keyOf(row.mod.moduleKey, c.itemName);
+
+/* ============================================================
+ * 2.5 可分配范围（★ 2026-10-23）
+ *
+ * 【为什么要这一层】
+ *   「职位权限分配」的权限树列出的是**全系统所有页面**。原来每个页面都能勾，
+ *   于是给咨询老师勾「审批中心」的动作后，页面管理里这个职位就多出审批中心
+ *   —— 而审批中心是咨询经理专属。越权的口子就在这里。
+ *
+ * 【现在的口径】
+ *   一个职位只能在自己**已经获得授权的页面**里分配动作（后端 assignable）。
+ *   没授权的页面：灰掉 + 不可勾，并提示去「页面管理 → 职位」授权。
+ *   想给职位加页面 → 只能在页面管理里加，分配树不再能"顺带"开页面。
+ * ============================================================ */
+
+const scopeInfo = ref<AssignScopeInfo | null>(null);
+const scopeRestricted = computed(() => !!scopeInfo.value?.restricted);
+/** 灰掉的页数（只算顶级功能点 = 页面） */
+const lockedPageCount = computed(() =>
+  treeRows.value.reduce((n, mr) => n + mr.rows.filter((r) => !r.assignable).length, 0),
+);
+
+/**
+ * ★ 2026-10-23：弹窗里**只渲染该职位已获授权的页面**。
+ *
+ * 用户口径：三个页面（页面管理 / 职位权限分配面板 / 编辑权限弹窗）必须完全一致。
+ * 未授权页面在弹窗里也不再「灰着摆一排」，直接不出现 ——
+ * 需要知道少了哪些页，看提示条上的「另有 N 页未授权」即可。
+ */
+const treeRowsVisible = computed<ModuleRow[]>(() =>
+  treeRows.value
+    .map((mr) => ({ ...mr, rows: mr.rows.filter((r) => r.assignable) }))
+    .filter((mr) => mr.rows.length > 0),
+);
+
+/** 实际渲染出来的页面数（= 该职位已获授权的页面数，提示条用） */
+const allowedPageCount = computed(() =>
+  treeRowsVisible.value.reduce((n, mr) => n + mr.rows.length, 0),
+);
+
+const assignableByKey = computed<Map<string, boolean>>(() => {
+  const m = new Map<string, boolean>();
+  treeRows.value.forEach((mr) => {
+    mr.rows.forEach((row) => {
+      m.set(row.key, row.assignable);
+      // 二级功能点跟着父页面的授权走（页面级授权只到页面这一层）
+      row.children.forEach((c) => m.set(childKey(row, c), row.assignable));
+    });
+  });
+  return m;
+});
+
+/** 某个功能点（页面）能不能分配动作 */
+const canAssign = (key: string): boolean => assignableByKey.value.get(key) !== false;
+
+/** 勾到未授权页面时的统一提示 */
+function warnLocked(): void {
+  toast('该职位还没有这一页的授权，请先到「页面管理 → 职位」里给它授权', 'warn');
+}
 
 /** 右侧概览面板：原型 renderAssign() 里模块卡片的数据（用【已保存】的权限算） */
 interface SummaryRow {
@@ -213,28 +282,46 @@ function savedSel(row: TreeRow): string[] {
 }
 
 const summary = computed<SummaryMod[]>(() =>
-  treeRows.value.map((mr) => {
-    const rows: SummaryRow[] = mr.rows.map((row) => {
-      const codes = savedSel(row);
+  treeRows.value
+    .map((mr) => {
+      /**
+       * ★ 2026-10-23 用户口径：右栏概览是「**这个职位有什么**」的清单，
+       *   不是全系统页面清单。所以只列该职位已获授权的页面（assignable），
+       *   其余未授权页一个字都不显示 —— 与「页面管理 → 职位」的勾选结果对齐。
+       *   （原来这里把未授权页也列成「○ 出勤管理 未授权」，看着像这职位有这页权限。）
+       */
+      const rows: SummaryRow[] = mr.rows
+        .filter((row) => row.assignable)
+        .map((row) => {
+          const codes = savedSel(row);
+          return {
+            key: row.key,
+            name: row.item.itemName,
+            remark: row.item.remark,
+            acts: codes.map((c) => ({ code: c, label: codeLabel(row, c) })),
+          };
+        });
+      const hit = rows.filter((r) => r.acts.length > 0).length;
+      // total 仍按该板块的**全部页面数**算，这样右上角显示「2/13」，
+      // 与「页面管理」里同一职位的「2/13」完全一致（不是 2/2）。
+      const total = mr.rows.length;
       return {
-        key: row.key,
-        name: row.item.itemName,
-        remark: row.item.remark,
-        acts: codes.map((c) => ({ code: c, label: codeLabel(row, c) })),
+        key: mr.mod.moduleKey,
+        icon: mr.mod.moduleIcon,
+        name: mr.mod.moduleName,
+        hit,
+        total,
+        tagClass: hit === 0 ? 'gy' : hit === total ? 'g' : 'w',
+        rows,
       };
-    });
-    const hit = rows.filter((r) => r.acts.length > 0).length;
-    const total = rows.length;
-    return {
-      key: mr.mod.moduleKey,
-      icon: mr.mod.moduleIcon,
-      name: mr.mod.moduleName,
-      hit,
-      total,
-      tagClass: hit === 0 ? 'gy' : hit === total ? 'g' : 'w',
-      rows,
-    };
-  }),
+    })
+    // 这个职位在某板块一页都没有 → 整个板块不列出
+    .filter((m) => m.rows.length > 0),
+);
+
+/** 本职位已获授权的页面总数（统计条用，与「页面管理」的 6/32 对得上） */
+const summaryPageCount = computed(() =>
+  summary.value.reduce((n, m) => n + m.total, 0),
 );
 
 /* ============================================================
@@ -257,6 +344,7 @@ async function loadTree(roleId: string): Promise<void> {
     modules.value = res.modules;
     perms.value = { ...res.perms };
     treeStats.value = res.stats;
+    scopeInfo.value = res.scope ?? null;
   } catch {
     /* 已提示 */
   } finally {
@@ -273,10 +361,22 @@ async function loadDetail(roleId: string): Promise<void> {
   }
 }
 
+/**
+ * 右侧权限内容容器（★ 2026-10-23：右栏改为独立滚动，见 shared-ui.css 的 .split-page）
+ * 换职位时把右栏滚回顶部 —— 否则会停在上一个职位滚到的位置，看着像「没切换」。
+ */
+const rgtEl = ref<HTMLElement | null>(null);
+function resetRgtScroll(): void {
+  nextTick(() => {
+    if (rgtEl.value) rgtEl.value.scrollTop = 0;
+  });
+}
+
 async function selectRole(roleId: string): Promise<void> {
   if (roleId === currentRoleId.value) return;
   currentRoleId.value = roleId;
   await Promise.all([loadTree(roleId), loadDetail(roleId)]);
+  resetRgtScroll();
 }
 
 /** 保存 / 复制 / 重置后：职位列表 + 详细权限全部重取 */
@@ -323,6 +423,7 @@ async function onItemSaved(): Promise<void> {
     modules.value = res.modules;
     perms.value = { ...res.perms };
     treeStats.value = res.stats;
+    scopeInfo.value = res.scope ?? null;
     if (treeOpen.value && draftBefore) {
       const next: Record<string, string[]> = {};
       modules.value.forEach((m) =>
@@ -369,20 +470,29 @@ function rowSel(row: TreeRow): string[] {
   ];
 }
 
-const modAll = (mr: ModuleRow): number => mr.rows.reduce((s, r) => s + r.codes.length, 0);
-const modGot = (mr: ModuleRow): number => mr.rows.reduce((s, r) => s + rowSel(r).length, 0);
+/**
+ * ★ 2026-10-23：模块内的统计只算**可分配**的页面。
+ *   锁定的页面（该职位没有这一页的授权）不参与「全选 / 取消全选」的判断，
+ *   否则会出现「明明全勾了，按钮还显示全选」的怪状态。
+ */
+const modAll = (mr: ModuleRow): number =>
+  mr.rows.reduce((s, r) => s + (r.assignable ? r.codes.length : 0), 0);
+const modGot = (mr: ModuleRow): number =>
+  mr.rows.reduce((s, r) => s + (r.assignable ? rowSel(r).length : 0), 0);
 const modOn = (mr: ModuleRow): boolean => {
   const all = modAll(mr);
   return all > 0 && modGot(mr) === all;
 };
 
-/** 底部「已勾选 N 项动作 · 覆盖 M 个模块」 */
+/** 底部「已勾选 N 项动作 · 覆盖 M 个模块」（只算可分配部分，与保存结果一致） */
 const treeStat = computed(() => {
   let n = 0;
   let m = 0;
   treeRows.value.forEach((mr) => {
     let c = 0;
-    mr.rows.forEach((r) => (c += rowSel(r).length));
+    mr.rows.forEach((r) => {
+      if (r.assignable) c += rowSel(r).length;
+    });
     if (c > 0) m++;
     n += c;
   });
@@ -429,6 +539,11 @@ function toggleMod(moduleKey: string): void {
 /** 原型 treeAct()：单个动作标签勾选 */
 function toggleAct(key: string, code: string): void {
   if (treeView.value) return;
+  // ★ 未授权页面（该职位在页面管理里没有这一页）不许勾，勾了也不会生效
+  if (!canAssign(key)) {
+    warnLocked();
+    return;
+  }
   const arr = [...getDraft(key)];
   const i = arr.indexOf(code);
   if (i >= 0) arr.splice(i, 1);
@@ -439,6 +554,12 @@ function toggleAct(key: string, code: string): void {
 /** 原型 treeItem()：整行勾选（本行 + 全部子项一起） */
 function onItemChange(row: TreeRow, e: Event): void {
   if (treeView.value) return;
+  if (!row.assignable) {
+    // disabled 的复选框正常点不中，这里兜住键盘/脚本触发的情况
+    (e.target as HTMLInputElement).checked = rowSel(row).length > 0;
+    warnLocked();
+    return;
+  }
   const on = (e.target as HTMLInputElement).checked;
   const next = { ...draft.value };
   next[row.key] = on ? codesOf(row.item) : [];
@@ -449,6 +570,12 @@ function onItemChange(row: TreeRow, e: Event): void {
 /** 子功能点整行勾选（原型 treeItem() 的 '::' 分支） */
 function onChildChange(row: TreeRow, c: PermItem, e: Event): void {
   if (treeView.value) return;
+  const k = childKey(row, c);
+  if (!canAssign(k)) {
+    (e.target as HTMLInputElement).checked = getDraft(k).length > 0;
+    warnLocked();
+    return;
+  }
   const on = (e.target as HTMLInputElement).checked;
   setDraft({ ...draft.value, [childKey(row, c)]: on ? codesOf(c) : [] });
 }
@@ -460,8 +587,14 @@ function onChildChange(row: TreeRow, c: PermItem, e: Event): void {
  */
 function setModAll(mr: ModuleRow, on: boolean): void {
   if (treeView.value) return;
+  if (modAll(mr) === 0) {
+    warnLocked();
+    return;
+  }
   const next = { ...draft.value };
   mr.rows.forEach((row) => {
+    // 锁定的页面不动（它们根本不该被写入）
+    if (!row.assignable) return;
     next[row.key] = on ? codesOf(row.item) : [];
     row.children.forEach((c) => (next[childKey(row, c)] = on ? codesOf(c) : []));
   });
@@ -484,12 +617,20 @@ function treeSelectAll(): void {
   const next = { ...draft.value };
   treeRows.value.forEach((mr) =>
     mr.rows.forEach((row) => {
+      // ★ 未授权页面跳过：它们不在这个职位的可分配范围里
+      if (!row.assignable) return;
       next[row.key] = codesOf(row.item);
       row.children.forEach((c) => (next[childKey(row, c)] = codesOf(c)));
     }),
   );
   setDraft(next);
-  toast('已全选全部权限', 'warn');
+  const skipped = lockedPageCount.value;
+  toast(
+    skipped
+      ? `已全选可分配的权限；${skipped} 个页面该职位未获授权，已跳过`
+      : '已全选全部权限',
+    'warn',
+  );
 }
 
 /* ---- 一键清空（原型 treeClear：先确认，再清空草稿，仍需点保存才生效） ---- */
@@ -528,12 +669,20 @@ async function doSaveTree(): Promise<void> {
   try {
     const payload: RolePermMap = {};
     Object.keys(draft.value).forEach((k) => {
+      // ★ 未授权页面不提交（后端也会再过滤一次，这里让 payload 干净）
+      if (!canAssign(k)) return;
       const v = draft.value[k] || [];
       if (v.length) payload[k] = [...v];
     });
     const res = await assignApi.save(currentRoleId.value, payload);
     treeOpen.value = false;
-    toast(`已保存 ${res.permCount} 项权限，${userCount.value} 个账号已生效`);
+    const dropped = res.dropped || 0;
+    toast(
+      dropped
+        ? `已保存 ${res.permCount} 项权限；${dropped} 个未授权页面被忽略（${(res.droppedItems || []).join('、')}）`
+        : `已保存 ${res.permCount} 项权限，${userCount.value} 个账号已生效`,
+      dropped ? 'warn' : 'ok',
+    );
     await refresh();
   } catch {
     /* 已提示 */
@@ -590,7 +739,13 @@ async function doCopy(): Promise<void> {
   try {
     const res = await assignApi.copy(currentRoleId.value, copySourceId.value);
     copyOpen.value = false;
-    toast(`已从「${res.sourceRoleName}」复制 ${res.permCount} 项权限到「${targetName}」`);
+    const dropped = res.dropped || 0;
+    toast(
+      dropped
+        ? `已复制 ${res.permCount} 项权限到「${targetName}」；${dropped} 个页面目标职位未获授权，已跳过`
+        : `已从「${res.sourceRoleName}」复制 ${res.permCount} 项权限到「${targetName}」`,
+      dropped ? 'warn' : 'ok',
+    );
     await refresh();
   } catch {
     /* 已提示 */
@@ -630,8 +785,9 @@ async function doReset(): Promise<void> {
 </script>
 
 <template>
-  <div>
+  <div class="split-page">
     <!-- ==================== 主体（原型 #page-assign） ==================== -->
+    <!-- ★ 2026-10-23：根节点加 .split-page —— 整页锁高，左职位列表固定、右权限内容自己滚 -->
     <div class="card">
       <div class="card-h">
         <div class="t"><span class="bar"></span>职位权限分配</div>
@@ -678,7 +834,7 @@ async function doReset(): Promise<void> {
           </div>
 
           <!-- ---------- 右：权限概览 ---------- -->
-          <div class="rgt">
+          <div ref="rgtEl" class="rgt">
             <template v-if="currentRole">
               <div
                 style="
@@ -729,7 +885,17 @@ async function doReset(): Promise<void> {
                 <!-- ★ 2026-10-20 按用户要求删掉这里的「查看账号」按钮；
                      同轮删掉「＋ 新增权限」：本页顶部工具条（重置为预置 / ＋ 新增权限 / 编辑该职位权限）已有入口，
                      这个位置离「配置权限」太近，容易点错成"加权限点"而不是"配权限"。 -->
-                <span class="cl">共 {{ treeStats.modCount }} 个模块 / {{ treeStats.actionCount }} 个权限点</span>
+                <!-- ★ 2026-10-23：统计口径改为「本职位」。
+                     原来写「共 5 个模块 / 146 个权限点」是**全系统**的总量，
+                     而这个职位其实只有 2 个模块 / 6 个页面 —— 用户看到
+                     "5 个模块"会以为财务、权限、教学也在里面（正是误会来源）。
+                     全系统总量仍然保留在括号里，方便对照。 -->
+                <span class="cl">
+                  本职位 {{ summary.length }} 个板块 / {{ summaryPageCount }} 个页面
+                  <span class="desc" style="margin-left: 6px">
+                    （全系统 {{ treeStats.modCount }} 个板块 / {{ treeStats.itemCount }} 个页面）
+                  </span>
+                </span>
               </div>
 
               <div v-if="loading" class="empty">
@@ -738,7 +904,10 @@ async function doReset(): Promise<void> {
               </div>
               <div v-else-if="!summary.length" class="empty">
                 <div class="ic">🗂️</div>
-                暂无权限数据
+                <template v-if="scopeRestricted">
+                  该职位还没有任何页面授权，请先到「页面管理 → 职位」里给它勾上页面
+                </template>
+                <template v-else>暂无权限数据</template>
               </div>
 
               <template v-else>
@@ -809,9 +978,26 @@ async function doReset(): Promise<void> {
         </div>
       </div>
 
+      <!-- ★ 2026-10-23：可分配范围提示（未授权页面不出现，避免"这职位好像有这页"的错觉） -->
+      <div v-if="scopeRestricted && lockedPageCount > 0" class="notice w mb12">
+        🔒
+        <div>
+          <b>这里只显示「{{ currentRoleName }}」已经获授权的页面（{{ allowedPageCount }} 个）。</b>
+          另有 {{ lockedPageCount }} 个页面该职位还没有授权，<b>已隐藏</b>。
+          本页决定的是「页面里能点哪些按钮」，页面本身归「页面管理」管。
+          要给「{{ currentRoleName }}」增加页面，请先到
+          <a
+            href="#/perm/page"
+            target="_blank"
+            style="color: var(--brand); text-decoration: underline; font-weight: 600"
+          >页面管理 → 职位</a>
+          里给它勾上，再回来配置具体操作。
+        </div>
+      </div>
+
       <div>
         <div class="tree">
-          <div v-for="mr in treeRows" :key="mr.mod.moduleKey" class="mod">
+          <div v-for="mr in treeRowsVisible" :key="mr.mod.moduleKey" class="mod">
             <div class="n">
               <span class="cx" @click="toggleMod(mr.mod.moduleKey)">
                 {{ collapsed[mr.mod.moduleKey] ? '▸' : '▾' }}
@@ -823,7 +1009,7 @@ async function doReset(): Promise<void> {
                    改成右侧的文字「全选 / 取消全选」（点一下切换本模块的全部动作）。
                    只读模式（查看权限）下不渲染 —— 点了也不能改，摆着只会误导。 -->
               <span
-                v-if="!treeView"
+                v-if="!treeView && modAll(mr) > 0"
                 class="mod-all"
                 :class="{ on: modOn(mr) }"
                 @click="toggleModAll(mr)"
@@ -835,15 +1021,21 @@ async function doReset(): Promise<void> {
 
             <div class="ch" :class="{ hide: collapsed[mr.mod.moduleKey] }">
               <template v-for="row in mr.rows" :key="row.key">
-                <div class="n" :style="row.children.length ? { fontWeight: 600 } : undefined">
+                <div
+                  class="n"
+                  :class="{ locked: !row.assignable }"
+                  :style="row.children.length ? { fontWeight: 600 } : undefined"
+                >
                   <input
                     type="checkbox"
                     :checked="rowSel(row).length > 0"
+                    :disabled="!row.assignable"
                     :style="roStyle"
                     @change="onItemChange(row, $event)"
                   />
                   <span class="nm">{{ row.item.itemName }}</span>
                   <span v-if="row.item.isCustom" class="tag b" style="flex: none; margin-left: 4px">自建</span>
+                  <!-- ★ 2026-10-23：未授权页面已整行不渲染，这里不再需要「🔒 未授权」标记 -->
                   <span class="cnt">{{ rowSel(row).length }}/{{ row.codes.length }}</span>
                 </div>
 
@@ -852,7 +1044,11 @@ async function doReset(): Promise<void> {
                     v-for="a in row.item.actions"
                     :key="a.actionCode"
                     class="act"
-                    :class="{ on: getDraft(row.key).includes(a.actionCode), ro: treeView }"
+                    :class="{
+                      on: getDraft(row.key).includes(a.actionCode),
+                      ro: treeView,
+                      off: !row.assignable,
+                    }"
                     @click="toggleAct(row.key, a.actionCode)"
                   >
                     <i class="bx"></i>{{ a.actionName }}
@@ -860,10 +1056,11 @@ async function doReset(): Promise<void> {
                 </div>
 
                 <template v-for="c in row.children" :key="childKey(row, c)">
-                  <div class="n" style="padding-left: 18px">
+                  <div class="n" :class="{ locked: !row.assignable }" style="padding-left: 18px">
                     <input
                       type="checkbox"
                       :checked="getDraft(childKey(row, c)).length > 0"
+                      :disabled="!row.assignable"
                       :style="roStyle"
                       @change="onChildChange(row, c, $event)"
                     />
@@ -875,7 +1072,11 @@ async function doReset(): Promise<void> {
                       v-for="a in c.actions"
                       :key="a.actionCode"
                       class="act"
-                      :class="{ on: getDraft(childKey(row, c)).includes(a.actionCode), ro: treeView }"
+                      :class="{
+                        on: getDraft(childKey(row, c)).includes(a.actionCode),
+                        ro: treeView,
+                        off: !row.assignable,
+                      }"
                       @click="toggleAct(childKey(row, c), a.actionCode)"
                     >
                       <i class="bx"></i>{{ a.actionName }}

@@ -42,7 +42,9 @@ const roleText = computed(() => {
   if (a) {
     if (a.title) return a.title;
     if (a.kind === 'sys_admin') return '系统管理员';
-    return '模块负责人';
+    /* ★ 2026-10-23：不再拿账号类型冒充职位（原先会显示「模块负责人」）。
+     *   后端已用职位名兜底，这里只是最后一道中性兜底。 */
+    return '员工';
   }
   return myRoles.value.map((r) => ROLE_CODE_NAME[r] || r).join('、') || '未登录';
 });

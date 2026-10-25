@@ -59,9 +59,14 @@ optionRouter.get(
 
         roleStatuses: [RoleStatus.ENABLED, RoleStatus.DISABLED].map((v) => ({ value: v, label: v })),
 
-        userStatuses: [UserStatus.NORMAL, UserStatus.DISABLED, UserStatus.LOCKED].map((v) => ({
+        /* ★ 2026-10-25 用户口径：账号状态只有「正常 / 停用」两档，「锁定」已全系统移除
+         *   （编辑弹窗下拉、列表标签、导出文案、/unlock 接口、UserStatus.LOCKED 枚举值
+         *   同步删除）。
+         *   ⚠️ label 仍统一为「停用」（不写「已停用」）；value 保持 UserStatus 枚举原值
+         *   （'已停用'）——它是存库与前后端比较用的真实值，改值会导致存量数据对不上。 */
+        userStatuses: [UserStatus.NORMAL, UserStatus.DISABLED].map((v) => ({
           value: v,
-          label: v,
+          label: v === UserStatus.DISABLED ? '停用' : v,
         })),
 
         deptLevels: [DeptLevel.SCHOOL, DeptLevel.DEPT, DeptLevel.STAGE].map((v) => ({

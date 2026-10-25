@@ -328,11 +328,28 @@ const detailTitle = computed(
   () => `职位详情 · <span class="em">${esc(detail.value?.roleName || '')}</span>`,
 );
 
-/** 权限覆盖情况：某模块下「已授权功能点」的文案 */
-function coverText(m: PermModule): string {
+/**
+ * ★ 2026-10-24：职位详情卡片明细（与「账号详情 → 有效权限明细」同一格式）。
+ *   原实现是 coverText()：只把已授权页面名用「、」串起来（✅ 学生管理、收款与退费…），
+ *   与账号详情的「模块名 x/y + 页面名：动作标签」不一致，被用户指出后统一为下述格式。
+ *   每个已授权页面一行：页面名 + 动作名标签（动作码翻成中文名，与账号详情一致）。
+ */
+interface CoverRow {
+  name: string;
+  actions: string[];
+}
+function coverRows(m: PermModule): CoverRow[] {
   const perms = detail.value?.perms || {};
-  const has = m.items.filter((it) => (perms[permKey(m.moduleKey, it.itemName)] || []).length > 0);
-  return has.length ? `✅ ${has.map((x) => x.itemName).join('、')}` : '❌ 无权限';
+  const rows: CoverRow[] = [];
+  m.items.forEach((it) => {
+    const codes = perms[permKey(m.moduleKey, it.itemName)] || [];
+    if (!codes.length) return;
+    rows.push({
+      name: it.itemName,
+      actions: codes.map((c) => it.actions.find((a) => a.actionCode === c)?.actionName || c),
+    });
+  });
+  return rows;
 }
 
 async function openDetail(row: PermRoleListItem): Promise<void> {
@@ -1317,14 +1334,34 @@ async function doExport(): Promise<void> {
 
       <div class="divider"></div>
       <div class="sec-t"><span class="bar"></span>权限覆盖情况</div>
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px">
+      <!-- ★ 2026-10-24：卡片格式与「账号详情 → 有效权限明细」完全对齐（同一口径）——
+           模块名 x/y（已授权页面数/该模块页面总数）+ 每页「页面名：动作标签」明细；
+           没有授权的模块仍显示「❌ 无权限」（未改动）。 -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px">
         <div
           v-for="m in modules"
           :key="m.moduleKey"
           style="border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px"
         >
-          <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 3px">{{ m.moduleIcon }} {{ m.moduleName }}</div>
-          <div class="desc">{{ coverText(m) }}</div>
+          <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 4px">
+            {{ m.moduleIcon }} {{ m.moduleName }}
+            <span class="desc">{{ coverRows(m).length }}/{{ m.items.length }}</span>
+          </div>
+          <template v-if="coverRows(m).length">
+            <div
+              v-for="r in coverRows(m)"
+              :key="r.name"
+              style="font-size: 11.5px; color: var(--tx2); margin-bottom: 3px"
+            >
+              <b style="color: var(--tx)">{{ r.name }}</b>：<span
+                v-for="a in r.actions"
+                :key="a"
+                class="tag b"
+                style="margin-right: 2px"
+              >{{ a }}</span>
+            </div>
+          </template>
+          <div v-else class="desc">❌ 无权限</div>
         </div>
       </div>
 

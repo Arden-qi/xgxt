@@ -12,7 +12,7 @@
  *   · 第 2274~2338 行 submitUserForm()       —— 表单校验（错误清单弹窗）→ 确认弹窗 → 落库
  *   · 第 2339~2397 行 openAssignRole()/submitAssignRole()  —— 分配职位弹窗
  *   · 第 2398~2460 行 resetPwd()/rpGen()/doResetPwd() —— 重置密码弹窗（密码按规则随机生成）
- *   · 第 2461~2523 行 toggleUser()/unlockUser()/delUser()  —— 停用启用 / 解锁 / 删除
+ *   · 第 2461~2523 行 toggleUser()/delUser()  —— 停用启用 / 删除（解锁已于 2026-10-25 随「锁定」状态一并移除）
  *   · 第 2524~2570 行 dlgImportUser()        —— 批量导入（原型演示）
  *   · 第 1896~1914 行 exportDlg()            —— 导出数据弹窗
  *
@@ -1002,6 +1002,20 @@ const assignVisibleRoles = computed<PermRoleListItem[]>(
   () => assignActiveDept.value?.roles || roles.value,
 );
 
+/**
+ * 左侧部门那枚小圆点，什么时候亮红？
+ *
+ * ★ 2026-10-25 用户口径（第三轮，回退第二轮的「只亮当前栏」）：
+ *   以任文静为例——她勾着「教员（大学部）」，切到初中部去挑新职位时，
+ *   「大学部」的圆点必须**保持红色**（提示她身上还挂着大学部的职位）；
+ *   只有把「教员（大学部）」取消勾选之后，大学部的圆点才熄灭。
+ *   即：**这一栏里只要还有已勾选的职位，红点就常亮**，与正在查看哪一栏无关。
+ *   每个部门已经勾了几个，右侧 X/Y 数字照旧。
+ */
+function assignDotOn(g: AssignDeptGroup): boolean {
+  return g.picked > 0;
+}
+
 /** 已勾选的职位（按职位原本顺序，用于底部「已选职位」一行；跨部门都在这里） */
 const assignPickedRoles = computed<PermRoleListItem[]>(() =>
   roles.value.filter((r) => assignRoleIds.value.includes(r.id)),
@@ -1040,6 +1054,25 @@ function setAssignOn(r: PermRoleListItem, on: boolean): void {
   assignPickCtx.value = nextCtx;
 }
 
+/**
+ * 打开「修改职位」时应停在哪一栏
+ *
+ * ★ 2026-10-23 用户口径：一看到弹窗就应该能直接改 —— 孙敏是初中部班主任，
+ *   弹窗出现时就应该停在「初中部」、里面「班主任」勾着，先取消再挑新职位一步到位；
+ *   不要先落在「全部职位」总览里让人自己找。
+ *   顺序：账号所属部门 → 现有职位记录的归属栏 → 全部职位（兜底，绝不落空）。
+ */
+function assignLandingKey(row: PermUserListItem): string {
+  const groups = assignDeptGroups.value;
+  const cands: string[] = [row.deptId, ...row.roleIds.map((id) => assignPickCtx.value[id])];
+  for (const k of cands) {
+    if (!k || k === ASSIGN_DEPT_ALL) continue;
+    const g = groups.find((x) => x.key === k);
+    if (g && g.roles.length) return g.key;
+  }
+  return ASSIGN_DEPT_ALL;
+}
+
 async function openAssignRole(row: PermUserListItem): Promise<void> {
   assignTarget.value = row;
   assignRoleIds.value = [...row.roleIds];
@@ -1050,8 +1083,9 @@ async function openAssignRole(row: PermUserListItem): Promise<void> {
     ctx[id] = assignCtxKeyOf(id, row.deptId);
   });
   assignPickCtx.value = ctx;
-  /* 每次打开都回到「全部职位」，避免继承上一次的部门选择让人误以为职位没了 */
-  assignDeptKey.value = ASSIGN_DEPT_ALL;
+  /* ★ 2026-10-23：落在「现有职位所在的那一栏」（见 assignLandingKey 说明），
+     一进来就是可改状态；不再是每次都回到「全部职位」总览。 */
+  assignDeptKey.value = assignLandingKey(row);
   assignOpen.value = true;
   await ensureRolePerms(assignRoleIds.value);
 }
@@ -1414,56 +1448,9 @@ async function saveStatus(row: PermUserListItem, status: string, off: boolean): 
   }
 }
 
-/** 「解锁并重置密码」的后续动作（ProtoConfirm 的 mid 事件） */
-let unlockMidAction: () => void = () => undefined;
-
-function unlockUser(row: PermUserListItem): void {
-  openConfirm(
-    {
-      title: '解锁账号',
-      icon: '🔓',
-      iconBg: 'var(--ok-l)',
-      msg: `确认解锁账号「${row.userName}」？`,
-      detail: [
-        { k: '账号', v: esc(row.account) },
-        { k: '当前状态', v: '<span class="tag d">已锁定</span>' },
-        { k: '变更后状态', v: '正常' },
-      ],
-      tip: '解锁后失败计数清零，该账号可正常登录；若为本人异常，建议同时重置密码。',
-      okText: '确认解锁',
-      okClass: 'ok',
-      midText: '解锁并重置密码',
-    },
-    () => {
-      void saveUnlock(row, false);
-    },
-  );
-  // 中间按钮：解锁后再拉起重置密码弹窗
-  unlockMidAction = () => {
-    void saveUnlock(row, true);
-  };
-}
-
-function onConfirmMid(): void {
-  confirmOpen.value = false;
-  unlockMidAction();
-}
-
-async function saveUnlock(row: PermUserListItem, thenReset: boolean): Promise<void> {
-  try {
-    await userApi.unlock(row.id);
-    if (thenReset) {
-      toast('已解锁，请继续重置密码');
-      await Promise.all([load(), loadOverview()]);
-      openReset(row);
-      return;
-    }
-    toast(`账号「${row.userName}」已解锁`);
-    await Promise.all([load(), loadOverview()]);
-  } catch {
-    /* 已提示 */
-  }
-}
+/* ★ 2026-10-25：账号状态只留「正常 / 停用」，「锁定 / 解锁」全系统移除
+ *   （unlockUser / saveUnlock / onConfirmMid 已删；UserStatus.LOCKED 后端枚举
+ *   仅为兼容历史 schema 保留，界面不再出现也不会再写入。） */
 
 function delUser(row: PermUserListItem): void {
   // 后端对系统管理员账号有硬保护（不可删除），提前拦一次少打一次必失败的请求
@@ -1602,7 +1589,9 @@ async function doExport(): Promise<void> {
       </div>
       <!-- ★ 2026-10-23 按用户要求删除「已锁定」KPI 卡：
            状态筛选里已不再提供「已锁定」这一档，卡片点下去会把筛选设成下拉里不存在的值（下拉变空白），
-           卡片与筛选项一起删除才自洽。lockedTotal 接口字段保留（后端仍返回），只是本页不再展示。 -->
+           卡片与筛选项一起删除才自洽。
+           ★ 2026-10-25：「锁定」全系统移除收尾 —— 后端 /overview 已不再返回 lockedTotal，
+           UserOverview 类型同步删掉该字段。 -->
       <div
         class="k"
         @click="toast(`共 ${overview?.needChangePwdTotal ?? 0} 个账号需首次登录修改密码`, 'warn')"
@@ -1638,7 +1627,8 @@ async function doExport(): Promise<void> {
           <select v-model="query.userStatus" class="inp" @change="searchNow">
             <option value="">全部状态</option>
             <option value="正常">正常</option>
-            <option value="已停用">已停用</option>
+            <!-- ★ 2026-10-24 用户口径：选项文字「停用」，value 保持真实值「已停用」（列表判等/接口都用它） -->
+            <option value="已停用">停用</option>
             <!-- ★ 2026-10-23 按用户要求删除「已锁定」筛选项 -->
           </select>
           <button class="btn" type="button" @click="resetQuery">重置</button>
@@ -1688,7 +1678,7 @@ async function doExport(): Promise<void> {
                 <td>
                   <span v-if="u.userStatus === '正常'" class="tag g">正常</span>
                   <span v-else-if="u.userStatus === '已停用'" class="tag gy">已停用</span>
-                  <span v-else class="tag d">已锁定</span>
+                  <!-- ★ 2026-10-25：「已锁定」分支删除——账号状态只有正常/停用两档 -->
                   <span v-if="u.needChangePwd" class="tag w" style="margin-top: 2px">待改密</span>
                 </td>
                 <td class="desc num">{{ u.lastLoginTime || '—' }}</td>
@@ -1708,7 +1698,6 @@ async function doExport(): Promise<void> {
                       :class="u.userStatus === '正常' ? 'wn' : 'gr'"
                       @click="toggleUser(u)"
                     >{{ u.userStatus === '正常' ? '停用' : '启用' }}</span>
-                    <span v-if="u.userStatus === '已锁定'" class="lk gr" @click="unlockUser(u)">解锁</span>
                     <span class="lk dg" @click="delUser(u)">删除</span>
                   </div>
                 </td>
@@ -1879,7 +1868,7 @@ async function doExport(): Promise<void> {
 
             <!-- ★ 2026-10-23：按用户要求删除「账号状态」下拉（图上框住的「账号状态 / 已锁定」）。
                  新建账号的状态不再由管理员选，一律按默认值「正常」建号（见 form.userStatus 初始值）。
-                 列表页顶部的状态筛选仍保留，停用 / 解锁仍走行内操作。 -->
+                 ★ 2026-10-25：「锁定」状态全系统移除，行内操作只剩 停用/启用 与 删除。 -->
           </div>
 
           <!-- ★ 2026-10-19：所属部门 / 所属职位 / 权限预览 / 快捷套用
@@ -2073,16 +2062,19 @@ async function doExport(): Promise<void> {
             :title="g.level === 3 ? '二级部门' : g.name"
             @click="assignDeptKey = g.key"
           >
-            <!-- ★ 2026-10-23：「全部职位」是总览视图、不是真实部门，前面不给红点（用户要求）。
-                 其余部门只有「在这一栏里实际勾过职位」才亮红点，兄弟部门不会被连坐变红。 -->
+            <!-- ★ 2026-10-25（用户口径）：红点 = 这一行部门名下**还有已勾选的职位**就常亮，
+                 与正在查看哪一栏无关；取消勾选后红点才熄灭。
+                 「全部职位」是总览视图、不是真实部门，前面仍不给红点。 -->
             <span
               v-if="g.key !== ASSIGN_DEPT_ALL"
               class="as-dot"
-              :class="{ has: g.picked > 0 }"
+              :class="{ has: assignDotOn(g) }"
             ></span>
             <!-- 二级部门靠 .sub 缩进 + 小字区分，不再额外加「· 」前缀（会和左侧圆点重复） -->
             <span class="nm" :class="{ 'nm-all': g.key === ASSIGN_DEPT_ALL }">{{ g.name }}</span>
-            <span class="cnt">{{ g.picked }}<i>/</i>{{ g.roles.length }}</span>
+            <span class="cnt" :class="{ 'cnt-all': g.key === ASSIGN_DEPT_ALL }"
+              >{{ g.picked }}<i>/</i>{{ g.roles.length }}</span
+            >
           </div>
         </div>
 
@@ -2356,7 +2348,7 @@ async function doExport(): Promise<void> {
       <div class="sec-t mt16"><span class="bar"></span>导出内容</div>
       <div class="radios" style="height: auto; flex-direction: column; align-items: flex-start; gap: 8px">
         <label><input v-model="exportScope" type="radio" name="expScopeU" value="filtered" /> 当前筛选结果（{{ total }} 条）</label>
-        <label><input v-model="exportScope" type="radio" name="expScopeU" value="all" /> 全部数据（含已停用/已锁定）</label>
+        <label><input v-model="exportScope" type="radio" name="expScopeU" value="all" /> 全部数据（含已停用）</label>
         <label><input v-model="exportScope" type="radio" name="expScopeU" value="page" /> 仅选中项</label>
       </div>
       <template #footer>
@@ -2382,7 +2374,6 @@ async function doExport(): Promise<void> {
       :ok-class="cfg.okClass"
       :cancel-text="cfg.cancelText"
       @ok="onConfirmOk"
-      @mid="onConfirmMid"
     />
   </div>
 </template>
@@ -2464,20 +2455,20 @@ async function doExport(): Promise<void> {
 .as-dept-item.on .cnt {
   color: #b22a23;
 }
-/* 该部门里已经勾过职位 → 左侧留个红点，切到别的部门也能看出「这边选过」 */
+/* 该部门里已经勾过职位 → 左侧留个红点；★ 2026-10-23 二次修正后只在「当前查看的那一栏」亮 */
 .as-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   flex: none;
-  background: #eadfd8;
+  background: #e6dcd5;
 }
 .as-dot.has {
   background: #cd3a33;
 }
-.as-dept-item.on .as-dot {
-  box-shadow: 0 0 0 2px #f9e4e1;
-}
+/* ★ 2026-10-23：原来 .on 会给圆点套一圈淡粉光圈，未勾选时看着也像「亮着」的红点，
+   和用户说的「点了实训管理却像两个部门都选中」叠在一起更难分辨 —— 直接去掉光圈，
+   选中态只靠整行底色 + 加粗表达。 */
 
 /* ---------------- 右：职位 ---------------- */
 .as-roles {
@@ -2583,9 +2574,22 @@ async function doExport(): Promise<void> {
   height: 12px;
   display: block;
 }
-/* 「全部职位」不是真实部门、前面没有红点，文字补 12px 补位，与其它行的文字左边缘对齐 */
+/* 「全部职位」不是真实部门、前面没有红点，文字补 12px 补位，与其它行的文字左边缘对齐。
+   ★ 2026-10-25（用户口径）：「全部职位」要一眼看到当前账号一共勾了几个职位 ——
+   字体放大 + 红色加粗，右侧 X/Y 计数同步放大标红。 */
 .as-dept-item .nm-all {
   padding-left: 12px;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #cd3a33;
+}
+.as-dept-item .cnt-all {
+  font-size: 13px;
+  font-weight: 700;
+  color: #cd3a33;
+}
+.as-dept-item .cnt-all i {
+  opacity: 0.75;
 }
 </style>
 

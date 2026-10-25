@@ -726,14 +726,26 @@ app.use(
 
 // ★ 学生档案（第六个合并的业务域）—— 三个学段：初高 / 大学 / 就业部
 //   ★ 2026-10-21 用户口径：学生档案界面删除「就业」「教务」两个入口
-//     （edu:student:view 从这里摘掉 —— 教务模块自己的页面还在，只是不再进学生档案）
-//   权限码：classjh:student:view / class:student:view / job:empArchive:view
+//     （界面上不再有「教务」部门页签）
+//   ★★ 2026-10-23：把 `edu:student:view` 加回本闸门（**不是**加回页签）——
+//     教务老师这个角色的「学生档案」页面权限在权限库里就是 edu:student:view
+//     （原教务档案页的口径：全校学生名单）。不加回来会出现：
+//     管理员在「职位权限分配」里勾了「学生档案」，教务登录后菜单没有这一项，
+//     就算直接敲 URL，本闸门也直接 403（用户 2026-10-23 截图报的正是这个问题）。
+//     它进去看到的仍是三个真实部门（初高部/大学部/就业部），口径见
+//     teaching/student/service.ts 的「全校通行码」。
+//   权限码：classjh:student:view / class:student:view / job:empArchive:view / edu:student:view
 app.use(
   '/api/teaching/student',
   authMiddleware,
   denyReadOnlyAdmin,
   denyApprovalOnlyWrite,
-  requireAnyPage(['classjh:student:view', 'class:student:view', 'job:empArchive:view']),
+  requireAnyPage([
+    'classjh:student:view',
+    'class:student:view',
+    'job:empArchive:view',
+    'edu:student:view',
+  ]),
   teachingStudentRouter,
 );
 

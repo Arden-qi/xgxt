@@ -22,6 +22,7 @@ import { ref, onMounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/portal/stores/auth';
+import { http } from '@/portal/api/request';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -72,6 +73,36 @@ const demoAccounts = [
   { account: 'sunjl', name: '孙建龙', scope: '项目经理（实训）', tag: 'job' },
   { account: 'zhouj', name: '周杰', scope: '就业老师', tag: 'job' },
 ];
+
+/**
+ * ★ 2026-10-24：演示账号的姓名/头衔改为【实时】拉取（/api/portal/account/demo，公开接口）。
+ *   上面数组里的 name/scope 只是「接口拉不到时的兜底文案」——
+ *   以前全部写死，账号在账号管理里改了职位，登录页还挂着旧职位
+ *   （孙敏：已是项目经理，登录页还显示「班主任（双语）」）。
+ */
+const liveInfo = ref<Record<string, { userName: string; title: string }>>({});
+onMounted(async () => {
+  try {
+    const rows = await http.get<{ account: string; userName: string; title: string }[]>(
+      '/api/portal/account/demo',
+    );
+    const map: Record<string, { userName: string; title: string }> = {};
+    (rows || []).forEach((x) => {
+      map[x.account] = { userName: x.userName, title: x.title };
+    });
+    liveInfo.value = map;
+  } catch {
+    /* 拉不到（后端未启动等）→ 用数组内置静态文案兜底 */
+  }
+});
+
+/** 展示用：优先实时姓名/头衔，接口没回来或没取到再回退到静态文案 */
+function demoName(a: { account: string; name: string }): string {
+  return liveInfo.value[a.account]?.userName || a.name;
+}
+function demoScope(a: { account: string; scope: string }): string {
+  return liveInfo.value[a.account]?.title || a.scope;
+}
 
 function pick(a: { account: string }) {
   form.value.account = a.account;
@@ -166,13 +197,13 @@ onMounted(() => {
           <div class="demo-title">演示账号（点击自动填入，密码均为 123456）</div>
           <div class="demo-grid">
             <div
-              v-for="a in demoAccounts"
-              :key="a.account"
+              v-for="(a, di) in demoAccounts"
+              :key="a.account + '-' + di"
               class="demo-item"
               @click="pick(a)"
             >
-              <span class="di-name">{{ a.name }}</span>
-              <span class="di-scope" :class="a.tag">{{ a.scope }}</span>
+              <span class="di-name">{{ demoName(a) }}</span>
+              <span class="di-scope" :class="a.tag">{{ demoScope(a) }}</span>
               <span class="di-account">{{ a.account }}</span>
             </div>
           </div>
