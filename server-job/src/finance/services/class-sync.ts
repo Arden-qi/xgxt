@@ -174,23 +174,42 @@ async function findUrgeTarget(
   stage: 'jh' | 'class' | 'job',
   opt: { sourceId: string; studentNo: string; feeType: number },
 ): Promise<Record<string, any> | null> {
-  /** ① 本单自己 */
+  /**
+   * ① 已认领到**本张财务单**的台账（`finance_fee_id` 为准）
+   *
+   * ★★ 2026-10-25 修：这是就业/大学最常见的形态 —— 催费行本身由财务同步而来，
+   *   身上已经有 `finance_fee_id = 本单`，但 `source_id` 可能为空。
+   *   原来没有这一级 → 财务核对回写时匹配不到 → **新增一行**
+   *   （用户实测：567 那张餐费单核对后变成「已缴 + 已核对」两行）。
+   */
+  const linked = (await tbl(conn, dbName, table, stage)
+    .where({ finance_fee_id: opt.sourceId, is_deleted: false })
+    .first()) as Record<string, any> | undefined;
+  if (linked) return linked;
+
+  /** ② 老口径：source_system='finance' + source_id=财务单 id（历史数据兼容） */
   const own = (await tbl(conn, dbName, table, stage)
     .where({ source_system: 'finance', source_id: opt.sourceId })
     .first()) as Record<string, any> | undefined;
   if (own) return own;
 
   /**
-   * ② 同学号 + 同费用项，且**不是**财务同步来的那条
+   * ③ 同学号 + 同费用项，但**排除已归属其它财务单**的台账
    *
-   * ⚠️ 不能写 `.whereNot({ source_system: 'finance' })`：
-   *    MySQL 三值逻辑下 `NULL <> 'finance'` 结果是 NULL（不成立），
-   *    会把「来源为空的老台账」整片漏掉 → 又退回「新增一行」的老路。
-   *    → 必须写 raw 条件把 NULL 也算作「非财务」。
+   * ★★ 2026-10-25 修：原来这里写死了 `source_system <> 'finance'`，
+   *   把「来源是财务」的台账整片排除 —— 而就业/大学的催费台账恰恰都是财务同步来的，
+   *   结果永远匹配不到，每核对一次就多插一行。
+   *   正确口径：只排除「已经被**另一张**财务单认领」的行（finance_fee_id/source_id
+   *   指向别的单），未被认领或正好指向本单的都能命中。
    */
   const rows = (await tbl(conn, dbName, table, stage)
     .where({ student_no: opt.studentNo, fee_type: opt.feeType, is_deleted: false })
-    .whereRaw('(source_system IS NULL OR source_system <> ?)', ['finance'])
+    .where(function (this: any) {
+      this.whereNull('finance_fee_id').orWhere('finance_fee_id', opt.sourceId);
+    })
+    .where(function (this: any) {
+      this.whereNull('source_id').orWhere('source_id', opt.sourceId);
+    })
     .orderBy('create_time', 'asc')
     .limit(1)) as Record<string, any>[];
   return rows[0] || null;
@@ -633,13 +652,45 @@ export async function syncFeesToJob(feeIds: string[]): Promise<void> {
 
 /** 单条：大学部（班级管理）+ 初高（教学管理）+ 就业（催费单） */
 export async function syncFeeToAll(feeId: string): Promise<void> {
+  /**
+   * ★★ 2026-10-25 修：**按单据所属部门分流**，不再无差别写四张台账。
+   *
+   *   原来一张单会同时推进初高/大学缴费副本/大学催费副本/就业四处 ——
+   *   就业学生的单因此也在「大学部」台账里长出一行（edu_stage=class 的就业学生），
+   *   催费页就出现"同一个学生两条"的怪现象。
+   *   现在按 `t_finance_fee.dept_code` 只写它该去的台账：
+   *     1 初高 → 初高缴费台账
+   *     2 大学 → 大学缴费副本 + 大学催费副本（催费页读后者）
+   *     3 就业 → 就业催费台账
+   *   dept_code 为空的老数据 → 保持原行为（四路都写），避免漏同步。
+   */
+  let dept = 0;
+  try {
+    const row = (await db(FEE_TABLE).where({ id: feeId, is_deleted: false }).first()) as
+      | Record<string, any>
+      | undefined;
+    dept = Number(row?.dept_code ?? 0);
+  } catch {
+    dept = 0;
+  }
+
+  if (dept === 1) {
+    await syncFeeToJh(feeId);
+    return;
+  }
+  if (dept === 2) {
+    await syncFeeToClass(feeId);
+    await syncFeeToClassUrge(feeId);
+    return;
+  }
+  if (dept === 3) {
+    await syncFeeToJob(feeId);
+    return;
+  }
+
   await syncFeeToClass(feeId);
   await syncFeeToJh(feeId);
-  // ★ 2026-10-22：大学催费页读的是催费副本表，不是缴费副本表
-  //   （缴费副本 t_class_fee_sync 供「缴费情况」详情用，催费副本 t_class_urge_sync 供催费页用）
-  //   → 缺这一路，财务建了单大学催费页也看不到（用户反馈「缴费里有、催费页里没有」）
   await syncFeeToClassUrge(feeId);
-  // ★ 2026-10-22：就业部的单同步成催费单（用户要求「就业同初高」）
   await syncFeeToJob(feeId);
 }
 
