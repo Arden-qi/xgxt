@@ -353,8 +353,8 @@
           <!-- 2026-10-15 按批注：删除「学段」选择器，学段由「部门」自动判定
                （初高部 → 初高；大学部 → 大学；实训从实训页签进入仍可新增） -->
           <el-col :span="8">
-            <el-form-item label="班级名称">
-              <el-input v-model="form.className" maxlength="50" placeholder="留空自动生成占位名" />
+            <el-form-item label="班级名称" prop="className">
+              <el-input v-model="form.className" maxlength="50" placeholder="请填写班级名称" />
             </el-form-item>
           </el-col>
           <!-- ★ 2026-10-21 用户口径：班级编号三部门统一（初高部/大学部/就业部），必填 -->
@@ -372,7 +372,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="部门">
+            <el-form-item label="部门" prop="deptCode" :required="!form.id">
               <el-select v-model="form.deptCode" style="width: 100%" @change="onFormDeptChange">
                 <el-option v-for="d in DEPT_OPTIONS" :key="d.value" :label="d.label" :value="d.value" />
               </el-select>
@@ -383,7 +383,7 @@
                  t_class_stage）。原「/api/teaching/class/scheme-options」读的
                  t_class_stage_scheme 两张表从未建过，那套实现已整体删除。 -->
           <el-col :span="8">
-            <el-form-item label="阶段方案">
+            <el-form-item label="阶段方案" :required="!form.id">
               <el-select
                 v-model="formPlanId"
                 clearable
@@ -397,7 +397,7 @@
           </el-col>
           <!-- ★ 阶段选项 = 当前方案里的阶段；没选方案 → 退回该学段的阶段清单（历史数据仍可编辑） -->
           <el-col v-if="formPhaseOptions.length" :span="8">
-            <el-form-item label="阶段">
+            <el-form-item label="阶段" prop="phaseCode" :required="!form.id">
               <el-select v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
                 <el-option v-for="p in formPhaseOptions" :key="p.value" :label="p.label" :value="p.value" />
               </el-select>
@@ -422,7 +422,7 @@
                  下拉按「职位 + 部门」过滤 —— 部门选初高部就只显示初高部的班主任。
                  规则与兜底见 @/teaching/classStaff.ts（staffOf）。 -->
           <el-col :span="8">
-            <el-form-item label="班主任">
+            <el-form-item label="班主任" prop="headTeacherId" :required="!form.id">
               <el-select
                 v-model="form.headTeacherId"
                 clearable
@@ -437,7 +437,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="教员">
+            <el-form-item label="教员" prop="teacherId" :required="!form.id">
               <el-select
                 v-model="form.teacherId"
                 clearable
@@ -468,9 +468,11 @@
           </el-col>
           <!-- 2026-10-16 按批注：加回「项目经理 / 就业老师」——不再是工号/ID 输入框，
                而是和 班主任/教员/助教 同一套规则：下拉按「职位 + 部门」过滤，选人自动带 ID。
-               ★ 只有「阶段 = 实训」时才必填（见 isTrainPhase / rules）。
-               ⚠️ 初高部的表没有这几列，所以只对 大学部 / 实训 显示（与「大学学号」下线的口径一致）。 -->
-          <template v-if="form.stage !== 'jh'">
+               ★ 2026-10-26 批注（红字）：「项目经理和就业老师，只在部门选择为就业部的时候显示」
+                 → 显示条件由「学段 ≠ 初高」改成「部门 = 就业部(3)」：
+                   大学部、初高部一律不显示（原来大学部也会露出来）。
+                 → 就业部（含实训 job / 就业 emp 两个学段）新增时必填，见 rules。 -->
+          <template v-if="form.deptCode === DeptCode.EMPLOYMENT">
             <el-col :span="8">
               <el-form-item label="项目经理" prop="projectManagerName">
                 <el-select
@@ -549,12 +551,14 @@
           show-icon
           title="大学班级没有「班级编号」也没有「备注」字段（那两张表里就没这两列），改动不会生效"
         />
+        <!-- ★ 2026-10-26 批注：「新增班级，除备注、开班日期、教室、助教之外都是必选项」
+             → 班主任 / 教员 现在是必填，只有助教仍为可选，提示语同步改口径 -->
         <el-alert
           v-if="form.stage === 'jh'"
           type="info"
           :closable="false"
           show-icon
-          title="班主任 / 教员 / 助教 均为可选，下拉按「职位 + 部门」过滤（如部门选初高部，班主任只列初高部的班主任；该部门没有该职位时退回只按职位列人）；初高部的表没有「项目经理 / 就业老师」这两列，所以这个学段不显示"
+          title="助教为可选，其余（班级名称/编号、部门、阶段方案、阶段、班主任、教员）新增时必填；人下拉按「职位 + 部门」过滤（如部门选初高部，班主任只列初高部的班主任；该部门没有该职位时退回只按职位列人）；初高部的表没有「项目经理 / 就业老师」这两列，所以这个学段不显示"
         />
       </el-form>
       <template #footer>
@@ -1005,44 +1009,74 @@ const isTrainPhase = computed(() => Number(form.phaseCode) === TRAIN_PHASE_CODE)
  * 表单校验规则
  *   2026-10-15 改版：学段 / 班级名称 / 部门 / 班主任 / 教员 / 阶段 全部不再必填；
  *   2026-10-16 批注：「项目经理姓名 / 就业老师姓名」**只在阶段 = 实训时**必填。
- *   规则写成 computed，切换阶段后红星与校验会立刻跟着变。
+ *   ★ 2026-10-26 批注（红字）：「新增班级，除备注、开班日期、教室、助教之外都是必选项」
+ *     → 必填 = 班级名称 / 班级编号 / 部门 / 阶段方案 / 阶段 / 班主任 / 教员
+ *              （+ 只在就业部显示的 项目经理 / 就业老师）
+ *     · 阶段方案 在 `formPlanId` 里（不在 form 上），el-form 的规则管不到 → 见 doSave 里单独校验；
+ *     · **编辑时一律放宽**：老班级这些字段本来就可能是空的，全拦死会导致连改个教室都保存不了
+ *       （与「班级编号只在新增时校验」的既有口径一致）。
+ *   规则写成 computed，切换阶段/部门后红星与校验会立刻跟着变。
  */
-const rules = computed<FormRules>(() => ({
-  // ★ 2026-10-21：班级编号三部门统一必填（历史班级留空，首次编辑时补）
-  // ★ 2026-10-23：编辑时编号只读、也不再校验必填（防止老数据编号为空时保存被卡）
-  classCode: form.id
-    ? []
-    : [
-        { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
-        {
-          validator: (_rule, value, callback) => {
-            if (String(value ?? '').trim()) callback();
-            else callback(new Error('请填写班级编号，如 Q17 / J101 / T101'));
-          },
-          trigger: 'submit',
-        },
-      ],
-  projectManagerName: isTrainPhase.value
-    ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
-    : [],
-  employmentTeacherName: isTrainPhase.value
-    ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
-    : [],
-  /**
-   * 2026-10-19 批注：教室必须输出成「楼栋-房间号」，例如 A-201。
-   * 校验看的是**归一后**的值 —— 输入 A栋-102 / 教学楼 A-102 也算合规（失焦时会自动改成 A-102），
-   * 只有认不出来的写法（比如只写 102、带中文描述的一串）才会被拦。
-   */
-  classroom: [
+const rules = computed<FormRules>(() => {
+  /** 新增时必填、编辑时放行（老数据可能为空）；trigger 用数组，下拉点选和清空都能触发 */
+  const requiredOnCreate = (msg: string) => [
     {
-      validator: (_rule, value, callback) => {
-        if (isClassroomValid(value)) callback();
-        else callback(new Error(CLASSROOM_TIP));
+      validator: (_rule: unknown, value: unknown, callback: (e?: Error) => void) => {
+        if (form.id || String(value ?? '').trim()) callback();
+        else callback(new Error(msg));
       },
-      trigger: 'blur',
+      trigger: ['blur', 'change'],
     },
-  ],
-}));
+  ];
+  /** 就业部（dept = 3）才有「项目经理 / 就业老师」两栏，也只有这时才必填 */
+  const isEmploymentDept = form.deptCode === DeptCode.EMPLOYMENT;
+  return {
+    // ★ 2026-10-21：班级编号三部门统一必填（历史班级留空，首次编辑时补）
+    // ★ 2026-10-23：编辑时编号只读、也不再校验必填（防止老数据编号为空时保存被卡）
+    classCode: form.id
+      ? []
+      : [
+          { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
+          {
+            validator: (_rule, value, callback) => {
+              if (String(value ?? '').trim()) callback();
+              else callback(new Error('请填写班级编号，如 Q17 / J101 / T101'));
+            },
+            trigger: 'submit',
+          },
+        ],
+    // ★ 2026-10-26：以下均为「新增必填」
+    className: form.id ? [] : [{ required: true, message: '请填写班级名称', trigger: 'blur' }],
+    deptCode: requiredOnCreate('请选择部门'),
+    // 阶段下拉在没配方案列时不渲染（老数据），这时不校验，否则会报一个看不见的错
+    phaseCode: form.id || !formPhaseOptions.value.length ? [] : requiredOnCreate('请选择阶段'),
+    headTeacherId: requiredOnCreate('请选择班主任'),
+    teacherId: requiredOnCreate('请选择教员'),
+    // ★ 2026-10-26：就业部新增必填；实训阶段（含编辑）沿用原来的必填口径
+    projectManagerName:
+      isEmploymentDept && (!form.id || isTrainPhase.value)
+        ? [{ required: true, message: '就业部班级必填', trigger: 'change' }]
+        : [],
+    employmentTeacherName:
+      isEmploymentDept && (!form.id || isTrainPhase.value)
+        ? [{ required: true, message: '就业部班级必填', trigger: 'change' }]
+        : [],
+    /**
+     * 2026-10-19 批注：教室必须输出成「楼栋-房间号」，例如 A-201。
+     * 校验看的是**归一后**的值 —— 输入 A栋-102 / 教学楼 A-102 也算合规（失焦时会自动改成 A-102），
+     * 只有认不出来的写法（比如只写 102、带中文描述的一串）才会被拦。
+     */
+    classroom: [
+      {
+        validator: (_rule, value, callback) => {
+          if (isClassroomValid(value)) callback();
+          else callback(new Error(CLASSROOM_TIP));
+        },
+        trigger: 'blur',
+      },
+    ],
+  };
+});
 
 /** 教室失焦即归一：A栋-102 / 教学楼 A-102 / a102 → A-102（不改变语义，只统一写法） */
 function onClassroomBlur() {
@@ -1307,6 +1341,15 @@ async function doSave() {
   if (formRef.value) {
     const ok = await formRef.value.validate().catch(() => false);
     if (!ok) return;
+  }
+  /**
+   * ★ 2026-10-26：新增时「阶段方案」也必填。
+   *   它绑的是 `formPlanId`（联动用的 ref），不在 form 上，el-form 的规则管不到 → 这里单独校验。
+   *   该部门一个方案都没配时（formPlanOptions 为空）放行，否则会变成永远存不了。
+   */
+  if (!form.id && formPlanOptions.value.length && !formPlanId.value) {
+    ElMessage.warning('请选择「阶段方案」');
+    return;
   }
   saving.value = true;
   try {

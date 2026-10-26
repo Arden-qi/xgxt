@@ -674,12 +674,12 @@
           </el-col>
           <el-col :span="8">
             <!-- 2026-10-15 改版：原「出生日期」输入框改为身份证号，出生日期/年龄由身份证号自动带出 -->
-            <el-form-item label="身份证号" prop="idCard">
+            <el-form-item label="身份证号" prop="idCard" :required="!form.id">
               <el-input v-model="form.idCard" maxlength="18" placeholder="录入后自动计算年龄" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="部门">
+            <el-form-item label="部门" prop="deptCode" :required="!form.id">
               <el-select v-model="form.deptCode" clearable placeholder="请选择" style="width: 100%" @change="onFormDeptChange">
                 <el-option v-for="(n, v) in DEPT_NAME" :key="v" :label="n" :value="Number(v)" />
               </el-select>
@@ -712,7 +712,7 @@
           </el-col>
           <!-- ★ 2026-10-22 用户口径：不再手选阶段，学生阶段跟随所在班级自动带出 -->
           <el-col :span="8">
-            <el-form-item label="状态">
+            <el-form-item label="状态" prop="studentStatus" :required="!form.id">
               <!-- ★ 2026-10-21 批注：下拉不再提供「已就业」（改由列表【已就业】按钮写入）；
                    已经是「已就业」的学生是终态，状态字段直接锁死，不可改回其它状态。
                    同批批注：「学生状态为【退学】的，任何操作都不可更改该状态」→ 退学一并锁死。 -->
@@ -723,28 +723,28 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="手机号">
-              <el-input v-model="form.phone" />
+            <el-form-item label="手机号" prop="phone" :required="!form.id">
+              <el-input v-model="form.phone" maxlength="20" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <!-- 2026-10-15 改版：「手机号」后新增【家长姓名】字段 -->
-            <el-form-item label="家长姓名">
-              <el-input v-model="form.parentName" />
+            <el-form-item label="家长姓名" prop="parentName" :required="!form.id">
+              <el-input v-model="form.parentName" maxlength="30" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="家长手机">
-              <el-input v-model="form.parentPhone" />
+            <el-form-item label="家长手机" prop="parentPhone" :required="!form.id">
+              <el-input v-model="form.parentPhone" maxlength="20" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="籍贯">
-              <el-input v-model="form.nativePlace" />
+            <el-form-item label="籍贯" prop="nativePlace" :required="!form.id">
+              <el-input v-model="form.nativePlace" maxlength="50" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="学历">
+            <el-form-item label="学历" prop="education" :required="!form.id">
               <!-- 2026-10-15 三次调整：学历固定下拉，不随部门联动，单独选择 -->
               <el-select v-model="form.education" clearable filterable style="width: 100%">
                 <el-option v-for="e in EDUCATION_OPTIONS" :key="e" :label="e" :value="e" />
@@ -752,12 +752,12 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="毕业学校">
-              <el-input v-model="form.graduateSchool" />
+            <el-form-item label="毕业学校" prop="graduateSchool" :required="!form.id">
+              <el-input v-model="form.graduateSchool" maxlength="50" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="入学日期">
+            <el-form-item label="入学日期" prop="enrollDate" :required="!form.id">
               <el-date-picker v-model="form.enrollDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
             </el-form-item>
           </el-col>
@@ -776,8 +776,8 @@
                账号仍由系统按学号自动生成，详情页「校园网账号」页签照旧只读展示；
                表单 state 保留 → 编辑老学生时原值随保存回传，不会被清空。 -->
           <el-col :span="24">
-            <el-form-item label="家庭住址">
-              <el-input v-model="form.homeAddress" />
+            <el-form-item label="家庭住址" prop="homeAddress" :required="!form.id">
+              <el-input v-model="form.homeAddress" maxlength="200" />
             </el-form-item>
           </el-col>
           <el-col :span="24">
@@ -1202,6 +1202,28 @@ const form = reactive(emptyForm());
 /** 编辑时带入的原年龄（身份证号算不出时的兜底展示） */
 const formAge = ref<number | null>(null);
 
+/**
+ * ★ 2026-10-26 批注（红框 + 红字）：「框选内容是必填项，若点击保存，该框选内容没有填，则会有相应的提示」
+ *
+ *   框选范围：学号 / 姓名 / 性别 / 身份证号 / 部门 / 年龄 / 班级 / 状态 /
+ *             手机号 / 家长姓名 / 家长手机 / 籍贯 / 学历 / 毕业学校 / 入学日期 / 家庭住址
+ *
+ *   · **学号**（按「LZ+班级编号+序号」自动生成）与 **年龄**（按身份证号自动算）是只读派生字段，
+ *     人工填不了 → 靠「班级」「身份证号」必填间接保证，这里不放规则；
+ *   · 其余字段 **新增时必填**；编辑时放宽 —— 老数据这些字段本来就可能是空的，
+ *     全拦死会导致连改个手机号都保存不了（与本文件 classId 的既有口径一致）；
+ *   · 红星常显（下面 el-form-item 上写了 required），具体提示语走各字段自己的 validator。
+ */
+const requiredOnCreate = (msg: string) => [
+  {
+    validator: (_rule: unknown, value: unknown, callback: (e?: Error) => void) => {
+      if (form.id || String(value ?? '').trim()) callback();
+      else callback(new Error(msg));
+    },
+    trigger: ['blur', 'change'],
+  },
+];
+
 const rules: FormRules = {
   studentName: [{ required: true, message: '姓名必填', trigger: 'blur' }],
   gender: [{ required: true, message: '性别必填', trigger: 'change' }],
@@ -1219,6 +1241,8 @@ const rules: FormRules = {
     },
   ],
   idCard: [
+    // ★ 2026-10-26：身份证号进入必填范围（年龄由它自动计算）
+    ...requiredOnCreate('请填写身份证号'),
     {
       validator: (_r, v: string, cb) => {
         if (!v || /^(\d{15}|\d{17}[\dXx])$/.test(v.trim())) cb();
@@ -1227,6 +1251,17 @@ const rules: FormRules = {
       trigger: 'blur',
     },
   ],
+  // ★ 2026-10-26：以下均按红框纳入必填（新增时）
+  deptCode: requiredOnCreate('请选择部门'),
+  studentStatus: requiredOnCreate('请选择状态'),
+  phone: requiredOnCreate('请填写学生手机号'),
+  parentName: requiredOnCreate('请填写家长姓名'),
+  parentPhone: requiredOnCreate('请填写家长手机'),
+  nativePlace: requiredOnCreate('请填写籍贯'),
+  education: requiredOnCreate('请选择学历'),
+  graduateSchool: requiredOnCreate('请填写毕业学校'),
+  enrollDate: requiredOnCreate('请选择入学日期'),
+  homeAddress: requiredOnCreate('请填写家庭住址'),
 };
 
 /* ============ 2026-10-15 表单改版：身份证号 → 年龄 ============ */
