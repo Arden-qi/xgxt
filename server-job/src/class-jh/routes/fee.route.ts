@@ -29,6 +29,8 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { nameOf } from '../utils/enumName';
 import { getNumberSetting } from '../utils/setting';
+// ★ 2026-10-26 催费名单数据源改为「财务账单到期日」
+import { listUrgeByExpire, getUrgeAheadDays } from '../../finance/services/urge.service';
 import { writeOpLog } from '../utils/opLog';
 import { boolFlag } from '../../utils/query';
 import { validate } from '../middleware/validate';
@@ -228,16 +230,27 @@ async function fetchStudentContacts(studentIds: Array<string | null | undefined>
       deptCode: number | null;
       phone: string | null;
       parentPhone: string | null;
+      headTeacherName: string | null;
     }
   > = {};
   const ids = [...new Set(studentIds.filter((x): x is string => !!x))];
   for (let i = 0; i < ids.length; i += 500) {
+    /**
+     * ★ 2026-10-26 关键修复：按 **source_id 或 id** 两种键都能命中
+     *
+     * 催费名单的 studentId 来自财务账单 = **咨询学生 id** = 统一表的 `source_id`；
+     * 原来只 `whereIn('id')`（统一表主键），两者不相等 →
+     * 一个都查不到 → 姓名/学号/班级/手机号全部回落到账单快照（或显示「—」）。
+     */
+    const chunk = ids.slice(i, i + 500);
     const rows = await tbl(db, DB, STUDENT_TABLE, STAGE)
       .where('is_deleted', false)
-      .whereIn('id', ids.slice(i, i + 500))
-      .select('id', 'phone', 'parent_phone', 'student_no', 'student_name', 'class_id', 'class_name', 'dept_code');
+      .where((b: any) => {
+        b.whereIn('source_id', chunk).orWhereIn('id', chunk);
+      })
+      .select('id', 'source_id', 'phone', 'parent_phone', 'student_no', 'student_name', 'class_id', 'class_name', 'dept_code');
     for (const r of rows as any[]) {
-      map[r.id] = {
+      const keyMap = {
         studentNo: r.student_no || null,
         studentName: r.student_name || null,
         classId: r.class_id || null,
@@ -245,7 +258,11 @@ async function fetchStudentContacts(studentIds: Array<string | null | undefined>
         deptCode: r.dept_code == null ? null : Number(r.dept_code),
         phone: r.phone || null,
         parentPhone: r.parent_phone || null,
+        headTeacherName: r.head_teacher_name || null,
       };
+      // 两种键都建索引，调用方传哪个都能命中
+      map[r.id] = keyMap;
+      if (r.source_id) map[r.source_id] = keyMap;
     }
   }
   return map;
@@ -274,6 +291,7 @@ function mergeArchive<T extends Record<string, any>>(
       // 联系方式本来就只有档案有，档案没有就是 null（前端显示「—」）
       phone: s.phone,
       parentPhone: s.parentPhone,
+      headTeacherName: s.headTeacherName ?? x.headTeacherName ?? null,
     };
   });
 }
@@ -329,52 +347,94 @@ feeRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
     const remindDays = await getNumberSetting('feeRemindDays');
-    // ★ 催费列表窗口天数（默认 20）：到期日距今 ≤ N 天才进列表
-    const windowDays = await getNumberSetting('feeUrgeWindowDays');
 
-    const query = tbl(db, DB, FEE_TABLE, STAGE).where('is_deleted', false);
-    // ★ 2026-10-20：班级筛选同时认「单据快照」和「档案现状」（学生换班后仍能筛到）
+    /**
+     * ★ 2026-10-26 用户口径：催费名单**改为以财务账单的到期日为准**
+     *
+     *   原来读 `t_class_fee`（教学台账）的到期日 + 20 天窗口；
+     *   现在直接调财务的催费服务（同进程）：
+     *     · 只看 餐费 / 住宿费 / 保险费（这三类才有到期概念）
+     *     · 到期日来自财务核对入账时按「缴费金额 ÷ 标准」算出的 expire_date
+     *     · 提前 N 天（财务「费用标准 → 催费设置」里配，默认 15）进名单
+     *
+     *   ⚠️ 页面上的其它功能（登记缴费 / 上传凭证 / 导出）保持不变 ——
+     *      所以每行会尽量去 `t_class_fee` 里匹配一条台账行，把 feeId 等字段补上。
+     */
+    const aheadDays = await getUrgeAheadDays();
+    // ★ 2026-10-26 必须按部门过滤，否则三个部门页签会看到同一批人
+    const fin = await listUrgeByExpire(aheadDays, {
+      keyword: q.keyword,
+      feeType: q.feeType,
+      deptCode: 1, // 初高部
+    });
+
+    // ---- 匹配台账行（同学生 + 同费用类型，取缴费日期最新的一条）----
+    const stuIdsAll = [...new Set(fin.rows.map((r) => r.studentId))].filter(Boolean);
+    let ledMap = new Map<string, any>();
+    if (stuIdsAll.length) {
+      const ledRows = await tbl(db, DB, FEE_TABLE, STAGE)
+        .where('is_deleted', false)
+        .whereIn('student_id', stuIdsAll)
+        .select('*');
+      for (const l of ledRows as any[]) {
+        const k = `${l.student_id}::${l.fee_type}`;
+        const prev = ledMap.get(k);
+        if (!prev || String(l.pay_date || '') > String(prev.pay_date || '')) ledMap.set(k, l);
+      }
+    }
+
+    let list: any[] = fin.rows.map((r) => {
+      const l = ledMap.get(`${r.studentId}::${r.feeType}`);
+      // 展示状态：已过到期日 = 逾期，否则待缴（名单里的人都是「该交钱了」）
+      const payStatus = r.remainDays < 0 ? PayStatus.OVERDUE : PayStatus.UNPAID;
+      return {
+        feeId: l?.id ?? '',
+        studentId: r.studentId,
+        studentNo: r.studentNo,
+        studentName: r.studentName,
+        classId: r.classId ?? null,
+        className: r.className ?? null,
+        deptCode: r.deptCode ?? null,
+        phone: null,
+        parentPhone: null,
+        feeType: r.feeType,
+        feeTypeName: r.feeTypeName,
+        feeAmount: Number(l?.fee_amount ?? r.suggestAmount ?? 0),
+        payStatus,
+        payStatusName: nameOf(PAY_STATUS_NAME, payStatus),
+        rawPayStatus: payStatus,
+        payDate: null,
+        expireDate: r.expireDate,
+        remainDays: r.remainDays,
+        // 紧急：剩余天数 ≤ 设置里的提醒天数（默认 7 天）
+        isUrgent: r.remainDays <= remindDays,
+        voucherUrl: l?.voucher_url ?? null,
+        paidAmount: l?.paid_amount ?? null,
+        payMethod: l?.pay_method ?? null,
+        payMethodName: l?.pay_method ? nameOf(PAY_METHOD_NAME, l.pay_method) : null,
+        payRemark: l?.pay_remark ?? null,
+        financeFeeId: l?.finance_fee_id ?? null,
+        regress: null,
+      };
+    });
+
+    // ---- 班级 / 状态 / 紧急 筛选（与原来同口径）----
     if (q.classId) {
       const inClass = await studentIdsInClass(q.classId);
-      query.andWhere((qb) => {
-        qb.where('class_id', q.classId);
-        if (inClass.length) qb.orWhereIn('student_id', inClass);
-      });
+      list = list.filter(
+        (x) => x.classId === q.classId || inClass.includes(x.studentId),
+      );
     }
-    if (q.feeType) query.andWhere('fee_type', q.feeType);
-    // ⚠️ 缴费状态**不能按库里的 pay_status 在 SQL 里筛**：
-    //    逾期是按到期日派生的（见 effectivePayStatus），库里可能还写着「待缴」。
-    //    若在这里 where pay_status=4 → 一条都查不到；where pay_status=1 → 又会把
-    //    显示成「逾期」的行带出来。所以统一等映射完按「展示状态」筛。
-    if (q.startDate) query.andWhere('expire_date', '>=', q.startDate);
-    if (q.endDate) query.andWhere('expire_date', '<=', q.endDate);
-    if (q.keyword) {
-      const hit = await studentIdsByKeyword(q.keyword);
-      query.andWhere((qb) => {
-        qb.where('student_no', 'like', `%${q.keyword}%`).orWhere('student_name', 'like', `%${q.keyword}%`);
-        if (hit.length) qb.orWhereIn('student_id', hit);
-      });
-    }
-
-    // isUrgent 为派生值，先取全量（当前筛选）再内存过滤分页
-    const allRows = await query.clone().select('*').orderBy('expire_date', 'asc');
-    // ★ 窗口过滤：只留到期日在 N 天内（含逾期）的单；到期日为空的单不进列表
-    let list = allRows
-      .map((r: any) => toFee(r, remindDays))
-      .filter((x: any) => withinUrgeWindow(x, windowDays));
-    // ★ 缴费状态按派生后的状态筛（逾期 = 待缴 + 已过到期日，见 effectivePayStatus）
-    if (q.payStatus) list = list.filter((x: any) => x.payStatus === q.payStatus);
-    if (q.isUrgent !== undefined) list = list.filter((x: any) => x.isUrgent === q.isUrgent);
+    if (q.payStatus) list = list.filter((x) => x.payStatus === q.payStatus);
+    if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
 
     const total = list.length;
     const paged = list.slice((q.page - 1) * q.size, q.page * q.size);
 
-    // ★ 催费次数（2026-10-19 用户要求）：按学生聚合催费记录条数（notify 按学生维度催缴，
-    //    只查本页行，一次 groupBy，代价可忽略）
+    // ★ 催费次数（原有逻辑）
     const stuIds = ([...new Set(paged.map((x: any) => x.studentId))].filter(Boolean)) as string[];
     let urgeCountMap: Record<string, number> = {};
     if (stuIds.length) {
-      // ★ 2026-10-23：催费记录也走 tbl()（→ t_uni_notify），原来读老表恒为 0 条
       const counts = await tbl(db, DB, NOTIFY_TABLE, STAGE)
         .where('is_deleted', false)
         .whereIn('student_id', stuIds)
@@ -384,13 +444,12 @@ feeRouter.get(
     }
     const withCount = paged.map((x: any) => ({ ...x, urgeCount: urgeCountMap[x.studentId] || 0 }));
 
-    // ★ 档案信息（2026-10-20）：缴费表不自带手机号，且姓名/班级是开单快照 ——
-    //   按本页学生批量取档案，一次性把联系方式和学生属性都对齐到档案最新值
+    // ★ 档案补全（手机号 / 学号 / 班级以档案为准）
     const contacts = await fetchStudentContacts(withCount.map((x: any) => x.studentId));
     const withContact = mergeArchive(withCount, contacts);
 
-    // 顺带把窗口天数带回前端：列表为什么比台账少，界面上要说得清楚
-    res.json({ ...page(withContact, total, q), urgeWindowDays: windowDays });
+    // 窗口天数带回前端（现在指财务催费的提前天数）
+    res.json({ ...page(withContact, total, q), urgeWindowDays: aheadDays });
   }),
 );
 

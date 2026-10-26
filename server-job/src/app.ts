@@ -134,6 +134,7 @@ import financeRefundRouter from './finance/routes/refund.route';
 import financeFreezeRouter from './finance/routes/freeze.route';
 import financeBillRouter, { overviewRouter as financeOverviewRouter } from './finance/routes/bill.route';
 import financeStandardRouter from './finance/routes/fee-standard.route';
+import financeUrgeRouter from './finance/routes/urge.route';
 // ---- 权限管理 ----
 import { authMiddleware as permAuth } from './perm/middleware/auth';
 import permOverviewRouter from './perm/routes/overview.route';
@@ -501,6 +502,8 @@ app.use('/api/finance/refund', financeAuth, financeRefundRouter);
 app.use('/api/finance/freeze', financeAuth, financeFreezeRouter);
 app.use('/api/finance/bill', financeAuth, financeBillRouter);
 app.use('/api/finance/standard', financeAuth, financeStandardRouter);
+// ★ 2026-10-26 催费提醒（按财务账单到期日：餐费/住宿费/保险费）
+app.use('/api/finance/urge', financeAuth, financeUrgeRouter);
 // 财务概览：路径是 /api/finance/overview（不带子资源）—— 必须放在上面几条之后
 app.use('/api/finance', financeAuth, financeOverviewRouter);
 
