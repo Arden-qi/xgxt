@@ -21,12 +21,13 @@
  * 【返回值约定】`null` = 不限；`[]` = 一个班都看不到（务必按「查不到」处理）
  */
 
-import { BizCode, ClassStatus, RoleCode, hasRole } from 'shared-types';
+import { BizCode, RoleCode, hasRole } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { db as classDb } from '../../class/db';
 import { db as classJhDb } from '../../class-jh/utils/db';
 import { db as jobDb } from '../../utils/db';
 import type { TeachingStage } from './dto';
+import { CLASS_STATUS } from './dto';
 import { tbl } from './uniTable';
 
 type Side = 'training' | 'university' | 'all';
@@ -67,9 +68,18 @@ export async function visibleClassIds(
   const side = sideOfRoles(roles);
   if (side === 'all') return null;
 
-  /* 责任人列历史上有两种写入口径：门户账号 UUID 与权限库 U_xxx —— 两个都比，避免一边比不中 */
+  /* 责任人列历史上有两种写入口径：门户账号 UUID 与权限库 U_xxx —— 两个都比，避免一边比不中
+   *
+   * ★ 2026-10-23 补 portalUserId：`userId` 从今天起统一成 U 号（见 middleware/auth.ts），
+   *   而**今天之前**写入的责任人 / 创建人列存的还是门户 UUID —— 只比 userId 会让
+   *   历史行的「我带的班」突然不匹配（列表整页变空）。三个 id 一起比，两种口径都覆盖。
+   */
   const ids = [
-    ...new Set([user?.userId, user?.businessUserId].map((x) => String(x || '')).filter(Boolean)),
+    ...new Set(
+      [user?.userId, user?.businessUserId, user?.portalUserId]
+        .map((x) => String(x || ''))
+        .filter(Boolean),
+    ),
   ];
 
   if (!ids.length) return [];
@@ -102,20 +112,30 @@ export async function visibleClassIds(
     const isPM = hasRole(roles, RoleCode.PROJECT_MANAGER);
     const isJob = hasRole(roles, RoleCode.JOB_STAFF);
     if (!isPM && !isJob) return [];
+    /* ★ 2026-10-23：「交棒给就业老师」的判据改了
+     *
+     * 原来用 `class_status = ClassStatus.GRADUATED(4 已结业)` ——
+     * 但 2026-10-22 批注已经把「已结业」整体下线（封班即终态），
+     * 4 永远不会出现 → 就业老师这条路**一行都查不出来**，
+     * 交接给他的实训班在「实训」侧完全消失（用户报障的另一半原因）。
+     *
+     * 现行口径：升就业成功 = 班级状态 6 待就业，确认后 7 已就业 —— 这才叫「已交棒」。
+     */
+    const HANDED_OVER = [CLASS_STATUS.WAIT_EMPLOY, CLASS_STATUS.EMPLOYED];
     try {
       const rows = (await tbl(jobDb, 'sms_job', 't_job_class', 'job')
         .where('is_deleted', 0)
         .andWhere((q: any) => {
           if (isPM) {
-            // 实训：我负责且未结业（结业 = 已交棒给就业老师）
+            // 实训：我负责且**还没交棒**（6/7 之后归就业老师）
             q.where((w: any) =>
-              w.whereIn('project_manager_id', ids).andWhereNot('class_status', ClassStatus.GRADUATED),
+              w.whereIn('project_manager_id', ids).andWhereNotIn('class_status', HANDED_OVER),
             );
           }
           if (isJob) {
-            // 就业：已结业（交棒）且 employment_teacher 是我
+            // 就业：已交棒（6 待就业 / 7 已就业）且 employment_teacher 是我
             q.orWhere((w: any) =>
-              w.whereIn('employment_teacher_id', ids).andWhere('class_status', ClassStatus.GRADUATED),
+              w.whereIn('employment_teacher_id', ids).andWhereIn('class_status', HANDED_OVER),
             );
           }
         })
@@ -138,7 +158,24 @@ export async function visibleClassIds(
       .andWhere((q: any) => {
         q.whereIn('head_teacher_id', ids)
           .orWhereIn('teacher_id', ids)
-          .orWhereIn('assistant_id', ids);
+          .orWhereIn('assistant_id', ids)
+          /**
+           * ★ 2026-10-23：**自己建的班也算「我的班」**
+           *
+           * 【用户反馈】班主任点「新增班级」→ 提示「班级已创建」→ 列表什么都没有，
+           *   以为数据丢了（截图里整页 0 条）。
+           *
+           * 【根因】建班表单的「班主任」空着（或选了别的老师）时，
+           *   这一行三个责任人列都不等于当前账号 → 本函数返回的可见集合里没有它
+           *   → 列表 / 统计卡片都按「查不到」处理，直接消失。
+           *   但这一行**明明就是本人刚创建的**，从产品上讲不该看不见。
+           *
+           * 【口径】班主任 / 教员 / 助教三者任一是我 → 可见；
+           *   另外「创建人是我」也可见（新建后立刻能管，不用先把自己设成班主任）。
+           *   只加在初高 / 大学这一侧：实训、就业的责任人随阶段交棒，
+           *   再按「创建人」放行会让已交棒的班重新出现在上一阶段页签里。
+           */
+          .orWhereIn('create_by', ids);
       })
       .select('id')) as Array<{ id: string }>;
     return rows.map((r) => String(r.id));

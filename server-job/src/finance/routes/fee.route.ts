@@ -237,6 +237,34 @@ const addSchema = z.object({
    */
   amount: z.coerce.number().int().positive('金额必须大于 0（单位：分）').optional(),
   /**
+   * ★ 2026-10-26 应缴金额（分）。不传时按「该部门该费用标准价」自动补，
+   * 拿不到标准则视为无优惠（应缴=实缴）。优惠 = 应缴 - 实缴，由服务层算。
+   */
+  standardAmount: z.coerce.number().int().positive().optional(),
+  /**
+   * ★ 2026-10-26 分项明细（一次缴清多类费用时由咨询/教务侧传过来）
+   *
+   * 【为什么必须收这个字段】
+   *   咨询侧 2026-10-19 就一直在传 `itemDetail`（学费/餐费/住宿各多少），
+   *   但财务这里的 schema 从来没定义过它 → zod 默认 strip → 落库时 item_detail 为空。
+   *   后果（用户 2026-10-26 实测反馈）：
+   *     · 合并单在财务只剩一个 fee_type（学费），账单明细里整笔钱全进「学费缴费记录」；
+   *     · 餐费/住宿/杂费组永远是空的；
+   *     · 详情「缴费类型」只显示学费，看不到包含哪些。
+   *   收下来之后，核对入账会按分项拆成多条账单（见 verifyFee）。
+   */
+  itemDetail: z
+    .array(
+      z.object({
+        feeType: z.coerce.number().int().min(1).max(8),
+        feeTypeName: z.string().optional(),
+        amount: z.coerce.number().int().nonnegative(),
+        standardAmount: z.coerce.number().int().nonnegative().optional(),
+        discount: z.coerce.number().int().nonnegative().optional(),
+      }),
+    )
+    .optional(),
+  /**
    * 来源模块（规则3）。不传时按费用类型自动推断：
    *   学费/试学费 → 咨询；餐费/住宿费/保险费 → 教务
    * 传了但和费用类型不匹配会被拒绝。

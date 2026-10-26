@@ -114,6 +114,12 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
      *   现在：方案阶段名优先，字典名兜底（老班级没绑方案时才用字典）。
      */
     phaseName: phase === null ? '' : (str(r.scheme_stage_name) || PHASE_NAME[phase] || ''),
+    // ★ 2026-10-26 合并取对方：阶段名口径按上面这行（方案 > 字典）。
+    //   但 dto.ClassRow 的方案三列仍是必填（前端【编辑班级】要回显阶段方案下拉），
+    //   这里只把三列原样下发，不参与任何筛选/显示判断。
+    schemeId: str(r.scheme_id),
+    schemeStageId: str(r.scheme_stage_id),
+    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -170,7 +176,10 @@ async function scopedClassIds(user: any): Promise<string[] | null> {
     .andWhere((b: any) => {
       b.whereIn('head_teacher_id', uids)
         .orWhereIn('teacher_id', uids)
-        .orWhereIn('assistant_id', uids);
+        .orWhereIn('assistant_id', uids)
+        /* ★ 2026-10-23：同 shared/dataScope.ts —— 自己建的班也算「我的班」，
+         *   否则新建完（班主任没填自己）列表里立刻消失。 */
+        .orWhereIn('create_by', uids);
     })
     .select('id')) as Array<{ id: string }>;
   return rows.map((r) => String(r.id));
@@ -279,7 +288,8 @@ export const repo: ClassRepo = {
     /* ★ 2026-10-22 与大学部同一口径：只选了方案阶段时按 sort_no 推导阶段码
      *   （初高方案：预科 101 / 初中部1~3期 102~104 / 高中部1~3期 105~107） */
     const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
-    set(phaseCodeCol(), body.phaseCode ?? derivedPhaseCode);
+    const phaseCode = body.phaseCode ?? derivedPhaseCode;
+    set(phaseCodeCol(), phaseCode);
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
     set('scheme_id', body.schemeId);
     set('scheme_stage_id', body.schemeStageId);
@@ -298,7 +308,12 @@ export const repo: ClassRepo = {
     set('open_date', body.openDate);
     set('remark', body.remark);
     // ★ 2026-10-21：班级编号（三部门统一必填 + 同表唯一）
-    set('class_code', body.classCode === undefined ? undefined : String(body.classCode ?? '').trim());
+    // ★ 2026-10-23：「班级编号只能新建班级可创建，编辑班级里的不可更改」
+    //   → 编辑（有 body.id）时忽略传上来的编号，库里保持创建时的值。
+    set(
+      'class_code',
+      body.id || body.classCode === undefined ? undefined : String(body.classCode ?? '').trim(),
+    );
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
 
     /**
@@ -307,10 +322,10 @@ export const repo: ClassRepo = {
      * 原来这里无条件要求「编辑必填」，但班级交接（service.ts handover）也走 save()，
      * 它的 saveBody 不带 classCode → 交接会被「班级编号必填」拦死。
      */
-    if (body.classCode !== undefined) {
+    if (body.classCode !== undefined && !body.id) {
       const code = String(body.classCode ?? '').trim();
       if (!code) throw new Error('班级编号必填');
-      await assertClassCodeUnique(code, body.id);
+      await assertClassCodeUnique(code);
     }
 
     if (body.id) {

@@ -174,8 +174,25 @@ export interface FeeListItem {
   feeType: FeeType;
   /** 双返回 */
   feeTypeName: string;
+  /**
+   * ★ 2026-10-26 合并单的全部费用类型名（用户要求「缴费类型全写上」）
+   *
+   * 合并单的 `feeType` 只是第一项（学费），只看它会以为整笔都是学费。
+   * 这里给全（如 ['学费','餐费','住宿费']），单项单返回 undefined（前端继续用 feeTypeName）。
+   * 筛选也按分项匹配，所以「缴费类型 = 餐费」能筛到包含餐费的合并单。
+   */
+  feeTypeNames?: string[];
   /** 金额（单位：分） */
   amount: number;
+  /**
+   * ★ 2026-10-26 应缴金额（分）—— 该费用的标准价
+   *
+   * 与 `amount`（实缴）配对，差额就是优惠。历史单据在迁移里回填成 = amount，
+   * 所以老单的优惠显示 0。前端列表/详情按「应缴 / 实缴 / 优惠」三列展示。
+   */
+  standardAmount?: number;
+  /** ★ 2026-10-26 优惠金额（分）= 应缴 - 实缴，最小为 0 */
+  discount?: number;
   /** 来源模块（谁是这笔费用的发起方） */
   sourceModule?: SourceModule;
   /** 双返回 */
@@ -729,8 +746,15 @@ export type BillFeeGroupKey = 'tuition' | 'meal' | 'dorm' | 'insurance';
 
 /** 某一类费用下的单笔缴费记录 */
 export interface BillFeeRecord {
-  /** 账单号 ZD20260001 */
+  /** 账单号 ZD20260001（合并单拆出来的带 -2 / -3 后缀） */
   billNo: string;
+  /**
+   * ★ 2026-10-26 对应的缴费单 id（t_finance_fee.id）
+   *
+   * 账单明细点开弹窗后，点某一笔要能弹出那张缴费单 —— 就是靠这个 id 查 /fee/detail。
+   * 合并单拆账后多条账单共用同一个 sourceId（它们本来就来自同一笔缴费）。
+   */
+  sourceId?: string;
   /** 费用类型名（如「正式学费」「试学学费」「餐费」） */
   feeTypeName: string;
   /** 金额（单位：分） */
@@ -757,8 +781,31 @@ export interface BillFeeGroup {
   amount: number;
   /** 最近一次缴费日期 */
   latestDate?: string;
+  /**
+   * ★ 2026-10-26 到期日（仅 餐费 / 住宿费 / 保险费 有）
+   *
+   * 取该组「最晚的一笔到期日」：续费是接续计算的，所以最大值就是当前有效期到哪天。
+   * 前端挂在分组标题旁，不需要展开明细就能看到。
+   */
+  expireDate?: string;
   /** 该组每笔记录（按日期倒序） */
   records: BillFeeRecord[];
+}
+
+/**
+ * ★ 2026-10-26 班级维度汇总（账单明细筛选某个班级时返回）
+ *
+ * 用户口径：「筛选出班级之后增加查看所有的费用的金额总额」+ 按费用类型拆分。
+ * 统计的是**该班全部学员的全部缴费账单**（不受分页影响）。
+ */
+export interface BillClassSummary {
+  className: string;
+  /** 该班有缴费记录的学员数 */
+  studentCount: number;
+  /** 全班缴费总额（分） */
+  totalAmount: number;
+  /** 按五类拆分的金额与笔数 */
+  groups: { key: string; name: string; amount: number; count: number }[];
 }
 
 /** 账单明细 · 一行 = 一个学员 */

@@ -22,6 +22,7 @@ import { BizCode, StudentStatus, STUDENT_STATUS_NAME, DEPT_NAME } from 'shared-t
 import { db } from '../utils/db';
 import { BizError } from '../middleware/errorHandler';
 import { toDateStr, toTimeStr, freezeFeeByStudent, FEE_TABLE, isTempStudentNo } from './fee.service';
+import { lookupArchive } from './student-archive';
 
 export const FREEZE_TABLE = 't_finance_freeze';
 
@@ -139,20 +140,32 @@ export async function syncStudentStatus(
   const now = new Date();
 
   // ---- 查学生基础信息（拿姓名/班级/学号，用于冗余存储）----
-  // ⚠️ 跨模块取数失败不能白屏：拉不到就允许调用方只传 studentId
-  let stu: any = null;
+  /**
+   * ★ 2026-10-25 改走 lookupArchive
+   *
+   * 原来直连 `t_student_base`（财务库一张基本为空的示例表），
+   * 拿到的永远是 null，冻结记录里学生姓名/学号/班级会全空。
+   */
+  let arch: { no: string; name: string; classId: string | null; className: string | null; deptCode: number | null } | null = null;
   try {
-    stu = await db('t_student_base').where({ id: studentId, is_deleted: false }).first();
+    const lookup = await lookupArchive([studentId], []);
+    const a = lookup.byId.get(String(studentId)) || lookup.bySource.get(String(studentId)) || null;
+    if (a) {
+      arch = { no: a.no, name: a.name, classId: a.classId, className: a.className, deptCode: a.deptCode };
+    }
   } catch {
-    stu = null;
+    arch = null;
   }
 
-  // ---- 快照兜底顺序：学生主数据 → 请求体传入 → 缴费单里的冗余信息 ----
-  // 最后这层兜底很关键：t_student_base 是各模块同步过来的示例表，
-  // 经常是空的，但缴费单里本来就存着学生姓名/班级（冗余字段），
-  // 从这里取能保证冻结记录不会是「无名氏」。
+  // ---- 快照兜底顺序：学籍档案 → 请求体传入 → 缴费单里的冗余信息 ----
+  /**
+   * ⚠️ 2026-10-25：缴费单兜底不能只在「连姓名都没有」时才查。
+   *    教学侧保存学生时只带 studentName（不带学号/班级），
+   *    老逻辑一看有姓名就跳过缴费单 → 学号、班级永远是空。
+   *    改成「学号或班级缺一个就查一次」，一次查询成本很低。
+   */
   let feeSnapshot: any = null;
-  if (!stu?.student_name && !body.studentName) {
+  if (!arch?.no || !arch?.className || !body.studentNo || !body.className) {
     try {
       feeSnapshot = await db(FEE_TABLE)
         .where({ student_id: studentId, is_deleted: false })
@@ -164,14 +177,14 @@ export async function syncStudentStatus(
 
   const snapshot = {
     student_no:
-      stu?.student_no ?? body.studentNo ?? feeSnapshot?.student_no ?? '',
+      arch?.no || body.studentNo || feeSnapshot?.student_no || '',
     student_name:
-      stu?.student_name ?? body.studentName ?? feeSnapshot?.student_name ?? '',
-    class_id: stu?.class_id ?? body.classId ?? feeSnapshot?.class_id ?? null,
+      arch?.name || body.studentName || feeSnapshot?.student_name || '',
+    class_id: arch?.classId ?? body.classId ?? feeSnapshot?.class_id ?? null,
     class_name:
-      stu?.class_name ?? body.className ?? feeSnapshot?.class_name ?? null,
+      arch?.className ?? body.className ?? feeSnapshot?.class_name ?? null,
     dept_code:
-      stu?.dept_code ?? body.deptCode ?? feeSnapshot?.dept_code ?? null,
+      arch?.deptCode ?? body.deptCode ?? feeSnapshot?.dept_code ?? null,
   };
 
   // ================= 休学 → 冻结 =================
@@ -303,11 +316,25 @@ export async function manualFreeze(
     throw new BizError(BizCode.PARAM_ERROR, '该学生已处于冻结中，请勿重复冻结');
   }
 
-  let stu: any = null;
+  /**
+   * ★ 2026-10-24 取学籍信息要走 lookupArchive，不能直连 t_student_base
+   *
+   * `t_student_base` 在财务库只是「各模块同步过来的示例表」，生产上基本是空的；
+   * 直连它拿到的永远是 null → 落库的 student_no / student_name / class_* 全是空，
+   * 冻结列表上就只剩一个 UUID（用户反馈过同类问题：财务看不到学生姓名/班级）。
+   *
+   * lookupArchive 依次查 sms_common.t_uni_student（统一表，唯一真源）、
+   * 初高/大学老表、sms_job 示例表，任一命中即可。
+   */
+  let arch: { no: string; name: string; classId: string | null; className: string | null; deptCode: number | null } | null = null;
   try {
-    stu = await db('t_student_base').where({ id: studentId, is_deleted: false }).first();
+    const lookup = await lookupArchive([studentId], []);
+    const a = lookup.byId.get(String(studentId)) || lookup.bySource.get(String(studentId)) || null;
+    if (a) {
+      arch = { no: a.no, name: a.name, classId: a.classId, className: a.className, deptCode: a.deptCode };
+    }
   } catch {
-    stu = null;
+    arch = null;
   }
 
   const id = randomUUID();
@@ -322,13 +349,13 @@ export async function manualFreeze(
     create_by: operator.userId,
     is_deleted: false,
     student_id: studentId,
-    student_no: stu?.student_no ?? '',
-    student_name: stu?.student_name ?? '',
-    class_id: stu?.class_id ?? null,
-    class_name: stu?.class_name ?? null,
-    dept_code: stu?.dept_code ?? null,
+    student_no: arch?.no ?? '',
+    student_name: arch?.name ?? '',
+    class_id: arch?.classId ?? null,
+    class_name: arch?.className ?? null,
+    dept_code: arch?.deptCode ?? null,
     // 手工冻结时学生不一定休学，记录其当前状态
-    student_status: stu?.student_status ?? StudentStatus.STUDYING,
+    student_status: StudentStatus.STUDYING,
     freeze_scope: scope,
     meal_from: scopeHas(scope, '餐费') ? freezeDate : null,
     meal_expire: scopeHas(scope, '餐费') ? `${year}-12-31` : null,

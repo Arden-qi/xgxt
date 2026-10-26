@@ -309,6 +309,17 @@ export const financeClient = {
     refundReason: string;
     /** 来源类型：1 咨询 / 2 就业 */
     sourceType?: number;
+    /**
+     * ★ 2026-10-26 上游单标识（幂等 + 出款后回写用）
+     *
+     * 【为什么必须传】财务的出款回写靠这三个字段找到上游退费单：
+     *   `source_module + source_refund_id` 定位到咨询这张单，再改学生状态。
+     *   原来没传 → 财务退费单的这三列全是 NULL →
+     *   **出款成功后咨询学生一直停在「退费·待财务打款」**（实测复现）。
+     */
+    sourceModule?: string;
+    sourceStage?: string;
+    sourceRefundId?: string;
     remark?: string;
   }): Promise<{ id: string; orderNo?: string }> {
     return request<{ id: string; orderNo?: string }>('/api/finance/refund/apply', {

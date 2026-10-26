@@ -1019,6 +1019,15 @@ export interface StudentListQuery {
    * 学生表没有方案字段，只能按**所在班级**绑定的 scheme_stage_id 关联。
    */
   schemeStageId?: string;
+  /**
+   * ★ 2026-10-25：上面那个 id 解析出来的**阶段码**（service 层预解析后带回仓储）。
+   *
+   *   只按「班级 scheme_stage_id」匹配会漏掉两批数据：
+   *   ① 班级只存了阶段码（方案改造前建的班，scheme_stage_id 为空）；
+   *   ② 学生自己的 stage_code 有值但班级没绑方案。
+   *   实测 19 个班只有 5 个有 scheme_stage_id → 用户选任何阶段都查不到数据。
+   */
+  schemeStageCode?: number;
   /** 只看「班级没绑阶段方案」的学生（含没有班级的） */
   noScheme?: boolean;
   keyword?: string;
@@ -1397,9 +1406,16 @@ export interface ClassRow {
   phaseCode: number | null;
   phaseName: string;
 
-  /* ★ 2026-10-20：原「阶段方案三字段」schemeId / schemeStageId / schemeStageName 已删除 ——
-   *   它们指向 t_class_stage_scheme 那套从未建表的实现，三张班级表里也从来没有这三列
-   *   （写进去会 Unknown column）。阶段只落 phase_code，方案名不下发。 */
+  /* ★ 2026-10-20：原「阶段方案三字段」曾一度删除 ——
+   *   当时判断 t_class_stage_scheme 那套从未建表，三张班级表也没有这三列。
+   * ★ 2026-10-22 恢复：跟团队主线后迁移已跑、两表建好，三张班级表
+   *   （sms_class.t_class_info / sms_class_jh.t_class_info / sms_job.t_job_class）
+   *   的 scheme 三列都在，建班/改班都会写。
+   * ★ 2026-10-23：列表「阶段」列取 scheme_stage_name 快照（见各 repo 的 mapRow），
+   *   所以这三个字段必须下发，否则「新建时选的阶段」在列表里看不出来。 */
+  schemeId: string | null;
+  schemeStageId: string | null;
+  schemeStageName: string | null;
 
   headTeacherId: string | null;
   headTeacherName: string | null;
@@ -1845,6 +1861,23 @@ export interface DormBedRow {
   gender: number | null;
   checkInDate: string | null;
   className: string | null;
+}
+
+/**
+ * ★ 2026-10-26：班级名下分派到的房间（含床位）
+ * 用于学生档案「新增学生」时的 楼栋号 → 宿舍号 → 床位号 三级联动。
+ */
+export interface DormClassRoomRow {
+  roomId: string;
+  /** 楼栋名（如「1号楼」）—— 联动第一级 */
+  building: string;
+  /** 房号（如「101」） */
+  room: string;
+  /** 宿舍编号「楼栋-房号」（如「1号楼-101」）—— 直接入库 dorm_no */
+  dormNo: string;
+  bedCount: number;
+  occupiedCount: number;
+  beds: DormBedRow[];
 }
 
 /** 在住学生行 */

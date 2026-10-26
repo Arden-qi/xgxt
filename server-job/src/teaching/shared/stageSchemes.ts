@@ -93,9 +93,57 @@ export async function loadSchemeStagesForStage(stage: string): Promise<SchemeSta
  * 所以建班只选了方案阶段时，按 `起始值 + sort_no` 推导：
  *   初高部（dept=1）：预科 101 / 初中部1~3期 102~104 / 高中部1~3期 105~107
  *   大学部（dept=2）：一阶段~六阶段 201~206
- * 两张种子方案的阶段顺序与这套码恰好一一对应。
+ *   就业部（dept=3）：一阶段~三阶段 301~303 / 实训 304（含实训在内按 sort_no 排）
+ * 种子方案的阶段顺序与这套码恰好一一对应。
+ *
+ * ★ 2026-10-23：补 dept=3 —— 之前漏了就业部，就业部班级选完阶段方案后
+ *   `stage_code` 落空（列表「阶段」列显示「—」），只能靠前端不传 phaseCode 的兜底 1。
  */
-export const FIRST_PHASE_OF_DEPT: Record<number, number> = { 1: 101, 2: 201 };
+export const FIRST_PHASE_OF_DEPT: Record<number, number> = { 1: 101, 2: 201, 3: 301 };
+
+/**
+ * 由「部门 + 阶段码」反查阶段方案里的阶段（id + 名称）
+ *
+ * 【为什么需要】
+ *   班级列表的「阶段」列读的是班级上的 `scheme_stage_name` 快照。表单只传
+ *   `phaseCode`（阶段码）时快照是空的 → 列表显示「—」，用户看到的就是
+ *   「新建班级选的阶段没有跟随」。
+ *   这里按 (dept_code, stage_code) 反查方案明细，让 save 时能自动补上三列。
+ *
+ * @returns 查不到（没配方案 / 阶段码不在方案里）→ null，由调用方保留 null
+ */
+export async function findSchemeStageByCode(
+  deptCode: unknown,
+  phaseCode: unknown,
+): Promise<{ id: string; schemeId: string; name: string } | null> {
+  const dept = Number(deptCode);
+  const code = Number(phaseCode);
+  if (!dept || !Number.isFinite(code)) return null;
+  try {
+    const schemes = (await classJhDb(SCHEME_T)
+      .where({ dept_code: dept, is_deleted: false })
+      .select('id')) as Array<Record<string, any>>;
+    if (!schemes.length) return null;
+    const row = (await classJhDb(STAGE_T)
+      .whereIn(
+        'scheme_id',
+        schemes.map((s) => s.id),
+      )
+      .andWhere('stage_code', code)
+      .andWhere('is_deleted', false)
+      .orderBy('sort_no', 'asc')
+      .select('id', 'scheme_id', 'stage_name')
+      .first()) as Record<string, any> | undefined;
+    if (!row?.id) return null;
+    return {
+      id: String(row.id),
+      schemeId: String(row.scheme_id ?? ''),
+      name: String(row.stage_name ?? ''),
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * 由「阶段方案阶段 id」推导阶段码
@@ -125,6 +173,27 @@ export async function resolveSchemeStageName(
       .first()) as Record<string, any> | undefined;
     const name = String(row?.stage_name ?? '').trim();
     return name || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ★ 2026-10-25：阶段明细 id → 阶段码（学生档案「阶段」筛选用）
+ *
+ *   学生档案的阶段筛选前端传的是方案阶段明细 id（`schemeStageId`），
+ *   而学生/班级表上只有阶段码。这里把它翻成码，仓储再按「学生阶段码 或 班级阶段码」匹配，
+ *   避免只认班级 `scheme_stage_id`（大多班级没写这一列）导致永远查不到。
+ */
+export async function resolveSchemeStageCode(stageId: unknown): Promise<number | null> {
+  const id = String(stageId ?? '').trim();
+  if (!id) return null;
+  try {
+    const row = (await classJhDb(STAGE_T).where({ id, is_deleted: false }).first()) as
+      | Record<string, any>
+      | undefined;
+    const code = Number(row?.stage_code);
+    return Number.isFinite(code) && code > 0 ? code : null;
   } catch {
     return null;
   }

@@ -41,7 +41,19 @@ export function validate(schema: ZodSchema): RequestHandler {
         // 把 zod 的报错翻译成中文
         const first = err.errors[0];
         const field = first.path.join('.');
-        const msg = `${field ? `参数「${field}」` : '参数'}${translateError(first.message, first.code)}`;
+        /**
+         * ★ 2026-10-23：schema 里写了**中文自定义文案**的，直接用它，不再拼「参数「phone」」前缀。
+         *
+         *   原来一律是 `${参数「字段」}${按code硬翻译}`：
+         *     没填手机号 → 字段缺失 → code=invalid_type → 「参数「phone」 类型不正确」，
+         *     用户完全看不出是「手机号没填」。
+         *   现在 schema 写「请填写学生手机号」就原样显示这句话。
+         */
+        const custom = /[\u4e00-\u9fa5]/.test(String(first.message))
+          ? String(first.message).trim()
+          : '';
+        const msg =
+          custom || `${field ? `参数「${field}」` : '参数'}${translateError(first.message, first.code)}`;
 
         const body: ApiResponse<null> = {
           code: BizCode.PARAM_ERROR,
@@ -58,6 +70,9 @@ export function validate(schema: ZodSchema): RequestHandler {
 
 /** 把 zod 的英文报错翻译成中文 */
 function translateError(message: string, code: string): string {
+  /* 中文自定义文案由调用方优先处理（见上面的 custom 判断），这里只兜底英文/无文案的情况 */
+  if (/[\u4e00-\u9fa5]/.test(message)) return ` ${message}`;
+
   const map: Record<string, string> = {
     invalid_type: ' 类型不正确',
     too_small: ' 太小或为空',

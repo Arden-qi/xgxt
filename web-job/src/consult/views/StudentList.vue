@@ -22,6 +22,8 @@ import type {
   ConsultStudentLedger,
   // ★ 2026-10-16 缴费单：总金额 + 包含的费用项
   ConsultStudentFeeGroup,
+  // ★ 2026-10-26 招生老师候选（新建学生 · 市场来源）
+  ConsultRecruitTeacher,
 } from 'shared-types/consult';
 import {
   CONSULT_STATE_NAME,
@@ -31,7 +33,12 @@ import {
   FEE_TYPE_NAME,
   FeeType,
   FormalPayMode as FPM,
+  // ★ 2026-10-26 来源渠道：新增「市场来源」，下拉文案统一取字典
+  LeadChannel,
+  LEAD_CHANNEL_NAME,
 } from 'shared-types/consult';
+// ★ 2026-10-22 学历下拉：与班主任建档共用同一份选项（初中/高中/专科/本科/研究生）
+import { EDUCATION_OPTIONS } from 'shared-types';
 import {
   fetchStudentList,
   fetchStudentDetail,
@@ -41,6 +48,8 @@ import {
   claimStudent,
   recordLoss,
   fetchConsultants,
+  // ★ 2026-10-26 招生老师下拉（新建学生 · 来源=市场来源）
+  fetchRecruitTeachers,
   toFormal,
   fetchSupplementPlan,
   submitInterviewResult as submitInterviewResultApi,
@@ -277,21 +286,81 @@ async function refreshDetail() {
 }
 
 /* ---------- 新建学生 ---------- */
+
+/**
+ * 来源渠道下拉
+ *
+ * ★ 2026-10-26 用户口径：「来源加一个市场来源」
+ *   选项顺序沿用字典口径（1/2/3/4/5/6/9），「市场来源」排在「其他」之前。
+ *   ⚠️ 文案以 shared-types 的 LEAD_CHANNEL_NAME 为准，这里只是给下拉用的顺序表。
+ */
+const SOURCE_CHANNEL_OPTIONS = [
+  { value: LeadChannel.HOME_VISIT, label: LEAD_CHANNEL_NAME[LeadChannel.HOME_VISIT] },
+  { value: LeadChannel.ONLINE, label: LEAD_CHANNEL_NAME[LeadChannel.ONLINE] },
+  { value: LeadChannel.REFERRAL, label: LEAD_CHANNEL_NAME[LeadChannel.REFERRAL] },
+  { value: LeadChannel.WALK_IN, label: LEAD_CHANNEL_NAME[LeadChannel.WALK_IN] },
+  { value: LeadChannel.PHONE, label: LEAD_CHANNEL_NAME[LeadChannel.PHONE] },
+  { value: LeadChannel.MARKET, label: LEAD_CHANNEL_NAME[LeadChannel.MARKET] },
+  { value: LeadChannel.OTHER, label: LEAD_CHANNEL_NAME[LeadChannel.OTHER] },
+];
+
+/** 「市场来源」渠道码（只有它需要选招生老师） */
+const LEAD_MARKET = LeadChannel.MARKET;
+
 const newVisible = ref(false);
 const newForm = ref({
   studentName: '',
   gender: 1,
+  /** ★ 学生手机号：11 位、全库唯一（后端查重） */
   phone: '',
   /** ★ 2026-10-22 用户口径：「部门」换成「年龄」（部门在分配班级时才定） */
   age: undefined as number | undefined,
-  sourceChannel: 1,
-  sourceRemark: '',
-  /** ★ 2026-10-15 来源=转介绍时填写的招生老师信息 */
+  /** ★ 2026-10-22 新增「学历」 */
+  education: '' as string,
+  sourceChannel: LeadChannel.HOME_VISIT as number,
+  /**
+   * ★ 2026-10-26 招生老师：仅「来源 = 市场来源」时填
+   *   referrerName 存姓名（下拉选中的值，后端按姓名落库）
+   *   referrerPhone 由选中的老师带出（只读，不用手填）
+   */
   referrerName: '',
   referrerPhone: '',
+  /** ★ 2026-10-26 家长联系人：关系（1父亲 2母亲）+ 姓名 */
+  parentRelation: 1 as number,
   parentContact: '',
+  /** ★ 家长电话：不去重，可与他人重复 */
   parentPhone: '',
+  // ⚠️ 2026-10-26：用户口径「去掉那个来源备注」→ sourceRemark 已从表单移除
 });
+
+/** 招生老师候选（打开弹窗时拉一次；接口失败就空列表，不挡建学生） */
+const recruitTeachers = ref<ConsultRecruitTeacher[]>([]);
+async function loadRecruitTeachers() {
+  try {
+    recruitTeachers.value = await fetchRecruitTeachers();
+  } catch {
+    recruitTeachers.value = [];
+  }
+}
+
+/** 学生手机号：只留数字，最多 11 位 */
+function onStudentPhoneInput(v: string) {
+  newForm.value.phone = String(v || '').replace(/\D/g, '').slice(0, 11);
+}
+
+/** 来源切换：离开「市场来源」时把招生老师清掉（避免残留脏数据） */
+function onSourceChannelChange(v: number) {
+  if (v !== LEAD_MARKET) {
+    newForm.value.referrerName = '';
+    newForm.value.referrerPhone = '';
+  }
+}
+
+/** 选中招生老师 → 手机号一起带出（用户口径：「手机号是一起的」） */
+function onRecruitTeacherChange(name: string) {
+  const hit = recruitTeachers.value.find((t) => t.name === name);
+  newForm.value.referrerPhone = hit?.phone || '';
+}
 
 function openNew() {
   newForm.value = {
@@ -299,43 +368,89 @@ function openNew() {
     gender: 1,
     phone: '',
     age: undefined,
-    sourceChannel: 1,
-    sourceRemark: '',
+    education: '',
+    sourceChannel: LeadChannel.HOME_VISIT,
     referrerName: '',
     referrerPhone: '',
+    parentRelation: 1,
     parentContact: '',
     parentPhone: '',
   };
   newVisible.value = true;
+  // 招生老师下拉数据（失败也不影响填写其他字段）
+  if (!recruitTeachers.value.length) loadRecruitTeachers();
 }
 
+const newSubmitting = ref(false);
+
 async function submitNew() {
-  if (!newForm.value.studentName.trim()) {
+  const f = newForm.value;
+
+  /* ---- 必填校验（对应表单上的星号）---- */
+  if (!f.studentName.trim()) {
     ElMessage.warning('请填写学生姓名');
     return;
   }
-  const f = newForm.value;
-  // ★ 2026-10-15 来源=转介绍时招生老师姓名必填
-  if (f.sourceChannel === 3 && !f.referrerName.trim()) {
-    ElMessage.warning('来源为「转介绍」时，请填写招生老师姓名');
+  // ★ 手机号必填（与后端 addSchema 的 required_error 口径一致，文案也统一）
+  if (!f.phone.trim()) {
+    ElMessage.warning('请填写学生手机号');
     return;
   }
-  const res = await addStudent({
-    studentName: f.studentName.trim(),
-    gender: f.gender,
-    phone: f.phone || undefined,
-    // ★ 2026-10-22：「部门」换成「年龄」（部门改为分配班级时选学部）
-    age: f.age ?? undefined,
-    sourceChannel: f.sourceChannel,
-    sourceRemark: f.sourceRemark || undefined,
-    referrerName: f.sourceChannel === 3 ? f.referrerName.trim() || undefined : undefined,
-    referrerPhone: f.sourceChannel === 3 ? f.referrerPhone.trim() || undefined : undefined,
-    parentContact: f.parentContact || undefined,
-    parentPhone: f.parentPhone || undefined,
-  });
-  ElMessage.success('新建成功，状态为「待分配」');
-  newVisible.value = false;
-  load();
+  // ★ 手机号 11 位（不需要校验重复，重复由后端拦并提示是哪位学生占用）
+  if (!/^1[3-9]\d{9}$/.test(f.phone)) {
+    ElMessage.warning('学生手机号需为 11 位手机号（1 开头的 11 位数字）');
+    return;
+  }
+  if (!f.sourceChannel) {
+    ElMessage.warning('请选择来源');
+    return;
+  }
+  // ★ 只有「市场来源」需要招生老师
+  if (f.sourceChannel === LEAD_MARKET && !f.referrerName.trim()) {
+    ElMessage.warning('来源为「市场来源」时，请选择招生老师');
+    return;
+  }
+  if (!f.parentContact.trim()) {
+    ElMessage.warning('请填写家长联系人姓名');
+    return;
+  }
+  if (!f.parentPhone.trim()) {
+    ElMessage.warning('请填写家长电话');
+    return;
+  }
+  if (!/^[0-9-]{6,20}$/.test(f.parentPhone.trim())) {
+    ElMessage.warning('家长电话只能填数字或短横线（6~20 位）');
+    return;
+  }
+
+  const isMarket = f.sourceChannel === LEAD_MARKET;
+  newSubmitting.value = true;
+  try {
+    await addStudent({
+      studentName: f.studentName.trim(),
+      gender: f.gender,
+      phone: f.phone,
+      // ★ 2026-10-22：「部门」换成「年龄」（部门改为分配班级时选学部）
+      age: f.age ?? undefined,
+      // ★ 2026-10-22 学历（不填则不传）
+      education: f.education || undefined,
+      sourceChannel: f.sourceChannel,
+      // ★ 2026-10-26 招生老师只在「市场来源」传（转介绍不再有招生老师）
+      referrerName: isMarket ? f.referrerName.trim() || undefined : undefined,
+      referrerPhone: isMarket ? f.referrerPhone.trim() || undefined : undefined,
+      parentContact: f.parentContact.trim(),
+      parentRelation: f.parentRelation,
+      // ⚠️ 家长电话不去重：后端也只存不查
+      parentPhone: f.parentPhone.trim(),
+    });
+    ElMessage.success('新建成功，状态为「待分配」');
+    newVisible.value = false;
+    load();
+  } catch {
+    // 错误提示已由 http 拦截器统一弹出（含「手机号已被某某使用」）
+  } finally {
+    newSubmitting.value = false;
+  }
 }
 
 /* ---------- 分配 / 领取 ---------- */
@@ -857,13 +972,14 @@ function actionsOf(row: ConsultStudentListItem | ConsultStudent) {
     /** ★ 2026-10-20：已分配给他人 → 经理也不能替人面试 */
     canInterview: s === CS.WAIT_INTERVIEW && isMyStudent(row),
     /**
-     * ★ 2026-10-20 分配班级（分班 + 入班合并）
+     * ★ 2026-10-22 分配班级（分班 + 入班合并）
      *
-     * 缴费到账（待分班）就可以分配；已经试学 / 缴费中 / 正式的学生
-     * 如果之前在「待接收」里没落地，也允许补分配一次（后端幂等）。
-     * 两个学段一律推到「待接收学员」，等对应班主任接收后才建档入班。
+     * 只有「待分班(4)」才需要这个动作。试学中(5) / 缴费中(6) / 正式在读(7)
+     * 说明人已经在班里了 —— 原来这里把它们也留进来（配 canEnrollOf 灰掉），
+     * 结果是「按钮在、但永远点不动」，用户看到的就是「已分班还能看到分配班级」。
+     * 现在直接不渲染；要换班请走学管的转班流程。
      */
-    canEnroll: [CS.TRIAL_WAIT_CLASS, CS.TRIAL, CS.FULL_FEE_PENDING, CS.FORMAL].includes(s),
+    canEnroll: s === CS.TRIAL_WAIT_CLASS,
     canToFormal: s === CS.TRIAL || s === CS.FULL_FEE_PENDING,
     /**
      * ★ 2026-10-08：「未报名」不再是待面试阶段的独立按钮 ——
@@ -871,13 +987,20 @@ function actionsOf(row: ConsultStudentListItem | ConsultStudent) {
      * 未报名·待跟进状态 → 显示「取消未报名」。
      */
     canCancelNotEnroll: s === CS.NOT_ENROLLED,
-    /** 可记录流失：已经进入试学/缴费阶段才谈得上「流失」 */
-    canLoss: [
-      CS.TRIAL_FEE_PENDING,
-      CS.TRIAL_WAIT_CLASS,
-      CS.TRIAL,
-      CS.FULL_FEE_PENDING,
-    ].includes(s),
+    /**
+     * 可记录流失：**只有「咨询中」有，其余一律没有**
+     *
+     * ★ 2026-10-22 用户口径（第二次确认，纠正上一版）：
+     *   「流失不是取消吗？只有咨询中有流失这个操作」
+     *
+     *   流失 = 咨询阶段就不来了（取消报名）。一旦分了班（待分班 / 试学中 /
+     *   正式在读），人要退出走的是**退费**流程，不是「流失」——
+     *   在已入班的学生上记流失，会把在读人数和退费金额都算错。
+     *
+     *   ⚠️ 上一版为了「缴费后还能记流失」把 FORMAL 也放进来了，方向错了，
+     *      这里收回：只留咨询中(3)。
+     */
+    canLoss: s === CS.TRIAL_FEE_PENDING,
   };
 }
 
@@ -1226,8 +1349,8 @@ onMounted(load);
             <el-descriptions-item label="来源">
               {{ detail.sourceChannelName }}{{ detail.sourceRemark ? ' · ' + detail.sourceRemark : '' }}
             </el-descriptions-item>
-            <!-- ★ 2026-10-15 转介绍来源时展示招生老师信息 -->
-            <el-descriptions-item v-if="detail.referrerName" label="转介绍招生老师">
+            <!-- ★ 2026-10-26 招生老师：现在只来自「市场来源」（转介绍不再填） -->
+            <el-descriptions-item v-if="detail.referrerName" label="招生老师">
               {{ detail.referrerName }}{{ detail.referrerPhone ? ' · ' + detail.referrerPhone : '' }}
             </el-descriptions-item>
             <el-descriptions-item label="跟进人">
@@ -1235,7 +1358,13 @@ onMounted(load);
               <span v-if="detail.ownerTitle" class="d-sub">（{{ detail.ownerTitle }}）</span>
             </el-descriptions-item>
             <el-descriptions-item label="建档人">{{ detail.creatorName || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="家长联系人">{{ detail.parentContact || '—' }}</el-descriptions-item>
+            <!-- ★ 2026-10-26 家长联系人 = 姓名（父亲/母亲） -->
+            <el-descriptions-item label="家长联系人">
+              {{ detail.parentContact || '—'
+              }}<span v-if="detail.parentContact && detail.parentRelationName" class="d-sub">
+                （{{ detail.parentRelationName }}）</span
+              >
+            </el-descriptions-item>
             <el-descriptions-item label="家长电话">{{ detail.parentPhone || '—' }}</el-descriptions-item>
             <el-descriptions-item label="班级">{{ detail.className || '未分班' }}</el-descriptions-item>
             <el-descriptions-item label="试学开始">{{ detail.trialStart || '—' }}</el-descriptions-item>
@@ -1544,10 +1673,23 @@ onMounted(load);
     </el-dialog>
 
     <!-- ============ 新建学生 ============ -->
+    <!--
+      ★ 2026-10-26 用户口径（一次改完，逐条对应）：
+        ① 「手机号设定为 11 位去重」        → 学生手机号限 11 位数字，库内唯一（后端已校验）
+        ② 「家长联系人选一下性别，父亲还是母亲」→ 家长联系人 = 关系（父亲/母亲）+ 姓名
+        ③ 「家长电话号不去重，可以重复」      → 家长电话不做任何唯一性校验
+        ④ 「去掉那个来源备注」              → 来源备注整行删除
+        ⑤ 「必填项用星号标出来」            → 姓名 / 手机号 / 来源 / 家长联系人 / 家长电话
+        ⑥ 「来源加一个市场来源，选了市场来源之后选择招生老师，手机号是一起的」
+                                          → 来源多一个「市场来源(6)」，选中后出现招生老师下拉，
+                                            手机号跟着选中的老师带出来（不用手填）
+        ⑦ 「转介绍的话就不用出现招生老师哪个了」
+                                          → 招生老师只在「市场来源」出现，转介绍不再有
+    -->
     <el-dialog v-model="newVisible" title="新建学生" width="560px">
       <el-form label-width="96px">
         <el-form-item label="姓名" required>
-          <el-input v-model="newForm.studentName" placeholder="学生姓名" />
+          <el-input v-model="newForm.studentName" placeholder="学生姓名" maxlength="50" />
         </el-form-item>
         <el-form-item label="性别">
           <el-radio-group v-model="newForm.gender">
@@ -1555,8 +1697,15 @@ onMounted(load);
             <el-radio :value="2">女</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="手机号">
-          <el-input v-model="newForm.phone" placeholder="学生本人手机号" />
+        <el-form-item label="手机号" required>
+          <!-- ★ 11 位、纯数字；同号已有学生时后端会拦（提示是哪个学生占用了） -->
+          <el-input
+            v-model="newForm.phone"
+            placeholder="学生本人 11 位手机号"
+            maxlength="11"
+            clearable
+            @input="onStudentPhoneInput"
+          />
         </el-form-item>
         <el-form-item label="年龄">
           <!-- ★ 2026-10-22 用户口径：原来的「部门」在这里没有意义（部门是分配班级时才选的学部），
@@ -1570,38 +1719,66 @@ onMounted(load);
             style="width: 140px"
           />
         </el-form-item>
-        <el-form-item label="来源">
-          <el-select v-model="newForm.sourceChannel" style="width: 100%">
-            <el-option :value="1" label="家访" />
-            <el-option :value="2" label="线上咨询" />
-            <el-option :value="3" label="转介绍" />
-            <el-option :value="4" label="主动上门" />
-            <el-option :value="5" label="电话咨询" />
-            <el-option :value="9" label="其他" />
+        <el-form-item label="学历">
+          <!-- ★ 2026-10-22 用户口径：「新建学生里边加一个学历」 -->
+          <el-select v-model="newForm.education" placeholder="请选择学历" clearable style="width: 100%">
+            <el-option v-for="e in EDUCATION_OPTIONS" :key="e" :value="e" :label="e" />
           </el-select>
         </el-form-item>
-        <el-form-item label="来源备注">
-          <el-input v-model="newForm.sourceRemark" placeholder="如「青山社区」" />
+        <el-form-item label="来源" required>
+          <el-select v-model="newForm.sourceChannel" style="width: 100%" @change="onSourceChannelChange">
+            <el-option
+              v-for="opt in SOURCE_CHANNEL_OPTIONS"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
+          </el-select>
         </el-form-item>
-        <!-- ★ 2026-10-15 来源=转介绍时：填招生老师姓名 + 手机号 -->
-        <template v-if="newForm.sourceChannel === 3">
-          <el-form-item label="招生老师姓名" required>
-            <el-input v-model="newForm.referrerName" placeholder="转介绍的招生老师姓名" />
-          </el-form-item>
-          <el-form-item label="招生老师手机号">
-            <el-input v-model="newForm.referrerPhone" placeholder="转介绍的招生老师手机号" maxlength="20" />
-          </el-form-item>
-        </template>
-        <el-form-item label="家长联系人">
-          <el-input v-model="newForm.parentContact" placeholder="如「陈建国（父）」" />
+        <!-- ★ 只有「市场来源」才出现招生老师：下拉选人，手机号随人带出 -->
+        <el-form-item v-if="newForm.sourceChannel === LEAD_MARKET" label="招生老师" required>
+          <el-select
+            v-model="newForm.referrerName"
+            placeholder="请选择招生老师"
+            filterable
+            clearable
+            style="width: 100%"
+            @change="onRecruitTeacherChange"
+          >
+            <el-option
+              v-for="t in recruitTeachers"
+              :key="t.id"
+              :value="t.name"
+              :label="t.phone ? `${t.name}（${t.phone}）` : t.name"
+            />
+          </el-select>
         </el-form-item>
-        <el-form-item label="家长电话">
-          <el-input v-model="newForm.parentPhone" />
+        <!-- 招生老师手机号：随选中的老师带出，只读（“手机号是一起的”） -->
+        <el-form-item v-if="newForm.sourceChannel === LEAD_MARKET && newForm.referrerPhone" label="老师手机号">
+          <el-input v-model="newForm.referrerPhone" readonly />
+        </el-form-item>
+        <el-form-item label="家长联系人" required>
+          <div class="parent-row">
+            <el-radio-group v-model="newForm.parentRelation">
+              <el-radio :value="1">父亲</el-radio>
+              <el-radio :value="2">母亲</el-radio>
+            </el-radio-group>
+            <el-input
+              v-model="newForm.parentContact"
+              placeholder="家长姓名"
+              maxlength="20"
+              class="parent-name"
+            />
+          </div>
+        </el-form-item>
+        <el-form-item label="家长电话" required>
+          <!-- ★ 不去重：同一个家长有两个孩子时号码本来就重复 -->
+          <el-input v-model="newForm.parentPhone" placeholder="手机号或座机，可重复" maxlength="20" clearable />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="newVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitNew">确定</el-button>
+        <el-button type="primary" :loading="newSubmitting" @click="submitNew">确定</el-button>
       </template>
     </el-dialog>
 
@@ -2045,6 +2222,22 @@ onMounted(load);
   font-size: 12px;
   color: #A2938E;
   margin-top: 4px;
+}
+
+/*
+ * ★ 2026-10-26 新建学生「家长联系人」一行：关系（父亲/母亲）+ 姓名 同一行
+ *   「家长联系人选一下性别，父亲还是母亲」
+ */
+.parent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.parent-row .parent-name {
+  flex: 1;
+  min-width: 120px;
 }
 
 /* ---- 缴费凭证预览弹窗 ---- */

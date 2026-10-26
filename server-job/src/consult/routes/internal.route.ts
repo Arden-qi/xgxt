@@ -34,6 +34,7 @@ import { changeState } from '../services/state.service';
 import { getSupplementPlan, isFullFeeSettled, advanceStudentStateOnArrival, FEE_ORDER_TABLE } from '../services/fee-order.service';
 import { terminateStudentPlans } from '../services/installment.service';
 import { config } from '../config';
+import { REFUND_TABLE } from '../services/refund.service';
 
 export const consultInternalRouter = Router();
 
@@ -522,9 +523,15 @@ consultInternalRouter.post(
           : '仅缴试学费，状态→试学中（试学结束后由班主任发起补费转正）'),
       extraFields: {
         class_name: className || null,
-        ...(next === ConsultState.TRIAL
-          ? { trial_start: (stu.trial_start as string) || today() }
-          : {}),
+        /**
+         * ★ 2026-10-23 进班日一律落下来（试学 / 直接转正式都写）
+         *
+         * 原来只在「→试学中」时写 trial_start，缴全款直接转「正式在读」的学生
+         * 这里是空的。退费按天算要从进班日起，缺了这一天前端日历没有下限，
+         * 能一路翻到几个月前，试学天数算成 80 天、多扣住宿餐费。
+         * 已经有值的不覆盖（首次进班日才是基准）。
+         */
+        ...(!stu.trial_start ? { trial_start: today() } : {}),
       },
     });
 
@@ -580,5 +587,69 @@ consultInternalRouter.post(
     await advanceStudentStateOnArrival(row);
 
     res.json(ok({ synced: 1, orderNo: row.order_no }, '已推进咨询侧学生状态'));
+  }),
+);
+
+/* ============================================================
+ * 财务退费出款回写（2026-10-26）
+ *
+ * POST /api/consult/student/internal/refund-finance-paid
+ *   header: x-internal-token
+ *   body: { refundId, financeRefundId?, financeRefundNo?, billNo?, payTime?, payMethod? }
+ *
+ * 【为什么要有】
+ *   财务 `payRefund()` 出款成功后会调上游回写，让上游自动变「已退费」。
+ *   教学域早就有 `/api/teaching/refund/internal/finance-paid`，
+ *   但财务的 `notifyUpstreamPaid()` 里第一行是
+ *   `if (row.source_module !== 'teaching') return;` —— 咨询单一直被跳过。
+ *
+ *   实测后果（2026-10-26）：财务出款成功、生成 ZT 账单，
+ *   但咨询学生**永远停在「退费·待财务打款(9)」**，退费单也停在待审批。
+ * ============================================================ */
+consultInternalRouter.post(
+  '/refund-finance-paid',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const refundId = String(b.refundId || b.id || '').trim();
+    if (!refundId) throw new BizError(BizCode.PARAM_ERROR, '缺少退费单 id');
+
+    const row = (await db(REFUND_TABLE).where({ id: refundId, is_deleted: false }).first()) as
+      | Record<string, any>
+      | undefined;
+    if (!row) throw new BizError(BizCode.PARAM_ERROR, '咨询退费单不存在');
+
+    const now = new Date();
+    // 退费单：已退费(6) + 回填财务单号/出款信息
+    await db(REFUND_TABLE).where({ id: refundId }).update({
+      status: 6,
+      finance_refund_id: b.financeRefundId ? String(b.financeRefundId) : row.finance_refund_id,
+      finance_refund_no: b.financeRefundNo ? String(b.financeRefundNo) : row.finance_refund_no,
+      pay_at: b.payTime ? String(b.payTime) : now,
+      pay_method: b.payMethod != null ? Number(b.payMethod) : row.pay_method,
+      pay_ref: b.billNo ? String(b.billNo) : row.pay_ref,
+      update_time: now,
+    });
+
+    // 学生：走 changeState（会写跟进历史 + 同步财务冻结/解冻），落到「流失」
+    let synced = false;
+    try {
+      const r = await changeState(row.consult_student_id, ConsultState.LOST, {
+        byName: '财务出款',
+        byTitle: '系统',
+        historyText: `财务已出款（${b.financeRefundNo || row.finance_refund_no || '退费单'}），学生置为流失`,
+        action: 'refund-paid',
+      } as any);
+      synced = !!r?.synced;
+    } catch (e) {
+      // 状态已是流失等情况不阻断回写
+      synced = false;
+    }
+
+    res.json(
+      ok(
+        { refundId, synced },
+        `财务出款已回写：退费单 ${row.refund_no}，学生状态已更新`,
+      ),
+    );
   }),
 );

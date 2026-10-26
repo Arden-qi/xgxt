@@ -598,6 +598,8 @@ export interface AllocateStudentRow {
   studentName: string;
   gender: number;
   genderName: string;
+  /** ★ 学籍状态（1~11）：退宿申请只列「休学(6) / 退学(7)」 */
+  studentStatus: number | null;
   classId: string | null;
   className: string | null;
   headTeacherName: string | null;
@@ -624,10 +626,13 @@ export async function searchStudents(opts: {
   className?: string;
   keyword?: string;
   limit?: number;
+  /** ★ 学籍状态过滤（如退宿申请只传 [6,7]=休学/退学）；不传 = 不限制 */
+  statuses?: number[];
 }): Promise<AllocateStudentRow[]> {
   const className = str(opts.className).trim();
   const kw = str(opts.keyword).trim();
   const limit = Math.min(Math.max(int(opts.limit) || 50, 1), 100);
+  const statuses = (opts.statuses || []).filter((n) => Number.isFinite(n));
 
   const rows: any[] = [];
   for (const table of STUDENT_SOURCES) {
@@ -643,12 +648,15 @@ export async function searchStudents(opts: {
           b.where('student_name', 'like', `%${kw}%`).orWhere('student_no', 'like', `%${kw}%`);
         });
       }
+      // ★ 退宿申请：只列指定学籍状态的学生（休学/退学）
+      if (statuses.length) qb.whereIn('student_status', statuses);
       const list = (await qb
         .select(
           'id',
           'student_no',
           'student_name',
           'gender',
+          'student_status',
           'class_id',
           'class_name',
           'head_teacher_name',
@@ -738,12 +746,14 @@ export async function searchStudents(opts: {
         room = room || rest.join('-');
       }
       const bedNo = str(bed?.bed_no) || null;
+      const ss = r.student_status;
       return {
         studentId: str(r.id),
         studentNo: str(r.student_no),
         studentName: str(r.student_name),
         gender: g,
         genderName: g === 1 ? '男' : g === 2 ? '女' : '未知',
+        studentStatus: ss === null || ss === undefined ? null : int(ss),
         classId: str(r.class_id) || null,
         className: str(r.class_name) || null,
         headTeacherName: str(r.head_teacher_name) || null,

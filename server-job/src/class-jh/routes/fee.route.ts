@@ -29,6 +29,8 @@ import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
 import { nameOf } from '../utils/enumName';
 import { getNumberSetting } from '../utils/setting';
+// ★ 2026-10-26 催费名单数据源改为「财务账单到期日」
+import { listUrgeByExpire, getUrgeAheadDays } from '../../finance/services/urge.service';
 import { writeOpLog } from '../utils/opLog';
 import { boolFlag } from '../../utils/query';
 import { validate } from '../middleware/validate';
@@ -40,6 +42,9 @@ import { BizError } from '../middleware/errorHandler';
 import { tbl, tblIns, uniUpdCols } from '../../teaching/shared/uniTable';
 // ★ 2026-10-20 批量转交财务：直接复用财务自己的建单服务（凭证唯一性等规则不重复实现）
 import { addFee as financeAddFee } from '../../finance/services/fee.service';
+// ★ 2026-10-23 登记缴费反写财务：与财务 attachVoucher 同口径（待缴 → 已缴），
+//   否则财务侧的待缴单点「核对」会被拦「尚未缴费，无法核对」
+import { pushVoucherToFinance } from '../../finance/utils/voucher-push';
 
 export const feeRouter = Router();
 
@@ -225,16 +230,27 @@ async function fetchStudentContacts(studentIds: Array<string | null | undefined>
       deptCode: number | null;
       phone: string | null;
       parentPhone: string | null;
+      headTeacherName: string | null;
     }
   > = {};
   const ids = [...new Set(studentIds.filter((x): x is string => !!x))];
   for (let i = 0; i < ids.length; i += 500) {
+    /**
+     * ★ 2026-10-26 关键修复：按 **source_id 或 id** 两种键都能命中
+     *
+     * 催费名单的 studentId 来自财务账单 = **咨询学生 id** = 统一表的 `source_id`；
+     * 原来只 `whereIn('id')`（统一表主键），两者不相等 →
+     * 一个都查不到 → 姓名/学号/班级/手机号全部回落到账单快照（或显示「—」）。
+     */
+    const chunk = ids.slice(i, i + 500);
     const rows = await tbl(db, DB, STUDENT_TABLE, STAGE)
       .where('is_deleted', false)
-      .whereIn('id', ids.slice(i, i + 500))
-      .select('id', 'phone', 'parent_phone', 'student_no', 'student_name', 'class_id', 'class_name', 'dept_code');
+      .where((b: any) => {
+        b.whereIn('source_id', chunk).orWhereIn('id', chunk);
+      })
+      .select('id', 'source_id', 'phone', 'parent_phone', 'student_no', 'student_name', 'class_id', 'class_name', 'dept_code');
     for (const r of rows as any[]) {
-      map[r.id] = {
+      const keyMap = {
         studentNo: r.student_no || null,
         studentName: r.student_name || null,
         classId: r.class_id || null,
@@ -242,7 +258,11 @@ async function fetchStudentContacts(studentIds: Array<string | null | undefined>
         deptCode: r.dept_code == null ? null : Number(r.dept_code),
         phone: r.phone || null,
         parentPhone: r.parent_phone || null,
+        headTeacherName: r.head_teacher_name || null,
       };
+      // 两种键都建索引，调用方传哪个都能命中
+      map[r.id] = keyMap;
+      if (r.source_id) map[r.source_id] = keyMap;
     }
   }
   return map;
@@ -271,6 +291,7 @@ function mergeArchive<T extends Record<string, any>>(
       // 联系方式本来就只有档案有，档案没有就是 null（前端显示「—」）
       phone: s.phone,
       parentPhone: s.parentPhone,
+      headTeacherName: s.headTeacherName ?? x.headTeacherName ?? null,
     };
   });
 }
@@ -326,52 +347,94 @@ feeRouter.get(
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof listSchema>;
     const remindDays = await getNumberSetting('feeRemindDays');
-    // ★ 催费列表窗口天数（默认 20）：到期日距今 ≤ N 天才进列表
-    const windowDays = await getNumberSetting('feeUrgeWindowDays');
 
-    const query = tbl(db, DB, FEE_TABLE, STAGE).where('is_deleted', false);
-    // ★ 2026-10-20：班级筛选同时认「单据快照」和「档案现状」（学生换班后仍能筛到）
+    /**
+     * ★ 2026-10-26 用户口径：催费名单**改为以财务账单的到期日为准**
+     *
+     *   原来读 `t_class_fee`（教学台账）的到期日 + 20 天窗口；
+     *   现在直接调财务的催费服务（同进程）：
+     *     · 只看 餐费 / 住宿费 / 保险费（这三类才有到期概念）
+     *     · 到期日来自财务核对入账时按「缴费金额 ÷ 标准」算出的 expire_date
+     *     · 提前 N 天（财务「费用标准 → 催费设置」里配，默认 15）进名单
+     *
+     *   ⚠️ 页面上的其它功能（登记缴费 / 上传凭证 / 导出）保持不变 ——
+     *      所以每行会尽量去 `t_class_fee` 里匹配一条台账行，把 feeId 等字段补上。
+     */
+    const aheadDays = await getUrgeAheadDays();
+    // ★ 2026-10-26 必须按部门过滤，否则三个部门页签会看到同一批人
+    const fin = await listUrgeByExpire(aheadDays, {
+      keyword: q.keyword,
+      feeType: q.feeType,
+      deptCode: 1, // 初高部
+    });
+
+    // ---- 匹配台账行（同学生 + 同费用类型，取缴费日期最新的一条）----
+    const stuIdsAll = [...new Set(fin.rows.map((r) => r.studentId))].filter(Boolean);
+    let ledMap = new Map<string, any>();
+    if (stuIdsAll.length) {
+      const ledRows = await tbl(db, DB, FEE_TABLE, STAGE)
+        .where('is_deleted', false)
+        .whereIn('student_id', stuIdsAll)
+        .select('*');
+      for (const l of ledRows as any[]) {
+        const k = `${l.student_id}::${l.fee_type}`;
+        const prev = ledMap.get(k);
+        if (!prev || String(l.pay_date || '') > String(prev.pay_date || '')) ledMap.set(k, l);
+      }
+    }
+
+    let list: any[] = fin.rows.map((r) => {
+      const l = ledMap.get(`${r.studentId}::${r.feeType}`);
+      // 展示状态：已过到期日 = 逾期，否则待缴（名单里的人都是「该交钱了」）
+      const payStatus = r.remainDays < 0 ? PayStatus.OVERDUE : PayStatus.UNPAID;
+      return {
+        feeId: l?.id ?? '',
+        studentId: r.studentId,
+        studentNo: r.studentNo,
+        studentName: r.studentName,
+        classId: r.classId ?? null,
+        className: r.className ?? null,
+        deptCode: r.deptCode ?? null,
+        phone: null,
+        parentPhone: null,
+        feeType: r.feeType,
+        feeTypeName: r.feeTypeName,
+        feeAmount: Number(l?.fee_amount ?? r.suggestAmount ?? 0),
+        payStatus,
+        payStatusName: nameOf(PAY_STATUS_NAME, payStatus),
+        rawPayStatus: payStatus,
+        payDate: null,
+        expireDate: r.expireDate,
+        remainDays: r.remainDays,
+        // 紧急：剩余天数 ≤ 设置里的提醒天数（默认 7 天）
+        isUrgent: r.remainDays <= remindDays,
+        voucherUrl: l?.voucher_url ?? null,
+        paidAmount: l?.paid_amount ?? null,
+        payMethod: l?.pay_method ?? null,
+        payMethodName: l?.pay_method ? nameOf(PAY_METHOD_NAME, l.pay_method) : null,
+        payRemark: l?.pay_remark ?? null,
+        financeFeeId: l?.finance_fee_id ?? null,
+        regress: null,
+      };
+    });
+
+    // ---- 班级 / 状态 / 紧急 筛选（与原来同口径）----
     if (q.classId) {
       const inClass = await studentIdsInClass(q.classId);
-      query.andWhere((qb) => {
-        qb.where('class_id', q.classId);
-        if (inClass.length) qb.orWhereIn('student_id', inClass);
-      });
+      list = list.filter(
+        (x) => x.classId === q.classId || inClass.includes(x.studentId),
+      );
     }
-    if (q.feeType) query.andWhere('fee_type', q.feeType);
-    // ⚠️ 缴费状态**不能按库里的 pay_status 在 SQL 里筛**：
-    //    逾期是按到期日派生的（见 effectivePayStatus），库里可能还写着「待缴」。
-    //    若在这里 where pay_status=4 → 一条都查不到；where pay_status=1 → 又会把
-    //    显示成「逾期」的行带出来。所以统一等映射完按「展示状态」筛。
-    if (q.startDate) query.andWhere('expire_date', '>=', q.startDate);
-    if (q.endDate) query.andWhere('expire_date', '<=', q.endDate);
-    if (q.keyword) {
-      const hit = await studentIdsByKeyword(q.keyword);
-      query.andWhere((qb) => {
-        qb.where('student_no', 'like', `%${q.keyword}%`).orWhere('student_name', 'like', `%${q.keyword}%`);
-        if (hit.length) qb.orWhereIn('student_id', hit);
-      });
-    }
-
-    // isUrgent 为派生值，先取全量（当前筛选）再内存过滤分页
-    const allRows = await query.clone().select('*').orderBy('expire_date', 'asc');
-    // ★ 窗口过滤：只留到期日在 N 天内（含逾期）的单；到期日为空的单不进列表
-    let list = allRows
-      .map((r: any) => toFee(r, remindDays))
-      .filter((x: any) => withinUrgeWindow(x, windowDays));
-    // ★ 缴费状态按派生后的状态筛（逾期 = 待缴 + 已过到期日，见 effectivePayStatus）
-    if (q.payStatus) list = list.filter((x: any) => x.payStatus === q.payStatus);
-    if (q.isUrgent !== undefined) list = list.filter((x: any) => x.isUrgent === q.isUrgent);
+    if (q.payStatus) list = list.filter((x) => x.payStatus === q.payStatus);
+    if (q.isUrgent !== undefined) list = list.filter((x) => x.isUrgent === q.isUrgent);
 
     const total = list.length;
     const paged = list.slice((q.page - 1) * q.size, q.page * q.size);
 
-    // ★ 催费次数（2026-10-19 用户要求）：按学生聚合催费记录条数（notify 按学生维度催缴，
-    //    只查本页行，一次 groupBy，代价可忽略）
+    // ★ 催费次数（原有逻辑）
     const stuIds = ([...new Set(paged.map((x: any) => x.studentId))].filter(Boolean)) as string[];
     let urgeCountMap: Record<string, number> = {};
     if (stuIds.length) {
-      // ★ 2026-10-23：催费记录也走 tbl()（→ t_uni_notify），原来读老表恒为 0 条
       const counts = await tbl(db, DB, NOTIFY_TABLE, STAGE)
         .where('is_deleted', false)
         .whereIn('student_id', stuIds)
@@ -381,13 +444,12 @@ feeRouter.get(
     }
     const withCount = paged.map((x: any) => ({ ...x, urgeCount: urgeCountMap[x.studentId] || 0 }));
 
-    // ★ 档案信息（2026-10-20）：缴费表不自带手机号，且姓名/班级是开单快照 ——
-    //   按本页学生批量取档案，一次性把联系方式和学生属性都对齐到档案最新值
+    // ★ 档案补全（手机号 / 学号 / 班级以档案为准）
     const contacts = await fetchStudentContacts(withCount.map((x: any) => x.studentId));
     const withContact = mergeArchive(withCount, contacts);
 
-    // 顺带把窗口天数带回前端：列表为什么比台账少，界面上要说得清楚
-    res.json({ ...page(withContact, total, q), urgeWindowDays: windowDays });
+    // 窗口天数带回前端（现在指财务催费的提前天数）
+    res.json({ ...page(withContact, total, q), urgeWindowDays: aheadDays });
   }),
 );
 
@@ -463,8 +525,10 @@ feeRouter.get(
  *   只写副本的话，财务下次把这张单再推一遍会把 voucher_url 覆盖回去，用户登记的凭证就"消失"了。
  *   财务那张单能不能找到，靠 `source_system='finance'` + `source_id` 判断；
  *   演示数据是 `source_system='local'`（没有财务单），就只写副本，不算失败。
- *   ⚠️ 财务侧 pay_status 不在这里流转（那是财务核对流程的事，财务侧还有"凭证唯一性""已核对不许改"等规则），
- *     本接口只负责把凭证和信息登记进去。
+ *   ⚠️ 财务侧 pay_status 只做「待缴(1) → 已缴(2)」这一步推进（2026-10-23 起），
+ *     **不**替财务核对（3 已核对只由财务核对流程写）。原因：财务 `verifyFee()`
+ *     第一步就拦「该缴费单尚未缴费，无法核对」，不推这一步财务根本点不动核对按钮。
+ *     与财务自己 `attachVoucher()`（上游回传凭证）的口径完全一致。
  *
  * 【状态怎么变】
  *   登记了「金额 + 时间 + 截图」就等于报缴了 → 未结清（待缴 1 / 逾期 4）推进成「已缴(2)」，
@@ -552,9 +616,13 @@ feeRouter.post(
     };
     // 未结清（待缴/逾期）→ 已缴；已缴/已核对保持（只补凭证与实缴信息）
     const rawStatus = Number(row.pay_status ?? 1);
-    const nextStatus = rawStatus === PayStatus.UNPAID || rawStatus === PayStatus.OVERDUE
-      ? PayStatus.PAID
-      : rawStatus;
+    const nextStatus =
+      rawStatus === PayStatus.UNPAID ||
+      rawStatus === PayStatus.OVERDUE ||
+      // ★ 2026-10-25：核对失败(6) 重新登记 = 重传凭证 → 回到已缴，等财务再核一遍
+      rawStatus === PayStatus.REJECTED
+        ? PayStatus.PAID
+        : rawStatus;
 
     const updateFields: Record<string, any> = {
       pay_method: body.payMethod,
@@ -568,6 +636,18 @@ feeRouter.post(
     // 现金且没传截图：保留原来的凭证，不要把它清空
     if (voucherUrl) updateFields.voucher_url = voucherUrl;
     /**
+     * ★ 2026-10-25 用户要求：「重新登记也要出现在批量上传到财务列表中，传到财务」。
+     *
+     *   已经上传过财务的单（`finance_fee_id` 有值）重新登记后，原来因为
+     *   「已转交」被永久排除在候选之外，班主任改完金额/换了截图，财务那张单收不到。
+     *   这里把「已上传时间」清掉 = 标记成「有新登记、待上传」，
+     *   候选查询（`teaching/fee/transfer.route.ts`）据此把它重新放回列表。
+     *
+     *   ⚠️ 只清时间、**不清 `finance_fee_id`** —— 那个 id 是「财务那张单是谁」的
+     *      唯一凭据，清掉后转交会再建一张新单，财务就重复记账了。
+     */
+    if (row.finance_fee_id) updateFields.finance_transfer_time = null;
+    /**
      * ★ 2026-10-23：写入必须走 `FEE()`（统一表）+ `uniUpdCols()`。
      *   原来写裸 `db(FEE_TABLE)`（老表），而列表读统一表 →
      *   登记成功后列表里 pay_method 一直是空，前端就不给「重新登记 / 查看」。
@@ -576,23 +656,29 @@ feeRouter.post(
     const patch = await uniUpdCols(db, DB, FEE_TABLE, updateFields);
     await FEE().where({ id: row.id }).update(patch as never);
 
-    /* ---- 4. 财务侧反写（best-effort）：只写凭证/日期/备注，状态交给财务核对流程 ---- */
+    /* ---- 4. 财务侧反写（best-effort）：凭证/日期/备注 + 待缴→已缴，财务才点得动「核对」 ---- */
     let financeSynced = false;
-    if (row.source_system === 'finance' && row.source_id) {
-      try {
-        const finFields: Record<string, any> = {
-          pay_date: body.payDate,
-          remark: body.remark ?? null,
-        };
-        if (voucherUrl) finFields.voucher_url = voucherUrl;
-        const affected = await db('sms_finance.t_finance_fee')
-          .where({ id: String(row.source_id), is_deleted: false })
-          .update(finFields);
-        financeSynced = Number(affected) > 0;
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[fee-payment] 反写财务缴费单失败（不影响本次登记）：', (e as Error).message);
-      }
+    /**
+     * ★ 2026-10-25 修：财务单定位改以 `finance_fee_id` 为准（老口径兜底）。
+     *
+     *   10-23 的 ID 统一之后，新单据只写 `finance_fee_id`，`source_id` 恒为空；
+     *   而这里原来判的是 `source_system === 'finance' && source_id`、
+     *   并且用 `source_id` 当财务单号 → **条件永远不成立、同步从未执行**，
+     *   表现就是「登记缴费后催费变已缴、财务单还是待缴，财务点不动核对」。
+     *   与文件里判重/口径统一（finance_fee_id 为准）保持一致。
+     */
+    const financeFeeId =
+      String((row as any).finance_fee_id ?? '').trim() ||
+      (row.source_system === 'finance' && row.source_id ? String(row.source_id) : '');
+    if (financeFeeId) {
+      const pushed = await pushVoucherToFinance({
+        financeFeeId,
+        voucherUrl: voucherUrl ?? null,
+        payDate: body.payDate,
+        remark: body.remark ?? null,
+        operatorId: operator?.userId ?? null,
+      });
+      financeSynced = pushed.ok;
     }
 
     /* ---- 5. 留痕 ---- */

@@ -15,6 +15,7 @@ import {
   ConsultRole,
   ConsultFeeStatus,
   ConsultRefundStatus,
+  ParentRelation,
 } from './consult-enums';
 import { BaseEntity, PageQuery } from './common';
 
@@ -99,6 +100,13 @@ export interface ConsultStudent extends BaseEntity {
   gender: Gender;
   genderName: string;
   age?: number;
+  /**
+   * ★ 2026-10-22 用户口径：「新建学生里边加一个学历」
+   *
+   * 咨询录入阶段就要掌握学生的最高学历（决定推荐课程/班型），
+   * 推送班级时一并带给接收端（class 模块的 consultPush 已支持 education）。
+   */
+  education?: string;
   phone?: string;
   deptCode?: DeptCode;
   deptName?: string;
@@ -106,11 +114,17 @@ export interface ConsultStudent extends BaseEntity {
   /* ---- 来源与归属 ---- */
   sourceChannel: LeadChannel;
   sourceChannelName: string;
-  /** 来源备注，如「青山社区」 */
+  /** 来源备注，如「青山社区」（★ 2026-10-26 新建表单已去掉该字段，老数据仍可能有值） */
   sourceRemark?: string;
-  /** 转介绍招生老师姓名（来源=转介绍时填） */
+  /**
+   * 招生老师姓名
+   *
+   * ★ 2026-10-26 用户口径：来源 = 市场来源 时，必须选一位招生老师
+   *   （下拉选项来自系统账号，手机号随人一起带出）。
+   *   转介绍不再填招生老师，所以这两个字段现在只服务「市场来源」。
+   */
   referrerName?: string;
-  /** 转介绍招生老师手机号 */
+  /** 招生老师手机号 */
   referrerPhone?: string;
   ownerId?: string;
   ownerName?: string;
@@ -120,7 +134,14 @@ export interface ConsultStudent extends BaseEntity {
 
   /* ---- 基本信息 ---- */
   intendCourse?: string;
+  /** 家长联系人姓名（如「陈建国」） */
   parentContact?: string;
+  /**
+   * ★ 2026-10-26 家长联系人关系：1父亲 2母亲
+   *   用户口径：「家长联系人选一下性别，父亲还是母亲」
+   */
+  parentRelation?: ParentRelation;
+  parentRelationName?: string;
   parentPhone?: string;
 
   /* ---- 档案信息 ---- */
@@ -184,6 +205,21 @@ export interface ConsultStudentQuery extends PageQuery {
   sourceChannel?: LeadChannel;
   intendCourse?: string;
   consultState?: ConsultState;
+  /**
+   * ★ 2026-10-26 排除状态（逗号分隔，如 `8,9,10,12`）
+   *
+   * 用于「不能对这类学生做某件事」的下拉：例如发起退费时，
+   * 退费中（待经理审批 8 / 待财务打款 9）、已退费 10、流失 12 的学生
+   * 不该出现在候选里。传单个 consultState 只能「含」，无法「排除」。
+   */
+  excludeStates?: string;
+  /**
+   * ★ 2026-10-26 排除「缴费中」的学生（传 1 生效）
+   *
+   * 只要该生还有在途收费单（待上传凭证 / 待财务确认 / 已驳回），
+   * 钱就还没确认到账 —— 发起退费的学生下拉要剔掉这类人。
+   */
+  excludePendingFee?: number;
   /** 部门筛选 */
   deptCode?: DeptCode;
   /** 全部字段模糊搜索 */
@@ -194,17 +230,27 @@ export interface ConsultStudentQuery extends PageQuery {
 export interface ConsultStudentSavePayload {
   studentName: string;
   gender: Gender;
-  /** 学生手机号（可留空，后续完善档案时补） */
+  /**
+   * 学生手机号
+   *
+   * ★ 2026-10-26 用户口径：必须是 11 位手机号，且全库唯一（去重校验）。
+   *   家长电话不做去重，可以重复。
+   */
   phone?: string;
   sourceChannel: LeadChannel;
+  /** ★ 2026-10-26 新建表单已去掉「来源备注」，保留字段兼容老调用方 */
   sourceRemark?: string;
-  /** 转介绍招生老师姓名（来源=转介绍时填） */
+  /** 招生老师姓名（来源=市场来源时必填，由下拉带出） */
   referrerName?: string;
-  /** 转介绍招生老师手机号 */
+  /** 招生老师手机号（随选中的招生老师一起带出） */
   referrerPhone?: string;
   /** 意向课程（可留空） */
   intendCourse?: string;
+  /** 家长联系人姓名 */
   parentContact?: string;
+  /** 家长联系人关系 1父亲 2母亲（★ 2026-10-26 新增） */
+  parentRelation?: ParentRelation;
+  /** 家长电话（★ 不去重，允许与别人重复） */
   parentPhone?: string;
   deptCode?: DeptCode;
   /**
@@ -215,6 +261,8 @@ export interface ConsultStudentSavePayload {
    * （见 /enroll-to-class 推送单里的 age 字段）。
    */
   age?: number;
+  /** ★ 2026-10-22 新建学生新增「学历」 */
+  education?: string;
 }
 
 /** 完善档案信息 */
@@ -229,7 +277,25 @@ export interface ConsultStudentExtraPayload {
   remark?: string;
   intendCourse?: string;
   parentContact?: string;
+  /** ★ 2026-10-26 家长关系 1父亲 2母亲 */
+  parentRelation?: ParentRelation;
   parentPhone?: string;
+}
+
+/**
+ * ★ 2026-10-26 招生老师候选（新建学生「来源=市场来源」时的下拉选项）
+ *
+ * 数据源：统一门户账号 × 权限库角色（详见后端 /api/consult/student/recruiters）
+ * 手机号随人一起带出，所以这里必须有 phone。
+ */
+export interface ConsultRecruitTeacher {
+  id: string;
+  /** 姓名 */
+  name: string;
+  /** 手机号（可能为空：老账号没登记电话） */
+  phone?: string;
+  /** 岗位 / 部门，下拉里做副标题 */
+  title?: string;
 }
 
 /* ============================================================
@@ -329,6 +395,18 @@ export interface ConsultFeeOrder {
   /** 财务侧的 payStatus（3=已核对） */
   financePayStatus?: number;
   financePayStatusName?: string;
+  /**
+   * ★ 2026-10-22 用户口径：「财务侧状态和操作人不对」
+   *
+   * 财务核对人 / 核对时间（从财务模块同步回来的快照）。
+   * 财务侧核对完，列表的「操作人 / 操作时间」要显示财务这个人，而不是咨询发起人。
+   */
+  financeVerifiedBy?: string;
+  financeVerifiedTime?: string;
+  /** 列表「操作人」：已核对 → 财务核对人；未核对 → 咨询发起人 */
+  operatorName?: string;
+  /** 列表「操作时间」：已核对 → 财务核对时间；未核对 → 发起时间 */
+  operatorTime?: string;
   /** 财务打回原因 */
   rejectReason?: string;
 
@@ -386,6 +464,13 @@ export interface ConsultFeeOrder {
   dueAmount?: number;
   /** ★ 2026-10-16 整单口径：优惠合计（分） */
   discountAmount?: number;
+  /**
+   * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目」
+   *
+   * 优惠不能是一个来路不明的差额 —— 建单时必须选名目（奖学金 / 活动优惠 / 困难减免…），
+   * 财务核对时才知道这笔少收的钱是怎么批的。落库 t_consult_fee_order.discount_reason。
+   */
+  discountReason?: string;
 
   /* ---------- ★ 2026-10-15 缴费完成后的操作人与时间 ---------- */
 
@@ -624,6 +709,23 @@ export interface ConsultFeeCreatePayload {
    * 正式学费六项仍按标准取，不传本字段。
    */
   amountByType?: Record<number, number>;
+  /**
+   * ★ 2026-10-26 住宿费按月缴纳
+   *
+   * 用户口径：「住宿费一个月 450，默认缴纳 6 个月，可以自己选择缴纳几个月」。
+   * 财务「住宿费」标准价是 6 个月的钱，所以：
+   *   月单价 = 标准价 ÷ 6，应缴 = 月单价 × accommodationMonths。
+   * 不传 = 按 6 个月（默认）。
+   */
+  accommodationMonths?: number;
+  /**
+   * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目，优惠只能优惠学费」
+   *
+   * 有优惠（实缴 < 应缴）时必填：
+   *   - 名目从固定字典里选（见 DISCOUNT_REASONS），不允许留空；
+   *   - 优惠只能从【学费】里扣，其余费用项一律按标准全额收（后端再兜一道）。
+   */
+  discountReason?: string;
   /**
    * ★ 2026-10-19 用户口径：「只要缴费就要有凭证」。
    *    发起收费必须带缴费凭证，建单时直接落库（财务侧即为待核对）。

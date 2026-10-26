@@ -47,6 +47,7 @@ import type {
   DormBedRow,
   DormChangeCreateBody,
   DormChangeRow,
+  DormClassRoomRow,
   DormListQuery,
   DormResidentRow,
   DormRow,
@@ -59,7 +60,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { DormCandidateRow, DormRepo } from './types';
 import { bedNoText } from 'shared-types/class';
 import { hasRole, RoleCode, StudentStatus } from 'shared-types';
-import { tbl, tblIns, upd, uniDb } from '../shared/uniTable';
+import { tbl, tblIns, upd, uniDb, USE_UNI_TABLE, UNI_MAP } from '../shared/uniTable';
 import { visibleClassIds } from '../shared/dataScope';
 import { listBuildingNames as listDormBuildingNames } from './building.service';
 import { loadClassStatus, loadClassStatuses } from './classStatus';
@@ -87,6 +88,26 @@ const STUDENT_SOURCES = [
  *   切读打开时，表名由 UNI_MAP 换成统一表，库名只用于查映射表 → 三学段都落同一张。
  */
 const SRC_DB = 'sms_job';
+
+/**
+ * ★ 2026-10-26：按 id 全学段查房间/床位表（统一表或老表）。
+ *
+ * 【为什么需要】
+ *   `T_DORM()` / `T_BED()` 是「本学段」闭包（makeRepo(stage) 注入 edu_stage，
+ *   见 line 137），会附加 `where edu_stage = 本学段`。
+ *   但班级分派关系 `t_edu_dorm_assignment` 是**跨学段**的 —— 初高班也能分到实训/大学楼
+ *   （注释 line 276 明说：「1号楼是初高房间，也能分给大学班 Q20」）。
+ *   → 用 T_DORM() 按 stage=jh 查 G2601/J2602 分到的 JDORM-1 / fe2dfb4c（都是 job 学段房间）
+ *     会恒为 0，学生档案「新增学生」的楼栋→宿舍→床位联动因此选不出房间。
+ *
+ * 【修法】
+ *   房间 id 已通过分派关系拿到（全局唯一，跨学段），按 id 查**不需要再卡学段**，
+ *   直接落统一表（开关开）或老表（开关关），不附加 edu_stage 过滤。
+ */
+function byIdTable(table: string): any {
+  const uni = UNI_MAP[`${SRC_DB}.${table}`];
+  return USE_UNI_TABLE ? uniDb(uni) : db(table);
+}
 
 
 
@@ -727,6 +748,79 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
      *   联动过滤不会因为「班级表 id 和学生快照 id 不一致」而漏人；
      *   学生表里查不到的（班还没招学生）→ 再从班级表把「我的班」补出来。
      */
+    /**
+     * ★ 2026-10-26：班级名下分派到的房间（含床位）—— 学生档案新增学生时联动用
+     *
+     * 数据来源：`sms_edu.t_edu_dorm_assignment`（class_name → room_id）。
+     * 每间房附上床位（含占用者姓名），前端把占用床禁选。
+     */
+    async classRooms(className: string): Promise<DormClassRoomRow[]> {
+      const cn = str(className) || '';
+      if (!cn) return [];
+
+      /**
+       * ★ 2026-10-26：学生档案「新增学生」的 楼栋 → 宿舍 → 床位 联动数据源
+       *
+       * 房间/床位一律走统一表（T_DORM / T_BED，按 edu_stage 过滤），
+       * **不要**再裸查 sms_job 老表 —— P8 归一后老表已 DROP（见 ecb9729）。
+       * 分派关系仍在 `sms_edu.t_edu_dorm_assignment`（未归一），其 room_id 与统一表 id 同源。
+       */
+      const assigned = (await db(ASSIGN_T)
+        .where({ class_name: cn, is_deleted: false })
+        .distinct('room_id')) as any[];
+      const ids = assigned.map((a) => str(a.room_id) || '').filter(Boolean);
+      if (!ids.length) return [];
+
+      const rooms = (await byIdTable(DORM_T)
+        .where({ is_deleted: false })
+        .whereIn('id', ids)) as any[];
+      if (!rooms.length) return [];
+      rooms.sort((a: any, b: any) =>
+        ((str(a.building) || '') + (str(a.room_no) || '')).localeCompare(
+          (str(b.building) || '') + (str(b.room_no) || ''),
+        ),
+      );
+
+      const beds = (await byIdTable(BED_T).where({ is_deleted: false }).whereIn('dorm_id', ids)) as any[];
+      const bedMap = new Map<string, any[]>();
+      for (const b of beds) {
+        const key = str(b.dorm_id) || '';
+        if (!bedMap.has(key)) bedMap.set(key, []);
+        bedMap.get(key)!.push(b);
+      }
+      for (const list of bedMap.values()) {
+        list.sort((a: any, b: any) => Number(a.bed_no ?? 0) - Number(b.bed_no ?? 0));
+      }
+
+      return rooms.map((r) => {
+        const id = str(r.id) || '';
+        const list = bedMap.get(id) || [];
+        const building = str(r.building) || '';
+        const room = str(r.room_no) || '';
+        const fallbackNo = building ? building + '-' + room : room;
+        return {
+          roomId: id,
+          building,
+          room,
+          dormNo: str(r.dorm_no) || fallbackNo,
+          bedCount: Number(r.bed_count ?? list.length),
+          occupiedCount: list.filter((b) => Number(b.bed_status) === 2).length,
+          beds: list.map((b) => ({
+            bedId: str(b.id) || '',
+            bedNo: str(b.bed_no) || '',
+            bedLabel: bedNoText(str(b.bed_no) || ''),
+            bedStatus: Number(b.bed_status ?? 1),
+            bedStatusName: DORM_BED_STATUS_NAME[Number(b.bed_status ?? 1)] ?? '',
+            studentId: str(b.student_id) || null,
+            studentNo: str(b.student_no) || null,
+            studentName: str(b.student_name) || null,
+            gender: numOrNull(b.student_gender),
+            checkInDate: fmtDate(b.check_in_date),
+            className: null,
+          })),
+        } as DormClassRoomRow;
+      });
+    },
     async checkinClasses(user): Promise<Array<{ classId: string | null; className: string }>> {
       const mine = await resolveMyClasses(user);
       const out = new Map<string, { classId: string | null; className: string }>();

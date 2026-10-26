@@ -6,7 +6,7 @@
  * 规则：经理自审自批（自己发起直接进「待财务打款」）
  */
 
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type {
   ConsultRefundOrder,
@@ -14,7 +14,7 @@ import type {
   ConsultRefundCalcResult,
   ConsultStudentListItem,
 } from 'shared-types/consult';
-import { ConsultState, ConsultRefundStatus as CRS, CONSULT_REFUND_STATUS_NAME } from 'shared-types/consult';
+import { ConsultRefundStatus as CRS, CONSULT_REFUND_STATUS_NAME, ConsultState } from 'shared-types/consult';
 import {
   fetchRefundList,
   fetchRefundStats,
@@ -87,14 +87,19 @@ const calcResult = ref<ConsultRefundCalcResult | null>(null);
 const calcLoading = ref(false);
 
 /**
- * ★ 2026-10-22 试学期间最早可选日 = 进班试学日
+ * ★ 2026-10-22 / 2026-10-23 试学期间最早可选日 = 进班日
  *
  * 用户口径：「试学期间的时间从分配班级进班试学开始计算，
  *            日期之前没进班或者没来之前不能选择」
+ *          「退费日期选择最开始的日期是分班之后开始」
  *
- * 空字符串 = 该生没有进班记录（老数据/直接转正式），此时不设下限。
+ * 后端一定给值（trial_start → 入班历史日 → 建档日），前端还兜一层
+ * prefill 的默认开始日，**不再出现「不设下限」的情况**。
  */
 const earliestTrialStart = ref('');
+
+/** 最早可选日的来源：进班日 / 入班历史 / 建档日（决定提示文案） */
+const earliestSource = ref<'TRIAL_START' | 'CLASS_HISTORY' | 'CREATE_TIME'>('TRIAL_START');
 
 /** 可勾选的消耗项（住宿/餐费/保险 + 物品）
  *  ★ 2026-10-16 用户指令：取消「工具包」「宿舍门禁卡」，不再参与退费扣减 */
@@ -109,35 +114,75 @@ const DEDUCT_OPTIONS = [
 ];
 
 /* ---------- 学生选择（★ 2026-10-08：必填项由「学生ID」改为「学生姓名」） ---------- */
-const studentOptions = ref<Array<{ consultStudentId: string; studentName: string; consultStateName?: string }>>([]);
+const studentOptions = ref<Array<{ consultStudentId: string; studentName: string; consultState?: number; consultStateName?: string }>>([]);
 const studentSearching = ref(false);
+
+/**
+ * ★ 2026-10-26 用户口径：「退费的、流失的、申请中的不可以再发起退费了」
+ *              「缴费中的要退费也不能选择」
+ *
+ * 这些状态下再发起退费都是错账，直接从候选里剔掉，别等到提交才报错：
+ *   · 退费·待经理审批 8 / 退费·待财务打款 9 → 已在途（申请中）
+ *   · 已退费 10                              → 已经退完了
+ *   · 流失 12                                → 没交过费 / 已按流失结案，不走退费
+ *   · 缴费中·待确认 6                        → 钱还没到账（见下方 excludePendingFee）
+ *
+ * 后端 `/student/list` 用 `excludeStates` 排除（不然搜出来的 20 条可能全被剔空），
+ * 前端再兜一层过滤，防止缓存里的旧列表把禁用学生带进来。
+ */
+const REFUND_BLOCKED_STATES: number[] = [
+  ConsultState.REFUND_MGR,
+  ConsultState.REFUND_FINANCE,
+  ConsultState.REFUNDED,
+  ConsultState.LOST,
+  ConsultState.FULL_FEE_PENDING,
+];
 
 /** 远程搜索学生（按姓名/学号模糊匹配），供下拉选择 */
 async function searchStudents(keyword: string) {
   studentSearching.value = true;
   try {
     /**
-     * ★ 2026-10-22 用户口径：退费只针对「试学中」的学生，
-     *   所以下拉里只列试学中的 —— 正式在读 / 已退费 / 流失 都不出现在候选里，
-     *   避免选到不能退的人才报错。
+     * ★ 2026-10-22 用户口径：「发起退费的学生姓名要有全部的」
+     *
+     * 不传状态 → 咨询中 / 待分班 / 试学中 / 正式在读 都能搜到；
+     * ★ 2026-10-26 起改成「排除」模式：只剔除退费中 / 已退费 / 流失 / 缴费中。
+     * ★ excludePendingFee=1：有在途收费单（待上传凭证 / 待财务确认）的学生也剔掉，
+     *   钱还没确认到账，谈不上退费（用户口径：「缴费中的要退费也不能选择」）。
      */
     const res = await fetchStudentList({
       page: 1,
       size: 20,
       keyword: keyword || undefined,
-      consultState: ConsultState.TRIAL,
+      excludeStates: REFUND_BLOCKED_STATES.join(','),
+      excludePendingFee: 1,
     });
-    studentOptions.value = res.list.map((s: ConsultStudentListItem) => ({
-      consultStudentId: s.consultStudentId,
-      studentName: s.studentName,
-      consultStateName: s.consultStateName,
-    }));
+    studentOptions.value = res.list
+      .filter((s: ConsultStudentListItem) => !REFUND_BLOCKED_STATES.includes(s.consultState))
+      .map((s: ConsultStudentListItem) => ({
+        consultStudentId: s.consultStudentId,
+        studentName: s.studentName,
+        consultState: s.consultState,
+        consultStateName: s.consultStateName,
+      }));
   } catch {
     studentOptions.value = [];
   } finally {
     studentSearching.value = false;
   }
 }
+
+/** 当前选中的学生（提交前兜底校验用；openApply 带出的行可能没有状态，则交给后端拦） */
+const applyStudent = computed(() =>
+  studentOptions.value.find((s) => s.consultStudentId === applyForm.value.consultStudentId),
+);
+
+/** 当前选中的学生是否已不允许再发起退费 */
+const applyStudentBlocked = computed(
+  () =>
+    !!applyStudent.value?.consultState &&
+    REFUND_BLOCKED_STATES.includes(applyStudent.value.consultState),
+);
 
 function openApply(row?: ConsultRefundOrder) {
   applyForm.value = {
@@ -155,6 +200,7 @@ function openApply(row?: ConsultRefundOrder) {
     : [];
   calcResult.value = null;
   earliestTrialStart.value = '';
+  earliestSource.value = 'TRIAL_START';
   applyVisible.value = true;
   if (row?.consultStudentId) onStudentChange();
 }
@@ -163,10 +209,18 @@ function openApply(row?: ConsultRefundOrder) {
 async function onStudentChange() {
   if (!applyForm.value.consultStudentId) return;
   earliestTrialStart.value = '';
+  earliestSource.value = 'TRIAL_START';
   try {
     const pre = await fetchRefundPrefill(applyForm.value.consultStudentId);
-    // ★ 2026-10-22 记住「进班试学日」，日历上更早的日期一律禁选
-    earliestTrialStart.value = pre.earliestTrialStart || '';
+    /**
+     * ★ 2026-10-22 / 2026-10-23 记住「最早可选日」，日历上更早的日期一律禁选
+     *
+     * 后端取值链：trial_start → 入班历史日 → 建档日，正常一定给得出来。
+     * `pre.trialStart` 是最后一道兜底：万一 earliest 为空，也不能放开下限，
+     * 否则日历能翻到几个月前（试学天数直接爆掉）。
+     */
+    earliestTrialStart.value = pre.earliestTrialStart || pre.trialStart || '';
+    earliestSource.value = pre.earliestSource || 'TRIAL_START';
     /**
      * 只接受 YYYY-MM-DD
      *
@@ -196,10 +250,10 @@ function todayStart(): Date {
 }
 
 /**
- * 试学开始日期：不能早于进班试学日
+ * 试学开始日期：不能早于进班日
  *
- * ★ 2026-10-22 用户口径 —— 人还没进班的那段时间不算试学，不该能选。
- *   没有进班记录（earliestTrialStart 为空）时不设下限。
+ * ★ 2026-10-22 / 2026-10-23 用户口径 —— 人还没进班的那段时间不算试学，不该能选。
+ *   最早可选日由后端算（trial_start → 入班历史日 → 建档日），前端不再存在「不设下限」。
  */
 function disabledTrialStart(d: Date): boolean {
   if (d > todayStart()) return true;
@@ -215,6 +269,32 @@ function disabledTrialEnd(d: Date): boolean {
   if (!s) return false;
   return d < new Date(`${s}T00:00:00`);
 }
+
+/** 最早可选日的中文说法（来源不同，提示文案要说到点上） */
+function earliestLabel(): string {
+  return earliestSource.value === 'CREATE_TIME' ? '建档日' : '进班日';
+}
+
+/**
+ * ★ 2026-10-22 兜底：手输 / 粘贴绕过 disabled-date 时把开始日纠正回来
+ *
+ * 【为什么需要】Element Plus 的 `disabled-date` 只管**日历面板里能不能点**，
+ *   输入框仍然可以手敲（截图里就出现过 2026-08-04 手输进去、试算出 80 天）。
+ *   输入框已经加了 `:editable="false"` 收紧，这里再做一层状态纠偏：
+ *   任何来源导致 trialStart < 最早可选日，一律拉回并提示。
+ */
+watch(
+  () => applyForm.value.trialStart,
+  (v) => {
+    if (!v || !earliestTrialStart.value) return;
+    if (v < earliestTrialStart.value) {
+      applyForm.value.trialStart = earliestTrialStart.value;
+      ElMessage.warning(
+        `试学从${earliestLabel()} ${earliestTrialStart.value} 开始计算，更早的日期不能选，已自动调整为 ${earliestTrialStart.value}`,
+      );
+    }
+  },
+);
 
 /** 勾选的「物品」名称（住宿/餐费/保险是每日消耗项，走 dailyItems 传） */
 function checkedItemNames(): string[] {
@@ -260,6 +340,13 @@ async function doCalc() {
 async function submitApply() {
   if (!applyForm.value.consultStudentId) {
     ElMessage.warning('请选择学生');
+    return;
+  }
+  // ★ 2026-10-26 退费中 / 已退费 / 流失的学生不允许再发起退费
+  if (applyStudentBlocked.value) {
+    ElMessage.warning(
+      `「${applyStudent.value?.studentName}」当前状态为「${applyStudent.value?.consultStateName}」，不能再发起退费`,
+    );
     return;
   }
   if (!applyForm.value.lossReason) {
@@ -488,7 +575,8 @@ onMounted(load);
             reserve-keyword
             :remote-method="searchStudents"
             :loading="studentSearching"
-            placeholder="输入学生姓名搜索选择"
+            placeholder="输入学生姓名搜索（退费中 / 已退费 / 流失 / 缴费中的学生不可选）"
+            no-data-text="没有可发起退费的学生（退费中 / 已退费 / 流失 / 缴费中已排除）"
             style="width: 100%"
             @change="onStudentChange"
           >
@@ -509,6 +597,7 @@ onMounted(load);
               placeholder="开始日期"
               value-format="YYYY-MM-DD"
               :disabled-date="disabledTrialStart"
+              :editable="false"
               style="width: 160px"
               @change="doCalc"
             />
@@ -523,9 +612,9 @@ onMounted(load);
               @change="doCalc"
             />
           </div>
-          <!-- ★ 2026-10-22 口径提示：只在有进班试学日时显示，避免用户不知道为何选不了 -->
+          <!-- ★ 2026-10-22 口径提示：只在有最早可选日时显示，避免用户不知道为何选不了 -->
           <div v-if="earliestTrialStart" class="date-hint">
-            试学从进班试学日 {{ earliestTrialStart }} 开始计算，更早的日期不可选
+            试学从{{ earliestLabel() }} {{ earliestTrialStart }} 开始计算，更早的日期不可选
           </div>
         </el-form-item>
 
