@@ -20,6 +20,13 @@ export enum LeadChannel {
   REFERRAL = 3,     // 转介绍
   WALK_IN = 4,      // 到校咨询
   PHONE = 5,        // 电话咨询
+  /**
+   * ★ 2026-10-26 用户口径：「来源选项里边，来源加一个市场来源」
+   *
+   * 选了这个渠道 → 表单上要再选「招生老师」（下拉，手机号随人一起带出），
+   * 其余渠道（含转介绍）都不再出现招生老师字段。
+   */
+  MARKET = 6,       // 市场来源
   OTHER = 9,        // 其他
 }
 
@@ -29,7 +36,25 @@ export const LEAD_CHANNEL_NAME: Record<number, string> = {
   [LeadChannel.REFERRAL]: '转介绍',
   [LeadChannel.WALK_IN]: '到校咨询',
   [LeadChannel.PHONE]: '电话咨询',
+  [LeadChannel.MARKET]: '市场来源',
   [LeadChannel.OTHER]: '其他',
+};
+
+/**
+ * ★ 2026-10-26 家长联系人关系（父亲 / 母亲）
+ *
+ * 用户口径：「家长联系人选一下性别，父亲还是母亲」——
+ * 原来家长联系人是一个自由文本（「陈建国（父）」），现在拆成
+ * 「关系（必选）+ 姓名」，关系单独落库（t_consult_student.parent_relation）。
+ */
+export enum ParentRelation {
+  FATHER = 1, // 父亲
+  MOTHER = 2, // 母亲
+}
+
+export const PARENT_RELATION_NAME: Record<number, string> = {
+  [ParentRelation.FATHER]: '父亲',
+  [ParentRelation.MOTHER]: '母亲',
 };
 
 /* ============================================================
@@ -332,3 +357,23 @@ export const LOSS_REASONS = [
   '家长意向不明确',
   '其他原因',
 ] as const;
+
+/**
+ * 优惠名目（★ 2026-10-26 用户口径：「优惠金额要有明确的名目」）
+ *
+ * 优惠不能只记一个差额 —— 建单时必须选名目，财务核对时才知道
+ * 这笔少收的钱是按什么批的。选「其他」时在备注里补一句原因。
+ *
+ * ⚠️ 优惠只能作用于【学费】，住宿费/餐费/押金/保险费/校服 一律按标准全额收。
+ */
+export const DISCOUNT_REASONS = [
+  '奖学金',
+  '活动优惠',
+  '老生转介绍',
+  '团报优惠',
+  '教职工子女',
+  '困难减免',
+  '其他',
+] as const;
+
+export type DiscountReason = (typeof DISCOUNT_REASONS)[number];

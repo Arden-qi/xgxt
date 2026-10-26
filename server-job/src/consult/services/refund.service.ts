@@ -20,6 +20,8 @@ import {
   ConsultState,
   ConsultRefundStatus as CRS,
   CONSULT_REFUND_STATUS_NAME,
+  CONSULT_STATE_NAME,
+  CONSULT_FEE_STATUS_NAME,
   TRIAL_DAILY_RATE_CENT,
   FeeType,
   nameOf,
@@ -45,7 +47,12 @@ import {
   getConsumeItems,
   getConfigNumber,
 } from './student.service';
-import { getArrivedTrialIncome, centToYuan, tempStudentNo } from './fee-order.service';
+import {
+  getArrivedTrialIncome,
+  centToYuan,
+  tempStudentNo,
+  findOpenFeeOrders,
+} from './fee-order.service';
 import { terminateStudentPlans } from './installment.service';
 import { changeState } from './state.service';
 import { financeClient } from './finance.client';
@@ -238,22 +245,57 @@ export async function applyRefund(
   if (!allowed.includes(stu.consult_state)) {
     throw new BizError(
       BizCode.INVALID_STATUS,
-      `当前状态不允许发起退费（仅「咨询中 / 待分班 / 试学中」可发起）。如需直接退学请联系教务模块处理。`,
+      `当前状态「${CONSULT_STATE_NAME[stu.consult_state] || stu.consult_state}」不允许发起退费（仅「咨询中 / 待分班 / 试学中」可发起）。已退费 / 退费中 / 流失的学生不能重复发起，如需直接退学请联系教务模块处理。`,
     );
   }
 
   // ---- 不允许重复发起 ----
+  /**
+   * ★ 2026-10-26 用户口径：「退费的、流失的、申请中的不可以再发起退费了」
+   *
+   * 在途单要同时看「待经理审批」和「待财务打款」两种 —— 原来只查前者，
+   * 一旦学生状态因为别的原因没同步过去，就能给已上报财务的学生再建一张退费单。
+   */
   const exists = await db(REFUND_TABLE)
     .where({
       consult_student_id: consultStudentId,
       is_deleted: false,
-      status: CRS.PENDING_MANAGER,
     })
+    .whereIn('status', [CRS.PENDING_MANAGER, CRS.PENDING_FINANCE])
     .first();
   if (exists) {
     throw new BizError(
       BizCode.REFUND_ALREADY_EXISTS,
-      `该学生已有在途退费单（${exists.refund_no}）处于「待经理审批」，请勿重复发起。`,
+      `该学生已有在途退费单（${exists.refund_no}）处于「${CONSULT_REFUND_STATUS_NAME[exists.status] || '处理中'}」，请勿重复发起。`,
+    );
+  }
+
+  // ---- 已退过费的，不再受理（历史单可能是旧数据，状态没同步）----
+  const paid = await db(REFUND_TABLE)
+    .where({ consult_student_id: consultStudentId, is_deleted: false, status: CRS.PAID })
+    .first();
+  if (paid) {
+    throw new BizError(
+      BizCode.REFUND_ALREADY_EXISTS,
+      `该学生已退费完成（${paid.refund_no}），不能重复发起退费。`,
+    );
+  }
+
+  /**
+   * ★ 2026-10-26 用户口径：「缴费中的要退费也不能选择」
+   *
+   * 有在途收费单 = 钱还没确认到账（待上传凭证 / 待财务确认），
+   * 这时候账上都还没有这笔钱，退费无从谈起 —— 直接拒，并告诉老师两条路。
+   * 前端下拉已用 `excludePendingFee` 剔掉这类学生，这里是接口层的兜底。
+   */
+  const openFees = await findOpenFeeOrders(consultStudentId);
+  if (openFees.length) {
+    const first = openFees[0];
+    throw new BizError(
+      BizCode.INVALID_STATUS,
+      `该学生有收费单还在「${CONSULT_FEE_STATUS_NAME[Number(first.status)] || '处理中'}」` +
+        `（${first.order_no ?? ''}），钱还没确认到账，不能发起退费。` +
+        `请先在「收款与缴费」里让这张单走完财务确认，或直接作废后再办理退费。`,
     );
   }
 
