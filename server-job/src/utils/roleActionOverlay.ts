@@ -355,6 +355,83 @@ export function diffOfOverride(ov: RoleActionOverride | null): { added: string[]
 }
 
 /* ============================================================
+ * 7.1 ★ 权限树「当前勾选」判定（不看基线差异）
+ *
+ *   【为什么需要它 —— 2026-10-26 实测 bug】
+ *     财务核对接口 `finance:fee:verify` 只认静态表 FIN_ROLE_OPERATIONS
+ *     （只有 FIN_STAFF / SYS_ADMIN）+ 差异覆盖。
+ *     校长（RM_PRINCIPAL）在「职位权限分配」里把「财务管理」全勾了，
+ *     但**基线快照里本来就有这 18 项** → 差异为空 → 没有 added 覆盖；
+ *     静态表又没有校长 → 直接 403「您没有该操作的权限」。
+ *
+ *   差异语义对「静态表里已有该角色」的模块是**对的**（防上线当天误伤），
+ *   但对「静态表里根本没有这个角色」的模块（finance 只认财务与管理员），
+ *   该角色在树里勾什么都不会生效 —— 这时**权限树必须是唯一权威**。
+ *
+ *   所以调用方用法固定为：
+ *     · 角色在静态表里有条目 → 只走 resolveActionWithOverlay（行为不变）
+ *     · 角色在静态表里没条目 → 再补一次 isActionGrantedInTree
+ * ============================================================ */
+
+/** legacy 操作码 → 权限树上的 `${module}||${item}||${action}` 集合（惰性建索引） */
+let codeToTreeKeys: Map<string, Set<string>> | null = null;
+function treeKeysOf(code: string): Set<string> {
+  if (!codeToTreeKeys) {
+    codeToTreeKeys = new Map();
+    for (const [point, acts] of Object.entries(PERM_POINT_TO_ACTION_CODES)) {
+      for (const [act, codes] of Object.entries(acts)) {
+        if (!Array.isArray(codes)) continue;
+        for (const c of codes) {
+          let set = codeToTreeKeys.get(c);
+          if (!set) codeToTreeKeys.set(c, (set = new Set()));
+          set.add(`${point}||${act}`);
+        }
+      }
+    }
+  }
+  return codeToTreeKeys.get(code) || new Set();
+}
+
+/**
+ * 这些角色里，是否有任何一个在**权限树里当前勾着**该操作码。
+ *
+ * 与 `resolveActionWithOverlay` 的区别：本函数**不看基线**，
+ * 只看"现在树里有没有勾"。用于静态白名单未覆盖的角色。
+ */
+export function isActionGrantedInTree(
+  roleCodes: string[] | undefined,
+  actionCode: string,
+): boolean {
+  const roles = Array.isArray(roleCodes) ? roleCodes : [];
+  if (!cache || !actionCode) return false;
+  const keys = treeKeysOf(actionCode);
+  if (!keys.size) return false;
+  for (const role of roles) {
+    const ov = cache.map.get(role);
+    if (!ov) continue;
+    for (const k of keys) {
+      if (ov.granted.has(k)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 角色是否**已**被某模块的静态表认过（用来决定要不要补 `isActionGrantedInTree`）。
+ *
+ * 用法：
+ *   const known = hasStaticEntry(roles, FIN_ROLE_OPERATIONS);
+ *   const allowed = resolveActionWithOverlay(...) || (!known && isActionGrantedInTree(roles, code));
+ */
+export function hasStaticEntry(
+  roleCodes: string[] | undefined,
+  staticTable: Record<string, unknown>,
+): boolean {
+  const roles = Array.isArray(roleCodes) ? roleCodes : [];
+  return roles.some((r) => Object.prototype.hasOwnProperty.call(staticTable, r));
+}
+
+/* ============================================================
  * 7. ★ 同步判定接口（给各业务模块的【后端接口判权】用）
  *
  *   背景：四个 legacy 模块（class / class-jh / consult / finance）的接口

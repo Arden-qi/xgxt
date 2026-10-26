@@ -27,6 +27,8 @@ import { resolveBusinessRoles, resolveBusinessProfile } from '../../middleware/a
 import {
   preloadRoleActionOverrides,
   resolveActionWithOverlay,
+  isActionGrantedInTree,
+  hasStaticEntry,
 } from '../../utils/roleActionOverlay';
 
 /** 把用户信息挂到 req 上，方便路由里用 */
@@ -260,10 +262,29 @@ export function checkPermission(permissionCode: string) {
     try {
       const roles = await ensureBusinessRoles(user);
       await preloadRoleActionOverrides();
-      const allowed = resolveActionWithOverlay(roles, permissionCode, (role) => {
+      let allowed = resolveActionWithOverlay(roles, permissionCode, (role) => {
         const own = FIN_ROLE_OPERATIONS[role] || [];
         return own.includes('*') || own.includes(permissionCode);
       });
+
+      /**
+       * ★ 2026-10-26 修：静态白名单里**没有**这个角色时，以权限树当前勾选为准。
+       *
+       *   实测 bug：校长（RM_PRINCIPAL）在「职位权限分配」里把财务管理全勾了
+       *   （18 项，与财务角色完全一致），但点【核对】仍报「您没有该操作的权限」。
+       *   原因：FIN_ROLE_OPERATIONS 只认 FIN_STAFF / SYS_ADMIN；
+       *        另外差异存储只叠加「相对基线的改动」，而校长那 18 项**基线里本来就有**
+       *        → 差异为空 → 没有任何 added 覆盖 → 静态表又没校长 → 403。
+       *
+       *   差异语义对「静态表里已有该角色」是对的（防上线当天误伤，见
+       *   roleActionOverlay 文件头），但对**从未被本模块认过**的角色，
+       *   树里勾什么都不生效 —— 这也是「勾了权限却不生效」最反直觉的一类。
+       *   这里只对该情形补一次"树勾选即放行"，已有角色的行为完全不变。
+       */
+      if (!allowed && !hasStaticEntry(roles, FIN_ROLE_OPERATIONS)) {
+        allowed = isActionGrantedInTree(roles, permissionCode);
+      }
+
       if (allowed) {
         next();
         return;
