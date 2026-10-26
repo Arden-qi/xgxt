@@ -113,6 +113,32 @@ const dialogState = () => ev(`(() => {
 })()`);
 const hasLabel = (st, t) => st.labels.some((l) => l.text.includes(t));
 
+/** 在弹窗里打开第 n 个 el-select（0 = 部门）并点选指定文字的下拉项 */
+async function pickSelect(text, index = 0) {
+  const r1 = await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].filter(x => x.offsetParent !== null).pop();
+    if (!d) return 'NO_DIALOG';
+    const sels = [...d.querySelectorAll('.el-select')].filter(x => x.offsetParent !== null);
+    const sel = sels[${index}];
+    if (!sel) return 'NO_SELECT';
+    (sel.querySelector('.el-select__wrapper') || sel).click();
+    return 'OK';
+  })()`);
+  await sleep(800);
+  const r2 = await ev(`(() => {
+    const pops = [...document.querySelectorAll('.el-select-dropdown')].filter(x => x.offsetParent !== null);
+    const pop = pops[pops.length - 1];
+    if (!pop) return 'NO_POPPER';
+    const it = [...pop.querySelectorAll('.el-select-dropdown__item')]
+      .find(x => x.innerText.trim() === ${JSON.stringify(text)});
+    if (!it) return 'NO_ITEM:' + pop.innerText.replace(/\\n/g, '|');
+    it.click();
+    return 'OK';
+  })()`);
+  await sleep(1000);
+  return r1 + '/' + r2;
+}
+
 (async () => {
   ws = new WebSocket(await getTarget());
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
@@ -129,7 +155,7 @@ const hasLabel = (st, t) => st.labels.some((l) => l.text.includes(t));
   await loginAs('qiansy');
 
   /* ---------- ② 新增班级（默认大学部）：项目经理/就业老师应隐藏 ---------- */
-  console.log('\n=== ② 新增班级：部门=大学部 ===');
+  console.log('\n=== ② 新增班级：非就业部（默认初高部）===');
   await nav('/teaching/class', 3500);
   pageErrors.length = 0;
   check('点【新增班级】', (await clickBtn('新增班级')) === 'OK');
@@ -137,12 +163,22 @@ const hasLabel = (st, t) => st.labels.some((l) => l.text.includes(t));
   let st = await dialogState();
   console.log('  弹窗标题:', st.title);
   console.log('  字段:', st.labels.map((l) => l.text + (l.required ? '*' : '')).join(' / '));
-  check('大学部不显示「项目经理」', !hasLabel(st, '项目经理'));
-  check('大学部不显示「就业老师」', !hasLabel(st, '就业老师'));
+  check('非就业部不显示「项目经理」', !hasLabel(st, '项目经理'));
+  check('非就业部不显示「就业老师」', !hasLabel(st, '就业老师'));
   check('「班级名称」有红星', st.labels.some((l) => l.text.includes('班级名称') && l.required));
   check('「班主任」有红星', st.labels.some((l) => l.text.includes('班主任') && l.required));
   check('「教员」有红星', st.labels.some((l) => l.text.includes('教员') && l.required));
   check('「助教」无红星', st.labels.some((l) => l.text.includes('助教') && !l.required));
+  // ★ 2026-10-26 补充批注：必选项前端只显示红星，输入/失焦不应弹红字
+  await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].filter(x => x.offsetParent !== null).pop();
+    const inp = d.querySelector('input.el-input__inner');
+    if (inp) { inp.focus(); inp.blur(); }
+    return true;
+  })()`);
+  await sleep(600);
+  st = await dialogState();
+  check('失焦不实时弹红字（只在保存时提示）', st.errors.length === 0, st.errors.join(' | '));
   await shot('req_class_new_university.png');
 
   /* ---------- ③ 空表单点保存 → 必填提示 ---------- */
@@ -158,6 +194,29 @@ const hasLabel = (st, t) => st.labels.some((l) => l.text.includes(t));
   check('弹窗未被关闭（校验拦住保存）', st.ok && !!st.title);
   check('无未捕获异常', pageErrors.length === 0, pageErrors[0] || '');
   await shot('req_class_empty_save.png');
+  await clickBtn('取消');
+  await sleep(600);
+
+  /* ---------- ② 就业部新增：班主任 / 教员 不是必选项 ---------- */
+  console.log('\n=== ② 就业部新增班级：班主任 / 教员 不是必选 ===');
+  check('点【新增班级】', (await clickBtn('新增班级')) === 'OK');
+  await sleep(1400);
+  // ⚠️ 不能靠 URL 上的 ?stage=emp —— 页面没读它，openCreate 用的是 query.stage（页面过滤器）
+  //    → 直接在弹窗里把「部门」切到就业部，走 onFormDeptChange 的真实联动
+  check('部门切到「就业部」', (await pickSelect('就业部')) === 'OK/OK');
+  st = await dialogState();
+  console.log('  字段:', st.labels.map((l) => l.text + (l.required ? '*' : '')).join(' / '));
+  check('「班主任」无红星', st.labels.some((l) => l.text.includes('班主任') && !l.required));
+  check('「教员」无红星', st.labels.some((l) => l.text.includes('教员') && !l.required));
+  check('「项目经理」有红星', st.labels.some((l) => l.text.includes('项目经理') && l.required));
+  check('「就业老师」有红星', st.labels.some((l) => l.text.includes('就业老师') && l.required));
+  await shot('req_class_new_employment.png');
+  check('点【保存】(就业部)', (await clickBtn('保存')) === 'OK');
+  await sleep(1400);
+  st = await dialogState();
+  console.log('  报错:', st.errors.join(' | ') || '(无)');
+  check('保存时不再要求班主任', !st.errors.some((e) => e.includes('班主任')));
+  check('保存时不再要求教员', !st.errors.some((e) => e.includes('教员')));
   await clickBtn('取消');
   await sleep(600);
 

@@ -1212,7 +1212,11 @@ const formAge = ref<number | null>(null);
  *     人工填不了 → 靠「班级」「身份证号」必填间接保证，这里不放规则；
  *   · 其余字段 **新增时必填**；编辑时放宽 —— 老数据这些字段本来就可能是空的，
  *     全拦死会导致连改个手机号都保存不了（与本文件 classId 的既有口径一致）；
- *   · 红星常显（下面 el-form-item 上写了 required），具体提示语走各字段自己的 validator。
+ *   · 红星常显（下面 el-form-item 上写了 required），具体提示语走各字段自己的 validator；
+ *   · ★ 2026-10-26 补充批注：「必选项前端只显示红星，只有保存时没填才显示文字」
+ *     → 所有必填校验的 trigger 统一用 `'submit'`：输入/失焦/切换下拉**都不弹红字**，
+ *       只有点【保存】调用 validate() 时才出提示
+ *       （el-form 的 validate() 不看 trigger，所以 'submit' 只起到「不参与交互触发」的作用）。
  */
 const requiredOnCreate = (msg: string) => [
   {
@@ -1220,13 +1224,13 @@ const requiredOnCreate = (msg: string) => [
       if (form.id || String(value ?? '').trim()) callback();
       else callback(new Error(msg));
     },
-    trigger: ['blur', 'change'],
+    trigger: 'submit',
   },
 ];
 
 const rules: FormRules = {
-  studentName: [{ required: true, message: '姓名必填', trigger: 'blur' }],
-  gender: [{ required: true, message: '性别必填', trigger: 'change' }],
+  studentName: [{ required: true, message: '姓名必填', trigger: 'submit' }],
+  gender: [{ required: true, message: '性别必填', trigger: 'submit' }],
   // ★ 2026-10-22：学号按班级编号生成，没班级就没有学号 → 新增时班级必填
   //   （编辑历史学生时放宽：老数据可能本来就没班级，不能因此改不了别的字段）
   classId: [
@@ -1237,7 +1241,7 @@ const rules: FormRules = {
         if (form.id || v) cb();
         else cb(new Error('请选择班级（学号按班级编号生成）'));
       },
-      trigger: 'change',
+      trigger: 'submit',
     },
   ],
   idCard: [
@@ -1248,7 +1252,7 @@ const rules: FormRules = {
         if (!v || /^(\d{15}|\d{17}[\dXx])$/.test(v.trim())) cb();
         else cb(new Error('身份证号格式不正确（15 或 18 位）'));
       },
-      trigger: 'blur',
+      trigger: 'submit',
     },
   ],
   // ★ 2026-10-26：以下均按红框纳入必填（新增时）

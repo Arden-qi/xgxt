@@ -422,7 +422,11 @@
                  下拉按「职位 + 部门」过滤 —— 部门选初高部就只显示初高部的班主任。
                  规则与兜底见 @/teaching/classStaff.ts（staffOf）。 -->
           <el-col :span="8">
-            <el-form-item label="班主任" prop="headTeacherId" :required="!form.id">
+            <el-form-item
+              label="班主任"
+              prop="headTeacherId"
+              :required="!form.id && form.deptCode !== DeptCode.EMPLOYMENT"
+            >
               <el-select
                 v-model="form.headTeacherId"
                 clearable
@@ -437,7 +441,11 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="教员" prop="teacherId" :required="!form.id">
+            <el-form-item
+              label="教员"
+              prop="teacherId"
+              :required="!form.id && form.deptCode !== DeptCode.EMPLOYMENT"
+            >
               <el-select
                 v-model="form.teacherId"
                 clearable
@@ -1018,14 +1026,20 @@ const isTrainPhase = computed(() => Number(form.phaseCode) === TRAIN_PHASE_CODE)
  *   规则写成 computed，切换阶段/部门后红星与校验会立刻跟着变。
  */
 const rules = computed<FormRules>(() => {
-  /** 新增时必填、编辑时放行（老数据可能为空）；trigger 用数组，下拉点选和清空都能触发 */
+  /**
+   * 新增时必填、编辑时放行（老数据可能为空）。
+   * ★ 2026-10-26 批注：「必选项前端只显示红星，只有点保存时没填才显示文字」
+   *   → trigger 用 'submit'：交互（输入/失焦/切换下拉）**不弹红字**，
+   *     只有点【保存】调用 validate() 时才校验并出提示。
+   *     （同 classCode 第二条规则的既有写法，el-form 的 validate() 不看 trigger。）
+   */
   const requiredOnCreate = (msg: string) => [
     {
       validator: (_rule: unknown, value: unknown, callback: (e?: Error) => void) => {
         if (form.id || String(value ?? '').trim()) callback();
         else callback(new Error(msg));
       },
-      trigger: ['blur', 'change'],
+      trigger: 'submit',
     },
   ];
   /** 就业部（dept = 3）才有「项目经理 / 就业老师」两栏，也只有这时才必填 */
@@ -1036,7 +1050,7 @@ const rules = computed<FormRules>(() => {
     classCode: form.id
       ? []
       : [
-          { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
+          { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'submit' },
           {
             validator: (_rule, value, callback) => {
               if (String(value ?? '').trim()) callback();
@@ -1046,20 +1060,24 @@ const rules = computed<FormRules>(() => {
           },
         ],
     // ★ 2026-10-26：以下均为「新增必填」
-    className: form.id ? [] : [{ required: true, message: '请填写班级名称', trigger: 'blur' }],
+    className: form.id ? [] : [{ required: true, message: '请填写班级名称', trigger: 'submit' }],
     deptCode: requiredOnCreate('请选择部门'),
     // 阶段下拉在没配方案列时不渲染（老数据），这时不校验，否则会报一个看不见的错
     phaseCode: form.id || !formPhaseOptions.value.length ? [] : requiredOnCreate('请选择阶段'),
-    headTeacherId: requiredOnCreate('请选择班主任'),
-    teacherId: requiredOnCreate('请选择教员'),
+    /**
+     * ★ 2026-10-26 批注（红字）：「就业部班主任、教员不是必选项」
+     *   → 部门 = 就业部时这两项放开（其它部门仍是新增必填）。
+     */
+    headTeacherId: isEmploymentDept ? [] : requiredOnCreate('请选择班主任'),
+    teacherId: isEmploymentDept ? [] : requiredOnCreate('请选择教员'),
     // ★ 2026-10-26：就业部新增必填；实训阶段（含编辑）沿用原来的必填口径
     projectManagerName:
       isEmploymentDept && (!form.id || isTrainPhase.value)
-        ? [{ required: true, message: '就业部班级必填', trigger: 'change' }]
+        ? [{ required: true, message: '就业部班级必填', trigger: 'submit' }]
         : [],
     employmentTeacherName:
       isEmploymentDept && (!form.id || isTrainPhase.value)
-        ? [{ required: true, message: '就业部班级必填', trigger: 'change' }]
+        ? [{ required: true, message: '就业部班级必填', trigger: 'submit' }]
         : [],
     /**
      * 2026-10-19 批注：教室必须输出成「楼栋-房间号」，例如 A-201。
