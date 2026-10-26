@@ -119,11 +119,13 @@ const studentSearching = ref(false);
 
 /**
  * ★ 2026-10-26 用户口径：「退费的、流失的、申请中的不可以再发起退费了」
+ *              「缴费中的要退费也不能选择」
  *
  * 这些状态下再发起退费都是错账，直接从候选里剔掉，别等到提交才报错：
  *   · 退费·待经理审批 8 / 退费·待财务打款 9 → 已在途（申请中）
  *   · 已退费 10                              → 已经退完了
  *   · 流失 12                                → 没交过费 / 已按流失结案，不走退费
+ *   · 缴费中·待确认 6                        → 钱还没到账（见下方 excludePendingFee）
  *
  * 后端 `/student/list` 用 `excludeStates` 排除（不然搜出来的 20 条可能全被剔空），
  * 前端再兜一层过滤，防止缓存里的旧列表把禁用学生带进来。
@@ -133,6 +135,7 @@ const REFUND_BLOCKED_STATES: number[] = [
   ConsultState.REFUND_FINANCE,
   ConsultState.REFUNDED,
   ConsultState.LOST,
+  ConsultState.FULL_FEE_PENDING,
 ];
 
 /** 远程搜索学生（按姓名/学号模糊匹配），供下拉选择 */
@@ -143,13 +146,16 @@ async function searchStudents(keyword: string) {
      * ★ 2026-10-22 用户口径：「发起退费的学生姓名要有全部的」
      *
      * 不传状态 → 咨询中 / 待分班 / 试学中 / 正式在读 都能搜到；
-     * ★ 2026-10-26 起改成「排除」模式：只剔除退费中 / 已退费 / 流失。
+     * ★ 2026-10-26 起改成「排除」模式：只剔除退费中 / 已退费 / 流失 / 缴费中。
+     * ★ excludePendingFee=1：有在途收费单（待上传凭证 / 待财务确认）的学生也剔掉，
+     *   钱还没确认到账，谈不上退费（用户口径：「缴费中的要退费也不能选择」）。
      */
     const res = await fetchStudentList({
       page: 1,
       size: 20,
       keyword: keyword || undefined,
       excludeStates: REFUND_BLOCKED_STATES.join(','),
+      excludePendingFee: 1,
     });
     studentOptions.value = res.list
       .filter((s: ConsultStudentListItem) => !REFUND_BLOCKED_STATES.includes(s.consultState))
@@ -569,8 +575,8 @@ onMounted(load);
             reserve-keyword
             :remote-method="searchStudents"
             :loading="studentSearching"
-            placeholder="输入学生姓名搜索（退费中 / 已退费 / 流失的学生不可选）"
-            no-data-text="没有可发起退费的学生（退费中 / 已退费 / 流失已排除）"
+            placeholder="输入学生姓名搜索（退费中 / 已退费 / 流失 / 缴费中的学生不可选）"
+            no-data-text="没有可发起退费的学生（退费中 / 已退费 / 流失 / 缴费中已排除）"
             style="width: 100%"
             @change="onStudentChange"
           >
