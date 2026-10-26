@@ -95,6 +95,14 @@ const POST_STEPS = [
    * 用入班历史 / 建档日补齐，只补空不覆盖。
    */
   ['scripts/repair-trial-start.mjs', '进班日对账', 'sms_consult'],
+  /**
+   * ★ 2026-10-26：退费状态对账
+   *
+   * 财务驳回只改了退费单状态、没回滚学生状态 → 人卡在「退费中(8/9)」，
+   * 退费下拉选不到、学生管理也没操作，流程闭不上环。
+   * 代码已修（驳回统一走 restoreStudentAfterReject），这里补存量数据。
+   */
+  ['scripts/repair-refund-state.mjs', '退费状态对账', 'sms_consult'],
 ];
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
