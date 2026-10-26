@@ -29,6 +29,8 @@ import {
 } from 'shared-types/consult';
 import type { ConsultToFormalResult } from 'shared-types/consult';
 import { FEE_ORDER_TABLE, PENDING_FEE_STATUSES, parseOrderItemDetail } from '../services/fee-order.service';
+// ★ 2026-10-26 发起退费下拉要按「有没有在途退费单」排除，不再只看状态
+import { REFUND_TABLE } from '../services/refund.service';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
@@ -118,6 +120,14 @@ const listSchema = z.object({
    * 谈不上退费 —— 直接从候选里剔掉，别让老师选完才在提交时报错。
    */
   excludePendingFee: z.coerce.number().int().optional(),
+  /**
+   * ★ 2026-10-26 排除「有在途退费单」的学生（传 1 生效）
+   *
+   * 发起退费的下拉改用「有没有真在途的退费单」判断，而不是只看状态 8/9：
+   * 财务驳回时状态没回滚（旧 bug）会让状态卡在 9，靠状态排除就永久搜不到人。
+   * 待经理审批(1) / 待财务打款(2) 才算在途；已驳回(4) 的人要能重新发起。
+   */
+  excludePendingRefund: z.coerce.number().int().optional(),
   deptCode: z.coerce.number().int().optional(),
   keyword: z.string().optional(),
 });
@@ -165,6 +175,23 @@ studentRouter.get(
           .whereIn('status', PENDING_FEE_STATUSES)
           .where('is_deleted', false)
           .whereNull('plan_id');
+      });
+    }
+    /**
+     * ★ 2026-10-26 排除「有在途退费单」的学生（待经理审批 / 待财务打款）
+     *
+     * 与 excludePendingFee 同理用 NOT EXISTS：不产生重复行、不影响分页总数。
+     * 已驳回(4) / 已打款(3) 不算在途 —— 已驳回的人必须能重新发起，
+     * 这正是「财务驳回后二次发起」的闭环入口。
+     */
+    if (q.excludePendingRefund) {
+      query.whereNotExists((sub: any) => {
+        sub
+          .select(db.raw('1'))
+          .from(REFUND_TABLE)
+          .whereRaw(`\`${REFUND_TABLE}\`.\`consult_student_id\` = \`${STUDENT_TABLE}\`.\`id\``)
+          .whereIn('status', [1, 2])
+          .where('is_deleted', false);
       });
     }
     // ★ 2026-10-15 部门筛选（前端「全部部门」下拉）：1=初高部 2=大学部

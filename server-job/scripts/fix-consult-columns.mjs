@@ -62,6 +62,16 @@ const TABLES = {
     ['finance_verified_by', "varchar(50) DEFAULT NULL COMMENT '财务核对人姓名（★ 2026-10-22 从财务侧同步）'"],
     ['finance_verified_time', "datetime DEFAULT NULL COMMENT '财务核对时间（★ 2026-10-22 从财务侧同步）'"],
   ],
+  t_consult_refund: [
+    /**
+     * ★ 2026-10-26 用户报障：「财务驳回之后没办法二次发起退费」
+     *
+     * 驳回要退回「发起之前的状态」，不能一律退回试学中（待分班的人会被凭空分班）。
+     * 发起时把当时的 consult_state 记在这里，驳回时按它回滚。
+     * 老单为 NULL → 代码按「有没有 class_id」推断（已分班=试学中，未分班=待分班）。
+     */
+    ['origin_state', "tinyint(4) DEFAULT NULL COMMENT '发起退费时的学生状态（驳回时回滚依据）'"],
+  ],
 };
 
 /** 控制台颜色：Windows 传统 cmd 不认 ANSI，会显示成 ←[32m 乱码 → 那时走纯文本 */
