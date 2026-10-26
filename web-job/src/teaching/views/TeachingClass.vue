@@ -187,12 +187,14 @@
           >
             升实训
           </el-button>
-          <!-- ★ 2026-10-21 批注：升实训之后出现【升就业】——
+          <!-- ★ 2026-10-23 批注第 2 条：「**就业部**才有【升就业】」——
+               就业部在库里是 job（实训班）/ emp（就业部自建班）两个学段，
+               两个都要出现按钮（见 isEmploymentStage）。
                点一下弹确认，把该班学生状态改为「待就业」，班级状态也改「待就业」。
-               ★ 2026-10-23 批注：升就业成功后这个按钮**变成【待就业】**（只表示当前态，
-                 不可再点），后面再出现【已就业】。已是待就业 / 已就业的班不再显示【升就业】。 -->
+               升就业成功后这个按钮**变成【待就业】**（只表示当前态，不可再点），
+               后面再出现【已就业】。已是待就业 / 已就业的班不再显示【升就业】。 -->
           <el-button
-            v-if="!isReadOnlyUser && isEmploymentStage(row) && canUpgradeEmployment(row)"
+            v-if="!isReadOnlyUser && isEmploymentStage(row.stage) && canUpgradeEmployment(row)"
             link
             type="warning"
             :loading="employmentSaving === row.classId"
@@ -200,21 +202,15 @@
           >
             升就业
           </el-button>
-          <!-- ★ 2026-10-23：升就业成功后的【待就业】——纯状态位，不可点击 -->
-          <el-button
-            v-if="!isReadOnlyUser && isEmploymentStage(row) && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
-            link
-            type="info"
-            disabled
-          >
-            待就业
-          </el-button>
+          <!-- ★ 2026-10-23 补充批注：「状态变为待就业就**不显示**【待就业】这个按钮了」
+               原来升就业成功后按钮变成灰的【待就业】占位，现在整块去掉 ——
+               待就业状态只由「状态」列的标签体现，操作列只留可点的【已就业】。 -->
           <!-- ★ 2026-10-23 批注第 3 条：【待就业】之后才有【已就业】。
                点击 → 识别整班学生状态 →
                  全部「已就业 / 退学」→ 提示班级人数 / 就业人数 → 确认改「已就业」；
                  还有别的状态 → 只提示各状态人数及人员，**不可操作**。 -->
           <el-button
-            v-if="!isReadOnlyUser && isEmploymentStage(row) && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
+            v-if="!isReadOnlyUser && isEmploymentStage(row.stage) && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
             link
             type="success"
             :loading="employedSaving === row.classId"
@@ -363,9 +359,16 @@
           </el-col>
           <!-- ★ 2026-10-21 用户口径：班级编号三部门统一（初高部/大学部/就业部），必填 -->
           <!-- ★ 2026-10-22 用户口径：去掉「生成」按钮，一律由相关人员手工填写 -->
+          <!-- ★ 2026-10-23 用户口径：「班级编号只能新建班级可创建，编辑班级里的班级编号不可更改」
+               → 只有新增时能填，编辑时只读（后端 save 也会忽略编辑传上来的编号）。 -->
           <el-col :span="8">
             <el-form-item label="班级编号" prop="classCode">
-              <el-input v-model="form.classCode" maxlength="32" placeholder="Q17/J101/T101" />
+              <el-input
+                v-model="form.classCode"
+                maxlength="32"
+                :disabled="!!form.id"
+                :placeholder="form.id ? '班级编号创建后不可修改' : 'Q17/J101/T101'"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -645,6 +648,7 @@
         <template #title>
           升实训会把这个班<b>连同学生</b>整体转到就业部：新班<b>不再有班主任 / 教员 / 助教</b>，
           只保留项目经理与就业老师；原班级从大学部移除。学生状态统一变为「实训中」。
+          <br /><b>班级编号沿用原班级，不会重新生成</b>（编号只在新建班级时确定，之后任何操作都不改）。
         </template>
       </el-alert>
       <el-form label-width="100px" class="tv-form">
@@ -657,6 +661,13 @@
           <el-col :span="12">
             <el-form-item label="部门">
               <el-input model-value="就业部" disabled />
+            </el-form-item>
+          </el-col>
+          <!-- ★ 2026-10-23 批注：「班级编号只有新建班级时创建更改，后续任何操作都不可更改」
+               → 升实训**沿用原编号**，这里只读展示，不给编辑。 -->
+          <el-col :span="12">
+            <el-form-item label="班级编号">
+              <el-input :model-value="trainingForm.srcClassCode" disabled placeholder="升实训后保持不变" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -1005,16 +1016,19 @@ const isTrainPhase = computed(() => Number(form.phaseCode) === TRAIN_PHASE_CODE)
  */
 const rules = computed<FormRules>(() => ({
   // ★ 2026-10-21：班级编号三部门统一必填（历史班级留空，首次编辑时补）
-  classCode: [
-    { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
-    {
-      validator: (_rule, value, callback) => {
-        if (String(value ?? '').trim()) callback();
-        else callback(new Error('请填写班级编号，如 Q17 / J101 / T101'));
-      },
-      trigger: 'submit',
-    },
-  ],
+  // ★ 2026-10-23：编辑时编号只读、也不再校验必填（防止老数据编号为空时保存被卡）
+  classCode: form.id
+    ? []
+    : [
+        { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
+        {
+          validator: (_rule, value, callback) => {
+            if (String(value ?? '').trim()) callback();
+            else callback(new Error('请填写班级编号，如 Q17 / J101 / T101'));
+          },
+          trigger: 'submit',
+        },
+      ],
   projectManagerName: isTrainPhase.value
     ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
     : [],
@@ -1102,11 +1116,9 @@ const formPlanId = ref('');
 const editStatusFrom = ref<number | null>(null);
 /**
  * ★ 2026-10-25：就业部班级的状态选项。
- *
- *   原来所有部门都用 classStatusOptions()：非系统态时只给「开班(1) / 封班(2)」两个 ——
- *   用户在就业部新建班级时觉得「状态不对、只有开班和闭班」。
- *   就业部还有实训(5) / 待就业(6) / 已就业(7) 三个系统态，
- *   新建/编辑时应能直接选（系统态的行依旧只读，避免绕过升实训/升就业的校验）。
+ *   所有部门都用 classStatusOptions() 时，非系统态只给「开班(1)/封班(2)」两个 ——
+ *   就业部还有实训(5)/待就业(6)/已就业(7) 三个系统态，新建/编辑时应能直接选
+ *   （系统态行仍只读，避免绕过升实训/升就业的校验）。
  */
 const EMP_STATUS_CHOICES = [1, 2, 5, 6, 7] as const;
 const editStatusOptions = computed(() => {
@@ -1497,6 +1509,8 @@ const trainingSaving = ref(false);
 const trainingForm = reactive({
   classId: '',
   srcName: '',
+  /** ★ 2026-10-23：源班编号 —— 升实训**沿用**它，弹窗里只读展示 */
+  srcClassCode: '',
   studentCount: 0,
   className: '',
   phaseCode: undefined as number | undefined,
@@ -1537,6 +1551,7 @@ function openTraining(row: ClassRow) {
   Object.assign(trainingForm, {
     classId: row.classId,
     srcName: row.className,
+    srcClassCode: row.classCode || '—',
     studentCount: row.studentCount ?? 0,
     // 批注：班级名称可以修改，也可以保持原班级名称不变
     className: row.className,
@@ -1609,8 +1624,9 @@ async function doTrainingUpgrade() {
  *     则进行提示班级各个状态的人数及人员，**不可进行【已就业】操作**」
  *
  * 落地：
- *   · 升就业 → 学生状态 实训中(8) → 待就业(9)，班级状态 实训(5) → 待就业(6)；
+ *   · 升就业 → 学生状态 实训中(8) → 待就业(9)，班级状态 原状态 → 待就业(6)；
  *     操作列按钮从【升就业】变【待就业】（灰、不可点），并出现【已就业】。
+ *     ★ 2026-10-23：入口放开到整个「就业部」（job 实训班 + emp 就业部自建班）。
  *   · 已就业 → 先查整班学生状态分布：
  *       settled（全班都是已就业/退学）→ 提示班级人数 / 就业人数 → 一次确认 → 班级状态改 已就业(7)；
  *       否则 → 只弹提示，逐条列出「状态 人数：姓名、姓名…」+ 明确「不可操作」，
@@ -1622,19 +1638,24 @@ const CLASS_STATUS_CODE = { TRAINING: 5, WAIT_EMPLOY: 6, EMPLOYED: 7 } as const;
 const employmentSaving = ref('');
 const employedSaving = ref('');
 
-/** 实训班还没到「待就业 / 已就业」→ 才显示【升就业】 */
+/**
+ * ★ 2026-10-23 批注第 2 条：「**就业部**才有【升就业】」
+ *
+ *   界面上「就业部」是一张卡，但行的 stage 有两个内部值（同一张表分开存）：
+ *     job —— 升实训造出来的实训班
+ *     emp —— 直接在就业部建的班
+ *   三个按钮（升就业 / 灰【待就业】/ 已就业）都只对这两个学段出现；
+ *   初高部、大学部一个都不出现。原来只判断 'job'，就业部里 emp 的班
+ *   （如 SX2601 / SX2602）操作列没有任何按钮。
+ */
+function isEmploymentStage(stage: string): boolean {
+  return stage === 'job' || stage === 'emp';
+}
+
+/** 就业部班级还没到「待就业 / 已就业」→ 才显示【升就业】 */
 function canUpgradeEmployment(row: ClassRow): boolean {
   const s = Number(row.classStatus);
   return s !== CLASS_STATUS_CODE.WAIT_EMPLOY && s !== CLASS_STATUS_CODE.EMPLOYED;
-}
-
-/**
- * ★ 2026-10-25：就业部班级在库里有两种学段 —— `job`（实训）与 `emp`（就业），
- *   都属就业部（dept_code=3）。原来升就业/待就业/已就业三个按钮写死 `row.stage === 'job'`，
- *   用户在「部门=就业部」新建的班（学段=emp）根本看不到这些按钮。
- */
-function isEmploymentStage(row: { stage: string }): boolean {
-  return row.stage === 'job' || row.stage === 'emp';
 }
 
 /** 「已就业 10 人、退学 2 人」这种一句话摘要（settled 弹窗用） */

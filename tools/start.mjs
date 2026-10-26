@@ -640,6 +640,37 @@ async function ensureDatabases() {
     }
   }
 
+  /* 5f) ★ 数据库表结构自检（2026-10-23）
+   *
+   * 【为什么要有这一步】
+   *   2026-10-23 用户报障：市场咨询 → 学生管理 弹「数据表不存在：
+   *   sms_consult.t_consult_installment_plan」。查明是**本地库比代码旧** ——
+   *   队友 a885bd7 加了分期付款三张表，只写进 sql/init，没写 knex 迁移，
+   *   而统一错误文案把它翻译成「代码漏切读」，指错方向，排查了一整轮。
+   *   所以每次启动都对比一次「代码引用的表 / init SQL 的表」与真实库，
+   *   有缺表就明确点名（不拦住启动 —— 缺的可能是暂时用不到的功能）。
+   *   手动跑：cd server-job && npm run db:schema-diff */
+  await checkSchemaDiff();
+
+  async function checkSchemaDiff() {
+    const r = spawnSync(
+      process.execPath,
+      [path.join(ROOT, 'server-job', 'scripts', 'db-schema-diff.mjs'), '--quiet'],
+      { stdio: 'inherit', windowsHide: true },
+    );
+    if (r.error) {
+      warn(`表结构自检跳过（${r.error.message}）`);
+      return;
+    }
+    if (r.status === 0) {
+      ok('表结构与代码/init SQL 一致');
+      return;
+    }
+    warn('检测到库里有缺表 —— 相关页面会报「数据表不存在」');
+    console.log('    补法见仓库根目录「数据库变更约定.md」（或 server-job/sql/init/README.md）；');
+    console.log('    自查命令：cd server-job && npm run db:schema-diff');
+  }
+
   async function tableCount(db) {
     const mysql2Path2 = path.join(ROOT, 'server-job', 'node_modules', 'mysql2', 'promise.js');
     const m = (await import('file://' + mysql2Path2.replace(/\\/g, '/'))).default;

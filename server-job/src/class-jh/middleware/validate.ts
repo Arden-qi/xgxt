@@ -44,9 +44,15 @@ export function validate(schema: ZodSchema): RequestHandler {
         // refine(...) 产生的校验失败（自定义规则/格式校验）→ 用 FORMAT_ERROR(40003)，
         // 其余基础类型/范围错误仍归为 PARAM_ERROR(40000)。
         const code = first.code === 'custom' ? BizCode.FORMAT_ERROR : BizCode.PARAM_ERROR;
-        const msg = first.code === 'custom'
-          ? (field ? `参数「${field}」：${first.message}` : first.message)
-          : `${field ? `参数「${field}」` : '参数'}${translateError(first.message, first.code)}`;
+        /**
+         * ★ 2026-10-23：schema 写了**中文自定义文案**（如「请填写学生手机号」）就原样显示，
+         *   不再拼「参数「phone」」前缀 —— 否则「没填手机号」会被说成「参数「phone」类型不正确」。
+         */
+        const customMsg = /[\u4e00-\u9fa5]/.test(String(first.message)) ? String(first.message).trim() : '';
+        const msg = customMsg
+          || (first.code === 'custom'
+            ? (field ? `参数「${field}」：${first.message}` : first.message)
+            : `${field ? `参数「${field}」` : '参数'}${translateError(first.message, first.code)}`);
 
         const body: ApiResponse<null> = {
           code,
@@ -63,6 +69,13 @@ export function validate(schema: ZodSchema): RequestHandler {
 
 /** 把 zod 的英文报错翻译成中文 */
 function translateError(message: string, code: string): string {
+  /* ★ 2026-10-23：zod 里带中文自定义文案（如「请填写学生手机号」）就优先用它。
+   *
+   * 【为什么】原来一律按 code 硬翻译：字段缺失（invalid_type）会被说成
+   *   「类型不正确」—— 用户只是没填手机号，看到这句话完全对不上。
+   *   约定：schema 里写了中文 message 就以它为准，没写才用下面的通用翻译。 */
+  if (/[\u4e00-\u9fa5]/.test(message)) return ` ${message}`;
+
   const map: Record<string, string> = {
     invalid_type: ' 类型不正确',
     too_small: ' 太小或为空',
