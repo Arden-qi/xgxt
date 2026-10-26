@@ -348,7 +348,18 @@
       top="6vh"
       destroy-on-close
     >
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
+      <!-- ★ 2026-10-26 批注：「进行部门的选择的时候，不显示必选项的文字提示」
+           el-form 的 validate-on-rule-change 默认为 true —— rules 是 computed，
+           切换部门会重算 rules（就业部放开班主任/教员、露出项目经理/就业老师），
+           组件随即把**整张表单**校验一遍，于是红字在没点保存时就全冒出来了。
+           关掉它：规则变化只影响后续的校验，不再立刻出提示。 -->
+      <el-form
+        ref="formRef"
+        :model="form"
+        :rules="rules"
+        label-width="110px"
+        :validate-on-rule-change="false"
+      >
         <el-row :gutter="12">
           <!-- 2026-10-15 按批注：删除「学段」选择器，学段由「部门」自动判定
                （初高部 → 初高；大学部 → 大学；实训从实训页签进入仍可新增） -->
@@ -756,7 +767,7 @@
  * 【★ 与学生档案页最大的不同：不按名字去重】
  *   「初高 G104」和「大学 G104」是两个不同的班，同名是常态。
  */
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
@@ -1143,6 +1154,22 @@ function emptyForm(stage: ClassStage): ClassSaveBody {
 }
 const form = reactive<ClassSaveBody>(emptyForm('jh'));
 
+/**
+ * ★ 2026-10-26：必填校验改成「只在保存时提示」之后带来的副作用 ——
+ *   trigger 不再含 change，所以**红字一旦出现就不会自己消失**：用户把班级名称补上，
+ *   「请填写班级名称」还挂在下面，看着像没生效。
+ *   这里监听整个 form：用户一动手（任意字段变化）就把当前红字全收起，
+ *   等下次点保存重新校验。既满足「平时不提示」，又不会让旧提示赖在屏幕上。
+ *   ⚠️ 必须放在 `form` 之后：watch 注册时会**立即跑一次 getter** 收集依赖，
+ *      放前面会踩 const 的 TDZ。
+ */
+watch(
+  () => JSON.stringify(form),
+  () => {
+    formRef.value?.clearValidate();
+  },
+);
+
 /** 表单里的阶段选项：★ 2026-10-16 改为「方案驱动」——
  *   选了方案 → 只给该方案下的阶段（新方案里的新阶段也能选到）；
  *   没选方案 → 回落到 meta 的阶段清单（此时初高仍按旧口径过滤掉预科）。 */
@@ -1199,6 +1226,20 @@ function onFormDeptChange(v: number | undefined) {
   // 学段变了：阶段按新学段重选（onFormStageChange 会清编号/交棒/备注等学段特有字段）
   if (!formPhaseOptions.value.some((p) => p.value === form.phaseCode)) form.phaseCode = undefined;
   onFormStageChange();
+  /**
+   * ★ 2026-10-26 批注：「进行部门的选择的时候，不显示必选项的文字提示」
+   *   ① el-form 已关掉 validate-on-rule-change（见模板上的说明），切部门不会再立刻全校验；
+   *   ② 但如果用户**先点过保存**（此时已经有红字），再切部门，
+   *      「班主任 / 教员 / 项目经理 / 就业老师」这四项的必填状态会变 ——
+   *      旧的报错得跟着清掉，否则会出现「就业部了、班主任还挂着『请选择班主任』」。
+   *      只清这四项，其余既有报错保留（用户还得去补）。
+   */
+  formRef.value?.clearValidate([
+    'headTeacherId',
+    'teacherId',
+    'projectManagerName',
+    'employmentTeacherName',
+  ]);
 }
 
 /* ============ 2026-10-15 改版：班主任/教员/助教接入「权限管理」用户列表 ============

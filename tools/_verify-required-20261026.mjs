@@ -194,6 +194,18 @@ async function pickSelect(text, index = 0) {
   check('弹窗未被关闭（校验拦住保存）', st.ok && !!st.title);
   check('无未捕获异常', pageErrors.length === 0, pageErrors[0] || '');
   await shot('req_class_empty_save.png');
+  // ★ 2026-10-26：红字要能被「用户开始填写」收起（否则补完了提示还挂着，像没生效）
+  await ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].filter(x => x.offsetParent !== null).pop();
+    const inp = d.querySelector('input.el-input__inner');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(inp, '冒烟测试班');
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await sleep(600);
+  st = await dialogState();
+  check('开始填写后红字自动收起', st.errors.length === 0, st.errors.join(' | '));
   await clickBtn('取消');
   await sleep(600);
 
@@ -201,10 +213,24 @@ async function pickSelect(text, index = 0) {
   console.log('\n=== ② 就业部新增班级：班主任 / 教员 不是必选 ===');
   check('点【新增班级】', (await clickBtn('新增班级')) === 'OK');
   await sleep(1400);
+  // 先在初高部点一次保存，把红字打出来 —— 后面切部门要验证这些旧红字会被清掉
+  check('（初高部）点【保存】', (await clickBtn('保存')) === 'OK');
+  await sleep(1300);
+  st = await dialogState();
+  check('初高部：保存后要求班主任/教员',
+    st.errors.some((e) => e.includes('班主任')) && st.errors.some((e) => e.includes('教员')),
+    st.errors.join(' | '));
   // ⚠️ 不能靠 URL 上的 ?stage=emp —— 页面没读它，openCreate 用的是 query.stage（页面过滤器）
   //    → 直接在弹窗里把「部门」切到就业部，走 onFormDeptChange 的真实联动
   check('部门切到「就业部」', (await pickSelect('就业部')) === 'OK/OK');
   st = await dialogState();
+  console.log('  切部门后报错:', st.errors.join(' | ') || '(无)');
+  // ★ 2026-10-26 批注：「进行部门的选择的时候，不显示必选项的文字提示」
+  //   → 切部门本身不许再冒新红字，也不许留着「请选择班主任 / 请选择教员」这种已失效的旧红字
+  check('切部门不再要求班主任', !st.errors.some((e) => e.includes('班主任')));
+  check('切部门不再要求教员', !st.errors.some((e) => e.includes('教员')));
+  check('切部门不冒新红字（就业部必填项未提前提示）',
+    !st.errors.some((e) => e.includes('就业部班级必填')), st.errors.join(' | '));
   console.log('  字段:', st.labels.map((l) => l.text + (l.required ? '*' : '')).join(' / '));
   check('「班主任」无红星', st.labels.some((l) => l.text.includes('班主任') && !l.required));
   check('「教员」无红星', st.labels.some((l) => l.text.includes('教员') && !l.required));

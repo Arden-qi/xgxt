@@ -860,7 +860,7 @@
  *   · 4 个学段各自的特有区块（综合素质 / 校园网 / 简历 / 学籍异动）
  *     都按「后端有没有给」来决定显不显示 —— 不写死学段判断
  */
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
@@ -1267,6 +1267,18 @@ const rules: FormRules = {
   enrollDate: requiredOnCreate('请选择入学日期'),
   homeAddress: requiredOnCreate('请填写家庭住址'),
 };
+
+/**
+ * ★ 2026-10-26：必填校验改成「只在保存时提示」之后带来的副作用 ——
+ *   trigger 不再含 blur / change，红字一旦出现就不会自己消失（补上了内容也还挂着）。
+ *   这里监听整个 form：用户一动手就把当前红字全收起，等下次点保存重新校验。
+ */
+watch(
+  () => JSON.stringify(form),
+  () => {
+    formRef.value?.clearValidate();
+  },
+);
 
 /* ============ 2026-10-15 表单改版：身份证号 → 年龄 ============ */
 
