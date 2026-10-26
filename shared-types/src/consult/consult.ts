@@ -220,6 +220,15 @@ export interface ConsultStudentQuery extends PageQuery {
    * 钱就还没确认到账 —— 发起退费的学生下拉要剔掉这类人。
    */
   excludePendingFee?: number;
+  /**
+   * ★ 2026-10-26 排除「有在途退费单」的学生（传 1 生效）
+   *
+   * 发起退费的下拉以前靠 consult_state ∈ (8,9) 排除，但财务驳回时
+   * 学生状态没回滚（旧 bug）→ 状态卡在 9、退费单已经是「已驳回」，
+   * 这个人就再也选不到了。改成按「有没有真在途的退费单」判断：
+   * 单子被驳回的人照常可选，能改完重新提交。
+   */
+  excludePendingRefund?: number;
   /** 部门筛选 */
   deptCode?: DeptCode;
   /** 全部字段模糊搜索 */
@@ -894,8 +903,15 @@ export interface ConsultRefundOrder {
   selfApprove: boolean;
   approveByName?: string;
   approveAt?: string;
-  /** 经理驳回原因 */
+  /** 经理 / 财务驳回原因 */
   rejectReason?: string;
+  /**
+   * ★ 2026-10-26 发起退费那一刻学生的咨询状态（1~13）
+   *
+   * 驳回时要退回「发起之前的状态」，不能一律退回试学中 ——
+   * 待分班(4) 发起的人被驳回后直接变试学中，等于凭空分了班。
+   */
+  originState?: number;
 
   /* ---- 试学消耗核算 ---- */
   trialStart?: string;
