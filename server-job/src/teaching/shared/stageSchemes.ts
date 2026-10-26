@@ -178,6 +178,27 @@ export async function resolveSchemeStageName(
   }
 }
 
+/**
+ * ★ 2026-10-25：阶段明细 id → 阶段码（学生档案「阶段」筛选用）
+ *
+ *   学生档案的阶段筛选前端传的是方案阶段明细 id（`schemeStageId`），
+ *   而学生/班级表上只有阶段码。这里把它翻成码，仓储再按「学生阶段码 或 班级阶段码」匹配，
+ *   避免只认班级 `scheme_stage_id`（大多班级没写这一列）导致永远查不到。
+ */
+export async function resolveSchemeStageCode(stageId: unknown): Promise<number | null> {
+  const id = String(stageId ?? '').trim();
+  if (!id) return null;
+  try {
+    const row = (await classJhDb(STAGE_T).where({ id, is_deleted: false }).first()) as
+      | Record<string, any>
+      | undefined;
+    const code = Number(row?.stage_code);
+    return Number.isFinite(code) && code > 0 ? code : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function resolvePhaseCodeFromScheme(
   deptCode: unknown,
   schemeStageId: unknown,

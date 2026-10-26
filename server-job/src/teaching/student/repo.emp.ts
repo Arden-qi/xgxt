@@ -66,8 +66,26 @@ const STAGE = 'emp' as const;
  */
 function applySchemeFilter(qb: any, q: StudentListQuery): void {
   const classOf = () => empClasses();
+  /**
+   * ★ 2026-10-25 修：按方案阶段筛选改成「学生阶段码 或 班级阶段码」双口径。
+   *
+   *   原来只按班级 scheme_stage_id 关联 —— 但 19 个班里只有 5 个写了这一列
+   *   （方案化改造前建的班没有），用户选任何阶段都查不到数据。
+   *   service 已把方案阶段 id 解析成阶段码（q.schemeStageCode），这里按码匹配：
+   *   学生自己的 stage_code 命中，或其所在班级的 stage_code 命中，都算该阶段。
+   */
   if (q.schemeStageId) {
-    qb.whereIn('class_id', classOf().where('scheme_stage_id', q.schemeStageId).select('id'));
+    if (q.schemeStageCode) {
+      const code = q.schemeStageCode;
+      qb.andWhere((b: any) => {
+        b.where(phaseCodeCol(), code).orWhereIn(
+          'class_id',
+          classOf().where(phaseCodeCol(), code).select('id'),
+        );
+      });
+    } else {
+      qb.whereIn('class_id', classOf().where('scheme_stage_id', q.schemeStageId).select('id'));
+    }
   }
   if (q.noScheme) {
     qb.andWhere((b: any) => {

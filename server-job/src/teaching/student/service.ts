@@ -40,7 +40,7 @@ import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
 import { getUserPagePermissions } from '../../utils/pagePermissionSource';
 import { listClassesByStage } from '../shared/classOptions';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
-import { loadSchemeStagesForStage } from '../shared/stageSchemes';
+import { resolveSchemeStageCode, loadSchemeStagesForStage } from '../shared/stageSchemes';
 import { nextStudentNoForClass, phaseCodeOfClass } from '../shared/studentNo';
 // ★ 2026-10-25 学籍状态变更（休学/复学）要通知财务冻结/解冻
 import { syncStudentStatusToFinance } from '../../utils/financeClient';
@@ -145,6 +145,12 @@ async function mergedRows(
   const stages: StudentStage[] = q.stage ? [q.stage] : await visibleStages(user);
   if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有学生档案的访问权限');
   if (q.stage) await assertStageView(user, q.stage);
+
+  /* ★ 2026-10-25：方案阶段 → 阶段码（仓储按「学生阶段码 或 班级阶段码」匹配） */
+  if (q.schemeStageId && !q.schemeStageCode) {
+    const code = await resolveSchemeStageCode(q.schemeStageId);
+    if (code) q = { ...q, schemeStageCode: code };
+  }
 
   const parts = await Promise.all(stages.map((s) => REPOS[s].list(q, user)));
   let rows = parts.flat();

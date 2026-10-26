@@ -398,7 +398,13 @@
           <!-- ★ 阶段选项 = 当前方案里的阶段；没选方案 → 退回该学段的阶段清单（历史数据仍可编辑） -->
           <el-col v-if="formPhaseOptions.length" :span="8">
             <el-form-item label="阶段">
-              <el-select v-model="form.phaseCode" clearable placeholder="请选择" style="width: 100%">
+              <el-select
+                v-model="form.phaseCode"
+                clearable
+                placeholder="请选择"
+                style="width: 100%"
+                @change="onFormPhaseChange"
+              >
                 <el-option v-for="p in formPhaseOptions" :key="p.value" :label="p.label" :value="p.value" />
               </el-select>
             </el-form-item>
@@ -770,6 +776,7 @@ import {
   confirmClassEmployed,
   getStaffOptions,
   isSystemClassStatus,
+  CLASS_STATUS_NAME,
   CLASS_STATUS_TAG,
   CLASS_STATUS_SELECTABLE,
   classStatusOptions,
@@ -1107,7 +1114,21 @@ const formPlanId = ref('');
 
 /** 打开编辑弹窗时的原始状态 —— 状态下拉的可选项按它算，选完不会越点越多 */
 const editStatusFrom = ref<number | null>(null);
-const editStatusOptions = computed(() => classStatusOptions(editStatusFrom.value));
+/**
+ * ★ 2026-10-25：就业部班级的状态选项。
+ *   所有部门都用 classStatusOptions() 时，非系统态只给「开班(1)/封班(2)」两个 ——
+ *   就业部还有实训(5)/待就业(6)/已就业(7) 三个系统态，新建/编辑时应能直接选
+ *   （系统态行仍只读，避免绕过升实训/升就业的校验）。
+ */
+const EMP_STATUS_CHOICES = [1, 2, 5, 6, 7] as const;
+const editStatusOptions = computed(() => {
+  if (Number(form.deptCode) === 3) {
+    const cur = Number(editStatusFrom.value) || 1;
+    if (isSystemClassStatus(cur)) return [{ value: cur, label: CLASS_STATUS_NAME[cur] ?? '' }];
+    return EMP_STATUS_CHOICES.map((v) => ({ value: v, label: CLASS_STATUS_NAME[v] ?? String(v) }));
+  }
+  return classStatusOptions(editStatusFrom.value);
+});
 /**
  * 状态是否只读：
  *   实训(5) / 待就业(6) / 已就业(7) 是系统态 —— 不能在编辑弹窗里手工改
@@ -1311,6 +1332,18 @@ async function openEdit(row: ClassRow) {
  *    （用户反馈：填完班级编号去选部门，编号自动清空）。
  *    班级编号是三个部门通用、与学段无关的字段，必须原样保留。
  */
+/**
+ * ★ 2026-10-25：就业部新建班级时，阶段决定初始状态 ——
+ *   301「实训」→ 班级状态=实训(5)；302「就业」→ 待就业(6)。之后由升就业/已就业按钮推进。
+ */
+function onFormPhaseChange(): void {
+  if (Number(form.deptCode) !== 3) return;
+  if (form.id) return; // 编辑已有班级不自动改状态
+  const code = Number(form.phaseCode);
+  if (code === 301) form.classStatus = CLASS_STATUS_CODE.TRAINING;
+  else if (code === 302) form.classStatus = CLASS_STATUS_CODE.WAIT_EMPLOY;
+}
+
 function onFormStageChange() {
   const keep = { id: form.id, className: form.className, classCode: form.classCode };
   Object.assign(form, emptyForm(form.stage), keep);

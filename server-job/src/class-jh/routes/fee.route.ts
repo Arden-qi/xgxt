@@ -658,9 +658,21 @@ feeRouter.post(
 
     /* ---- 4. 财务侧反写（best-effort）：凭证/日期/备注 + 待缴→已缴，财务才点得动「核对」 ---- */
     let financeSynced = false;
-    if (row.source_system === 'finance' && row.source_id) {
+    /**
+     * ★ 2026-10-25 修：财务单定位改以 `finance_fee_id` 为准（老口径兜底）。
+     *
+     *   10-23 的 ID 统一之后，新单据只写 `finance_fee_id`，`source_id` 恒为空；
+     *   而这里原来判的是 `source_system === 'finance' && source_id`、
+     *   并且用 `source_id` 当财务单号 → **条件永远不成立、同步从未执行**，
+     *   表现就是「登记缴费后催费变已缴、财务单还是待缴，财务点不动核对」。
+     *   与文件里判重/口径统一（finance_fee_id 为准）保持一致。
+     */
+    const financeFeeId =
+      String((row as any).finance_fee_id ?? '').trim() ||
+      (row.source_system === 'finance' && row.source_id ? String(row.source_id) : '');
+    if (financeFeeId) {
       const pushed = await pushVoucherToFinance({
-        financeFeeId: String(row.source_id),
+        financeFeeId,
         voucherUrl: voucherUrl ?? null,
         payDate: body.payDate,
         remark: body.remark ?? null,
