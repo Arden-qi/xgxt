@@ -333,13 +333,23 @@ async function syncClassStageNames(
   }
 }
 
-/** 阶段明细入库 */
+/**
+ * 阶段明细入库
+ *
+ * ★ 2026-10-23：加了 `trx` —— 方案主行与阶段明细**必须在同一个事务里**。
+ *   原来分开写：先 insert 方案、再写阶段，阶段一旦失败（例如库里缺列），
+ *   方案行已经落库 → 留下「只有名字、没有阶段」的空方案，
+ *   用户再存同名还会被「该部门下已有同名方案」拦住（2026-10-23 实际发生）。
+ */
 async function replaceStages(
   schemeId: string,
   stages: StageSchemeSaveInput['stages'],
   userId: string,
   deptCode: number,
+  trx?: any,
 ): Promise<void> {
+  /** 事务对象与 knex 实例的查询 API 一致，写库统一走它 */
+  const q = trx || db;
   const now = new Date();
   const codes = await assignStageCodes(schemeId, deptCode, stages, userId);
 
@@ -351,7 +361,7 @@ async function replaceStages(
    *   编辑班级时阶段下拉选不中（显示成一串 uuid），
    *   也没法反查「这个阶段被哪些班用了」。现在同码阶段复用原 id。
    */
-  const current = (await db(SCHEME_STAGE_TABLE)
+  const current = (await q(SCHEME_STAGE_TABLE)
     .where({ scheme_id: schemeId, is_deleted: false })
     .select('id', 'stage_name', 'stage_code')) as Array<Record<string, any>>;
 
@@ -387,7 +397,7 @@ async function replaceStages(
     if (hit) {
       const id = String(hit.id);
       keptIds.add(id);
-      await db(SCHEME_STAGE_TABLE).where({ id }).update({
+      await q(SCHEME_STAGE_TABLE).where({ id }).update({
         stage_name: name,
         stage_code: code,
         study_months: months,
@@ -400,7 +410,7 @@ async function replaceStages(
     } else {
       const id = randomUUID();
       keptIds.add(id);
-      await db(SCHEME_STAGE_TABLE).insert({
+      await q(SCHEME_STAGE_TABLE).insert({
         id,
         scheme_id: schemeId,
         stage_name: name,
@@ -426,7 +436,7 @@ async function replaceStages(
         `阶段「${String(c.stage_name ?? '')}」已被 ${used} 个班级使用，不能删除 —— 请先把这些班级改到别的阶段`,
       );
     }
-    await db(SCHEME_STAGE_TABLE).where({ id }).update({
+    await q(SCHEME_STAGE_TABLE).where({ id }).update({
       is_deleted: true,
       update_time: now,
       update_by: userId || 'system',
@@ -444,7 +454,12 @@ async function replaceStages(
   await refreshStageDict();
 }
 
-/** 新增方案（含阶段明细） */
+/**
+ * 新增方案（含阶段明细）
+ *
+ * ★ 2026-10-23：主行 + 明细放进**同一个事务**。
+ *   以前是两步裸写：方案行先落库，阶段明细失败就留下空方案（见 replaceStages 注释）。
+ */
 export async function createScheme(input: StageSchemeSaveInput, userId: string): Promise<{ id: string }> {
   if (await nameDuplicated(input.schemeName, input.deptCode)) {
     throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, '该部门下已有同名方案');
@@ -452,16 +467,18 @@ export async function createScheme(input: StageSchemeSaveInput, userId: string):
 
   const id = randomUUID();
   const now = new Date();
-  await db(SCHEME_TABLE).insert({
-    id,
-    scheme_name: input.schemeName,
-    dept_code: input.deptCode,
-    sort_no: 0,
-    is_deleted: false,
-    create_time: now,
-    create_by: userId || 'system',
+  await db.transaction(async (trx) => {
+    await trx(SCHEME_TABLE).insert({
+      id,
+      scheme_name: input.schemeName,
+      dept_code: input.deptCode,
+      sort_no: 0,
+      is_deleted: false,
+      create_time: now,
+      create_by: userId || 'system',
+    });
+    await replaceStages(id, input.stages, userId, input.deptCode, trx);
   });
-  await replaceStages(id, input.stages, userId, input.deptCode);
   return { id };
 }
 
@@ -473,13 +490,15 @@ export async function updateScheme(id: string, input: StageSchemeSaveInput, user
     throw new BizError(BizCode.BUSINESS_RULE_VIOLATION, '该部门下已有同名方案');
   }
 
-  await db(SCHEME_TABLE).where({ id }).update({
-    scheme_name: input.schemeName,
-    dept_code: input.deptCode,
-    update_time: new Date(),
-    update_by: userId || 'system',
+  await db.transaction(async (trx) => {
+    await trx(SCHEME_TABLE).where({ id }).update({
+      scheme_name: input.schemeName,
+      dept_code: input.deptCode,
+      update_time: new Date(),
+      update_by: userId || 'system',
+    });
+    await replaceStages(id, input.stages, userId, input.deptCode, trx);
   });
-  await replaceStages(id, input.stages, userId, input.deptCode);
   return { id };
 }
 

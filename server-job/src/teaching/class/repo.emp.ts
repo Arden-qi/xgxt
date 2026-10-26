@@ -46,6 +46,11 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import { resolveStageName } from '../../class-jh/utils/stageDict';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
+import {
+  resolvePhaseCodeFromScheme,
+  findSchemeStageByCode,
+  FIRST_PHASE_OF_DEPT,
+} from '../shared/stageSchemes';
 import { assertClassCodeAvailable } from '../shared/classCode';
 
 const T = 't_job_class';
@@ -104,6 +109,12 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     phaseCode: phase,
     // ★ 2026-10-23：阶段名方案优先、字典兜底（同 repo.classJh 口径）
     phaseName: phase === null ? '' : (str(r.scheme_stage_name) || PHASE_NAME[phase] || resolveStageName(phase) || ''),
+    // ★ 2026-10-26 合并取对方：阶段名口径按上面这行（方案 > 字典 > stage 字典）。
+    //   但 dto.ClassRow 的方案三列仍是必填（前端【编辑班级】要回显阶段方案下拉），
+    //   这里只把三列原样下发，不参与任何筛选/显示判断。
+    schemeId: str(r.scheme_id),
+    schemeStageId: str(r.scheme_stage_id),
+    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -132,10 +143,22 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
   };
 }
 
-/** 数据范围（口径原样搬，见文件头说明） */
+/**
+ * 数据范围（与 `teaching/shared/dataScope.ts` 同一口径）
+ *
+ * ★ 2026-10-23 修两处「交接后新负责人看不到班级」的根因：
+ *   ① **责任人 id 有两个口径**：门户账号是 UUID，权限管理里是 `U_xxx`。
+ *      交接把 `U_xxx` 写进 *_teacher_id，而这里只拿 `user.userId`（门户 UUID）比 →
+ *      一条都对不上。两个都比。
+ *   ② **就业老师没有分支** → applyScope 直接放行，就业老师能看到就业部**所有**班级，
+ *      但详情走的是另一套校验 → 列表点进去就报「没有该班级的访问权限」。
+ *      补上 `employment_teacher_id = 我` 这一支（升就业 / 交接把班交给他之后就能看到）。
+ */
 async function applyScope(qb: any, user: any): Promise<void> {
   const roles = user?.roles || [];
-  const uid = user?.userId || '';
+  const ids = [
+    ...new Set([user?.userId, user?.businessUserId].map((x) => String(x || '')).filter(Boolean)),
+  ];
   if (
     hasRole(roles, RoleCode.SYS_ADMIN) ||
     hasRole(roles, RoleCode.TEACH_DEAN) ||
@@ -143,17 +166,31 @@ async function applyScope(qb: any, user: any): Promise<void> {
   ) {
     return;
   }
+  if (!ids.length) {
+    qb.whereRaw('1 = 0');
+    return;
+  }
   if (hasRole(roles, RoleCode.PROJECT_MANAGER)) {
     const mine = (await tbl(db, 'sms_job', T, STAGE)
-      .where({ project_manager_id: uid, is_deleted: false })
+      .whereIn('project_manager_id', ids)
+      .where('is_deleted', false)
       .select('id')) as Array<{ id: string }>;
-    const ids = mine.map((c) => c.id);
-    if (!ids.length) qb.whereRaw('1 = 0');
-    else qb.whereIn('id', ids);
+    const mineIds = mine.map((c) => c.id);
+    if (!mineIds.length) qb.whereRaw('1 = 0');
+    else qb.whereIn('id', mineIds);
+    return;
+  }
+  if (hasRole(roles, RoleCode.JOB_STAFF)) {
+    // 就业老师：只看自己接手的班（交接 / 升就业写入 employment_teacher_id）
+    qb.andWhere((w: any) => {
+      w.whereIn('employment_teacher_id', ids);
+    });
     return;
   }
   if (hasRole(roles, RoleCode.TEACH_HEAD)) {
-    qb.andWhere('head_teacher_id', uid);
+    qb.andWhere((w: any) => {
+      w.whereIn('head_teacher_id', ids);
+    });
   }
 }
 
@@ -243,7 +280,22 @@ export const repo: ClassRepo = {
     };
     set('class_name', String(body.className || '').trim() || undefined);
     set('dept_code', body.deptCode);
-    set(phaseCodeCol(), body.phaseCode);
+    // ★ 2026-10-22 阶段码：显式传了 phaseCode 就用它；只选了「阶段方案阶段」时
+    //   按方案阶段的 sort_no 推导（否则就业部的班阶段码落空，列表「阶段」显示「—」）。
+    const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
+    const phaseCode = body.phaseCode ?? derivedPhaseCode;
+    set(phaseCodeCol(), phaseCode);
+    // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
+    //   ★ 2026-10-23：之前只有大学部仓储写这三列，就业部/实训漏写 → 列表阶段列空。
+    //   ★ 2026-10-23：表单只传阶段码时，按 (部门, 阶段码) 反查方案阶段补上
+    //     方案三列，保证「新建/编辑时选的阶段」立刻出现在列表「阶段」列。
+    const autoStage =
+      body.schemeStageId == null && phaseCode != null
+        ? await findSchemeStageByCode(body.deptCode, phaseCode)
+        : null;
+    set('scheme_id', body.schemeId ?? autoStage?.schemeId);
+    set('scheme_stage_id', body.schemeStageId ?? autoStage?.id);
+    set('scheme_stage_name', body.schemeStageName ?? autoStage?.name);
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);
@@ -271,10 +323,15 @@ export const repo: ClassRepo = {
      *    班级交接（service.ts handover）也走 save()，不带编号字段；
      *    无条件要求必填会把交接拦死。表单提交时空串被 route 转成 null，仍会报必填。
      */
-    if (body.classCode !== undefined) {
+    /**
+     * ★ 2026-10-23 用户口径：「班级编号只能新建班级可创建，编辑班级里的班级编号不可更改」
+     *   → 只有**新增**（无 body.id）才写入/校验编号；编辑时传上来的编号一律忽略，
+     *     库里保持创建时的值（前端编辑弹窗也把该输入框 disabled 了）。
+     */
+    if (body.classCode !== undefined && !body.id) {
       const code = String(body.classCode ?? '').trim();
       if (!code) throw new Error('班级编号必填');
-      await assertClassCodeUnique(code, body.id);
+      await assertClassCodeUnique(code);
       payload.class_code = code;
     }
 
@@ -324,7 +381,7 @@ export const repo: ClassRepo = {
       // ★ 新建默认封班（"开放"已废弃）
       class_status: body.classStatus ?? CLASS_STATUS.CLOSED,
       // ★ `stage`（阶段码）/ `dept_code` 在这张表都是 NOT NULL，前端没传时给兜底值
-      [phaseCodeCol()]: body.phaseCode ?? 1,
+      [phaseCodeCol()]: body.phaseCode ?? derivedPhaseCode ?? FIRST_PHASE_OF_DEPT[deptCode] ?? 1,
       dept_code: deptCode,
       student_count: 0,
       is_deleted: false,

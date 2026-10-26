@@ -338,7 +338,21 @@ studentRouter.get(
 const addSchema = z.object({
   studentName: z.string().min(1, '姓名必填').max(50),
   gender: z.coerce.number().int().min(1).max(2, '性别只能是 1(男) 或 2(女)'),
-  phone: z.string().min(1, '手机号必填').max(20),
+  /**
+   * ★ 2026-10-23：手机号统一成「必填」，且报错要说人话。
+   *
+   * 【为什么改】用户报障：新建学生只填了姓名就点确定 → 弹「参数「phone」类型不正确」。
+   *   链路是：前端把空手机号当 undefined → JSON 里这个字段直接消失 →
+   *   zod 报 invalid_type（字段缺失）→ 翻译成「类型不正确」，
+   *   用户根本看不出是「手机号没填」。
+   *   现在前端也标了必填（红星 + 提交拦截），两边口径一致；
+   *   后端再兜一层：缺字段 / 空串 / 全空格 → 一律「请填写学生手机号」。
+   */
+  phone: z
+    .string({ required_error: '请填写学生手机号', invalid_type_error: '请填写学生手机号' })
+    .trim()
+    .min(1, '请填写学生手机号')
+    .max(20, '手机号最多 20 位'),
   sourceChannel: z.coerce.number().int().min(1).max(9, '来源渠道取值非法'),
   sourceRemark: optionalStr(100),
   // ★ 2026-10-15 来源=转介绍(3)时填写的招生老师信息
