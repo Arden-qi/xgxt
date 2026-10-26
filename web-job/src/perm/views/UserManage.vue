@@ -3,15 +3,16 @@
  * 账号管理（账号管理）
  *
  * 页面结构严格对齐高保真原型《学管系统-权限体系高保真原型.html》：
- *   · 第 1924~2001 行 renderUsers()          —— KPI 5 卡 + 账号列表（筛选条 + 表格 + 行内操作）
+ *   · 第 1924~2001 行 renderUsers()          —— KPI 4 卡 + 账号列表（筛选条 + 表格 + 行内操作）
+ *   （KPI 由 5 卡减为 4 卡：「已锁定」卡与状态筛选项已于 2026-10-23 按用户要求删除）
  *   · 第 2002~2077 行 openUserDetail()       —— 账号详情弹窗（基本信息 + 所属职位 + 有效权限明细）
  *   · 第 2078~2187 行 openUserForm()         —— 新建 / 编辑账号弹窗（左：基本信息 + 部门树；右：职位 + 权限预览）
- *   · 第 2188~2273 行 togRoleCk / refreshUserPermPreview / quickRoleSet /
- *                     quickRoleClear / previewUserPerm / pwdLive / genPwd / togglePw
+ *   · 第 2188~2273 行 togRoleCk / refreshUserPermPreview / previewUserPerm / pwdLive / genPwd / togglePw
+ *   （同段原型里的 quickRoleSet / quickRoleClear 及「快捷套用」按钮组已于 2026-10-23 删除）
  *   · 第 2274~2338 行 submitUserForm()       —— 表单校验（错误清单弹窗）→ 确认弹窗 → 落库
  *   · 第 2339~2397 行 openAssignRole()/submitAssignRole()  —— 分配职位弹窗
  *   · 第 2398~2460 行 resetPwd()/rpGen()/doResetPwd() —— 重置密码弹窗（密码按规则随机生成）
- *   · 第 2461~2523 行 toggleUser()/unlockUser()/delUser()  —— 停用启用 / 解锁 / 删除
+ *   · 第 2461~2523 行 toggleUser()/delUser()  —— 停用启用 / 删除（解锁已于 2026-10-25 随「锁定」状态一并移除）
  *   · 第 2524~2570 行 dlgImportUser()        —— 批量导入（原型演示）
  *   · 第 1896~1914 行 exportDlg()            —— 导出数据弹窗
  *
@@ -149,16 +150,9 @@ const query = reactive({
   userStatus: '',
 });
 
-/** 账号状态下拉：优先用字典接口，兜底原型写死的三档 */
-const statusOptions = computed<{ value: string; label: string }[]>(() => {
-  const opts = optionStore.userStatuses;
-  if (opts && opts.length) return opts.map((o) => ({ value: String(o.value), label: o.label }));
-  return [
-    { value: '正常', label: '正常' },
-    { value: '已停用', label: '已停用' },
-    { value: '已锁定', label: '已锁定' },
-  ];
-});
+// ★ 2026-10-23：原「账号状态下拉候选」（statusOptions，取字典 + 兜底三档）
+//   随新建表单里的状态下拉一起删除，不再需要。
+//   列表页顶部的状态筛选用的是写死的三档（见模板「全部状态」那个 select）。
 
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / query.size)));
 
@@ -512,7 +506,7 @@ interface UserForm {
 
 const form = reactive<UserForm>({
   // ★ 2026-10-16 按用户要求：新建表单【一切留空】——
-  //   性别不预选、年龄不给默认值、账号状态不预选、密码不预填、强制改密不预勾，
+  //   性别不预选、年龄不给默认值、密码不预填、强制改密不预勾，
   //   管理员填了什么才显示什么（对应的「必填」校验也都补齐了）。
   id: '',
   userName: '',
@@ -523,8 +517,8 @@ const form = reactive<UserForm>({
   /** null = 未填（年龄必须由管理员填，20-65） */
   age: null,
   deptId: '',
-  /** '' = 未选（下拉第一项是「请选择」） */
-  userStatus: '',
+  /** ★ 2026-10-23：账号状态字段已从表单删除，建号一律「正常」 */
+  userStatus: '正常',
   password: '',
   needChangePwd: false,
   modules: [],
@@ -611,7 +605,7 @@ function openAdd(): void {
     gender: 0, // 性别不预选
     age: null, // 年龄不给默认值
     deptId: '',
-    userStatus: '', // 账号状态不预选（下拉显示「请选择」）
+    userStatus: '正常', // ★ 2026-10-23：表单已无状态字段，新建固定「正常」
     password: '', // 密码不预填（可点「随机」按规则生成）
     needChangePwd: false, // 强制改密不预勾
   });
@@ -710,22 +704,8 @@ function onPhoneInput(e: Event): void {
   form.phone = el.value;
 }
 
-/** 快捷套用（原型 quickRoleSet / quickRoleClear 第 2214~2226 行）——
- *  原型写死职位 id，开发版按【职位名】匹配（种子数据同名） */
-function quickRoleSet(names: string[]): void {
-  const ids = roles.value.filter((r) => names.includes(r.roleName)).map((r) => r.id);
-  if (!ids.length) {
-    toast(`未找到职位「${names.join('、')}」，请手动勾选`, 'warn');
-    return;
-  }
-  formRoleIds.value = ids;
-  toast(`已套用职位：${names.join('、')}`);
-}
-
-function quickRoleClear(): void {
-  formRoleIds.value = [];
-  toast('已清空职位选择', 'warn');
-}
+/* ★ 2026-10-23 删除 quickRoleSet / quickRoleClear：界面上的「快捷套用」按钮组已按用户要求移除，
+   这两个函数失去唯一调用方，属死代码。职位选择只保留上面列表里的手工勾选。 */
 
 /* ---- 权限明细预览（原型 previewUserPerm 第 2239~2254 行） ---- */
 
@@ -771,7 +751,7 @@ function validateForm(): string[] {
     }
   }
 
-  if (!v.userStatus) errs.push('请选择账号状态');
+  // ★ 2026-10-23：账号状态字段已删除（固定「正常」建号），这里不再校验它
   // ★ 2026-10-19：职位 / 可访问模块 / 所属部门 三块只在【新建账号】表单里出现，
   //   编辑模式下它们沿用原值提交、界面上也无法修改，所以校验只对新建账号生效。
   if (formMode.value === 'add') {
@@ -818,16 +798,10 @@ function submitUserForm(): void {
           : [
               {
                 k: '所属部门',
-                v: esc(deptFlat.value.find((d) => d.id === form.deptId)?.deptName || '—'),
+                v: esc(deptPathOfId(form.deptId)),
               },
-              {
-                k: '可访问模块',
-                v: derivedModules.value.length
-                  ? `${derivedModules.value
-                      .map((k) => `<span class="tag b">${esc(moduleTitleOf(k))}</span>`)
-                      .join(' ')} <span class="desc">· 按所选职位自动开通</span>`
-                  : '<span class="desc">未推导出模块 · 请检查职位权限</span>',
-              },
+              // ★ 2026-10-23：按用户要求，确认框不再展示「可访问模块」一行
+              //   （模块仍按职位自动推导并照常提交，只是不在确认信息里列出）
               {
                 k: '所属职位',
                 v: roleNames.length
@@ -844,8 +818,8 @@ function submitUserForm(): void {
       ],
       warn: dupName ? '系统内已存在同姓名的账号，请确认不是重复创建。' : '',
       tip: isEdit
-        ? '仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「分配职位」）。'
-        : `账号创建后默认状态为「${form.userStatus}」，可直接登录。`,
+        ? '仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「修改职位」）。'
+        : '', // ★ 2026-10-23：按用户要求删掉「账号创建后默认状态为「正常」…」提示条
       okText: isEdit ? '确认保存' : '确认创建',
     },
     () => {
@@ -901,8 +875,8 @@ const assignRoleIds = ref<string[]>([]);
 
 const assignTitle = computed(() =>
   assignTarget.value
-    ? `分配职位 · <span class="em">${esc(assignTarget.value.userName)}</span>`
-    : '分配职位',
+    ? `修改职位 · <span class="em">${esc(assignTarget.value.userName)}</span>`
+    : '修改职位',
 );
 
 const assignTags = computed<ModuleTag[]>(() => moduleTags(mergedMap(assignRoleIds.value)));
@@ -911,9 +885,207 @@ const assignModuleCount = computed(() => assignTags.value.filter((t) => t.c > 0)
 
 const assignIsOn = (id: string): boolean => assignRoleIds.value.includes(id);
 
+/* ★ 2026-10-23：每个已选职位「是在左栏哪一组里被勾上的」。
+ *
+ * 【为什么需要】初中部 / 高中部 / 大学部 自身没有职位，继承的是教学部那同一批职位
+ *   （同一个 roleId 会同时出现在「教学部 + 三个学段」四栏里）。如果红点和 X/Y 直接按
+ *   职位 id 数一遍，选了初中部的班主任，高中部、大学部也会跟着变红 —— 用户明确不接受。
+ *   所以改成：勾选时把「当时所在的部门键」记在这个表里，红点与计数都只看本栏。
+ *   打开弹窗时先按「账号所属部门」回填，让红点在打开那一刻就指出职位挂在哪几栏。 */
+const assignPickCtx = ref<Record<string, string>>({});
+
+/* ------------------------------------------------------------
+ * ★ 2026-10-23：分配职位弹窗改为「左侧先选部门 → 右侧再选职位」
+ *
+ * 【为什么要改】
+ *   原来是把全部职位平铺成一长条（12 个职位挤在一个滚动框里，只在右侧小字标
+ *   「市场咨询部 · 31项」）。职位一多，找人要靠眼扫；用户希望先按部门收窄范围：
+ *   市场咨询部 / 教学部（初中部·高中部·大学部）/ 就业部（实训管理·就业管理）/
+ *   教务部 / 财务管理部 / 行政，再在下面挑该部门的职位。
+ *
+ * 【三条硬约束（改版不能破坏）】
+ *   ① 多选语义不变：账号权限仍是所选职位的【并集】。
+ *   ② 切换部门【绝不清空】已勾选 —— 跨部门多选是常态，所以底部专门有一行
+ *      「已选职位」把各轮勾选的职位横向列全，点一下即可移除。
+ *   ③ 不能把任何一个职位藏起来：
+ *      · 「全部职位」兜底保留（原来的一锅看全还在，只是默认落在这里）；
+ *      · 挂在「全部门（校级）」上、不属于任何一级部门的职位（如「校长」）
+ *        单独归入末尾的「校级（全部门）」组 —— 否则分级之后它会彻底选不到。
+ * ------------------------------------------------------------ */
+
+/** 左侧部门键：'__all__' = 全部职位，'__school__' = 校级（全部门） */
+const ASSIGN_DEPT_ALL = '__all__';
+const ASSIGN_DEPT_SCHOOL = '__school__';
+
+/** 左侧当前选中的部门键 */
+const assignDeptKey = ref<string>(ASSIGN_DEPT_ALL);
+
+interface AssignDeptGroup {
+  key: string;
+  name: string;
+  /** 2 = 一级部门，3 = 二级子部门（只用于缩进） */
+  level: number;
+  /** 该部门（含下级）名下的职位 */
+  roles: PermRoleListItem[];
+  /** 其中已被勾选的数量（左栏 X/Y 的 X） */
+  picked: number;
+  /** ★ 2026-10-23：本部门没有直属职位时，职位是从这个上级部门继承来的（用于右栏标注） */
+  inheritedFrom?: string;
+}
+
+/** 部门 id → 该部门及其全部下级部门的 id */
+function collectDeptIds(n: PermDeptTreeNode): string[] {
+  const out: string[] = [n.id];
+  (n.children || []).forEach((c) => out.push(...collectDeptIds(c)));
+  return out;
+}
+
+const assignDeptGroups = computed<AssignDeptGroup[]>(() => {
+  /* ★ 2026-10-23：picked 不再「把职位 id 数一遍」，而是只数【在这一栏里勾的】。
+     否则同一批职位同时出现在教学部和三个学段里，勾一个就四处变红。 */
+  const mk = (key: string, name: string, level: number, list: PermRoleListItem[]): AssignDeptGroup => ({
+    key,
+    name,
+    level,
+    roles: list,
+    picked: list.filter((r) => assignRoleIds.value.includes(r.id) && assignPickCtx.value[r.id] === key)
+      .length,
+  });
+
+  // 一级部门（含其子部门）→ 每个子部门单独一组
+  const deptGroups: AssignDeptGroup[] = [];
+  deptRoots.value.forEach((root) => {
+    const ids = collectDeptIds(root);
+    deptGroups.push(mk(root.id, root.deptName, 2, roles.value.filter((r) => ids.includes(r.deptId))));
+
+    /* ★ 2026-10-23：学段（初中部 / 高中部 / 大学部）在库里没有直属职位 ——
+       职位都挂在上级「教学部」上，导致点进去右栏是空的、一个都勾不了。
+       这里让【自己没有职位的子部门】继承父部门的【直属】职位，使它可点可选。
+       注意用「父部门直属」而不是「父部门含下级的全集」，否则某个学段真有了自己的
+       职位时，会把兄弟学段的职位也一起列出来。 */
+    const parentOwn = roles.value.filter((r) => r.deptId === root.id);
+
+    (root.children || []).forEach((child) => {
+      const mine = roles.value.filter((r) => r.deptId === child.id);
+      if (mine.length) {
+        deptGroups.push(mk(child.id, child.deptName, 3, mine));
+      } else {
+        deptGroups.push({ ...mk(child.id, child.deptName, 3, parentOwn), inheritedFrom: root.deptName });
+      }
+    });
+  });
+
+  // 任何一级 / 二级部门都覆盖不到的职位 → 校级（目前是「校长」，它挂在「全部门」节点上）
+  const reached = new Set<string>();
+  deptGroups.forEach((g) => g.roles.forEach((r) => reached.add(r.id)));
+  const schoolRoles = roles.value.filter((r) => !reached.has(r.id));
+
+  /* 「全部职位」是一个总览视图、不是真实部门，所以：
+     · 它的计数直接给「已选总数」（14 个职位里有几个被勾了），否则按归属算会恒为 0；
+     · 它的红点在模板里不渲染（用户要求「全部职位」前面不要红点）。 */
+  const allPicked = roles.value.filter((r) => assignRoleIds.value.includes(r.id)).length;
+  const out: AssignDeptGroup[] = [
+    { ...mk(ASSIGN_DEPT_ALL, '全部职位', 2, roles.value), picked: allPicked },
+    ...deptGroups,
+  ];
+  if (schoolRoles.length) out.push(mk(ASSIGN_DEPT_SCHOOL, '校级（全部门）', 2, schoolRoles));
+  return out;
+});
+
+/** 左侧选中的那组 */
+const assignActiveDept = computed<AssignDeptGroup | null>(
+  () => assignDeptGroups.value.find((g) => g.key === assignDeptKey.value) || null,
+);
+
+/** 右侧要列出的职位 = 选中部门名下的职位 */
+const assignVisibleRoles = computed<PermRoleListItem[]>(
+  () => assignActiveDept.value?.roles || roles.value,
+);
+
+/**
+ * 左侧部门那枚小圆点，什么时候亮红？
+ *
+ * ★ 2026-10-25 用户口径（第三轮，回退第二轮的「只亮当前栏」）：
+ *   以任文静为例——她勾着「教员（大学部）」，切到初中部去挑新职位时，
+ *   「大学部」的圆点必须**保持红色**（提示她身上还挂着大学部的职位）；
+ *   只有把「教员（大学部）」取消勾选之后，大学部的圆点才熄灭。
+ *   即：**这一栏里只要还有已勾选的职位，红点就常亮**，与正在查看哪一栏无关。
+ *   每个部门已经勾了几个，右侧 X/Y 数字照旧。
+ */
+function assignDotOn(g: AssignDeptGroup): boolean {
+  return g.picked > 0;
+}
+
+/** 已勾选的职位（按职位原本顺序，用于底部「已选职位」一行；跨部门都在这里） */
+const assignPickedRoles = computed<PermRoleListItem[]>(() =>
+  roles.value.filter((r) => assignRoleIds.value.includes(r.id)),
+);
+
+/** 某个职位该归到左栏哪一组：优先「账号所属部门」→ 职位真实所属部门 → 校级兜底 */
+function assignCtxKeyOf(roleId: string, preferDeptId?: string): string {
+  const groups = assignDeptGroups.value;
+  const contains = (key: string): boolean =>
+    !!groups.find((g) => g.key === key)?.roles.some((r) => r.id === roleId);
+
+  if (preferDeptId && contains(preferDeptId)) return preferDeptId;
+  const role = roles.value.find((r) => r.id === roleId);
+  if (role?.deptId && contains(role.deptId)) return role.deptId;
+  return contains(ASSIGN_DEPT_SCHOOL) ? ASSIGN_DEPT_SCHOOL : ASSIGN_DEPT_ALL;
+}
+
+/** 当前这一栏对应的归属键：在「全部职位」总览里勾时，按职位自己的部门归属 */
+function assignCtxFor(r: PermRoleListItem): string {
+  if (assignDeptKey.value !== ASSIGN_DEPT_ALL) return assignDeptKey.value;
+  return assignCtxKeyOf(r.id, assignTarget.value?.deptId);
+}
+
+/** 勾上 / 取消时同步「归属部门」记录（取消就删掉，避免残留让红点灭不掉） */
+function setAssignOn(r: PermRoleListItem, on: boolean): void {
+  const nextCtx = { ...assignPickCtx.value };
+  if (on) {
+    if (!assignRoleIds.value.includes(r.id)) {
+      assignRoleIds.value = [...assignRoleIds.value, r.id];
+    }
+    nextCtx[r.id] = assignCtxFor(r);
+  } else {
+    assignRoleIds.value = assignRoleIds.value.filter((x) => x !== r.id);
+    delete nextCtx[r.id];
+  }
+  assignPickCtx.value = nextCtx;
+}
+
+/**
+ * 打开「修改职位」时应停在哪一栏
+ *
+ * ★ 2026-10-23 用户口径：一看到弹窗就应该能直接改 —— 孙敏是初中部班主任，
+ *   弹窗出现时就应该停在「初中部」、里面「班主任」勾着，先取消再挑新职位一步到位；
+ *   不要先落在「全部职位」总览里让人自己找。
+ *   顺序：账号所属部门 → 现有职位记录的归属栏 → 全部职位（兜底，绝不落空）。
+ */
+function assignLandingKey(row: PermUserListItem): string {
+  const groups = assignDeptGroups.value;
+  const cands: string[] = [row.deptId, ...row.roleIds.map((id) => assignPickCtx.value[id])];
+  for (const k of cands) {
+    if (!k || k === ASSIGN_DEPT_ALL) continue;
+    const g = groups.find((x) => x.key === k);
+    if (g && g.roles.length) return g.key;
+  }
+  return ASSIGN_DEPT_ALL;
+}
+
 async function openAssignRole(row: PermUserListItem): Promise<void> {
   assignTarget.value = row;
   assignRoleIds.value = [...row.roleIds];
+  /* ★ 已有职位先按「账号所属部门」归位（该栏不含此职位时退回职位实际部门），
+     这样一打开红点就能说明这个人的职位挂在哪几栏，而不是全表一起亮 */
+  const ctx: Record<string, string> = {};
+  row.roleIds.forEach((id) => {
+    ctx[id] = assignCtxKeyOf(id, row.deptId);
+  });
+  assignPickCtx.value = ctx;
+  /* ★ 2026-10-23：落在「现有职位所在的那一栏」（见 assignLandingKey 说明），
+     一进来就是可改状态；不再是每次都回到「全部职位」总览。 */
+  assignDeptKey.value = assignLandingKey(row);
   assignOpen.value = true;
   await ensureRolePerms(assignRoleIds.value);
 }
@@ -933,14 +1105,12 @@ function togAssignRole(r: PermRoleListItem): void {
         okClass: 'wn',
       },
       () => {
-        assignRoleIds.value = [...assignRoleIds.value, r.id];
+        setAssignOn(r, true);
       },
     );
     return;
   }
-  assignRoleIds.value = assignIsOn(r.id)
-    ? assignRoleIds.value.filter((x) => x !== r.id)
-    : [...assignRoleIds.value, r.id];
+  setAssignOn(r, !assignIsOn(r.id));
 }
 
 function submitAssignRole(): void {
@@ -971,6 +1141,10 @@ function submitAssignRole(): void {
 
   const added = ids.filter((r) => !cur.includes(r));
   const removed = cur.filter((r) => !ids.includes(r));
+  /* ★ 2026-10-23：改职位会顺带把「所属部门」跟过去 —— 否则账号人还在旧部门、
+     职位已换成新部门的，职位管理 →「职位下人员」里显示的部门就是错的。 */
+  const nextDeptId = nextDeptIdFor(row, ids);
+  const deptChanged = nextDeptId !== row.deptId;
   openConfirm(
     {
       title: '保存职位分配',
@@ -994,12 +1168,23 @@ function submitAssignRole(): void {
                 .join(' ')
             : '<span class="desc">无</span>',
         },
+        {
+          k: '所属部门',
+          v: deptChanged
+            ? `<span class="tag d">${esc(deptPathOfId(row.deptId))}</span> → <span class="tag g">${esc(
+                deptPathOfId(nextDeptId),
+              )}</span>`
+            : `<span class="desc">${esc(deptPathOfId(row.deptId))}（不变）</span>`,
+        },
         { k: '合并权限', v: `${ids.reduce((a, r) => a + permCountOf(r), 0)} 项动作` },
       ],
+      tip: deptChanged
+        ? '职位换了部门，账号的所属部门会一起改到新部门，职位管理里的「职位下人员」也会同步显示新部门。'
+        : '',
       okText: '确认保存',
     },
     () => {
-      void saveAssign(row, ids);
+      void saveAssign(row, ids, nextDeptId);
     },
   );
 }
@@ -1008,7 +1193,77 @@ function roleNameById(id: string): string {
   return roles.value.find((r) => r.id === id)?.roleName || '—';
 }
 
-async function saveAssign(row: PermUserListItem, ids: string[]): Promise<void> {
+/** 账号当前部门是否在 ancestorId 这棵子树里（含自身） */
+function isDeptUnder(childId: string, ancestorId: string): boolean {
+  if (!childId || !ancestorId) return false;
+  if (childId === ancestorId) return true;
+  const seen = new Set<string>([childId]);
+  let cur = deptFlat.value.find((d) => d.id === childId)?.parentId || null;
+  while (cur && !seen.has(cur)) {
+    if (cur === ancestorId) return true;
+    seen.add(cur);
+    cur = deptFlat.value.find((d) => d.id === cur)?.parentId || null;
+  }
+  return false;
+}
+
+/**
+ * 部门 id → 带上级的完整路径（「教学部-初中部」）
+ *
+ * ★ 2026-10-23：账号的部门一律按这条口径展示 —— 账号建的是**具体学段**
+ *   （初中部 / 高中部 / 大学部 / 实训管理 / 就业管理），只显示「初中部」
+ *   看不出属于哪个一级部门，跟职位管理里的「教学部-大学部」也对不上。
+ *   根节点「全部门（校级）」不入路径（口径与后端 deptPathMap 一致）。
+ */
+function deptPathOfId(id: string): string {
+  const self = deptFlat.value.find((d) => d.id === id);
+  if (!self) return '—';
+  const names: string[] = [self.deptName];
+  let cur: PermDeptTreeNode | undefined = self;
+  for (let guard = 0; guard < 10 && cur?.parentId; guard++) {
+    const parent = deptFlat.value.find((d) => d.id === cur?.parentId);
+    if (!parent) break;
+    /* 根节点不写进路径 */
+    if (parent.deptLevel < 2) break;
+    names.unshift(parent.deptName);
+    cur = parent;
+  }
+  return names.join('-');
+}
+
+/** 改职位后账号「所属部门」的目标值
+ *  · 优先看「勾选时站在哪一栏」—— 班主任 / 教员 / 助教 这类职位在库里统一挂在
+ *    「教学部」上（初中部 / 高中部 / 大学部 共用同一批职位），只看职位自己的 deptId
+ *    永远得不出「初中部」，账号就会被钉死在教学部。用户在「初中部」栏里勾的，
+ *    就按初中部算（这就是「孙敏 = 初中部班主任」却显示成教学部的根因）；
+ *  · 只在「全部职位」总览里勾、或该职位栏与账号当前部门一致 → 走下面的职位部门口径；
+ *  · 所选职位分属两个以上部门（一栏概括不了）→ 保持原部门不动。 */
+function nextDeptIdFor(row: PermUserListItem, ids: string[]): string {
+  const realDeptIds = new Set(deptFlat.value.map((d) => d.id));
+
+  /** 勾选来源栏 → 真实部门 id（「全部职位」「校级」不是真实部门，剔除） */
+  const fromCtx = new Set(
+    ids.map((id) => assignPickCtx.value[id]).filter((k) => !!k && realDeptIds.has(k)),
+  );
+  if (fromCtx.size > 1) return row.deptId;
+  if (fromCtx.size === 1) {
+    const target = [...fromCtx][0];
+    /* 账号已经在该部门的下级（如「大学部」⊂「教学部」）就保留更精确的学段 */
+    return isDeptUnder(row.deptId, target) ? row.deptId : target;
+  }
+
+  const set = new Set(
+    roles.value
+      .filter((r) => ids.includes(r.id))
+      .map((r) => r.deptId)
+      .filter(Boolean),
+  );
+  if (set.size !== 1) return row.deptId;
+  const target = [...set][0];
+  return isDeptUnder(row.deptId, target) ? row.deptId : target;
+}
+
+async function saveAssign(row: PermUserListItem, ids: string[], deptId: string): Promise<void> {
   try {
     // 职位分配走账号编辑接口（职位为全量覆盖），其余字段原样带回
     await userApi.update({
@@ -1018,13 +1273,17 @@ async function saveAssign(row: PermUserListItem, ids: string[]): Promise<void> {
       phone: row.phone,
       gender: row.gender,
       age: row.age,
-      deptId: row.deptId,
+      deptId,
       roleIds: ids,
       userStatus: row.userStatus,
       needChangePwd: row.needChangePwd,
     });
     assignOpen.value = false;
-    toast('已更新职位分配');
+    toast(
+      deptId === row.deptId
+        ? '已更新职位分配'
+        : `已更新职位分配，所属部门改为「${deptPathOfId(deptId)}」`,
+    );
     await Promise.all([load(), loadOverview()]);
   } catch {
     /* 已提示 */
@@ -1189,56 +1448,9 @@ async function saveStatus(row: PermUserListItem, status: string, off: boolean): 
   }
 }
 
-/** 「解锁并重置密码」的后续动作（ProtoConfirm 的 mid 事件） */
-let unlockMidAction: () => void = () => undefined;
-
-function unlockUser(row: PermUserListItem): void {
-  openConfirm(
-    {
-      title: '解锁账号',
-      icon: '🔓',
-      iconBg: 'var(--ok-l)',
-      msg: `确认解锁账号「${row.userName}」？`,
-      detail: [
-        { k: '账号', v: esc(row.account) },
-        { k: '当前状态', v: '<span class="tag d">已锁定</span>' },
-        { k: '变更后状态', v: '正常' },
-      ],
-      tip: '解锁后失败计数清零，该账号可正常登录；若为本人异常，建议同时重置密码。',
-      okText: '确认解锁',
-      okClass: 'ok',
-      midText: '解锁并重置密码',
-    },
-    () => {
-      void saveUnlock(row, false);
-    },
-  );
-  // 中间按钮：解锁后再拉起重置密码弹窗
-  unlockMidAction = () => {
-    void saveUnlock(row, true);
-  };
-}
-
-function onConfirmMid(): void {
-  confirmOpen.value = false;
-  unlockMidAction();
-}
-
-async function saveUnlock(row: PermUserListItem, thenReset: boolean): Promise<void> {
-  try {
-    await userApi.unlock(row.id);
-    if (thenReset) {
-      toast('已解锁，请继续重置密码');
-      await Promise.all([load(), loadOverview()]);
-      openReset(row);
-      return;
-    }
-    toast(`账号「${row.userName}」已解锁`);
-    await Promise.all([load(), loadOverview()]);
-  } catch {
-    /* 已提示 */
-  }
-}
+/* ★ 2026-10-25：账号状态只留「正常 / 停用」，「锁定 / 解锁」全系统移除
+ *   （unlockUser / saveUnlock / onConfirmMid 已删；UserStatus.LOCKED 后端枚举
+ *   仅为兼容历史 schema 保留，界面不再出现也不会再写入。） */
 
 function delUser(row: PermUserListItem): void {
   // 后端对系统管理员账号有硬保护（不可删除），提前拦一次少打一次必失败的请求
@@ -1272,7 +1484,7 @@ function delUser(row: PermUserListItem): void {
       msg: `确认删除账号「${row.userName}」？`,
       detail: [
         { k: '账号', v: esc(row.account) },
-        { k: '部门', v: esc(row.deptName) },
+        { k: '部门', v: esc(deptPathOfId(row.deptId)) },
         { k: '职位', v: row.roleNames.length ? esc(row.roleNames.join('、')) : '<span class="desc">无</span>' },
       ],
       warn: '删除后账号不可恢复，如需再次使用只能重新创建；门户登录账号也会一并作废。',
@@ -1375,10 +1587,11 @@ async function doExport(): Promise<void> {
         <div class="n w">{{ overview?.disabledTotal ?? '—' }}</div>
         <div class="l">已停用</div>
       </div>
-      <div class="k" @click="kpiStatus('已锁定')">
-        <div class="n d">{{ overview?.lockedTotal ?? '—' }}</div>
-        <div class="l">已锁定</div>
-      </div>
+      <!-- ★ 2026-10-23 按用户要求删除「已锁定」KPI 卡：
+           状态筛选里已不再提供「已锁定」这一档，卡片点下去会把筛选设成下拉里不存在的值（下拉变空白），
+           卡片与筛选项一起删除才自洽。
+           ★ 2026-10-25：「锁定」全系统移除收尾 —— 后端 /overview 已不再返回 lockedTotal，
+           UserOverview 类型同步删掉该字段。 -->
       <div
         class="k"
         @click="toast(`共 ${overview?.needChangePwdTotal ?? 0} 个账号需首次登录修改密码`, 'warn')"
@@ -1414,8 +1627,9 @@ async function doExport(): Promise<void> {
           <select v-model="query.userStatus" class="inp" @change="searchNow">
             <option value="">全部状态</option>
             <option value="正常">正常</option>
-            <option value="已停用">已停用</option>
-            <option value="已锁定">已锁定</option>
+            <!-- ★ 2026-10-24 用户口径：选项文字「停用」，value 保持真实值「已停用」（列表判等/接口都用它） -->
+            <option value="已停用">停用</option>
+            <!-- ★ 2026-10-23 按用户要求删除「已锁定」筛选项 -->
           </select>
           <button class="btn" type="button" @click="resetQuery">重置</button>
           <button class="btn" type="button" @click="importOpen = true">批量导入</button>
@@ -1449,7 +1663,7 @@ async function doExport(): Promise<void> {
                   >{{ u.account }}</code>
                 </td>
                 <td class="num">{{ u.phone }}</td>
-                <td>{{ u.deptName }}</td>
+                <td :title="deptPathOfId(u.deptId)">{{ deptPathOfId(u.deptId) }}</td>
                 <td>
                   <template v-if="u.roleNames.length">
                     <span
@@ -1464,7 +1678,7 @@ async function doExport(): Promise<void> {
                 <td>
                   <span v-if="u.userStatus === '正常'" class="tag g">正常</span>
                   <span v-else-if="u.userStatus === '已停用'" class="tag gy">已停用</span>
-                  <span v-else class="tag d">已锁定</span>
+                  <!-- ★ 2026-10-25：「已锁定」分支删除——账号状态只有正常/停用两档 -->
                   <span v-if="u.needChangePwd" class="tag w" style="margin-top: 2px">待改密</span>
                 </td>
                 <td class="desc num">{{ u.lastLoginTime || '—' }}</td>
@@ -1472,7 +1686,7 @@ async function doExport(): Promise<void> {
                   <div class="acts">
                     <span class="lk" @click="openUserDetail(u)">查看</span>
                     <span class="lk" @click="openEdit(u)">编辑</span>
-                    <span class="lk" @click="openAssignRole(u)">分配职位</span>
+                    <span class="lk" @click="openAssignRole(u)">修改职位</span>
                     <span
                       class="lk wn"
                       title="本人忘记密码、登不进系统时，由管理员代其重置新密码"
@@ -1484,7 +1698,6 @@ async function doExport(): Promise<void> {
                       :class="u.userStatus === '正常' ? 'wn' : 'gr'"
                       @click="toggleUser(u)"
                     >{{ u.userStatus === '正常' ? '停用' : '启用' }}</span>
-                    <span v-if="u.userStatus === '已锁定'" class="lk gr" @click="unlockUser(u)">解锁</span>
                     <span class="lk dg" @click="delUser(u)">删除</span>
                   </div>
                 </td>
@@ -1653,20 +1866,15 @@ async function doExport(): Promise<void> {
             </div>
             </template>
 
-            <div class="f">
-              <label>账号状态 <span class="req">*</span></label>
-              <select v-model="form.userStatus" class="inp">
-                <!-- ★ 2026-10-16：新建时不给默认值，先显示「请选择」 -->
-                <option value="" disabled>请选择</option>
-                <option v-for="o in statusOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-              </select>
-            </div>
+            <!-- ★ 2026-10-23：按用户要求删除「账号状态」下拉（图上框住的「账号状态 / 已锁定」）。
+                 新建账号的状态不再由管理员选，一律按默认值「正常」建号（见 form.userStatus 初始值）。
+                 ★ 2026-10-25：「锁定」状态全系统移除，行内操作只剩 停用/启用 与 删除。 -->
           </div>
 
           <!-- ★ 2026-10-19：所属部门 / 所属职位 / 权限预览 / 快捷套用
                只在【新建账号】时出现 —— 编辑账号只改基础信息。
                编辑时这些字段沿用列表带回的原值一起提交，不会被改动；
-               需要调整职位或部门请走列表里的「分配职位」入口。 -->
+               需要调整职位或部门请走列表里的「修改职位」入口。 -->
           <template v-if="formMode === 'add'">
           <!-- ★ 2026-10-19：原先的「可访问模块」勾选区已按用户要求删除 ——
                模块改为【按所选职位自动推导】（见 utils/moduleDerive.ts）：
@@ -1773,16 +1981,9 @@ async function doExport(): Promise<void> {
             </div>
           </div>
 
-          <div class="mt12">
-            <div class="sec-t"><span class="bar"></span>快捷套用</div>
-            <div class="flex">
-              <button class="btn xs" type="button" @click="quickRoleSet(['咨询老师'])">只读咨询</button>
-              <button class="btn xs" type="button" @click="quickRoleSet(['班主任'])">班主任</button>
-              <button class="btn xs" type="button" @click="quickRoleSet(['教员', '助教'])">教员+助教</button>
-              <button class="btn xs" type="button" @click="quickRoleSet(['财务'])">财务</button>
-              <button class="btn xs" type="button" @click="quickRoleClear">清空</button>
-            </div>
-          </div>
+          <!-- ★ 2026-10-23 按用户要求删除「快捷套用」按钮组（只读咨询 / 班主任 / 教员+助教 / 财务 / 清空）：
+               它只是把一批职位名一次性勾上，和上面「所属职位」列表手工勾选完全等价，
+               属于重复入口。职位一律手工勾选，对应的 quickRoleSet / quickRoleClear 一并删除。 -->
         </div>
       </div>
       <template #footer>
@@ -1842,26 +2043,107 @@ async function doExport(): Promise<void> {
     </ProtoDialog>
 
     <!-- ==================== 分配职位（原型 openAssignRole 第 2344~2367 行） ==================== -->
-    <ProtoDialog v-model="assignOpen" :title="assignTitle" size="md">
-      <div class="notice i mb12">ℹ<div>可多选职位，账号权限为所选职位的<b>并集</b>。</div></div>
-      <div
-        style="border: 1px solid var(--line); border-radius: 9px; padding: 9px; max-height: 330px; overflow-y: auto"
-      >
-        <div
-          v-for="r in roles"
-          :key="r.id"
-          class="rl-item"
-          :class="{ on: assignIsOn(r.id) }"
-          :style="r.roleStatus === '停用' ? 'opacity:.5' : ''"
-          @click="togAssignRole(r)"
-        >
-          <input
-            type="checkbox"
-            :checked="assignIsOn(r.id)"
-            style="accent-color: var(--brand); pointer-events: none"
-          />
-          <span>{{ roleIcon(r) }} {{ r.roleName }}</span>
-          <span class="cnt">{{ r.deptName }} · {{ r.permCount }}项</span>
+    <ProtoDialog v-model="assignOpen" :title="assignTitle" size="lg">
+      <div class="notice i mb12">
+        ℹ<div>
+          先在左侧选<b>部门</b>，再在右侧勾选该部门的<b>职位</b>；可跨部门多选，账号权限为所选职位的<b>并集</b>。
+        </div>
+      </div>
+
+      <!-- ★ 2026-10-23：左「部门」/ 右「职位」两栏（原来是全部职位一锅平铺） -->
+      <div class="as-split">
+        <!-- ---------- 左：部门 ---------- -->
+        <div class="as-dept">
+          <div
+            v-for="g in assignDeptGroups"
+            :key="g.key"
+            class="as-dept-item"
+            :class="{ on: g.key === assignDeptKey, sub: g.level === 3 }"
+            :title="g.level === 3 ? '二级部门' : g.name"
+            @click="assignDeptKey = g.key"
+          >
+            <!-- ★ 2026-10-25（用户口径）：红点 = 这一行部门名下**还有已勾选的职位**就常亮，
+                 与正在查看哪一栏无关；取消勾选后红点才熄灭。
+                 「全部职位」是总览视图、不是真实部门，前面仍不给红点。 -->
+            <span
+              v-if="g.key !== ASSIGN_DEPT_ALL"
+              class="as-dot"
+              :class="{ has: assignDotOn(g) }"
+            ></span>
+            <!-- 二级部门靠 .sub 缩进 + 小字区分，不再额外加「· 」前缀（会和左侧圆点重复） -->
+            <span class="nm" :class="{ 'nm-all': g.key === ASSIGN_DEPT_ALL }">{{ g.name }}</span>
+            <span class="cnt" :class="{ 'cnt-all': g.key === ASSIGN_DEPT_ALL }"
+              >{{ g.picked }}<i>/</i>{{ g.roles.length }}</span
+            >
+          </div>
+        </div>
+
+        <!-- ---------- 右：该部门的职位 ---------- -->
+        <div class="as-roles">
+          <div class="as-roles-h">
+            <b>{{ assignActiveDept?.name || '全部职位' }}</b>
+            <span class="desc">
+              {{ assignVisibleRoles.length }} 个职位 · 已选
+              {{ assignVisibleRoles.filter((r) => assignIsOn(r.id)).length }} 个
+            </span>
+          </div>
+
+          <!-- ★ 2026-10-23：学段继承上级职位时说明来源，避免误以为该学段自己建了职位 -->
+          <div v-if="assignActiveDept?.inheritedFrom" class="as-inherit">
+            ⓘ 该部门暂未单独设置职位，下面列出的是「{{ assignActiveDept.inheritedFrom }}」的职位，可直接勾选
+          </div>
+
+          <div class="as-roles-b">
+            <div v-if="!assignVisibleRoles.length" class="empty" style="padding: 26px 10px">
+              <div class="ic">📭</div>
+              该部门暂无职位<div class="desc" style="margin-top: 4px">
+                可到「职位管理」为其新增职位后再来勾选
+              </div>
+            </div>
+
+            <div
+              v-for="r in assignVisibleRoles"
+              :key="r.id"
+              class="rl-item"
+              :class="{ on: assignIsOn(r.id) }"
+              :style="r.roleStatus === '停用' ? 'opacity:.5' : ''"
+              role="checkbox"
+              :aria-checked="assignIsOn(r.id)"
+              tabindex="0"
+              @click="togAssignRole(r)"
+              @keydown.space.prevent="togAssignRole(r)"
+              @keydown.enter.prevent="togAssignRole(r)"
+            >
+              <!-- ★ 2026-10-23：原来是原生 <input type=checkbox>，浏览器会给它自带的圆角/勾选样式，
+                   看着像「红点」；用户要求改成明确的【方框】：没勾就是空白方框（绝不出对勾），
+                   勾上才是红底 + 白色对勾。这里用自绘方框，勾选状态直接读 assignIsOn，不依赖原生渲染。 -->
+              <span
+                class="as-cb"
+                :class="{ on: assignIsOn(r.id) }"
+                :title="assignIsOn(r.id) ? '点击取消该职位' : '点击选择该职位'"
+                @click.stop.prevent="togAssignRole(r)"
+              >
+                <svg v-if="assignIsOn(r.id)" viewBox="0 0 16 16" aria-hidden="true">
+                  <path
+                    d="M3.6 8.4l3 3 5.8-6"
+                    fill="none"
+                    stroke="#fff"
+                    stroke-width="2.1"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </span>
+              <span class="as-rl-nm">
+                {{ roleIcon(r) }} {{ r.roleName }}
+                <span v-if="r.roleStatus === '停用'" class="tag gy" style="margin-left: 3px">已停用</span>
+              </span>
+              <!-- 在「全部职位」里看不出归属，所以补部门名；进到具体部门后就不用重复了 -->
+              <span class="cnt">
+                {{ assignDeptKey === ASSIGN_DEPT_ALL ? `${r.deptName} · ` : '' }}{{ r.permCount }}项
+              </span>
+            </div>
+          </div>
         </div>
       </div>
       <div class="mt12" style="border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; background: #FBF8F5">
@@ -1870,6 +2152,20 @@ async function doExport(): Promise<void> {
           尚未选择职位，账号将无任何权限
         </div>
         <template v-else>
+          <!-- ★ 2026-10-23：分部门勾选后，已选职位会散在几个部门里，
+               这里横向列全（点一下 = 取消该职位），避免「切了部门就看不见刚选了什么」 -->
+          <div class="as-picked">
+            <span class="as-picked-t">已选职位</span>
+            <span
+              v-for="r in assignPickedRoles"
+              :key="'pk-' + r.id"
+              class="tag g as-chip"
+              :title="`${r.deptName} · 点击移除该职位`"
+              @click="togAssignRole(r)"
+            >
+              {{ roleIcon(r) }} {{ r.roleName }}<i>×</i>
+            </span>
+          </div>
           <div style="font-size: 12.5px; margin-bottom: 8px">
             合并后共 <b style="color: var(--brand)">{{ assignPermCount }}</b> 项权限动作 ·
             {{ assignModuleCount }} 个模块可用
@@ -2052,7 +2348,7 @@ async function doExport(): Promise<void> {
       <div class="sec-t mt16"><span class="bar"></span>导出内容</div>
       <div class="radios" style="height: auto; flex-direction: column; align-items: flex-start; gap: 8px">
         <label><input v-model="exportScope" type="radio" name="expScopeU" value="filtered" /> 当前筛选结果（{{ total }} 条）</label>
-        <label><input v-model="exportScope" type="radio" name="expScopeU" value="all" /> 全部数据（含已停用/已锁定）</label>
+        <label><input v-model="exportScope" type="radio" name="expScopeU" value="all" /> 全部数据（含已停用）</label>
         <label><input v-model="exportScope" type="radio" name="expScopeU" value="page" /> 仅选中项</label>
       </div>
       <template #footer>
@@ -2078,7 +2374,222 @@ async function doExport(): Promise<void> {
       :ok-class="cfg.okClass"
       :cancel-text="cfg.cancelText"
       @ok="onConfirmOk"
-      @mid="onConfirmMid"
     />
   </div>
 </template>
+
+<style scoped>
+/**
+ * ★ 2026-10-23：分配职位弹窗「左边选部门 / 右边选职位」两栏样式。
+ *
+ * 只补本弹窗专有的分栏与部门行；其余版式（.dlg / .notice / .rl-item / .tag /
+ * .empty / .cnt）全部复用 shared-ui.css，不在这里重写，避免波及别的页面。
+ * 前缀统一用 .as-（assign），与 PageManage 的 .pg- 保持同样的命名习惯。
+ */
+
+.as-split {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  /* 上面提示条与下面统计框都靠这里留白（.mb12/.mt12 这类工具类本项目里并未定义） */
+  margin: 10px 0;
+}
+
+/* ---------------- 左：部门 ---------------- */
+.as-dept {
+  width: 196px;
+  flex: none;
+  /* 高度取 360：13 项部门（全部 + 6 个一级 + 5 个二级 + 校级）在 4px 行距下
+     正好一屏放完，不需要滚动——「行政 / 校级」被藏在滚动区里会让人以为没有 */
+  height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 6px;
+  background: #fff;
+}
+.as-dept-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: #6b5c58;
+  transition: 0.14s;
+  user-select: none;
+}
+.as-dept-item:hover {
+  background: #fbf7f4;
+  color: #b22a23;
+}
+.as-dept-item.on {
+  background: #fdf4f2;
+  color: #b22a23;
+  font-weight: 600;
+}
+/* 二级部门（初中部 / 高中部 / 大学部 / 实训管理 / 就业管理）缩进一级 */
+.as-dept-item.sub {
+  padding-left: 20px;
+  font-size: 12px;
+}
+.as-dept-item .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.as-dept-item .cnt {
+  flex: none;
+  font-size: 11px;
+  color: #b3a69f;
+  font-variant-numeric: tabular-nums;
+}
+.as-dept-item .cnt i {
+  font-style: normal;
+  margin: 0 1px;
+  opacity: 0.65;
+}
+.as-dept-item.on .cnt {
+  color: #b22a23;
+}
+/* 该部门里已经勾过职位 → 左侧留个红点；★ 2026-10-23 二次修正后只在「当前查看的那一栏」亮 */
+.as-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: #e6dcd5;
+}
+.as-dot.has {
+  background: #cd3a33;
+}
+/* ★ 2026-10-23：原来 .on 会给圆点套一圈淡粉光圈，未勾选时看着也像「亮着」的红点，
+   和用户说的「点了实训管理却像两个部门都选中」叠在一起更难分辨 —— 直接去掉光圈，
+   选中态只靠整行底色 + 加粗表达。 */
+
+/* ---------------- 右：职位 ---------------- */
+.as-roles {
+  flex: 1;
+  min-width: 0;
+  /* 与左栏同高，两栏底边对齐 */
+  height: 360px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+.as-roles-h {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 7px;
+  border-bottom: 1px solid #f4eee9;
+  font-size: 12.5px;
+  color: #443432;
+}
+.as-roles-b {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+}
+/* ★ 2026-10-23：学段继承上级职位时的来源说明（窄行、不抢列表高度） */
+.as-inherit {
+  flex: none;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #96776d;
+  background: #fdf6ef;
+  border-bottom: 1px solid #f4eee9;
+}
+.as-rl-nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- 底部「已选职位」一行 ---------------- */
+.as-picked {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.as-picked-t {
+  flex: none;
+  font-size: 11.5px;
+  color: #9c8d88;
+  margin-right: 2px;
+}
+.as-chip {
+  cursor: pointer;
+}
+.as-chip:hover {
+  background: #fdedea;
+}
+.as-chip i {
+  font-style: normal;
+  margin-left: 2px;
+  opacity: 0.55;
+}
+
+/* ---------------- 职位行：自绘方框复选框 ----------------
+ * ★ 2026-10-23：用户要求「没勾就是空白方框、勾了才是对勾」。
+ *   原生 <input type=checkbox> 在 Windows 上会被浏览器渲染成带圆角/自带勾选样式的一团，
+ *   看着像红点；改成自绘方框后，勾选状态 100% 由 assignIsOn 决定，不可能出现「没选却有对勾」。
+ *   方框自己绑了点击（.stop 防冒泡后父行再切一次），点方框和点整行都能勾选。 */
+.as-cb {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  box-sizing: border-box;
+  border: 1.5px solid #d8ccc6;
+  border-radius: 3px;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: 0.12s;
+}
+.as-cb:hover {
+  border-color: #cd3a33;
+}
+.as-cb.on {
+  background: #cd3a33;
+  border-color: #cd3a33;
+}
+.as-cb svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+/* 「全部职位」不是真实部门、前面没有红点，文字补 12px 补位，与其它行的文字左边缘对齐。
+   ★ 2026-10-25（用户口径）：「全部职位」要一眼看到当前账号一共勾了几个职位 ——
+   字体放大 + 红色加粗，右侧 X/Y 计数同步放大标红。 */
+.as-dept-item .nm-all {
+  padding-left: 12px;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #cd3a33;
+}
+.as-dept-item .cnt-all {
+  font-size: 13px;
+  font-weight: 700;
+  color: #cd3a33;
+}
+.as-dept-item .cnt-all i {
+  opacity: 0.75;
+}
+</style>
+

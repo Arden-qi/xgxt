@@ -66,6 +66,8 @@ export const PayStatusName: Record<number, string> = {
   // 2026-10-20：库注释里 4 就是逾期，原来漏了 → 催缴行状态显示成「未知」
   [PayStatus.OVERDUE]: '逾期',
   [PayStatus.FROZEN]: '冻结',
+  // ★ 2026-10-25：财务打回 → 催缴/催费列表显示「核对失败」（漏了就会被兜成「未知」）
+  [PayStatus.REJECTED]: '核对失败',
 };
 
 export const RefundStatusName: Record<number, string> = {

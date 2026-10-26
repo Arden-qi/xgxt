@@ -36,10 +36,14 @@ import type {
 } from '../shared/dto';
 import { STUDENT_DEDUP_PRIORITY, STUDENT_STAGES, STUDENT_STAGE_NAME } from '../shared/dto';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
+// ★ 2026-10-23：学生档案的「全校学籍通行码」要读账号的真实页面码集合
+import { getUserPagePermissions } from '../../utils/pagePermissionSource';
 import { listClassesByStage } from '../shared/classOptions';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { loadSchemeStagesForStage } from '../shared/stageSchemes';
 import { nextStudentNoForClass, phaseCodeOfClass } from '../shared/studentNo';
+// ★ 2026-10-25 学籍状态变更（休学/复学）要通知财务冻结/解冻
+import { syncStudentStatusToFinance } from '../../utils/financeClient';
 import { db } from '../../utils/db';
 import { StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
 import { CONSULT_TO_STUDENT_STATUS } from 'shared-types/consult';
@@ -85,14 +89,48 @@ const MODULE: Record<StudentStage, string> = {
 
 const LABEL = '学生档案';
 
+/**
+ * ★★ 2026-10-23「全校学籍通行码」—— 教务老师（ACAD_STAFF）看学生档案的口径
+ *
+ * 【问题】教务老师在「职位权限分配」里被授予「学生档案」页，
+ *   它在权限库里拿到的页面码是 `edu:student:view`（原教务档案页：**全校**学生名单）。
+ *   而本页的三个学段各自只需 `classjh:/class:/job:` 前缀的码 ——
+ *   `edu:student:view` 一个都不匹配 →
+ *     · 前端菜单判定（教学域学段码）恒 false → 侧栏没有「学生档案」
+ *     · 后端 requireAnyPage 直接 403
+ *   表象就是「权限勾了，教务却看不到这个页面」（用户 2026-10-23 反馈）。
+ *
+ * 【口径】把 `edu:student:view` 当作**本页的全校通行码**：
+ *   命中它 = 三个真实部门（初高部 / 大学部 / 就业部）全部可见，
+ *   与「档案 = 全校学生名单」的原始业务定义一致。
+ *
+ * ⚠️ 只作用于**学生档案**这一页（其它域没有这个通行码），
+ *    也不会给账号凭空补出别的页面码 —— 不动权限库的既有口径。
+ * ⚠️ 不加「教务」部门页签：2026-10-21 用户口径（edu 只是教务宿舍模块的学生副本，
+ *    在档案里再列一遍既重复又对不上号）仍然有效，这里只是把数据范围放开到三个真实部门。
+ */
+const FULL_SCHOOL_PASS_CODES: readonly string[] = ['edu:student:view'];
+
+/** 该账号是否持有「全校学籍」通行码 */
+async function hasFullSchoolPass(user: any): Promise<boolean> {
+  if (!user) return false;
+  if (user.permissions?.includes('*')) return true;
+  const allowed = await getUserPagePermissions(user.roles || []);
+  return FULL_SCHOOL_PASS_CODES.some((c) => allowed.includes(c));
+}
+
 const nameOf = (s: StudentStage): string => STUDENT_STAGE_NAME[s];
 const moduleOf = (s: StudentStage): string => MODULE[s];
 
-export function assertStageView(user: any, stage: StudentStage): Promise<void> {
+export async function assertStageView(user: any, stage: StudentStage): Promise<void> {
+  // 通行码 → 全校三个部门都可进（不再看单个学段码与学段所属模块）
+  if (await hasFullSchoolPass(user)) return;
   return assertStageCodeEx(user, stage, CODES, LABEL, nameOf, moduleOf);
 }
 
-export function visibleStages(user: any): Promise<StudentStage[]> {
+export async function visibleStages(user: any): Promise<StudentStage[]> {
+  // 通行码 → 三个真实部门全给（顺序沿用 STUDENT_STAGES，界面顺序不受影响）
+  if (await hasFullSchoolPass(user)) return [...STUDENT_STAGES];
   return visibleStagesEx(user, STUDENT_STAGES, CODES, LABEL, nameOf, moduleOf);
 }
 
@@ -283,6 +321,7 @@ export async function summaryStudents(q: StudentListQuery, user: any): Promise<S
   const out: StudentStat = {
     total: rows.length,
     studying: 0,
+    training: 0,
     trial: 0,
     suspended: 0,
     quit: 0,
@@ -290,6 +329,8 @@ export async function summaryStudents(q: StudentListQuery, user: any): Promise<S
   };
   for (const r of rows) {
     if (r.studentStatus === StudentStatus.STUDYING) out.studying += 1;
+    /* ★ 实训中（就业部的「在校」形态）：单独计一档，不再落到空档 */
+    if (r.studentStatus === StudentStatus.TRAINING) out.training += 1;
     if (r.studentStatus === StudentStatus.TRIAL) out.trial += 1;
     if (r.studentStatus === StudentStatus.SUSPENDED) out.suspended += 1;
     if (r.studentStatus === StudentStatus.QUIT) out.quit += 1;
@@ -420,8 +461,10 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
    *     ① 库里已经是退学(7) → 传上来的状态必须还是 7，想改就报错（前端下拉也已 disabled）；
    *     ② 顺便把 payload 里的状态钉成 7，防止绕过前端改出别的值。
    *   ⚠️ 新增（没有 id）不受影响，见 statusLock.ts 的说明。 */
+  let prevStatus: number | null = null;
   if (body.id) {
     const current = await getStudentStatus(body.stage, body.id);
+    prevStatus = Number(current);
     if (isStatusLocked(current)) {
       if (body.studentStatus !== undefined && Number(body.studentStatus) !== Number(current)) {
         throw new BizError(BizCode.PARAM_ERROR, lockedStatusMessage('该学生'));
@@ -438,14 +481,50 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
     const phase = await phaseCodeOfClass(body.stage, body.classId);
     if (phase !== null) body.phaseCode = phase;
   }
+  let saved: StudentSaveResult;
   try {
-    return await REPOS[body.stage].save(body, user?.userId || 'system');
+    saved = await REPOS[body.stage].save(body, user?.userId || 'system');
   } catch (e) {
     // 仓储抛的 Error 多为「学号已存在」这类业务校验 → 转成 40302/400 让前端能显示原文
     const msg = (e as Error).message || '保存失败';
     if (/学号/.test(msg)) throw new BizError(BizCode.STUDENT_NO_EXISTS, msg);
     throw new BizError(BizCode.PARAM_ERROR, msg);
   }
+
+  /**
+   * ★ 2026-10-25 学籍状态变更 → 通知财务冻结/解冻
+   *
+   * 财务 `/api/finance/freeze/sync` 早就有「休学 → 自动冻结餐费/住宿费、
+   * 非休学 → 解冻」的实现，咨询侧也会调，但教学侧一直没接：
+   * 实测把学生改成休学(6)，`t_finance_freeze` 一条记录都没有。
+   *
+   * 只在**状态真的变了**时才调（保存一次不传状态就调，会平白多一次跨模块请求）；
+   * 失败不阻断保存（财务挂了不能让学生档案存不进去）。
+   */
+  const nextStatus =
+    body.studentStatus !== undefined && body.studentStatus !== null
+      ? Number(body.studentStatus)
+      : prevStatus;
+  if (prevStatus !== null && nextStatus !== null && prevStatus !== nextStatus) {
+    try {
+      const r = await syncStudentStatusToFinance({
+        studentId: String(body.id),
+        studentStatus: nextStatus,
+        studentNo: body.studentNo || undefined,
+        studentName: body.studentName || undefined,
+        classId: body.classId || undefined,
+        className: body.className || undefined,
+        deptCode: body.deptCode ?? undefined,
+      });
+      if (r.freezeCount) saved.frozenCount = r.freezeCount;
+      if (r.unfreezeCount) saved.unfrozenCount = r.unfreezeCount;
+    } catch (e) {
+      // 跨模块失败只记日志，不回滚学籍
+      console.warn('[teaching] 学籍状态同步财务失败（不阻断）：', (e as Error).message);
+    }
+  }
+
+  return saved;
 }
 
 export async function removeStudent(

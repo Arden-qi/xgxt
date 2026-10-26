@@ -4,14 +4,15 @@
  *
  * 页面结构严格对齐高保真原型《学管系统-权限体系高保真原型.html》：
  *   · 第 1491~1551 行 renderRoleList()      —— 筛选条 + 职位表格 + 行内操作
- *   · 第 1554~1598 行 openRoleDetail()      —— 职位详情弹窗（基本信息 + 权限覆盖 + 职位下账号）
+ *   · 第 1554~1598 行 openRoleDetail()      —— 职位详情弹窗（基本信息 + 权限覆盖情况；「职位下账号」已于 2026-10-23 删除）
  *   · 第 1599~1612 行 openRoleUsers()       —— 职位下人员弹窗
  *   · 第 1613~1625 行 removeRoleFromUser()  —— 移出职位确认
  *   · 第 1626~1640 行 toggleRole()          —— 停用 / 启用确认
  *   · 第 1641~1671 行 delRole()             —— 删除确认（预置不可删 / 有关联账号不可删）
- *   · 第 1675~1740 行 openRoleForm()        —— 新建 / 编辑职位弹窗（含模板 + 权限预览）
+ *   · 第 1675~1740 行 openRoleForm()        —— 新建 / 编辑职位弹窗（基本信息 + 权限只读预览）
  *   · 第 1740~1783 行 permPreviewHtml / openFormPermTree / applyFormPerm
- *   · 第 1784~1807 行 ROLE_TPL / applyRoleTpl  —— 权限模板
+ *                     （2026-10-23 已删：表单内不再提供「＋ 配置权限」与「应用到表单」）
+ *   · 第 1784~1807 行 ROLE_TPL / applyRoleTpl  —— 权限模板（2026-10-23 已删：不再支持套用模板）
  *   · 第 1808~1857 行 submitRoleForm()      —— 校验 + 确认后落库
  *   · 第 1858~1914 行 dlgImportRole / dlgImportPreview / doImport / exportDlg / selOne
  *   · 第 1148~1317 行 renderPermTree / treeAct / treeItem / treeMod / treeTog /
@@ -158,8 +159,12 @@ async function loadOverview(): Promise<void> {
  * ============================================================ */
 
 const modules = ref<PermModule[]>([]);
-/** 部门下拉（由部门树拍平；原型 DEPTS 的等价物） */
-const flatDepts = ref<{ id: string; deptName: string; isRoot: boolean }[]>([]);
+/**
+ * 部门下拉（由部门树拍平；原型 DEPTS 的等价物）
+ * ★ 2026-10-23：补 parentId —— 「职位下人员」的部门列要显示成「教学部-大学部」
+ *   这种带上级的路径，只存 deptName 的话拼不出上级。
+ */
+const flatDepts = ref<{ id: string; deptName: string; parentId: string | null; isRoot: boolean }[]>([]);
 
 /** 原型表单里「所属部门」默认选中市场咨询部；开发版取第一个非校级部门 */
 const defaultDeptId = computed(
@@ -167,6 +172,36 @@ const defaultDeptId = computed(
 );
 
 const deptNameOf = (id: string): string => flatDepts.value.find((d) => d.id === id)?.deptName || '—';
+
+/**
+ * 部门 id → 带上级的完整路径（「教学部-大学部」「就业部-就业管理」）
+ *
+ * 【为什么需要】
+ *   账号在创建时选的是**具体学段/科室**（初中部 / 高中部 / 大学部 / 实训管理 / 就业管理），
+ *   但过去这里只显示自身那一级 ——「大学部」单看不知道是教学部的还是谁的，
+ *   「教学部」又看不出这个人到底带哪个学段。所以按账号的 deptId 一路向上拼出路径。
+ *
+ * 【两条口径】
+ *   · 根节点「全部门（校级）」不写进路径 —— 否则会变成「全部门-教学部-大学部」；
+ *   · 但如果账号本身就挂在根节点上（如「校长」），那就只显示「全部门」。
+ */
+function deptPathOf(id: string): string {
+  const self = flatDepts.value.find((d) => d.id === id);
+  if (!self) return '—';
+  if (self.isRoot) return self.deptName;
+
+  const names: string[] = [self.deptName];
+  let cur = self;
+  /* guard 防脏数据成环：部门层级目前最深 3 级，10 次足够 */
+  for (let guard = 0; guard < 10; guard++) {
+    if (cur.isRoot || !cur.parentId) break;
+    const parent = flatDepts.value.find((d) => d.id === cur.parentId);
+    if (!parent || parent.isRoot) break;
+    names.unshift(parent.deptName);
+    cur = parent;
+  }
+  return names.join('-');
+}
 
 const roleStatuses = computed<{ value: string; label: string }[]>(() =>
   optionStore.roleStatuses.length
@@ -185,10 +220,10 @@ async function loadMeta(): Promise<void> {
     ]);
     modules.value = tree;
 
-    const flat: { id: string; deptName: string; isRoot: boolean }[] = [];
+    const flat: { id: string; deptName: string; parentId: string | null; isRoot: boolean }[] = [];
     const walk = (nodes: PermDeptTreeNode[], depth: number): void => {
       nodes.forEach((n) => {
-        flat.push({ id: n.id, deptName: n.deptName, isRoot: depth === 0 });
+        flat.push({ id: n.id, deptName: n.deptName, parentId: n.parentId, isRoot: depth === 0 });
         if (n.children?.length) walk(n.children, depth + 1);
       });
     };
@@ -286,36 +321,44 @@ function onConfirmOk(): void {
 
 const detailOpen = ref(false);
 const detail = ref<PermRoleDetail | null>(null);
-const detailUsers = ref<PermUserListItem[]>([]);
-const detailLoading = ref(false);
+/* ★ 2026-10-23：detailUsers / detailLoading 随「职位详情 → 职位下账号」整块一起删除，
+   打开详情不再额外拉一次账号列表（只查职位本身）。 */
 
 const detailTitle = computed(
   () => `职位详情 · <span class="em">${esc(detail.value?.roleName || '')}</span>`,
 );
 
-/** 权限覆盖情况：某模块下「已授权功能点」的文案 */
-function coverText(m: PermModule): string {
+/**
+ * ★ 2026-10-24：职位详情卡片明细（与「账号详情 → 有效权限明细」同一格式）。
+ *   原实现是 coverText()：只把已授权页面名用「、」串起来（✅ 学生管理、收款与退费…），
+ *   与账号详情的「模块名 x/y + 页面名：动作标签」不一致，被用户指出后统一为下述格式。
+ *   每个已授权页面一行：页面名 + 动作名标签（动作码翻成中文名，与账号详情一致）。
+ */
+interface CoverRow {
+  name: string;
+  actions: string[];
+}
+function coverRows(m: PermModule): CoverRow[] {
   const perms = detail.value?.perms || {};
-  const has = m.items.filter((it) => (perms[permKey(m.moduleKey, it.itemName)] || []).length > 0);
-  return has.length ? `✅ ${has.map((x) => x.itemName).join('、')}` : '❌ 无权限';
+  const rows: CoverRow[] = [];
+  m.items.forEach((it) => {
+    const codes = perms[permKey(m.moduleKey, it.itemName)] || [];
+    if (!codes.length) return;
+    rows.push({
+      name: it.itemName,
+      actions: codes.map((c) => it.actions.find((a) => a.actionCode === c)?.actionName || c),
+    });
+  });
+  return rows;
 }
 
 async function openDetail(row: PermRoleListItem): Promise<void> {
   detail.value = null;
-  detailUsers.value = [];
   detailOpen.value = true;
-  detailLoading.value = true;
   try {
-    const [d, users] = await Promise.all([
-      roleApi.detail(row.id),
-      userApi.list({ roleId: row.id, page: 1, size: 100 }),
-    ]);
-    detail.value = d;
-    detailUsers.value = users.list || [];
+    detail.value = await roleApi.detail(row.id);
   } catch {
     /* 已提示 */
-  } finally {
-    detailLoading.value = false;
   }
 }
 
@@ -326,17 +369,17 @@ async function openDetail(row: PermRoleListItem): Promise<void> {
  *      form —— 职位表单草稿（表单「＋ 配置权限」）→ 应用到表单
  * ============================================================ */
 
-type TreeMode = 'view' | 'form';
-
 const treeOpen = ref(false);
-const treeMode = ref<TreeMode>('view');
 const treeTitle = ref('');
 const treeDraft = ref<RolePermMap>({});
 const treeRoleName = ref('');
 /** 模块折叠（原型 treeTog） */
 const collapsed = reactive<Record<string, boolean>>({});
 
-const readonlyTree = computed(() => treeMode.value === 'view');
+/* ★ 2026-10-23：权限树只剩「只读查看」一种形态 ——
+   编辑模式（2026-10-20 删）、表单草稿模式（本次随「＋ 配置权限」删除）都已不存在，
+   原来的 treeMode / TreeMode 类型失去意义，直接写死只读。 */
+const readonlyTree = ref(true);
 
 const checkedOf = (moduleKey: string, itemName: string): string[] =>
   treeDraft.value[permKey(moduleKey, itemName)] || [];
@@ -412,7 +455,6 @@ function collapseAll(): void {
 
 function openTreeWith(roleName: string, perms: RolePermMap): void {
   treeRoleName.value = roleName;
-  treeMode.value = 'view';
   treeDraft.value = clonePerms(perms);
   collapseAll();
 
@@ -436,16 +478,9 @@ async function openPermTree(row: PermRoleListItem): Promise<void> {
    「编辑权限」按钮，按钮已按用户要求删除 → 函数失去唯一调用方，属死代码。
    权限编辑入口现在只剩「职位权限分配」页（那边是完整的编辑 UI）。 */
 
-/** 表单「＋ 配置权限」（原型 openFormPermTree） */
-function openFormTree(): void {
-  treeMode.value = 'form';
-  treeRoleName.value = form.roleName;
-  treeDraft.value = clonePerms(draftPerms.value);
-  collapseAll();
-  treeTitle.value =
-    '配置权限（职位表单草稿） <span class="tag n" style="font-weight:400">保存后回到职位表单</span>';
-  treeOpen.value = true;
-}
+/* ★ 2026-10-23 删除 openFormTree()：它只服务职位表单里的「＋ 配置权限」按钮，
+   按钮已按用户要求移除 → 函数失去唯一调用方，属死代码。
+   权限树在本页只保留「只读查看」（列表的「权限数」入口）。 */
 
 function toggleModCollapse(moduleKey: string): void {
   collapsed[moduleKey] = !collapsed[moduleKey];
@@ -526,12 +561,8 @@ function treeClear(): void {
   );
 }
 
-/** 表单模式：应用到表单（原型 applyFormPerm） */
-function applyFormPerm(): void {
-  draftPerms.value = cleanPerms(treeDraft.value);
-  treeOpen.value = false;
-  toast(`已应用 ${countActions(draftPerms.value)} 项权限到表单`);
-}
+/* ★ 2026-10-23 删除 applyFormPerm()（「应用到表单」）：它只服务权限树的表单草稿模式，
+   而草稿模式的唯一入口「＋ 配置权限」已按用户要求移除 → 死代码。 */
 
 /* ★ 2026-10-20 删除 saveRolePerms() / doSaveRolePerms()：
    这两个只服务权限树的「编辑模式」，而编辑模式的唯一入口是
@@ -720,10 +751,10 @@ function removeRoleFromUser(u: PermUserListItem): void {
         detail: [
           { k: '账号', v: `${esc(u.userName)} (${esc(u.account)})` },
           { k: '当前职位', v: esc((u.roleNames || []).join('、') || '—') },
-          { k: '正确的做法', v: '先去「账号管理」给该账号分配另一个职位，再回来移出本职位' },
+          { k: '正确的做法', v: '先去「账号管理」用「修改职位」把该账号的职位改成另一个，再回来移出本职位' },
         ],
         tip: '如果这个账号本身已不再需要，请到「账号管理」里直接停用或删除它。',
-        okText: '去账号管理分配职位',
+        okText: '去账号管理修改职位',
         okClass: 'wn',
       },
       () => {
@@ -901,82 +932,8 @@ async function openEdit(row: PermRoleListItem): Promise<void> {
   }
 }
 
-/* ---- 权限模板（原型 ROLE_TPL / applyRoleTpl，第 1784~1807 行） ---- */
-
-interface TplCfg {
-  /** 模块 key → 'all' 或 功能点名数组 */
-  [moduleKey: string]: 'all' | string[];
-}
-
-const ROLE_TPL: Record<string, TplCfg | 'all' | null> = {
-  consult: {
-    market: 'all',
-    acad: ['学生档案'],
-    fin: ['试学学费名单', '正式学费名单'],
-    approve: ['待办事项'],
-  },
-  teacher: {
-    teach: 'all',
-    /* ⚠️ 2026-10-02：实训补到 10 个功能点后，「教员」模板不再整模块全给 ——
-       「实训-考试管理」按《三方操作清单》1.3 只给校长 + 系统管理员 */
-    train: [
-      '实训-班级信息', '实训-出勤管理', '实训-成绩管理', '实训-成绩汇总',
-      '实训-休学退学复学审批', '实训-宿舍管理', '实训-催费管理', '实训-退费申请',
-      '实训-班级交接',
-    ],
-    acad: ['学生档案'],
-    job: ['查看'],
-  },
-  acad: { acad: 'all', train: 'all', approve: 'all' },
-  fin: { fin: 'all', acad: 'all', approve: ['待办事项', '财务出款', '教务核算', '校长审批'] },
-  all: 'all',
-  none: null,
-};
-
-const TPL_NAME: Record<string, string> = {
-  consult: '咨询老师',
-  teacher: '教员',
-  acad: '教务',
-  fin: '财务',
-  all: '全部权限',
-};
-
-function applyRoleTpl(tpl: string): void {
-  const cfg = ROLE_TPL[tpl];
-  const next: RolePermMap = {};
-
-  modules.value.forEach((m) => {
-    m.items.forEach((it) => {
-      next[permKey(m.moduleKey, it.itemName)] = [];
-    });
-  });
-
-  if (cfg === 'all') {
-    modules.value.forEach((m) => {
-      m.items.forEach((it) => {
-        next[permKey(m.moduleKey, it.itemName)] = it.actions.map((a) => a.actionCode);
-      });
-    });
-  } else if (cfg) {
-    Object.keys(cfg).forEach((mk) => {
-      const m = modules.value.find((x) => x.moduleKey === mk);
-      if (!m) return;
-      const rule = cfg[mk];
-      m.items.forEach((it) => {
-        if (rule === 'all') next[permKey(mk, it.itemName)] = it.actions.map((a) => a.actionCode);
-        else if (rule.includes(it.itemName)) {
-          next[permKey(mk, it.itemName)] = it.actions.map((a) => a.actionCode);
-        }
-      });
-    });
-  }
-
-  draftPerms.value = cleanPerms(next);
-  toast(
-    tpl === 'none' ? '已清空权限草稿' : `已套用「${TPL_NAME[tpl] || tpl}」模板`,
-    tpl === 'none' ? 'warn' : 'ok',
-  );
-}
+/* ★ 2026-10-23 按用户要求删除「套用模板」按钮组，连带 ROLE_TPL / TPL_NAME / applyRoleTpl 一并删除：
+   新建职位不再预置权限模板，权限统一到「职位权限分配」页配置。 */
 
 /** 提交（原型 submitRoleForm：校验 → 确认 → 落库） */
 function submitForm(): void {
@@ -1377,41 +1334,40 @@ async function doExport(): Promise<void> {
 
       <div class="divider"></div>
       <div class="sec-t"><span class="bar"></span>权限覆盖情况</div>
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px">
+      <!-- ★ 2026-10-24：卡片格式与「账号详情 → 有效权限明细」完全对齐（同一口径）——
+           模块名 x/y（已授权页面数/该模块页面总数）+ 每页「页面名：动作标签」明细；
+           没有授权的模块仍显示「❌ 无权限」（未改动）。 -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px">
         <div
           v-for="m in modules"
           :key="m.moduleKey"
           style="border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px"
         >
-          <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 3px">{{ m.moduleIcon }} {{ m.moduleName }}</div>
-          <div class="desc">{{ coverText(m) }}</div>
+          <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 4px">
+            {{ m.moduleIcon }} {{ m.moduleName }}
+            <span class="desc">{{ coverRows(m).length }}/{{ m.items.length }}</span>
+          </div>
+          <template v-if="coverRows(m).length">
+            <div
+              v-for="r in coverRows(m)"
+              :key="r.name"
+              style="font-size: 11.5px; color: var(--tx2); margin-bottom: 3px"
+            >
+              <b style="color: var(--tx)">{{ r.name }}</b>：<span
+                v-for="a in r.actions"
+                :key="a"
+                class="tag b"
+                style="margin-right: 2px"
+              >{{ a }}</span>
+            </div>
+          </template>
+          <div v-else class="desc">❌ 无权限</div>
         </div>
       </div>
 
-      <div class="divider"></div>
-      <div class="sec-t"><span class="bar"></span>职位下账号 <span class="desc">（{{ detailUsers.length }} 人）</span></div>
-      <div v-if="detailUsers.length" class="tb-wrap">
-        <table class="tb">
-          <thead>
-            <tr><th>姓名</th><th>部门</th><th>状态</th><th>最后登录</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="u in detailUsers" :key="u.id">
-              <td><b>{{ u.userName }}</b></td>
-              <td>{{ u.deptName }}</td>
-              <td>
-                <span v-if="u.userStatus === '正常'" class="tag g">正常</span>
-                <span v-else class="tag" :class="u.userStatus === '已停用' ? 'gy' : 'd'">{{ u.userStatus }}</span>
-              </td>
-              <td class="desc num">{{ u.lastLoginTime || '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="empty">
-        <div class="ic">👤</div>
-        {{ detailLoading ? '加载中…' : '该职位下暂无账号' }}
-      </div>
+      <!-- ★ 2026-10-23 按用户要求删除「职位下账号」整块（标题 + 表格 + 空状态）。
+           职位详情回归「职位本身的属性 + 权限覆盖情况」；
+           要看某职位下有哪些人，请走列表行的「查看职位下人员」（带移出职位 / 账号详情操作）。 -->
 
       <template #footer>
         <div class="lft">职位 ID：{{ detail?.id || '—' }}</div>
@@ -1433,7 +1389,7 @@ async function doExport(): Promise<void> {
         <tbody>
           <tr v-for="u in roleUsers" :key="u.id">
             <td><b>{{ u.userName }}</b></td>
-            <td>{{ u.deptName }}</td>
+            <td>{{ u.deptPath || deptPathOf(u.deptId) }}</td>
             <td>
               <span v-if="u.userStatus === '正常'" class="tag g">正常</span>
               <span v-else class="tag gy">{{ u.userStatus }}</span>
@@ -1454,10 +1410,9 @@ async function doExport(): Promise<void> {
 
     <!-- ==================== 权限树（原型 openPermTree / openFormPermTree） ==================== -->
     <ProtoDialog v-model="treeOpen" :title="treeTitle" size="lg">
-      <div v-if="treeMode === 'form'" class="notice w mb12">
-        ⚠<div>此处改动仅作用于当前职位表单草稿，点击「应用到表单」后才会写入。</div>
-      </div>
-      <div v-else class="notice i mb12">
+      <!-- ★ 2026-10-23：原「表单草稿」模式提示随「＋ 配置权限」入口一起删除，
+           权限树在本页只剩只读查看，固定显示只读说明。 -->
+      <div class="notice i mb12">
         ℹ<div>
           <b>两种勾选方式：</b>① 点功能点左侧的<b>方框</b>可一次性勾选该功能点的全部动作；② 也可<b>单独点击下方任意一个动作标签</b>（如「查看」「新建」「编辑」），自由组合勾选其中一项或几项。勾选后点<b>保存</b>即生效。
         </div>
@@ -1550,11 +1505,7 @@ async function doExport(): Promise<void> {
                   改一处必须同步另一处（上轮只改了 PermAssign 导致本页漏改）。 -->
           <button class="btn" type="button" @click="treeClear">一键清空</button>
         </template>
-        <!-- 编辑模式已删（2026-10-20），文案只剩两种：表单模式「放弃」、只读模式「关闭」 -->
-        <button class="btn" type="button" @click="treeOpen = false">
-          {{ treeMode === 'form' ? '放弃' : '关闭' }}
-        </button>
-        <button v-if="treeMode === 'form'" class="btn pri" type="button" @click="applyFormPerm">应用到表单</button>
+        <button class="btn" type="button" @click="treeOpen = false">关闭</button>
       </template>
     </ProtoDialog>
 
@@ -1588,23 +1539,17 @@ async function doExport(): Promise<void> {
       <div class="divider"></div>
       <div class="sec-t">
         <span class="bar"></span>可操作权限
-        <span class="desc" style="font-weight: 400">点击下方"配置权限"逐项勾选，或先套用模板</span>
+        <span class="desc" style="font-weight: 400">当前该职位已配置的模块（勾选态为只读预览）</span>
       </div>
-      <div class="flex mb12">
-        <button class="btn sm" type="button" @click="applyRoleTpl('consult')">📞 套用·咨询老师模板</button>
-        <button class="btn sm" type="button" @click="applyRoleTpl('teacher')">👨‍🏫 套用·教员模板</button>
-        <button class="btn sm" type="button" @click="applyRoleTpl('acad')">🗂️ 套用·教务模板</button>
-        <button class="btn sm" type="button" @click="applyRoleTpl('fin')">💰 套用·财务模板</button>
-        <button class="btn sm" type="button" @click="applyRoleTpl('all')">🔓 全部权限</button>
-        <button class="btn sm" type="button" @click="applyRoleTpl('none')">🔒 清空</button>
-      </div>
+      <!-- ★ 2026-10-23 按用户要求删除「套用模板」整行按钮（咨询老师 / 教员 / 教务 / 财务 / 全部权限 / 清空）
+           与右侧的「＋ 配置权限」入口：新建职位只填基本信息，权限统一到「职位权限分配」页配置。
+           下方面板改为只读预览，不再提供任何勾选 / 套用入口。 -->
       <div style="border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; background: #FBF8F5">
         <div class="flex" style="justify-content: space-between; margin-bottom: 8px">
           <div style="font-size: 12.5px">
             当前勾选：<b style="color: var(--brand)">{{ draftActionCount }}</b> 项动作 ·
             {{ draftModuleCount }} 个模块
           </div>
-          <button class="btn sm pri" type="button" @click="openFormTree">＋ 配置权限</button>
         </div>
         <div class="flex">
           <span

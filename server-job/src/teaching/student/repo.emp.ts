@@ -212,6 +212,11 @@ async function applyScope(qb: any, user: any): Promise<void> {
     const ids = mine.map((c) => c.id);
     if (!ids.length) qb.whereRaw('1 = 0');
     else qb.whereIn('class_id', ids);
+    /**
+     * ★ 2026-10-23 用户口径：项目经理和就业老师虽同属就业部，但**按学生状态分工**——
+     *   就业老师只负责「待就业 / 已就业」的学生（实训中的归项目经理管）。
+     */
+    qb.whereIn('student_status', [StudentStatus.WAIT_EMPLOY, StudentStatus.EMPLOYED]);
     return;
   }
 
@@ -222,6 +227,8 @@ async function applyScope(qb: any, user: any): Promise<void> {
     const ids = mine.map((c) => c.id);
     if (!ids.length) qb.whereRaw('1 = 0');
     else qb.whereIn('class_id', ids);
+    /* ★ 2026-10-23 用户口径：项目经理只看「实训中」的学生（待就业/已就业归就业老师） */
+    qb.where('student_status', StudentStatus.TRAINING);
     return;
   }
   if (hasRole(roles, RoleCode.TEACH_HEAD)) {

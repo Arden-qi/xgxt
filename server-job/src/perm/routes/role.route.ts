@@ -46,6 +46,8 @@ import {
   getRolePermMap,
   replaceRolePerms,
 } from '../services/perm.service';
+import { assignScopeOfRole, clearAssignScopeCache, filterPermsByScope } from '../services/assignScope';
+import { freedUniqueValue } from '../../utils/freedUniqueValue';
 
 export const roleRouter = Router();
 
@@ -76,9 +78,52 @@ async function userCountMap(): Promise<Map<string, number>> {
   return new Map(rows.map((r: any) => [r.role_id, Number(r.n)]));
 }
 
+/**
+ * 职位 → **有效动作数**（★ 2026-10-23 新增）
+ *
+ * 【为什么不用 t_perm_role.perm_count】
+ *   perm_count 是 replaceRolePerms 写库时顺手记的冗余字段。只要有一行
+ *   「页面已关、动作还在」的历史数据，它就是虚高的 —— 用户看到的
+ *   「咨询经理 41 项」就是这么来的（实际有效 35 项）。
+ *
+ *   这里按 assignScope 现算，与「页面管理」「职位权限分配」「账号详情」同源。
+ *   一次批量查完所有职位的动作行，避免 N 次往返。
+ */
+async function effectivePermCountMap(roleIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!roleIds.length) return out;
+
+  const rows = await db('t_perm_role_perm')
+    .whereIn('role_id', roleIds)
+    .andWhere('is_deleted', false)
+    .select('role_id', 'module_key', 'item_name', 'action_code');
+
+  const grouped = new Map<string, RolePermMap>();
+  for (const p of rows as any[]) {
+    const key = `${p.module_key}||${p.item_name}`;
+    const map = grouped.get(p.role_id) || {};
+    (map[key] = map[key] || []).push(String(p.action_code));
+    grouped.set(p.role_id, map);
+  }
+
+  for (const id of roleIds) {
+    const scope = await assignScopeOfRole(id);
+    const kept = filterPermsByScope(grouped.get(id) || {}, scope).perms;
+    out.set(
+      id,
+      Object.values(kept).reduce((n, list) => n + (list?.length || 0), 0),
+    );
+  }
+  return out;
+}
+
 /** 组装职位列表项（列表 / 导出 共用） */
 async function buildRoleListItems(rows: any[]) {
-  const [depts, users] = await Promise.all([deptNameMap(), userCountMap()]);
+  const [depts, users, effCounts] = await Promise.all([
+    deptNameMap(),
+    userCountMap(),
+    effectivePermCountMap(rows.map((r: any) => String(r.id))),
+  ]);
   return rows.map((r: any) => {
     const userCount = users.get(r.id) || 0;
     return {
@@ -93,7 +138,8 @@ async function buildRoleListItems(rows: any[]) {
       isSys: !!r.is_sys,
       canDelete: !r.is_sys && userCount === 0,
       roleStatus: r.role_status,
-      permCount: Number(r.perm_count || 0),
+      // ★ 2026-10-23：有效动作数（页面已关闭的动作不计入），与详情/分配页一致
+      permCount: effCounts.get(String(r.id)) ?? Number(r.perm_count || 0),
       userCount,
       remark: r.remark,
       createTime: r.create_time,
@@ -181,11 +227,29 @@ roleRouter.get(
     const row = await db(TABLE).where({ id, is_deleted: false }).first();
     if (!row) throw new BizError(BizCode.ROLE_NOT_FOUND, '职位不存在');
 
-    const [dept, perms, userCount] = await Promise.all([
+    const [dept, perms, userCount, scope] = await Promise.all([
       row.dept_id ? db('t_perm_dept').where({ id: row.dept_id }).first() : null,
       getRolePermMap(id),
       countRoleUsers(id),
+      assignScopeOfRole(id),
     ]);
+
+    /**
+     * ★ 2026-10-23：这里必须回**有效权限**，不能回原始行。
+     *
+     *   用户报障：「咨询经理在页面管理里财务是 0/6、分配页里也没有财务，
+     *   但账号详情里财务还是 2/6、还写着 41 项」。根因就是本接口把
+     *   t_perm_role_perm 原样吐给了详情弹窗 —— 而 t_perm_role_perm 里
+     *   还留着「页面已被关掉」的历史动作行。
+     *
+     *   三个界面（页面管理 / 职位权限分配 / 账号详情）现在都只认这一份：
+     *   有效动作 = 动作 ∩ 该职位已授权的页面（assignScope）。
+     */
+    const effectivePerms = filterPermsByScope(perms, scope).perms;
+    const effectiveCount = Object.values(effectivePerms).reduce(
+      (n, list) => n + (list?.length || 0),
+      0,
+    );
 
     const detail: PermRoleDetail = {
       id: row.id,
@@ -198,7 +262,8 @@ roleRouter.get(
       equivRoleCode: row.equiv_role_code || null,
       isSys: !!row.is_sys,
       roleStatus: row.role_status,
-      permCount: Number(row.perm_count || 0),
+      // ★ 2026-10-23：权限数 = 有效动作数（不是库里那串可能过期的行数）
+      permCount: effectiveCount,
       sortNo: row.sort_no,
       remark: row.remark,
       createTime: row.create_time,
@@ -207,7 +272,7 @@ roleRouter.get(
       updateBy: row.update_by,
       isDeleted: !!row.is_deleted,
       userCount,
-      perms,
+      perms: effectivePerms,
     };
 
     res.json(ok(detail));
@@ -443,7 +508,19 @@ roleRouter.put(
 
     let permCount = Number(exists.perm_count || 0);
     if (body.perms) {
-      permCount = await replaceRolePerms(body.id, body.perms as RolePermMap, req.user?.userId || 'system');
+      /**
+       * ★ 2026-10-23：编辑职位时带过来的权限点也要守「页面上限」
+       *
+       *   本页的权限树是**只读查看**（编辑入口已删），保存时是把详情里的
+       *   perms 原样回传。万一本页之前被塞过越权页面（例如咨询老师带
+       *   审批中心），回传就会把脏数据再写一遍 —— 这里统一按可分配范围过滤，
+       *   保证「任何一个写入口都不会把职位没有授权的页面写进去」。
+       */
+      const scope = await assignScopeOfRole(body.id);
+      const filtered = filterPermsByScope(body.perms as RolePermMap, scope);
+      permCount = await replaceRolePerms(body.id, filtered.perms, req.user?.userId || 'system');
+      // ★ 2026-10-23：动作变了 → 默认页面集合 / 可分配范围都要重算
+      clearAssignScopeCache();
     }
 
     await addLog({
@@ -536,7 +613,8 @@ roleRouter.delete(
 
     await db.transaction(async (trx) => {
       // ⚠️ 释放编码：唯一索引不认 is_deleted，不改编码则同名编码无法重建
-      const freedCode = `${exists.role_code}#DEL#${Date.now()}`.slice(0, 64);
+      // ★ 2026-10-24：统一改用 freedUniqueValue（完整携带时间戳，防同编码二次删除撞键）
+      const freedCode = freedUniqueValue(exists.role_code, 64);
       await trx(TABLE).where({ id }).update({
         role_code: freedCode,
         is_deleted: true,

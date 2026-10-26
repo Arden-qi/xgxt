@@ -153,6 +153,31 @@ export async function findSchemeStageByCode(
  * ⚠️ 不要退回 `Object.keys(PHASE_NAME)[0]` 这类兜底：数字键按数值升序，
  *    大学部 PHASE_NAME 里 13（实训）比 201 小，取「第一个」会静默拿到实训。
  */
+/**
+ * ★ 2026-10-23：按「方案 + 阶段码」反查**方案里的阶段名**。
+ *
+ *   同一编码在不同方案里叫法不同（201 在全局字典叫「一阶段」，方案「大学2」里叫
+ *   「拉丝机」）。班级绑定方案后要显示方案里的名字，保存时把名字一起落库
+ *   （scheme_stage_name），列表按它显示。放服务端解析 → 前端漏传也能落对。
+ */
+export async function resolveSchemeStageName(
+  schemeId: unknown,
+  phaseCode: unknown,
+): Promise<string | null> {
+  const sid = String(schemeId ?? '').trim();
+  const code = Number(phaseCode);
+  if (!sid || !Number.isFinite(code)) return null;
+  try {
+    const row = (await classJhDb(STAGE_T)
+      .where({ scheme_id: sid, stage_code: code, is_deleted: false })
+      .first()) as Record<string, any> | undefined;
+    const name = String(row?.stage_name ?? '').trim();
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function resolvePhaseCodeFromScheme(
   deptCode: unknown,
   schemeStageId: unknown,

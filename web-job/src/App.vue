@@ -87,13 +87,17 @@ const userNameText = computed(
   () => portal.account?.userName || '未登录',
 );
 
-/** 顶栏显示的头衔：门户账号 kind / title */
+/** 顶栏显示的头衔：门户账号 title / kind */
 const roleText = computed(() => {
   const a = portal.account;
   if (a) {
     if (a.title) return a.title;
     if (a.kind === 'sys_admin') return '系统管理员';
-    return '模块负责人';
+    /* ★ 2026-10-23：「模块负责人」是账号类型（kind=module_owner），不是岗位名称。
+     *   以前这里把 kind 当岗位显示，于是咨询经理王寒逸（title 为空）被写成
+     *   「模块负责人」。后端现在会用职位名兜底（resolveAccountTitle），
+     *   这里只留一个中性兜底，绝不再把账号类型冒充职位。 */
+    return '员工';
   }
   // 兜底：老口径的角色码（就业/教务/班级账号）
   return myRoles.value.map((r) => ROLE_CODE_NAME[r] || r).join('、') || '未登录';

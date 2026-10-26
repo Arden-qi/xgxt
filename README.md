@@ -159,7 +159,8 @@ npm run db:check    :: 结构体检：9 个库是否齐、关键表和关键列�
 
 - 系统使用 9 个数据库：`sms_job`、`sms_edu`、`sms_class`、`sms_common`、`sms_class_jh`、`sms_portal`、`sms_consult`、`sms_finance`、`sms_perm`。它们应位于同一个 MySQL 实例中，项目存在跨库读取和同步。
 - 一键启动仅对五个业务数据库运行 knex 迁移（另外会对咨询库做一次幂等补列 `npm run fix:consult`）；门户、咨询、财务、权限四个库以及 43 张统一表的结构由 `server-job/sql/init/` 下的初始化 SQL 建立。启动器会自动导入：四个模块库**仅在该库为空时**导入（文件含 `DROP TABLE`），统一表用 `CREATE TABLE IF NOT EXISTS` 补齐（可重复执行、不动数据）。
-- 新建空环境完成一键启动后，如需生成项目内置的完整演示业务数据，可在 `server-job/` 执行 `npm run seed:all`。**该脚本会重建多个业务库中的演示数据，执行前先确认连接的是可丢弃的演示环境并备份重要数据。**
+- 新建空环境完成一键启动后，如需生成项目内置的完整演示业务数据，可在 `server-job/` 执行 `npm run seed:all`。**该脚本会重建多个业务库中的演示数据，执行前先确认连接的是可丢弃的演示环境并备份重要数据。** 它现在会**自动接一步统一表搬迁**（`npm run uni:migrate`）——因为「教学管理」全部页面读的是 `sms_common` 里的统一表，只灌老库不搬的话页面照样是空的。
+- 如果「教学管理」里某些页面没数据（学生档案 / 班级 / 出勤 / 成绩 / 宿舍 / 退费…），而老库里其实有数据，先跑 `npm run uni:migrate:verify` 看是不是统一表有缺口；有缺口就跑 `npm run uni:migrate`（只补缺、不覆盖）。排查步骤：`npm run uni:migrate:plan`（只出计划）→ `npm run uni:migrate`（补数据）→ `npm run uni:migrate:verify`（逐表核对）。
 - 只想给「教学管理」补数据（学生 / 班级 / 出勤 / 考试 / 成绩 / 宿舍 / 催费 / 退费 / 休学退学）时，用 `npm run seed:teaching`（预演加 `--dry`）。它**不清库**、走真实接口做加法、并可重复执行；需要后端已在 8004 运行。改动教学管理页面后可跑 `node tools\_verify-teaching-demo-data.mjs` 逐页核对是否还有数据。
 - **演示数据安全提示**：`sql/init/` 里的四个库 SQL 是演示数据，其中门户演示账号密码统一为 `123456` 且以**明文**存储。生产或正式使用前必须：① 改掉所有演示账号密码；② 将密码字段改为哈希存储；③ 替换掉演示业务数据。不要把演示环境直接当作生产环境使用。
 - 生产或正式使用前，应由部署负责人配置真实账号、数据库权限及安全密钥；在 `server-job/.env` 中配置真实数据库凭据和随机 JWT/内部令牌密钥，并妥善保管数据库备份及上传文件。

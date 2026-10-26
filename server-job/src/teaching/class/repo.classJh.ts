@@ -38,7 +38,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 import { applyClassScope } from '../shared/dataScope';
-import { resolvePhaseCodeFromScheme, findSchemeStageByCode } from '../shared/stageSchemes';
+import { resolvePhaseCodeFromScheme, resolveSchemeStageName } from '../shared/stageSchemes';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -106,9 +106,17 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
-    // ★ 2026-10-23：阶段名优先取「方案里选的阶段」快照，老班级没有才退回阶段码名称
-    phaseName: str(r.scheme_stage_name) || (phase === null ? '' : (PHASE_NAME[phase] ?? '')),
-    // ★ 2026-10-23：把方案三列一起下发（编辑弹窗回显 + 前端判断用）
+    /**
+     * ★ 2026-10-23 修：阶段名**以方案为准**。
+     *   班级绑定方案后，同一编码在不同方案里叫法不同（201 在全局字典叫「一阶段」，
+     *   在方案「大学2」里叫「拉丝机」）。原来字典优先 → 用户改完方案里的阶段，
+     *   表格仍显示字典名（「一阶段」），以为“阶段没保存”。
+     *   现在：方案阶段名优先，字典名兜底（老班级没绑方案时才用字典）。
+     */
+    phaseName: phase === null ? '' : (str(r.scheme_stage_name) || PHASE_NAME[phase] || ''),
+    // ★ 2026-10-26 合并取对方：阶段名口径按上面这行（方案 > 字典）。
+    //   但 dto.ClassRow 的方案三列仍是必填（前端【编辑班级】要回显阶段方案下拉），
+    //   这里只把三列原样下发，不参与任何筛选/显示判断。
     schemeId: str(r.scheme_id),
     schemeStageId: str(r.scheme_stage_id),
     schemeStageName: str(r.scheme_stage_name),
@@ -280,15 +288,13 @@ export const repo: ClassRepo = {
     const phaseCode = body.phaseCode ?? derivedPhaseCode;
     set(phaseCodeCol(), phaseCode);
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
-    //   ★ 2026-10-23：表单只传阶段码时，按 (部门, 阶段码) 反查方案阶段补上
-    //     方案三列 —— 否则列表「阶段」列显示的是空的，看着像"选了阶段没生效"。
-    const autoStage =
-      body.schemeStageId == null && phaseCode != null
-        ? await findSchemeStageByCode(body.deptCode, phaseCode)
-        : null;
-    set('scheme_id', body.schemeId ?? autoStage?.schemeId);
-    set('scheme_stage_id', body.schemeStageId ?? autoStage?.id);
-    set('scheme_stage_name', body.schemeStageName ?? autoStage?.name);
+    set('scheme_id', body.schemeId);
+    set('scheme_stage_id', body.schemeStageId);
+    set(
+      'scheme_stage_name',
+      // ★ 2026-10-23：前端漏传阶段名时服务端按「方案 + 阶段码」反查兜底
+      body.schemeStageName ?? (await resolveSchemeStageName(body.schemeId, body.phaseCode)),
+    );
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);

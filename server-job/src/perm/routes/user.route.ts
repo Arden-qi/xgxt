@@ -9,10 +9,9 @@
  *  POST   /add                   新建账号
  *  PUT    /update                编辑账号
  *  DELETE /delete/:id            删除账号（逻辑删除）
- *  PUT    /status                启用 / 停用 / 锁定
+ *  PUT    /status                启用 / 停用（锁定状态已于 2026-10-25 全系统移除）
  *  PUT    /reset-pwd             重置密码
- *  PUT    /unlock                解锁（清零错误次数）
- *  GET    /overview              账号 KPI（5 个，均可点击筛选）
+ *  GET    /overview              账号 KPI（4 个，均可点击筛选）
  *  GET    /auth-profile?account= 账号鉴权档案（跨模块：登录模块调用）
  *
  * ⚠️ 归属决策：账号数据归【权限管理模块】所有（账号管理是权限管理的第 3 个功能页）。
@@ -46,6 +45,7 @@ import {
   avatarText,
   clientIp,
   collectDescendants,
+  deptPathMap,
   getUserEffectivePerms,
   joinRoleNames,
   maskPhone,
@@ -55,8 +55,13 @@ import {
   accountBusinessRefs,
   retirePortalAccount,
   setPortalAccountActive,
+  syncPortalAccountTitle,
   upsertPortalAccount,
 } from '../services/perm.service';
+/* ★ 2026-10-23：账号的有效权限要按「页面管理 → 职位」的授权范围过滤，
+   与职位权限分配 / 页面管理 / 登录后菜单同一个口径（见 services/assignScope.ts） */
+import { assignScopeOfRole } from '../services/assignScope';
+import { freedUniqueValue } from '../../utils/freedUniqueValue';
 
 export const userRouter = Router();
 
@@ -137,15 +142,39 @@ async function loadUserRoleBundle(userIds: string[]): Promise<UserRoleBundle> {
   });
 
   const permRows = await db('t_perm_role_perm').whereIn('role_id', roleIds).andWhere('is_deleted', false);
+
+  /**
+   * ★ 2026-10-23：账号详情 / 列表里的「有效权限」必须按页面上限过滤。
+   *
+   *   原来的算法是「把该账号所有职位的 t_perm_role_perm 全部并起来」——
+   *   于是「咨询经理在页面管理里财务 0/6、分配页里也没有财务，
+   *   但账号详情里财务 2/6」这种自相矛盾的画面就出来了：
+   *   详情读的是**原始行**，而其它界面读的是**有效集合**。
+   *
+   *   现在统一走 assignScopeOfRole（= 页面管理台账）：
+   *   页面没授权 → 这一页的动作在详情里也不显示，也不计入有效权限数、不参与数据范围。
+   */
+  const scopeByRole = new Map<string, Awaited<ReturnType<typeof assignScopeOfRole>>>();
+  await Promise.all(
+    roleIds.map(async (rid) => {
+      scopeByRole.set(rid, await assignScopeOfRole(String(rid)));
+    }),
+  );
+
   permRows.forEach((p: any) => {
+    const scope = scopeByRole.get(p.role_id);
+    const itemKey = `${p.module_key}||${p.item_name}`;
+    // 页面未授权 → 这一行不算（与「职位权限分配」里灰掉的那一页口径相同）
+    if (scope?.restricted && !scope.allowedItems.has(itemKey)) return;
+
     const set = permKeysByRole.get(p.role_id) || new Set<string>();
     set.add(`${p.module_key}||${p.item_name}||${p.action_code}`);
     permKeysByRole.set(p.role_id, set);
 
-    const scope = SCOPE_ACTION_TO_VALUE[p.action_code];
-    if (scope) {
+    const scopeVal = SCOPE_ACTION_TO_VALUE[p.action_code];
+    if (scopeVal) {
       const prev = dataScopeByRole.get(p.role_id) || DataScope.SELF;
-      if (scope > prev) dataScopeByRole.set(p.role_id, scope);
+      if (scopeVal > prev) dataScopeByRole.set(p.role_id, scopeVal);
     }
   });
 
@@ -154,7 +183,10 @@ async function loadUserRoleBundle(userIds: string[]): Promise<UserRoleBundle> {
 
 /** 组装账号列表项 */
 async function buildUserListItems(rows: any[]) {
-  const depts = await db('t_perm_dept').where('is_deleted', false).select('id', 'dept_name');
+  const [depts, deptPaths] = await Promise.all([
+    db('t_perm_dept').where('is_deleted', false).select('id', 'dept_name'),
+    deptPathMap(),
+  ]);
   const deptMap = new Map(depts.map((d: any) => [d.id, d.dept_name]));
 
   // ★ 2026-10-16：批量带出门户账号的可访问模块（列表 / 编辑表单回显用）
@@ -184,6 +216,8 @@ async function buildUserListItems(rows: any[]) {
       age: r.age,
       deptId: r.dept_id,
       deptName: deptMap.get(r.dept_id) || '—',
+      /** ★ 2026-10-23：带上级的部门路径（「教学部-初中部」）—— 全站展示统一用它 */
+      deptPath: deptPaths.get(r.dept_id) || deptMap.get(r.dept_id) || '—',
       roleIds,
       roleNames,
       roleName: roleNames[0] || '—',
@@ -463,6 +497,22 @@ const updateSchema = addSchema
     password: z.string().optional(),
     /** ★ 2026-10-16：编辑时模块可选 —— 不传 = 不动门户那边的模块 */
     modules: z.array(z.string()).optional(),
+    /**
+     * ★ 2026-10-24：「修改职位」走的也是本接口（全量带回资料字段），但部分历史种子
+     *   账号 gender=0 / 资料不全 —— 之前按建档口径硬校验，导致只是想换个职位
+     *   却被「性别只能是 1(男) 或 2(女)」卡死（周铭就是这个问题）。
+     *   现在放宽为：传了合法值(1/2)就更新；传 0/null/不传 = 未改动，保持原值。
+     */
+    gender: z
+      .union([z.literal(1), z.literal(2), z.literal(0), z.null()])
+      .optional(),
+    age: z
+      .union([
+        z.coerce.number().int().min(20, '年龄不得小于 20').max(65, '年龄不得大于 65'),
+        z.literal(0),
+        z.null(),
+      ])
+      .optional(),
   });
 
 userRouter.put(
@@ -519,8 +569,13 @@ userRouter.put(
         user_name: body.userName,
         account: body.account,
         phone: body.phone,
-        gender: body.gender,
-        age: body.age,
+        // ★ 2026-10-24：gender/age 只在传了合法值时才更新（0/null/不传 = 保持原值），
+        //   见 updateSchema 里的注释 —— 修改职位不能再被资料字段卡死。
+        gender: body.gender === 1 || body.gender === 2 ? body.gender : exists.gender,
+        age:
+          typeof body.age === 'number' && body.age >= 20 && body.age <= 65
+            ? body.age
+            : exists.age,
         dept_id: body.deptId,
         user_status: body.userStatus || exists.user_status,
         need_change_pwd: needChange,
@@ -566,6 +621,13 @@ userRouter.put(
       });
     }
 
+    // ★ 2026-10-24：职位有增删 → 门户头衔同步刷成最新职位名。
+    //   否则改完职位，登录后顶栏还显示旧头衔（孙敏：职位已是项目经理、头衔还是「班主任」）。
+    const afterRolesStr = roles.map((r: any) => r.role_name).join('、');
+    if (afterRolesStr && afterRolesStr !== beforeRolesStr) {
+      await syncPortalAccountTitle(body.account, afterRolesStr);
+    }
+
     await addLog({
       operatorId: req.user?.userId,
       operatorName: req.user?.userName,
@@ -583,8 +645,9 @@ userRouter.put(
 );
 
 /* ============================================================
- * 5. 启用 / 停用 / 锁定
+ * 5. 启用 / 停用
  *    PUT /api/perm/user/status
+ *    ★ 2026-10-25：「锁定」状态全系统移除，状态只有「正常 / 已停用」两档
  * ============================================================ */
 
 userRouter.put(
@@ -593,8 +656,8 @@ userRouter.put(
   validate(
     z.object({
       id: z.string().min(1, '必须传 id'),
-      userStatus: z.enum([UserStatus.NORMAL, UserStatus.DISABLED, UserStatus.LOCKED], {
-        errorMap: () => ({ message: '状态只能是「正常」「已停用」「已锁定」' }),
+      userStatus: z.enum([UserStatus.NORMAL, UserStatus.DISABLED], {
+        errorMap: () => ({ message: '状态只能是「正常」「已停用」' }),
       }),
     }),
   ),
@@ -609,7 +672,7 @@ userRouter.put(
       .where({ 't_perm_user_role.user_id': body.id, 't_perm_role.role_code': 'SYS_ADMIN' })
       .first();
     if (isAdmin && body.userStatus !== UserStatus.NORMAL) {
-      throw new BizError(BizCode.PRESET_ROLE_PROTECTED, '系统管理员账号不可停用或锁定');
+      throw new BizError(BizCode.PRESET_ROLE_PROTECTED, '系统管理员账号不可停用');
     }
 
     // ★ 2026-10-16 用户定的删除规则：账号有业务数据关联时【不可停用】
@@ -625,7 +688,7 @@ userRouter.put(
 
     await db(TABLE).where({ id: body.id }).update({
       user_status: body.userStatus,
-      // 启用时顺手解锁：错误次数归零
+      // 启用时错误次数归零
       pwd_error_count: body.userStatus === UserStatus.NORMAL ? 0 : exists.pwd_error_count,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
@@ -688,7 +751,7 @@ userRouter.put(
       pwd_algo: 'plain',
       need_change_pwd: needChange,
       pwd_error_count: 0,
-      user_status: exists.user_status === UserStatus.LOCKED ? UserStatus.NORMAL : exists.user_status,
+      user_status: exists.user_status,
       update_time: new Date(),
       update_by: req.user?.userId || 'system',
     });
@@ -718,47 +781,10 @@ userRouter.put(
 );
 
 /* ============================================================
- * 7. 解锁
- *    PUT /api/perm/user/unlock   body: { id }
- * ============================================================ */
-
-userRouter.put(
-  '/unlock',
-  checkPermission('perm:账号管理:edit'),
-  validate(z.object({ id: z.string().min(1, '必须传 id') })),
-  wrap(async (req, res) => {
-    const { id } = (req as any).validated as { id: string };
-    const exists = await db(TABLE).where({ id, is_deleted: false }).first();
-    if (!exists) throw new BizError(BizCode.USER_NOT_FOUND, '账号不存在');
-
-    await db(TABLE).where({ id }).update({
-      pwd_error_count: 0,
-      user_status: UserStatus.NORMAL,
-      update_time: new Date(),
-      update_by: req.user?.userId || 'system',
-    });
-
-    // ★ 2026-10-16：解锁 = 状态回到「正常」→ 门户登录账号也要跟着启用
-    await setPortalAccountActive(exists.account, true);
-
-    await addLog({
-      operatorId: req.user?.userId,
-      operatorName: req.user?.userName,
-      moduleName: '权限管理',
-      actionType: '修改',
-      targetObj: `用户 ${exists.user_name}(${exists.account})`,
-      beforeValue: exists.user_status,
-      afterValue: '已解锁',
-      ip: clientIp(req),
-    });
-
-    res.json(ok(null, '已解锁'));
-  }),
-);
-
-/* ============================================================
- * 8. 删除账号（逻辑删除）
+ * 7. 删除账号（逻辑删除）
  *    DELETE /api/perm/user/delete/:id
+ *    ★ 2026-10-25：原「7. 解锁」接口（PUT /api/perm/user/unlock）已随
+ *      「锁定」状态全系统移除一并删除 —— 状态只有正常/停用，无锁可解。
  * ============================================================ */
 
 userRouter.delete(
@@ -786,14 +812,19 @@ userRouter.delete(
 
     // ★ 2026-10-16：后缀两处共用（权限库 + 门户库），
     //   两边同步改名，唯一键都腾出来给以后复用
-    const suffix = `#DEL#${Date.now()}`;
+    // ★ 2026-10-24：改用 freedUniqueValue —— 旧写法 `${v}#DEL#${ts}` 按列长截断尾巴，
+    //   时间戳前几位几周不变（"1792…"），同手机号/工号二次删除必撞唯一键
+    //   （齐田田删不掉、报「数据已存在」就是它）；现在完整携带时间戳，绝不撞历史行。
+    const renamedAccount = freedUniqueValue(exists.account, 50);
+    const renamedGwNo = freedUniqueValue(exists.gw_no, 20);
+    const renamedPhone = freedUniqueValue(exists.phone, 20);
 
     await db.transaction(async (trx) => {
       // 释放唯一键：账号/工号/手机号加了唯一索引，不改则无法复用
       await trx(TABLE).where({ id }).update({
-        account: `${exists.account}${suffix}`.slice(0, 50),
-        gw_no: `${exists.gw_no}${suffix}`.slice(0, 20),
-        phone: `${exists.phone}${suffix}`.slice(0, 20),
+        account: renamedAccount,
+        gw_no: renamedGwNo,
+        phone: renamedPhone,
         is_deleted: true,
         update_time: new Date(),
         update_by: req.user?.userId || 'system',
@@ -819,25 +850,25 @@ userRouter.delete(
 
     // ★ 2026-10-16：门户登录账号一并作废（改名 + 逻辑删除 + 停用）——
     //   不然后台把人删了，他还能登录门户（只是进去什么都看不到）
-    await retirePortalAccount(exists.account, `${exists.account}${suffix}`.slice(0, 50));
+    await retirePortalAccount(exists.account, renamedAccount);
 
     res.json(ok(null, '删除成功（门户登录账号已作废）'));
   }),
 );
 
 /* ============================================================
- * 9. 账号 KPI（5 个）
+ * 8. 账号 KPI（4 个）
  *    GET /api/perm/user/overview
+ *    ★ 2026-10-25：lockedTotal 随「锁定」状态移除一并删除
  * ============================================================ */
 
 userRouter.get(
   '/overview',
   wrap(async (_req, res) => {
-    const [all, normal, disabled, locked, needChange] = await Promise.all([
+    const [all, normal, disabled, needChange] = await Promise.all([
       db(TABLE).where('is_deleted', false).count({ n: '*' }),
       db(TABLE).where({ is_deleted: false, user_status: UserStatus.NORMAL }).count({ n: '*' }),
       db(TABLE).where({ is_deleted: false, user_status: UserStatus.DISABLED }).count({ n: '*' }),
-      db(TABLE).where({ is_deleted: false, user_status: UserStatus.LOCKED }).count({ n: '*' }),
       db(TABLE).where({ is_deleted: false, need_change_pwd: true }).count({ n: '*' }),
     ]);
 
@@ -846,7 +877,6 @@ userRouter.get(
         userTotal: Number(all[0]?.n || 0),
         normalTotal: Number(normal[0]?.n || 0),
         disabledTotal: Number(disabled[0]?.n || 0),
-        lockedTotal: Number(locked[0]?.n || 0),
         needChangePwdTotal: Number(needChange[0]?.n || 0),
       }),
     );
@@ -854,7 +884,7 @@ userRouter.get(
 );
 
 /* ============================================================
- * 10. 账号鉴权档案（跨模块：登录模块调用）
+ * 9. 账号鉴权档案（跨模块：登录模块调用）
  *     GET /api/perm/user/auth-profile?account=admin
  *
  * ⚠️ 这个接口【不加 checkPermission】—— 它是给登录流程用的，
@@ -873,6 +903,7 @@ userRouter.get(
     if (!row) throw new BizError(BizCode.USER_NOT_FOUND, '账号不存在');
 
     const dept = row.dept_id ? await db('t_perm_dept').where({ id: row.dept_id }).first() : null;
+    const deptPaths = await deptPathMap();
 
     const links = await db('t_perm_user_role').where({ user_id: row.id, is_deleted: false });
     const roleIds = links.map((l: any) => l.role_id);
@@ -889,6 +920,8 @@ userRouter.get(
         account: row.account,
         deptId: row.dept_id,
         deptName: dept?.dept_name || '—',
+        /* 带上级的完整路径，登录后门户显示部门用 */
+        deptPath: (row.dept_id && deptPaths.get(row.dept_id)) || dept?.dept_name || '—',
         userStatus: row.user_status,
         roles: roles.map((r: any) => r.role_code),
         roleIds,

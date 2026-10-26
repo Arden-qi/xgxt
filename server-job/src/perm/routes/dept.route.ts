@@ -161,19 +161,37 @@ deptRouter.get(
 deptRouter.get(
   '/overview',
   wrap(async (_req, res) => {
-    const [deptTotal, stageTotal, roleTotal, userTotal] = await Promise.all([
+    /* ★ 2026-10-23 按用户要求改口径：顶部两个 KPI 不再「整表 count」，
+       改为「按下方部门表格的口径汇总后去重」。
+       规则（用户原话落到代码里）：
+         ① 归属职位数 / 归属账号数 = 全部未删除部门（校级 + 一级部门 + 下设子部门）
+            覆盖到的职位 / 账号，**每个职位、每个账号只算一次** ——
+            父部门与其子部门不重复累加（教学部的 4 个职位已含三个学段，不再加一遍）；
+         ② 停用 / 暂停的职位、停用 / 锁定的账号**仍计入**，
+            只有 is_deleted = 1（删除）才剔除；
+         ③ 一个账号挂多个职位只算一次：按 t_perm_user 行统计天然满足。
+            ⚠️ 不要改成「职位 JOIN 关联表再 count(*)」，那样挂 2 个职位的账号会被算 2 次；
+         ④ dept_id 指向已删除部门的孤儿记录不计入 ——
+            这正是旧版整表 count 会虚高的来源（当前数据下孤儿为 0，故数字不变）。
+       当前数据：14 个职位 / 17 个账号，与改之前一致，但口径从此与表格同源。 */
+    const [deptTotal, stageTotal, deptRows, roleRows, userRows] = await Promise.all([
       countDeptTotal(),
       countStageTotal(),
-      db('t_perm_role').where('is_deleted', false).count({ n: '*' }),
-      db('t_perm_user').where('is_deleted', false).count({ n: '*' }),
+      db(TABLE).where('is_deleted', false).select('id'),
+      db('t_perm_role').where('is_deleted', false).select('id', 'dept_id'),
+      db('t_perm_user').where('is_deleted', false).select('id', 'dept_id'),
     ]);
+
+    // 各部门 collectDescendants 的并集 = 全部部门 id，所以这里不必逐个部门递归
+    const deptIds = new Set<string>(deptRows.map((d: any) => d.id));
+    const hasDept = (id: string | null): boolean => !!id && deptIds.has(id);
 
     res.json(
       ok({
         deptTotal,
         stageTotal,
-        roleTotal: Number(roleTotal[0]?.n || 0),
-        userTotal: Number(userTotal[0]?.n || 0),
+        roleTotal: roleRows.filter((r: any) => hasDept(r.dept_id)).length,
+        userTotal: userRows.filter((u: any) => hasDept(u.dept_id)).length,
       }),
     );
   }),

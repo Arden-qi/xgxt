@@ -439,6 +439,11 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
     // ★ 2026-10-05：教学管理（初高）—— 教务在该模块负责【调宿审批】，
     //   所以给宿舍页（其余页面属班主任/经理，不给他）
     ...CLASS_JH_ACAD_PAGES,
+    // ★★ 2026-10-23 补：大学部宿舍页 —— 宿舍管理三学段共用一页，
+    //   教务是「调宿/退宿申请」的审批人；缺这个码时大学部页签的
+    //   申请列表 assertStageView 40302 → 教务收不到班主任提交的申请
+    //   （实测 zhengym change/list?stage=class 返回空）。
+    'class:dorm:view',
   ],
 
   // 就业老师：**只管就业阶段**，实训侧的页面一律不给

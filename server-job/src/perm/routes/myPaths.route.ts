@@ -50,6 +50,32 @@ myPathsRouter.get(
         roleFiltered = true;
         paths = flags.paths.filter((p) => rolePaths.has(p));
       }
+
+      /* ★★ 2026-10-24：系统管理员的页面下发按【账号级 modules】收窄（与登录下发的
+       *   visibleModules 同源 —— 见 portal/services/account.service.ts 的 ★★ 注释）。
+       *
+       *   【为什么】用户拍板：「权限管理员的账号应该只看见权限管理板块才对」。
+       *   SYS_ADMIN 职位在权限树里天然勾着几乎所有页面（这是它作为"超级职位"的设计），
+       *   如果 my-paths 照单全发，就会出现「页面管理里一片勾、林晓登录却看不到」或
+       *   「菜单跟着页面走、管理员多出一堆板块」——两头都不对。
+       *
+       *   【口径】SYS_ADMIN 能拿到哪些页面 = 账号行 `t_sys_account.modules` 里声明的板块
+       *   （token 里就有，不用回查库）∩ 职位页面集合。
+       *   linx（modules=["perm"]）→ 只剩 `/` 与 `/perm/*`；
+       *   想让管理员多看什么，就在账号管理里给他的 modules 加板块。
+       *
+       *   【不影响别人】这条只对 roleCodes 含 SYS_ADMIN 的账号生效；
+       *   其余账号仍按「职位页面台账」原样下发（legacy / teaching 菜单靠它渲染，不能动）。 */
+      if (roles.includes('SYS_ADMIN')) {
+        const mods = new Set(
+          Array.isArray(req.user?.modules) ? req.user.modules.map((m: any) => String(m)) : [],
+        );
+        paths = paths.filter((p) => {
+          if (p === '/' || p === '') return true; // 工作台恒可见
+          const seg = p.split('/')[1] || '';
+          return mods.has(seg);
+        });
+      }
     } catch {
       // 职位台账算不出来 → 只按全局台账下发，绝不把页面全禁掉
     }

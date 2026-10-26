@@ -107,12 +107,11 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
-    // ★ 2026-10-23：阶段名**优先方案里选的阶段**（新建/编辑班级时选的），
-    //   老班级没有方案快照才退回阶段码名称。否则就业部 304「实训」这类
-    //   方案阶段在列表里会显示成「—」（阶段码在老字典里已软删）。
-    phaseName:
-      str(r.scheme_stage_name) || (phase === null ? '' : (PHASE_NAME[phase] ?? resolveStageName(phase))),
-    // ★ 2026-10-23：把方案三列一起下发（编辑弹窗回显 + 前端判断用）
+    // ★ 2026-10-23：阶段名方案优先、字典兜底（同 repo.classJh 口径）
+    phaseName: phase === null ? '' : (str(r.scheme_stage_name) || PHASE_NAME[phase] || resolveStageName(phase) || ''),
+    // ★ 2026-10-26 合并取对方：阶段名口径按上面这行（方案 > 字典 > stage 字典）。
+    //   但 dto.ClassRow 的方案三列仍是必填（前端【编辑班级】要回显阶段方案下拉），
+    //   这里只把三列原样下发，不参与任何筛选/显示判断。
     schemeId: str(r.scheme_id),
     schemeStageId: str(r.scheme_stage_id),
     schemeStageName: str(r.scheme_stage_name),

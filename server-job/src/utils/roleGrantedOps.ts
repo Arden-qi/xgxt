@@ -61,12 +61,39 @@ export async function loadRoleGrantedOps(force = false): Promise<Map<string, Set
         'rp.action_code as actionCode',
       );
 
+    /**
+     * ★ 2026-10-23：先算「每个职位能分配的页面」，再挑动作行。
+     *
+     *   本函数是按钮 / 接口判权的底座。原来它把 t_perm_role_perm 的行
+     *   全部当已授权 —— 于是「页面管理里已被关掉的那一页」的按钮仍然放行，
+     *   与菜单、账号详情、职位权限分配三处口径不一致。
+     *   现在与 assignScope 同一份范围：页面没授权 → 这一页的操作码一律不给。
+     */
+    const codesOfRows = Array.from(
+      new Set((rows as any[]).map((r) => String(r.roleCode || '')).filter(Boolean)),
+    );
+    const allowedByCode = new Map<string, Set<string> | null>();
+    await Promise.all(
+      codesOfRows.map(async (code) => {
+        try {
+          const { allowedItemsOfRoleCode } = await import('../perm/services/assignScope');
+          allowedByCode.set(code, await allowedItemsOfRoleCode(code));
+        } catch {
+          allowedByCode.set(code, null);
+        }
+      }),
+    );
+
     for (const row of rows as any[]) {
       const roleCode = String(row.roleCode || '');
       const moduleKey = String(row.moduleKey || '');
       const itemName = String(row.itemName || '');
       const actionCode = String(row.actionCode || '');
       if (!roleCode || !moduleKey || !itemName || !actionCode) continue;
+
+      // 该职位在这一页没有授权 → 不算已授权动作
+      const allowed = allowedByCode.get(roleCode);
+      if (allowed && !allowed.has(`${moduleKey}||${itemName}`)) continue;
 
       // `模块||功能点` → { 动作 → 操作码[] }
       const itemOps = PERM_TREE_ACTION_OPS[`${moduleKey}||${itemName}`];

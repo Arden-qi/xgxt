@@ -45,14 +45,29 @@ const emit = defineEmits<{
 
 const optionStore = useOptionStore();
 
-/** 账号状态下拉：优先用字典接口，兜底原型写死的三档（与账号管理同一口径） */
+/**
+ * 账号状态下拉：优先用字典接口，兜底写死两档
+ * ★ 2026-10-25 用户口径：账号状态只有「正常 / 停用」两档，**「锁定」已全系统移除**
+ *   （编辑下拉、字典接口、列表标签、导出文案、后端枚举与 /unlock 接口全部同步删除）。
+ *   字典万一还是旧文案（store 有会话级缓存），渲染前统一剥一遍「已」并过滤锁定。
+ */
+const STATUS_LABEL_FIX: Record<string, string> = {
+  已停用: '停用',
+  已启用: '启用',
+  已冻结: '冻结',
+  已禁用: '禁用',
+};
+const normStatusLabel = (label: string) => STATUS_LABEL_FIX[label] ?? label;
+
 const statusOptions = computed<{ value: string; label: string }[]>(() => {
   const opts = optionStore.userStatuses;
-  if (opts && opts.length) return opts.map((o) => ({ value: String(o.value), label: o.label }));
+  const mapped = (opts && opts.length ? opts : [])
+    .map((o) => ({ value: String(o.value), label: normStatusLabel(o.label) }))
+    .filter((o) => o.value !== '已锁定' && o.label !== '锁定'); // ★ 2026-10-25：锁定档整体移除
+  if (mapped.length) return mapped;
   return [
     { value: '正常', label: '正常' },
-    { value: '已停用', label: '已停用' },
-    { value: '已锁定', label: '已锁定' },
+    { value: '已停用', label: '停用' },
   ];
 });
 
@@ -274,7 +289,7 @@ async function doSave(): Promise<void> {
 
     <!-- 只改基础信息：职位 / 部门不在这里改，写清楚免得用户以为能改 -->
     <div class="desc" style="margin-top: 10px">
-      仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「分配职位」）。
+      仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「修改职位」）。
       <span v-if="loading">正在读取最新资料…</span>
     </div>
 
@@ -308,7 +323,7 @@ async function doSave(): Promise<void> {
       <div>账号状态：{{ form.userStatus || '—' }}</div>
     </div>
     <div class="desc mt12">
-      仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「分配职位」）。
+      仅修改基础信息；所属职位与部门不受影响（如需调整请用列表里的「修改职位」）。
     </div>
     <template #footer>
       <button class="btn" type="button" @click="confirmOpen = false">再改改</button>

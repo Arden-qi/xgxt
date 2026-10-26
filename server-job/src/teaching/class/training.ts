@@ -141,13 +141,9 @@ export async function upgradeClassToTraining(
 
   const newId = randomUUID();
   /**
-   * ★ 2026-10-23 批注：「【升实训】点击后**不更改班级编号**
-   *   （班级编号只有新建班级时进行创建更改，后续的任何操作都不可更改）」
-   *
-   *   → 新班**沿用源班的班级编号**，不再 genClassCode() 另生成一个
-   *     （原来升一次实训编号就从 U2601 变成 SX2026000x）。
-   *   源班编号为空（历史数据）时才生成一个兜底，避免 NOT NULL 约束报错。
-   *   编号在三部门全局唯一（见 shared/classCode.ts），源班紧接着会被删除，不会长期占用。
+   * ★ 2026-10-23 修：升实训**沿用原班编号**（用户口径：升实训不应该改变班级编号）。
+   *   原来无条件 genClassCode() 重新生成 → 用户看到「19 班」升实训后编号变了。
+   *   只有原班没有编号（老数据）时才兜底生成。
    */
   const classCode = String(src.class_code ?? '').trim() || (await genClassCode());
   const now = new Date();

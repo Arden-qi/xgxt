@@ -34,6 +34,8 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { BizCode, ApiResponse, DataScope, RoleCode } from 'shared-types/class-jh';
+// ★ 2026-10-24：自建职位等价归一（BZR_G → TEACH_HEAD …），见 normalizeRoles 内注释
+import { normalizeRoles as sharedNormalize } from 'shared-types';
 import { config } from '../config';
 import { verifyToken } from '../utils/jwt';
 // ★ 2026-10-05：业务角色的唯一权威源在权限管理模块 —— 复用主包的解析函数，
@@ -82,7 +84,11 @@ export function normalizeRoles(roles: string[] | undefined): string[] {
   const out = new Set<string>();
   for (const r of roles) {
     if (!r) continue;
-    out.add(ROLE_ALIAS[r] || r);
+    /* ★ 2026-10-24：先过「自建职位 → 内置职位」等价归一（shared-types），
+     *   再翻成本模块老码。否则按学段拆的自建职位（BZR_G 班主任（高中部）…）
+     *   在这里查不到 ROLE_ALIAS → 原样透传 → POLICIES/数据范围全部失配。 */
+    const mainCode = sharedNormalize([r])[0] || r;
+    out.add(ROLE_ALIAS[mainCode] || mainCode);
   }
   return [...out];
 }

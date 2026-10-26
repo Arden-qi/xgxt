@@ -1216,8 +1216,10 @@ function onPlanChange() {
 }
 
 /** 列表/详情里「阶段」列的回显（阶段名由后端按阶段码解析下发） */
-function phaseTextOf(row: Pick<ClassRow, 'phaseName'>): string {
-  return row.phaseName || '—';
+function phaseTextOf(row: Pick<ClassRow, 'phaseName' | 'phaseCode'>): string {
+  /* ★ 2026-10-23：阶段码在字典里没有中文名时（跨部门号段 / 方案新增阶段），
+     原来显示「—」→ 用户以为编辑没生效；现在兜底显示「阶段 321」。 */
+  return row.phaseName || (row.phaseCode != null ? `阶段 ${row.phaseCode}` : '—');
 }
 
 async function openCreate() {
@@ -1240,6 +1242,13 @@ async function openEdit(row: ClassRow) {
   } catch {
     /* 忽略：沿用上一次的 meta */
   }
+  /**
+   * ★ 2026-10-23：编辑回填方案 —— 优先级：班级已存方案 → 按阶段码反查方案 → 该部门第一个。
+   *   原来不回填，阶段下拉按「默认第一个方案」过滤，用户看到的阶段选不中原来的值，
+   *   改完保存后表格里阶段看起来「没变」（前端下拉与库里阶段码对不上）。
+   */
+  formPlanId.value =
+    (row.schemeId as string | null) || planIdOfPhase(row.phaseCode) || formPlanOptions.value[0]?.id || '';
   Object.assign(form, emptyForm(row.stage), {
     id: row.classId,
     className: row.className,
@@ -1301,7 +1310,17 @@ async function doSave() {
   }
   saving.value = true;
   try {
-    await saveClass({ ...form });
+    /**
+     * ★ 2026-10-23：方案三字段要跟着保存（formPlanId 只是联动用的 ref，不在 form 里）。
+     *   方案阶段名按当前选中的阶段选项取 label —— 阶段码在字典里查不到名（如就业部
+     *   号段的 321 配在初高班）时，列表用它兜底显示，不再是一片空白。
+     */
+    const phaseOpt = formPhaseOptions.value.find((p) => p.value === form.phaseCode);
+    await saveClass({
+      ...form,
+      schemeId: formPlanId.value || null,
+      schemeStageName: phaseOpt?.label ?? null,
+    });
     ElMessage.success(form.id ? '班级已更新' : '班级已创建');
     editVisible.value = false;
     load();

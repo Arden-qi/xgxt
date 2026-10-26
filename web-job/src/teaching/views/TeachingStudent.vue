@@ -20,6 +20,12 @@
         <div class="tsv-card__k">正式在读</div>
         <div class="tsv-card__v ok">{{ summary.studying }}</div>
       </div>
+      <!-- ★ 2026-10-23：实训中（status=8）单列一档。就业部的学生全是这一状态，
+           不加这张卡就出现「总人数 5、其余全 0」，看着像没数据。 -->
+      <div class="tsv-card">
+        <div class="tsv-card__k">实训中</div>
+        <div class="tsv-card__v ok">{{ summary.training ?? 0 }}</div>
+      </div>
       <div class="tsv-card">
         <div class="tsv-card__k">试学中</div>
         <div class="tsv-card__v">{{ summary.trial }}</div>
@@ -977,6 +983,7 @@ const total = ref(0);
 const summary = ref<StudentSummary>({
   total: 0,
   studying: 0,
+  training: 0,
   trial: 0,
   suspended: 0,
   quit: 0,
@@ -1647,8 +1654,12 @@ async function doDelete(row: StudentRow) {
  *   · 提交后状态不可回退：编辑弹窗的状态下拉对已就业学生锁死、下拉里也没有该选项。
  */
 function canMarkEmployed(row: StudentRow): boolean {
-  const s = Number(row.studentStatus);
-  return s !== StudentStatus.EMPLOYED && s !== StudentStatus.QUIT && s !== StudentStatus.LOST;
+  /**
+   * ★ 2026-10-23 用户口径：**只有「待就业」的学生才显示【已就业】操作**。
+   *   原来只要不是已就业/退学/流失就给按钮 —— 在读、试学中、实训中、休学的行
+   *   也能一键标成已就业（与实际业务不符）。
+   */
+  return Number(row.studentStatus) === StudentStatus.WAIT_EMPLOY;
 }
 
 async function doMarkEmployed(row: StudentRow) {

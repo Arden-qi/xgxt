@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>登录引导</title>
+</head>
+<body>
+<p>正在以该账号身份进入系统…</p>
+<script>
+  // 用法：/_harness_login.html#<JWT>#/teaching/student
+  //   hash 第一段 = token；第二段（可选）= 登录后要进入的路由。
+  // 无头浏览器取证专用：把 token 写入 localStorage 后跳转首页或指定路由。
+  (function () {
+    var raw = location.hash.slice(1);
+    var parts = raw.split('#');
+    var token = decodeURIComponent(parts[0] || '');
+    var target = parts[1] || '';
+    if (token && token.split('.').length === 3) {
+      localStorage.setItem('sms_token', token);
+      // 清掉旧账号可能残留的可见模块缓存，让 App 用新 token 重新拉取
+      localStorage.removeItem('portal_modules');
+    }
+    location.replace('/' + (target ? '#' + target : ''));
+  })();
+</script>
+</body>
+</html>

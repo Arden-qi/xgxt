@@ -30,7 +30,7 @@
     "seed:portal:clean": "node scripts/seed-portal-accounts.mjs clean",
     "seed:class-jh": "node scripts/seed-class-jh-demo.js",
     "seed:class-job": "node scripts/seed-class-job-demo.mjs",
-    "seed:all": "node scripts/seed-all-demo.mjs",
+    "seed:all": "node scripts/seed-all-demo.mjs && npm run uni:migrate",
     "seed:all:dry": "node scripts/seed-all-demo.mjs --dry",
     "seed:teaching": "node scripts/seed-teaching-demo.mjs",
     "seed:teaching:dry": "node scripts/seed-teaching-demo.mjs --dry",
@@ -47,7 +47,13 @@
     "db:schema-diff": "node scripts/db-schema-diff.mjs",
     "id:audit": "node scripts/id-audit.mjs",
     "id:unify": "node scripts/unify-user-ids.mjs",
-    "id:unify:apply": "node scripts/unify-user-ids.mjs --apply"
+    "id:unify:apply": "node scripts/unify-user-ids.mjs --apply",
+    "fix:perm-scope": "tsx scripts/fix-role-perm-scope.ts",
+    "fix:perm-consistency": "tsx scripts/fix-perm-consistency.ts",
+    "fix:perm-consistency:apply": "tsx scripts/fix-perm-consistency.ts --apply",
+    "sync:page-actions": "tsx scripts/sync-role-page-actions.ts",
+    "sync:page-actions:apply": "tsx scripts/sync-role-page-actions.ts --apply",
+    "audit:perm": "node ../tools/_audit_perm_all.mjs"
   },
   "dependencies": {
     "axios": "^1.7.2",

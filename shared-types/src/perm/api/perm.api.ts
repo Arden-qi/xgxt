@@ -133,8 +133,8 @@ export type PermRoleCodesResponse = ApiResponse<RoleCodeItem[]>;
  *        DELETE /api/perm/user/delete/:id
  *        PUT    /api/perm/user/status
  *        PUT    /api/perm/user/reset-pwd
- *        PUT    /api/perm/user/unlock
  *        GET    /api/perm/user/overview
+ *        （原 PUT /api/perm/user/unlock 已于 2026-10-25 随「锁定」状态移除）
  *
  * ⚠️ 跨模块：登录模块调 GET /api/perm/user/auth-profile?account=xxx
  * ============================================================ */
@@ -148,10 +148,10 @@ export type PermUserDeleteResponse = ApiResponse<null>;
 export type PermUserSaveBody = PermUserSavePayload;
 export type PermUserResetPwdResponse = ApiResponse<{ newPassword: string }>;
 
-/** 启用/停用/解锁账号 */
+/** 启用/停用账号（「已锁定」档已于 2026-10-25 全系统移除） */
 export interface PermUserStatusPayload {
   id: string;
-  userStatus: '正常' | '已停用' | '已锁定';
+  userStatus: '正常' | '已停用';
 }
 export type PermUserStatusResponse = ApiResponse<null>;
 
@@ -178,18 +178,38 @@ export type PermMenuItem = PermItem;
  * ============================================================ */
 
 export type AssignRoleListResponse = ApiResponse<AssignRoleItem[]>;
+/** 可分配范围（页面上限）：restricted=false 表示该职位还没配过页面，不设上限 */
+export interface AssignScopeInfo {
+  restricted: boolean;
+  /** 允许分配动作的页面数（restricted=false 时为 0，表示不限） */
+  allowedCount: number;
+  /** 权限树里的页面总数 */
+  totalCount: number;
+}
 /** 权限树 + 该职位勾选态；同时回传统计 */
 export interface AssignTreeData {
   modules: PermModule[];
   perms: RolePermMap;
   stats: PermTreeStats;
   selected: PermTreeSelectionStats;
+  /** ★ 2026-10-23：可分配范围（页面级授权的上限） */
+  scope?: AssignScopeInfo;
 }
 export type AssignTreeResponse = ApiResponse<AssignTreeData>;
 export type AssignSaveBody = RolePermSavePayload;
-export type AssignSaveResponse = ApiResponse<{ permCount: number }>;
+export interface AssignSaveResult {
+  permCount: number;
+  /** 因「该职位未获页面授权」被丢弃的功能点数 */
+  dropped?: number;
+  /** 被丢弃的页面名 */
+  droppedItems?: string[];
+}
+export type AssignSaveResponse = ApiResponse<AssignSaveResult>;
 export type AssignCopyBody = RolePermCopyPayload;
-export type AssignCopyResponse = ApiResponse<{ permCount: number; sourceRoleName: string }>;
+export interface AssignCopyResult extends AssignSaveResult {
+  sourceRoleName: string;
+}
+export type AssignCopyResponse = ApiResponse<AssignCopyResult>;
 export type AssignResetResponse = ApiResponse<{ permCount: number }>;
 
 /* ============================================================

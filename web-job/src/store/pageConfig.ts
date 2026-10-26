@@ -134,6 +134,26 @@ export function pageDisabled(path?: string): boolean {
   return allPaths.value.has(path) && !enabledPaths.value.has(path);
 }
 
+/**
+ * ★ 2026-10-24 新增：该 path 是否被职位页面台账【明确授权】
+ *
+ * 【与 pageEnabled 的区别】
+ *   pageEnabled 对「台账没登记过 / 台账没拉到」的 path 一律放行 ——
+ *   它回答的是「能不能进」，适合路由守卫；
+ *   本函数回答的是「后端 my-paths 是不是真的把这个页面下发给了我」——
+ *   三条同时成立才算：台账拉到了 + path 在台账里 + 账号的职位能看到它。
+ *
+ * 【用途】教学管理合并域菜单的**第二条可见依据**（见 config/sideMenu.ts）：
+ *   账号在「职位权限分配 / 页面管理」里被授予了 /teaching/<域> 页面
+ *   （后端 my-paths 会下发），但它的旧页面权限码（job:* / classjh:*…）
+ *   可能一个都没有 —— 原先菜单只认旧码，就会出现
+ *   「页面管理里明明勾了、登录进来什么都看不到」。
+ */
+export function pageGranted(path?: string): boolean {
+  if (!path || !pageConfigOk.value) return false;
+  return allPaths.value.has(path) && enabledPaths.value.has(path);
+}
+
 /** 台账里已启用的页面数 / 总页面数 */
 export function pageConfigStat(): { enabled: number; total: number } {
   return { enabled: enabledPaths.value.size, total: allPaths.value.size };

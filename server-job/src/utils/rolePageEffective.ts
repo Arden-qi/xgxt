@@ -142,6 +142,81 @@ export function effectivePathsByRoleId(
 /** 导出给调用方构造键用（与 pageRegistry 的页面一一对应） */
 export { key as rolePageKeyOf, pathOf as pagePathOf };
 
+/* ============================================================
+ * 4. 账号 → 它能看到的【板块】(moduleKey 集合) ★ 2026-10-23 新增
+ *
+ * 【为什么需要】
+ *   左侧一级菜单（市场咨询 / 财务管理 / 权限管理）的显隐，一直只认
+ *   `t_sys_account.modules` 这个**账号级**字段；而「页面管理」「职位权限分配」
+ *   改的是**职位级**的「角色 → 页面」。
+ *   于是出现用户报的那个 bug：
+ *     · 页面管理里给「咨询老师」勾上财务管理的 2 个页面 → 保存成功
+ *     · 职位权限分配里也勾上了对应动作 → 保存成功
+ *     · 但咨询老师登录后左侧**根本没有「财务管理」这个一级模块** ——
+ *       因为 t_sys_account.modules 里只有 ["consult"]
+ *   → 页面级放开了，模块级没放开，等于门开了但楼没盖。
+ *
+ *   本函数把「职位 → 页面」换算成「这个账号能看到哪些板块」，
+ *   供门户登录（portal/services/account.service.ts）合成 visibleModules。
+ *
+ * 【返回 null 的含义（很重要）】
+ *   null = 「算不出来」→ 调用方**不要干预**，沿用账号级 modules。
+ *   触发条件：账号没绑职位、查库失败、算出来是空集。
+ *   理由：权限表抖一下绝不能让一个正常账号登不进去（同本文件其他降级口径）。
+ * ============================================================ */
+
+/**
+ * 某账号所有职位最终能看到的板块 key 集合
+ *
+ * @param accountName 登录账号（sms_portal.t_sys_account.account ↔ sms_perm.t_perm_user.account）
+ */
+export async function effectiveModuleScopeOfAccount(
+  accountName: string,
+): Promise<{ modules: Set<string>; roleCodes: string[]; roleNames: string[] } | null> {
+  if (!accountName) return null;
+
+  /** 1) 账号 → 职位编码 + 职位名（多职位取并集） */
+  let codes: string[] = [];
+  let names: string[] = [];
+  try {
+    const { db } = await import('../perm/utils/db');
+    const rows = (await db('t_perm_user as u')
+      .join('t_perm_user_role as ur', 'ur.user_id', 'u.id')
+      .join('t_perm_role as r', 'r.id', 'ur.role_id')
+      .where('u.account', accountName)
+      .where('u.is_deleted', false)
+      .where('r.is_deleted', false)
+      .where('ur.is_deleted', false)
+      .distinct()
+      .select('r.role_code as roleCode', 'r.role_name as roleName')) as Array<{
+      roleCode?: string;
+      roleName?: string;
+    }>;
+    codes = rows.map((r) => String(r.roleCode || '')).filter(Boolean);
+    names = rows.map((r) => String(r.roleName || '')).filter(Boolean);
+  } catch {
+    return null;
+  }
+  if (!codes.length) return null;
+
+  /** 2) 逐个职位算「最终可见页面」，抽出 moduleKey */
+  const modules = new Set<string>();
+  for (const code of codes) {
+    try {
+      const keys = await effectiveKeysOfRole(code);
+      keys.forEach((k) => {
+        const mk = k.split('||')[0];
+        if (mk) modules.add(mk);
+      });
+    } catch {
+      /* 单个职位算失败不影响其它职位 */
+    }
+  }
+
+  /** 一个页面都没算出来 → 视同「没配置」，不干预账号级 modules */
+  return modules.size ? { modules, roleCodes: codes, roleNames: names } : null;
+}
+
 /** 板块 → 页面总数（配置界面统计用） */
 export const BOARD_TOTALS: Record<string, number> = Object.fromEntries(
   PAGE_REGISTRY.map((b) => [b.moduleKey, b.pages.length]),

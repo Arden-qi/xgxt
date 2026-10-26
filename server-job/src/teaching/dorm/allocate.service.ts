@@ -364,7 +364,49 @@ export async function listAllocateClasses(
  *   这样刚建好楼栋、还没生成房间时，下拉里也能看到它（只是房间列表为空）。
  *   字典里一栋都没有时再退回房间表，避免页面完全空白。
  */
-export async function listAllocateBuildings(category: number): Promise<string[]> {
+/**
+ * ★ 2026-10-23：调宿弹窗的房间数据范围。
+ *   用户口径：「班主任换宿时只能选择教务给他分配的宿舍」——
+ *   目标宿舍限定为【分派给本班的 ∪ 本班学生已入住的】房间；
+ *   教务 / 校长 / 学管 / 管理员（privileged）返回 null = 全量不限定。
+ */
+async function scopedAllocateRoomIds(user?: any): Promise<string[] | null> {
+  if (!user) return null;
+  const mine = await resolveMyClasses(user);
+  if (mine.privileged) return null;
+  const ids = new Set<string>();
+  if (mine.names.length) {
+    try {
+      const assigned = (await db(ASSIGN)
+        .whereIn('class_name', mine.names)
+        .where({ is_deleted: false })
+        .distinct('room_id')) as any[];
+      for (const a of assigned) if (str(a.room_id)) ids.add(String(a.room_id));
+    } catch {
+      /* 分派表不可用 → 跳过 */
+    }
+  }
+  if (mine.ids.length || mine.names.length) {
+    try {
+      const rows = (await db(STUDENT)
+        .where({ is_deleted: false })
+        .whereIn('student_status', IN_SCHOOL_STATUS)
+        .whereNotNull('dorm_id')
+        .andWhere('dorm_id', '<>', '')
+        .andWhere((w: any) => {
+          if (mine.ids.length) w.orWhereIn('class_id', mine.ids);
+          if (mine.names.length) w.orWhereIn('class_name', mine.names);
+        })
+        .distinct('dorm_id')) as any[];
+      for (const r of rows) if (str(r.dorm_id)) ids.add(String(r.dorm_id));
+    } catch {
+      /* 跳过 */
+    }
+  }
+  return [...ids];
+}
+
+export async function listAllocateBuildings(category: number, user?: any): Promise<string[]> {
   let names: string[] = [];
   try {
     const rows = (await db(BUILDING)
@@ -381,6 +423,14 @@ export async function listAllocateBuildings(category: number): Promise<string[]>
   if (!names.length) {
     const rows = (await db(ROOM).where({ is_deleted: false }).whereIn('dorm_gender', [category]).distinct('building')) as any[];
     names = rows.map((r) => str(r.building).trim()).filter(Boolean);
+  }
+  /* ★ 2026-10-23：班主任限定 → 只出「本班分派/入住」房间所在的楼栋 */
+  const scope = await scopedAllocateRoomIds(user);
+  if (scope !== null) {
+    if (!scope.length) return [];
+    const inScope = (await db(ROOM).whereIn('id', scope).where({ is_deleted: false }).distinct('building')) as any[];
+    const ok = new Set(inScope.map((r) => str(r.building).trim()));
+    names = names.filter((n) => ok.has(n));
   }
   return names.sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }));
 }
@@ -452,10 +502,17 @@ async function roomBedStats(ids: string[]): Promise<Map<string, { capacity: numb
 export async function listAllocateRooms(
   category: number,
   building?: string,
+  user?: any,
 ): Promise<AllocateRoomRow[]> {
   const qb = db(ROOM).where({ is_deleted: false }).whereIn('dorm_gender', [category, 0]);
   const b = str(building).trim();
   if (b) qb.andWhere('building', b);
+  /* ★ 2026-10-23：班主任限定 → 只出「本班分派/入住」的房间 */
+  const scope = await scopedAllocateRoomIds(user);
+  if (scope !== null) {
+    if (!scope.length) return [];
+    qb.whereIn('id', scope);
+  }
   const rooms = (await qb.orderBy(['building', 'room_no'])) as any[];
   if (!rooms.length) return [];
 
@@ -556,9 +613,9 @@ export interface AllocateStudentRow {
 
 /** 学生表来源（与班级列表同口径，逐张查再按学号去重） */
 const STUDENT_SOURCES = [
-  'sms_class_jh.t_class_student',
-  'sms_class.t_class_student',
-  'sms_job.t_student_base',
+  // ★ 2026-10-23：三学段学生档案已统一到 t_uni_student（新建学生只写这里），
+  //   老表已 DROP；不补这源的话「调宿/退宿弹窗」搜不到新建的学生。
+  'sms_common.t_uni_student',
   EDU_STUDENT,
   PERM_STUDENT,
 ];

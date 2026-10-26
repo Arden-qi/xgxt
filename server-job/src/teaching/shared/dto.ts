@@ -1612,6 +1612,8 @@ export interface StudentSummary {
   stageName: string;
   total: number;
   studying: number;
+  /** 实训中（status=8，只有就业部有） */
+  training: number;
   trial: number;
   suspended: number;
   quit: number;
