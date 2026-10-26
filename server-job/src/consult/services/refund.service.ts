@@ -21,6 +21,7 @@ import {
   ConsultRefundStatus as CRS,
   CONSULT_REFUND_STATUS_NAME,
   CONSULT_STATE_NAME,
+  CONSULT_FEE_STATUS_NAME,
   TRIAL_DAILY_RATE_CENT,
   FeeType,
   nameOf,
@@ -46,7 +47,12 @@ import {
   getConsumeItems,
   getConfigNumber,
 } from './student.service';
-import { getArrivedTrialIncome, centToYuan, tempStudentNo } from './fee-order.service';
+import {
+  getArrivedTrialIncome,
+  centToYuan,
+  tempStudentNo,
+  findOpenFeeOrders,
+} from './fee-order.service';
 import { terminateStudentPlans } from './installment.service';
 import { changeState } from './state.service';
 import { financeClient } from './finance.client';
@@ -272,6 +278,24 @@ export async function applyRefund(
     throw new BizError(
       BizCode.REFUND_ALREADY_EXISTS,
       `该学生已退费完成（${paid.refund_no}），不能重复发起退费。`,
+    );
+  }
+
+  /**
+   * ★ 2026-10-26 用户口径：「缴费中的要退费也不能选择」
+   *
+   * 有在途收费单 = 钱还没确认到账（待上传凭证 / 待财务确认），
+   * 这时候账上都还没有这笔钱，退费无从谈起 —— 直接拒，并告诉老师两条路。
+   * 前端下拉已用 `excludePendingFee` 剔掉这类学生，这里是接口层的兜底。
+   */
+  const openFees = await findOpenFeeOrders(consultStudentId);
+  if (openFees.length) {
+    const first = openFees[0];
+    throw new BizError(
+      BizCode.INVALID_STATUS,
+      `该学生有收费单还在「${CONSULT_FEE_STATUS_NAME[Number(first.status)] || '处理中'}」` +
+        `（${first.order_no ?? ''}），钱还没确认到账，不能发起退费。` +
+        `请先在「收款与缴费」里让这张单走完财务确认，或直接作废后再办理退费。`,
     );
   }
 

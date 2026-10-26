@@ -213,6 +213,13 @@ export interface ConsultStudentQuery extends PageQuery {
    * 不该出现在候选里。传单个 consultState 只能「含」，无法「排除」。
    */
   excludeStates?: string;
+  /**
+   * ★ 2026-10-26 排除「缴费中」的学生（传 1 生效）
+   *
+   * 只要该生还有在途收费单（待上传凭证 / 待财务确认 / 已驳回），
+   * 钱就还没确认到账 —— 发起退费的学生下拉要剔掉这类人。
+   */
+  excludePendingFee?: number;
   /** 部门筛选 */
   deptCode?: DeptCode;
   /** 全部字段模糊搜索 */

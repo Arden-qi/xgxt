@@ -28,7 +28,7 @@ import {
   nameOf,
 } from 'shared-types/consult';
 import type { ConsultToFormalResult } from 'shared-types/consult';
-import { FEE_ORDER_TABLE, parseOrderItemDetail } from '../services/fee-order.service';
+import { FEE_ORDER_TABLE, PENDING_FEE_STATUSES, parseOrderItemDetail } from '../services/fee-order.service';
 import { ok, page } from '../utils/response';
 import { db } from '../utils/db';
 import { wrap } from '../utils/wrap';
@@ -110,6 +110,14 @@ const listSchema = z.object({
    * 单独用 consultState 只能「只查某状态」，排除需要用 whereNotIn。
    */
   excludeStates: z.string().optional(),
+  /**
+   * ★ 2026-10-26 排除「缴费中」的学生（传 1 生效）
+   *
+   * 发起退费的学生下拉用：只要该生还有在途收费单
+   * （待上传凭证 / 待财务确认），钱就还没确认到账，
+   * 谈不上退费 —— 直接从候选里剔掉，别让老师选完才在提交时报错。
+   */
+  excludePendingFee: z.coerce.number().int().optional(),
   deptCode: z.coerce.number().int().optional(),
   keyword: z.string().optional(),
 });
@@ -142,6 +150,22 @@ studentRouter.get(
         .map((v) => Number(v.trim()))
         .filter((n) => Number.isInteger(n) && n > 0);
       if (excluded.length) query.whereNotIn('consult_state', excluded);
+    }
+    /**
+     * ★ 2026-10-26 排除「有在途收费单」的学生（= 缴费中，钱还没确认到账）
+     *   用 NOT EXISTS 子查询，不产生重复行、也不影响分页总数。
+     *   分期单（plan_id 非空）由分期计划自己管，不算在这里。
+     */
+    if (q.excludePendingFee) {
+      query.whereNotExists((sub: any) => {
+        sub
+          .select(db.raw('1'))
+          .from(FEE_ORDER_TABLE)
+          .whereRaw(`\`${FEE_ORDER_TABLE}\`.\`consult_student_id\` = \`${STUDENT_TABLE}\`.\`id\``)
+          .whereIn('status', PENDING_FEE_STATUSES)
+          .where('is_deleted', false)
+          .whereNull('plan_id');
+      });
     }
     // ★ 2026-10-15 部门筛选（前端「全部部门」下拉）：1=初高部 2=大学部
     if (q.deptCode) query.andWhere('dept_code', q.deptCode);

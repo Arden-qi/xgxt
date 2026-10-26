@@ -358,22 +358,35 @@ export async function attachPlanInfo(rows: any[]): Promise<any[]> {
 }
 
 /* ============================================================
- * ★ 2026-10-19 重复收费防护
+ * ★ 2026-10-19 重复收费防护 —— ★ 2026-10-26 收紧成「整单」口径
  *
  * 背景（本地库里的真实数据）：
  *   同一学生在 10-15 12:14 已发起 6 张单（学费/住宿/押金/保险/餐费/校服），
  *   16:34 又在收款页发了一张 ¥32,400 的合计单 —— 同一批费用被收了两遍，
  *   学生档案里因此出现两组一模一样的「¥32,400」，老师问「怎么能缴费好几次」。
  *
- * 口径：
- *   · 同一费用项只要还有【未终结】单据（待上传凭证 / 待财务确认 / 已驳回），
- *     就不允许再发起 —— 否则账面重复计费，老师也分不清哪张有效。
- *   · 分期单由「分期计划 + 期次」自己管，不参与这里的防重。
- *   · 已到账的允许再发起（补收差额），但在返回文案里明确提示。
+ * ★ 2026-10-26 用户口径（截图：同一学生同时挂着 SK-001 试学费 ¥5000
+ *   和 SK-002 正式学费 ¥30900，两张都是「待财务确认」）：
+ *   「发起收费不能同时发起两份，要么试学费通过之后补费，要么一次交完，
+ *     要么财务审批通过之前作废」
+ *
+ *   所以口径从「同一费用项不重复」收紧为「**整张单不重复**」：
+ *   · 只要该生还有一张【未终结】单（待上传凭证 / 待财务确认 / 已驳回），
+ *     就不允许再发起任何收费 —— 试学费单在途时不能同时开正式学费单。
+ *   · 已到账（ARRIVED）不拦：试学费到账后再补正式学费，正是用户要的正常路径。
+ *   · 分期单由「分期计划 + 期次」自己管，不参与这里的防重（plan_id 非空跳过）。
  * ============================================================ */
 
-/** 仍占着这笔费用的状态：单子没走完，钱还没确认 */
-const OPEN_STATUSES: number[] = [CFS.NO_VOUCHER, CFS.PENDING, CFS.REJECTED];
+/**
+ * 「在途」= 钱还没确认到账、单子还占着位置的状态：
+ *   · 待上传凭证 0（历史单：已发起但没传截图）
+ *   · 待财务确认 1（已传凭证，等财务核对）
+ *
+ * ⚠️ 已驳回 3 **不算在途**：钱确定没到账，允许改金额/换凭证重来
+ *    （与前端 alreadySupplemented 的口径一致，见 FeeList.vue）。
+ * ⚠️ 已到账 2 更不算：试学费到账后再补正式学费，是正常路径。
+ */
+export const PENDING_FEE_STATUSES: number[] = [CFS.NO_VOUCHER, CFS.PENDING];
 
 /** 一张收款单覆盖的费用类型：合并单读 item_detail，老数据读 fee_type */
 export function typesOfOrder(row: any): FeeType[] {
@@ -403,63 +416,58 @@ export interface FeeConflict {
   amountYuan: string;
 }
 
-/** 该生「在途」的收费单里，命中本次要发起的费用项 */
-export async function findInFlightConflicts(
-  consultStudentId: string,
-  feeTypes: FeeType[],
-): Promise<FeeConflict[]> {
-  if (!feeTypes.length) return [];
+/**
+ * 该生当前所有「在途」收费单（不含分期单）
+ *
+ * ★ 2026-10-26：退费侧也用它 —— 有在途收费单（钱还没确认到账）就不该发起退费。
+ */
+export async function findOpenFeeOrders(consultStudentId: string): Promise<any[]> {
   const rows: any[] = await db(FEE_ORDER_TABLE).where({
     consult_student_id: consultStudentId,
     is_deleted: false,
   });
+  return rows
+    .filter((r) => !r.plan_id && PENDING_FEE_STATUSES.includes(Number(r.status)))
+    .sort((a, b) => Number(a.create_time || 0) - Number(b.create_time || 0));
+}
 
-  const hits: FeeConflict[] = [];
-  for (const r of rows) {
-    if (r.plan_id) continue; // 分期单不参与主动收款防重
-    if (!OPEN_STATUSES.includes(Number(r.status))) continue;
-    const covered = typesOfOrder(r);
-    for (const t of covered) {
-      if (!feeTypes.includes(t)) continue;
-      hits.push({
-        feeType: t,
-        feeTypeName: nameOf(FEE_TYPE_NAME, t),
-        orderNo: r.order_no,
-        status: Number(r.status),
-        statusName: nameOf(CONSULT_FEE_STATUS_NAME, Number(r.status)),
-        amountYuan: centToYuan(Number(r.amount || 0)),
-      });
-    }
-  }
-  return hits;
+/** 一张单覆盖的费用项名称，如「学费 + 住宿费」 */
+function describeOrderTypes(row: any): string {
+  const names = typesOfOrder(row).map((t) => nameOf(FEE_TYPE_NAME, t));
+  return names.length ? names.join(' + ') : '收费';
 }
 
 /**
- * 发起收费前的硬拦截：同一费用项已有未终结单据 → 直接拒绝
+ * 发起收费前的硬拦截：一个学生同时只允许有一张「在途」收费单
  *
- * ⚠️ 文案要写清「是哪张单、什么状态、该怎么办」，
+ * ★ 2026-10-26 用户口径：「发起收费不能同时发起两份，要么试学费通过之后补费，
+ *   要么一次交完，要么财务审批通过之前作废」
+ *
+ * 所以**不再按费用项比对**，而是整单拦：该生只要还有
+ * 待上传凭证 / 待财务确认 的单，就不再允许发起新的收费。
+ * 否则同一个学生会同时挂着「试学费 ¥5000」和「正式学费 ¥30900」两张待确认单，
+ * 财务核账时根本分不清哪笔算数（截图中 SK-001 / SK-002 就是这个场景）。
+ *
+ * ⚠️ 已到账(ARRIVED)不拦 —— 试学费到账后再补正式学费，是正常路径。
+ * ⚠️ 已驳回(REJECTED)也不拦 —— 钱没到账，允许改金额/换凭证重来。
+ * ⚠️ 文案必须说清「是哪张单、什么状态、有哪两条路可走」，
  *    否则老师只会看到「参数错误」，然后换个入口再点一次，越点越乱。
  */
-export async function assertNoInFlightDuplicate(
-  consultStudentId: string,
-  feeTypes: FeeType[],
-): Promise<void> {
-  const hits = await findInFlightConflicts(consultStudentId, feeTypes);
-  if (!hits.length) return;
+export async function assertNoInFlightOrder(consultStudentId: string): Promise<void> {
+  const rows = await findOpenFeeOrders(consultStudentId);
+  if (!rows.length) return;
 
-  // 同一类型只报第一条，避免 6 项冲突刷屏
-  const seen = new Set<FeeType>();
-  const lines: string[] = [];
-  for (const h of hits) {
-    if (seen.has(h.feeType)) continue;
-    seen.add(h.feeType);
-    lines.push(`${h.feeTypeName}（单号 ${h.orderNo}，${h.statusName} ¥${h.amountYuan}）`);
-  }
+  const lines = rows.map(
+    (r) =>
+      `${r.order_no}（${describeOrderTypes(r)} ¥${centToYuan(Number(r.amount || 0))}，` +
+      `${nameOf(CONSULT_FEE_STATUS_NAME, Number(r.status))}）`,
+  );
 
   throw new BizError(
     BizCode.PARAM_ERROR,
-    `该学生已有未完成的收费单，不能重复发起：${lines.join('；')}。` +
-      `请先在原单上上传缴费凭证、等财务确认到账；如果那张单是误发起的，请先「作废」再重新收费。`,
+    `该学生已有一张在途收费单：${lines.join('；')}。同一学生不能同时发起两份收费 —— ` +
+      `请二选一：① 等这张单财务确认到账后，再发起补费（试学费→正式学费就走这条）；` +
+      `② 如果这张单发错了，先在「收款与缴费」里作废，再重新发起。`,
   );
 }
 
@@ -635,10 +643,11 @@ export async function createCombinedFees(
   const studentNo = stu.student_no || tempStudentNo(consultStudentId);
 
   /**
-   * ★ 2026-10-19 防重复收费（用户口径：同一笔费用只能有一张在途单）
-   *   同一费用项已有「待上传凭证 / 待财务确认 / 已驳回」的单 → 直接拒绝。
+   * ★ 2026-10-19 防重复收费 → ★ 2026-10-26 收紧为「整单」口径
+   *   该生只要还有一张在途单（待上传凭证 / 待财务确认 / 已驳回）就直接拒绝，
+   *   不允许「试学费在途 + 正式学费同时发起」，见 assertNoInFlightOrder 注释。
    */
-  await assertNoInFlightDuplicate(consultStudentId, feeTypes);
+  await assertNoInFlightOrder(consultStudentId);
   /** 已到账过的类型：允许再收（补差），但要提示 */
   const arrivedBefore = await findArrivedTypes(consultStudentId, feeTypes);
 
@@ -914,13 +923,13 @@ export async function createFees(
   const batchNo = Date.now();
 
   /**
-   * ★ 2026-10-19 防重复收费（与合并单同一口径）
+   * ★ 2026-10-19 防重复收费（与合并单同一口径）→ ★ 2026-10-26 整单拦
    *
    * ⚠️ 这条路径也被「转正式 · 一次性缴清 / 分笔补缴」调用：
-   *    如果学生已经有一张待确认的学费单，再点一次转正式就会重复建单，
-   *    学生档案里就会出现两组相同金额 —— 必须在建单前拦住。
+   *    「试学费还没确认到账」时点转正式 → 会被这张在途单挡住，
+   *    必须先等财务确认（试学费到账）再补费，或者把原单作废。
    */
-  await assertNoInFlightDuplicate(consultStudentId, feeTypes);
+  await assertNoInFlightOrder(consultStudentId);
   const arrivedBefore = await findArrivedTypes(consultStudentId, feeTypes);
 
   for (const feeType of feeTypes) {
