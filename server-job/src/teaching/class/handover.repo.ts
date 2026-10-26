@@ -80,13 +80,24 @@ function mapRow(row: Record<string, any>): ClassHandoverRow {
   };
 }
 
-/** 某班的交接记录（新的在前） */
+/**
+ * 某班的交接记录（新的在前）
+ *
+ * ★ 2026-10-23：**不再按 stage 过滤，只按 class_id**
+ *
+ * 【为什么】用户报障「交接的记录也看不到」。根因是这个 `stage = 请求学段` 的条件：
+ *   实训班升就业后，班级在页面里的学段从 `job` 变成了 `emp`，
+ *   而历史交接记录里写的是当时的 `job`（还有更早 demo 数据的 `job`）→ 一条都查不出来。
+ *   班级 id 本身就能唯一定位一个班（跨学段不会重复），多这一层只会把记录挡在外面。
+ *   参数 `stage` 保留只为兼容调用方，不再参与过滤。
+ */
 export async function listHandovers(
   stage: ClassStage,
   classId: string,
 ): Promise<ClassHandoverRow[]> {
+  void stage;
   const rows = (await commonDb(T)
-    .where({ class_id: classId, stage, is_deleted: 0 })
+    .where({ class_id: classId, is_deleted: 0 })
     .orderBy('handover_date', 'desc')
     .orderBy('create_time', 'desc')) as Array<Record<string, any>>;
   return rows.map(mapRow);

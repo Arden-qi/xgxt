@@ -12,8 +12,11 @@
  *     确认之后需要再次确认，再次确认之后状态改为已就业」
  *
  * 【口径】
- *   ① 入口只在**实训班**（`t_job_class` 里 `stage_key='job'`）上出现 ——
- *      这些班就是「升实训」造出来的，所以「升实训之后才有升就业」天然成立。
+ *   ① 入口在**就业部**的班级上出现，即 `t_job_class` 里 `stage_key='job'`（升实训造的
+ *      实训班）**和** `stage_key='emp'`（直接在就业部建的班）两种 —— 界面上它们都叫
+ *      「就业部」（部门下拉 2026-10-22 起只有 初高部 / 大学部 / 就业部）。
+ *      ★ 2026-10-23 批注第 2 条：「就业部才有【升就业】」→ 原来只认 job，
+ *        emp 班（如 SX2601 / SX2602）没有按钮，本条按批注放开。
  *   ② 升就业：改**学生状态**（实训中 8 → 待就业 9）+ 班级状态（实训 5 → 待就业 6）。
  *      班级本身不搬、不改名、不换部门。
  *      已是「待就业(9)」的学生跳过；已是「已就业(10)」的**不降级**（终态）。
@@ -44,7 +47,22 @@ import { assertStageView } from './service';
 const T = 't_job_class';
 const ROSTER_T = 't_job_class_student';
 const STUDENT_T = 't_student_base';
-const STAGE = 'job' as const;
+
+/**
+ * ★ 2026-10-23 批注第 2 条：「**就业部**才有【升就业】」
+ *
+ *   界面上「就业部」是一张卡，但库里是**两个内部学段**共用 `t_job_class`：
+ *     job —— 升实训造出来的实训班（stage_key='job'）
+ *     emp —— 直接在就业部建的班（stage_key='emp'）
+ *   两者部门都是 3 就业部、在列表里都显示「就业部」，所以升就业 / 已就业
+ *   **两种都要认**。原来只写死 'job'，导致就业部里 stage_key='emp' 的班
+ *   （如 SX2601 / SX2602）操作列根本没有按钮 —— 本次修的就是这个。
+ *
+ *   ⚠️ 顺序有意义：同 id 只会命中一个学段（统一表按 edu_stage 过滤），
+ *      先查 job 是兼容旧数据（升实训早于就业部建班）。
+ */
+const EMPLOYMENT_STAGES = ['job', 'emp'] as const;
+type EmploymentStage = (typeof EMPLOYMENT_STAGES)[number];
 
 export interface EmploymentUpgradeInput {
   classId: string;
@@ -108,21 +126,25 @@ export interface EmployedConfirmResult {
   changed: boolean;
 }
 
-/** 取实训班（只认 stage_key='job'，越权与不存在都按同一句话回） */
-async function loadJobClass(classId: string): Promise<Record<string, any>> {
-  const cls = (await tbl(db, 'sms_job', T, STAGE)
-    .where({ id: classId, is_deleted: 0 })
-    .first()) as Record<string, any> | undefined;
-  if (!cls) throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在或已删除');
-  if (String(cls.stage_key ?? '') !== 'job') {
-    throw new BizError(BizCode.PARAM_ERROR, '该操作只能用于实训班级');
+/**
+ * 取就业部班级（实训 job / 就业 emp 两套都认）
+ *   查不到 → 与原来同一句话（不区分「不存在」与「不在就业部」，避免探测）。
+ */
+async function loadClass(
+  classId: string,
+): Promise<{ cls: Record<string, any>; stage: EmploymentStage }> {
+  for (const stage of EMPLOYMENT_STAGES) {
+    const cls = (await tbl(db, 'sms_job', T, stage)
+      .where({ id: classId, is_deleted: 0 })
+      .first()) as Record<string, any> | undefined;
+    if (cls) return { cls, stage };
   }
-  return cls;
+  throw new BizError(BizCode.CLASS_NOT_FOUND, '班级不存在或已删除（升就业 / 已就业只适用于就业部班级）');
 }
 
-/** 花名册里的学生 id 列表 */
-async function rosterStudentIds(classId: string): Promise<string[]> {
-  const roster = (await tbl(db, 'sms_job', ROSTER_T, STAGE)
+/** 花名册里的学生 id 列表（学生与花名册都按班级自己的学段取） */
+async function rosterStudentIds(classId: string, stage: EmploymentStage): Promise<string[]> {
+  const roster = (await tbl(db, 'sms_job', ROSTER_T, stage)
     .where({ class_id: classId, is_deleted: 0 })
     .select('student_id')) as Array<Record<string, any>>;
   return roster.map((r) => String(r.student_id)).filter(Boolean);
@@ -132,16 +154,16 @@ export async function upgradeClassToEmployment(
   input: EmploymentUpgradeInput,
   user: any,
 ): Promise<EmploymentUpgradeResult> {
-  // 升就业只发生在实训班，权限按「实训」学段校验
-  await assertStageView(user, 'job');
-
   const classId = String(input.classId ?? '').trim();
   if (!classId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
 
-  const cls = await loadJobClass(classId);
+  const { cls, stage } = await loadClass(classId);
+  // 就业部两个内部学段（job / emp）共用同一个权限码（见 service.ts#CODES）
+  await assertStageView(user, stage);
+
   const className = String(cls.class_name ?? '');
 
-  const ids = await rosterStudentIds(classId);
+  const ids = await rosterStudentIds(classId, stage);
   if (!ids.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生');
 
   // 只动「还没到待就业/已就业」的学生
@@ -149,7 +171,7 @@ export async function upgradeClassToEmployment(
   //   退学(7) 虽然也落在 whereNotIn 里，但它是**永久锁** → 必须单独排除，
   //   否则一次【升就业】就把退学学生改成「待就业」，花名册里那条退学记录凭空消失。
   //   见 shared/statusLock.ts（LOCKED_STUDENT_STATUSES）。
-  const updated = await tbl(db, 'sms_job', STUDENT_T, STAGE)
+  const updated = await tbl(db, 'sms_job', STUDENT_T, stage)
     .whereIn('id', ids)
     .whereNotIn('student_status', [
       StudentStatus.WAIT_EMPLOY,
@@ -168,7 +190,7 @@ export async function upgradeClassToEmployment(
   let classStatus = from;
   if (from !== CLASS_STATUS.EMPLOYED && from !== CLASS_STATUS.WAIT_EMPLOY) {
     classStatus = CLASS_STATUS.WAIT_EMPLOY;
-    await tbl(db, 'sms_job', T, STAGE).where({ id: classId }).update({
+    await tbl(db, 'sms_job', T, stage).where({ id: classId }).update({
       class_status: classStatus,
       prev_class_status: from,
       update_time: new Date(),
@@ -194,24 +216,25 @@ export async function getEmploymentProgress(
   input: EmploymentUpgradeInput,
   user: any,
 ): Promise<EmploymentProgressResult> {
-  await assertStageView(user, 'job');
-
   const classId = String(input.classId ?? '').trim();
   if (!classId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
 
-  const cls = await loadJobClass(classId);
-  const ids = await rosterStudentIds(classId);
+  const { cls, stage } = await loadClass(classId);
+  await assertStageView(user, stage);
+
+  const ids = await rosterStudentIds(classId, stage);
   if (!ids.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生');
 
-  return buildProgress(cls, ids);
+  return buildProgress(cls, ids, stage);
 }
 
 /** 整班学生状态分布（getEmploymentProgress 与 confirmClassEmployed 共用） */
 async function buildProgress(
   cls: Record<string, any>,
   ids: string[],
+  stage: EmploymentStage,
 ): Promise<EmploymentProgressResult> {
-  const rows = (await tbl(db, 'sms_job', STUDENT_T, STAGE)
+  const rows = (await tbl(db, 'sms_job', STUDENT_T, stage)
     .whereIn('id', ids)
     .select('id', 'student_no', 'student_name', 'student_status')) as Array<Record<string, any>>;
 
@@ -273,12 +296,12 @@ export async function confirmClassEmployed(
   input: EmploymentUpgradeInput,
   user: any,
 ): Promise<EmployedConfirmResult> {
-  await assertStageView(user, 'job');
-
   const classId = String(input.classId ?? '').trim();
   if (!classId) throw new BizError(BizCode.PARAM_ERROR, '缺少班级ID');
 
-  const cls = await loadJobClass(classId);
+  const { cls, stage } = await loadClass(classId);
+  await assertStageView(user, stage);
+
   const className = String(cls.class_name ?? '');
   const from = Number(cls.class_status);
 
@@ -291,10 +314,10 @@ export async function confirmClassEmployed(
     };
   }
 
-  const ids = await rosterStudentIds(classId);
+  const ids = await rosterStudentIds(classId, stage);
   if (!ids.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生');
 
-  const progress = await buildProgress(cls, ids);
+  const progress = await buildProgress(cls, ids, stage);
   if (!progress.settled) {
     const detail = progress.items
       .filter((i) => i.status !== StudentStatus.EMPLOYED && i.status !== StudentStatus.QUIT)
@@ -306,7 +329,7 @@ export async function confirmClassEmployed(
     );
   }
 
-  await tbl(db, 'sms_job', T, STAGE).where({ id: classId }).update({
+  await tbl(db, 'sms_job', T, stage).where({ id: classId }).update({
     class_status: CLASS_STATUS.EMPLOYED,
     prev_class_status: from,
     update_time: new Date(),

@@ -1397,9 +1397,16 @@ export interface ClassRow {
   phaseCode: number | null;
   phaseName: string;
 
-  /* ★ 2026-10-20：原「阶段方案三字段」schemeId / schemeStageId / schemeStageName 已删除 ——
-   *   它们指向 t_class_stage_scheme 那套从未建表的实现，三张班级表里也从来没有这三列
-   *   （写进去会 Unknown column）。阶段只落 phase_code，方案名不下发。 */
+  /* ★ 2026-10-20：原「阶段方案三字段」曾一度删除 ——
+   *   当时判断 t_class_stage_scheme 那套从未建表，三张班级表也没有这三列。
+   * ★ 2026-10-22 恢复：跟团队主线后迁移已跑、两表建好，三张班级表
+   *   （sms_class.t_class_info / sms_class_jh.t_class_info / sms_job.t_job_class）
+   *   的 scheme 三列都在，建班/改班都会写。
+   * ★ 2026-10-23：列表「阶段」列取 scheme_stage_name 快照（见各 repo 的 mapRow），
+   *   所以这三个字段必须下发，否则「新建时选的阶段」在列表里看不出来。 */
+  schemeId: string | null;
+  schemeStageId: string | null;
+  schemeStageName: string | null;
 
   headTeacherId: string | null;
   headTeacherName: string | null;
