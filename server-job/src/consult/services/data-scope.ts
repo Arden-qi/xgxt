@@ -72,6 +72,37 @@ export async function assertStudentIdInScope(id: string, user?: any): Promise<an
 }
 
 /**
+ * ★ 2026-10-22 咨询师可见范围条件（唯一实现，列表 / 学生 id 集合共用）
+ *
+ * 口径（用户原话：「咨询老师看不到所有学生，只能看到他自己所负责的学生」）：
+ *   owner_name = 本人
+ *   ∪（owner_name 为空 且 建档人 = 本人）   ← 自己刚录的还没被经理分配，得能看到
+ *
+ * ⚠️ 2026-10-22 修掉一个隐蔽漏洞：
+ *   原来的写法是 `qb.where('owner_name', owner).orWhere(qb2 => qb2.whereNull('owner_name')
+ *   .orWhere('owner_name','').where('create_by_name', owner))`，
+ *   knex 拼出来是 `owner_name = ? OR owner_name IS NULL OR (owner_name = '' AND create_by_name = ?)`，
+ *   AND 优先级高于 OR → **任何未分配的公海学生对所有咨询师都可见**。
+ *   实测张老师能看到 7 条，其中 2 条是别人录的未分配学生。
+ *
+ *   现在改成显式分组：`owner_name IN (本人, 本人（本人接待）) OR (owner_name 为空 AND 建档人 = 本人)`。
+ *   同时兼容经理「本人接待」认领时写的 `姓名（本人接待）`。
+ */
+export function whereOwnStudents(qb: any, owner: string): void {
+  const named = [owner, `${owner}（本人接待）`, `${owner}(本人接待)`];
+  qb.where((w: any) => {
+    w.whereIn('owner_name', named).orWhere((w2: any) => {
+      // 未分配：把空归属单独括起来再 AND 建档人，避免 OR 泄漏
+      w2
+        .where((w3: any) => {
+          w3.whereNull('owner_name').orWhere('owner_name', '');
+        })
+        .andWhere('create_by_name', owner);
+    });
+  });
+}
+
+/**
  * 给「学生列表」查询加数据范围条件（原地修改 query）
  *
  * 口径：owner_name = 本人 **或**（owner_name 为空 且 建档人 = 本人）
@@ -80,14 +111,7 @@ export function applyStudentScope(query: any, user?: any): void {
   const owner = scopeOwnerName(user);
   if (!owner) return;
 
-  query.andWhere((qb: any) => {
-    qb.where('owner_name', owner).orWhere((qb2: any) => {
-      qb2
-        .whereNull('owner_name')
-        .orWhere('owner_name', '')
-        .where('create_by_name', owner);
-    });
-  });
+  query.andWhere((qb: any) => whereOwnStudents(qb, owner));
 }
 
 /**
@@ -101,14 +125,7 @@ export async function scopedStudentIds(user?: any): Promise<string[] | null> {
 
   const rows: any[] = await db(STUDENT_TABLE)
     .where('is_deleted', false)
-    .andWhere((qb: any) => {
-      qb.where('owner_name', owner).orWhere((qb2: any) => {
-        qb2
-          .whereNull('owner_name')
-          .orWhere('owner_name', '')
-          .where('create_by_name', owner);
-      });
-    })
+    .andWhere((qb: any) => whereOwnStudents(qb, owner))
     .select('id');
 
   return rows.map((r) => String(r.id));

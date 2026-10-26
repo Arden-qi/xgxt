@@ -121,6 +121,14 @@ export function centToYuan(c: number): string {
 }
 
 /**
+ * ★ 2026-10-26 住宿费基准月数
+ *
+ * 财务「住宿费」标准价按【6 个月】录（如 2700 = 450 × 6）。
+ * 学生可自选缴纳月数（1~12），月单价 = 标准价 ÷ 6。
+ */
+const ACCOMMODATION_BASE_MONTHS = 6;
+
+/**
  * ★ 2026-10-16 解析合并缴费单的明细 JSON（脏数据返回空数组，不影响主流程）
  *
  * 里面带 standardAmount / discount（应缴 / 优惠），前端据此展示「应缴 / 实缴 / 优惠」。
@@ -271,6 +279,20 @@ export function toOrderView(row: any): ConsultFeeOrder {
     financePayStatusName: row.finance_pay_status
       ? nameOf(PAY_STATUS_NAME, row.finance_pay_status)
       : undefined,
+    /** ★ 2026-10-22 财务核对人 / 核对时间快照（由 syncFromFinance 回填） */
+    financeVerifiedBy: row.finance_verified_by || undefined,
+    financeVerifiedTime: row.finance_verified_time
+      ? formatTime(row.finance_verified_time)
+      : undefined,
+    /**
+     * ★ 2026-10-22 「操作人 / 操作时间」口径修正
+     *
+     * 用户反馈：财务侧核对完之后，列表的操作人还显示咨询发起人，对不上。
+     * 现在：财务已核对（有核对人）→ 显示财务核对人与其核对时间；
+     *       还没核对 → 显示咨询发起人与其发起时间（发起动作确实是他做的）。
+     */
+    operatorName: row.finance_verified_by || row.create_by_name || '',
+    operatorTime: formatTime(row.finance_verified_time || row.create_time),
     rejectReason: row.reject_reason || undefined,
     voucherUrl: row.voucher_url || undefined,
     voucherNo: row.voucher_no || undefined,
@@ -292,6 +314,8 @@ export function toOrderView(row: any): ConsultFeeOrder {
     itemDetail: detail.length ? detail : undefined,
     dueAmount: detail.length ? dueTotal : undefined,
     discountAmount: detail.length ? dueTotal - Number(row.amount || 0) : undefined,
+    /** ★ 2026-10-26 优惠名目（有优惠的单据才有） */
+    discountReason: row.discount_reason || undefined,
 
     /* ---------- ★ 2026-10-16 分期付款 ---------- */
     planId: row.plan_id || undefined,
@@ -583,6 +607,20 @@ export async function createCombinedFees(
    */
   voucherUrl?: string,
   voucherNo?: string,
+  /**
+   * ★ 2026-10-26 住宿费按月缴纳（1~12，默认 6）
+   *
+   * 用户口径：「住宿费一个月 450，默认缴纳 6 个月，可以自己选择缴纳几个月」。
+   * 财务「住宿费」标准价是【6 个月】的价（2700 = 450 × 6），
+   * 所以本函数里住宿费的应缴 = 标准价 ÷ 6 × 月数，实缴同额（月数变化不算优惠）。
+   */
+  accommodationMonths?: number,
+  /**
+   * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目」
+   *
+   * 有优惠（实缴 < 应缴）时必须给名目 —— 财务核对时要知道这笔少收的钱按什么批的。
+   */
+  discountReason?: string,
 ): Promise<ConsultFeeCreateResult> {
   const stu = await findStudent(consultStudentId);
   if (!stu) {
@@ -634,22 +672,56 @@ export async function createCombinedFees(
      * ★ 2026-10-16 应缴 / 实缴 / 优惠：
      *    standardAmount = 财务标准的应缴；amount = 本次实缴（老师可改，改了就是优惠/补收）。
      *    discount = 应缴 - 实缴（>0 优惠，<0 补收）。
+     *
+     * ★ 2026-10-26 住宿费按月数：标准价是 6 个月的价，
+     *    应缴 = 月单价 × 月数，实缴同额（月数少不算优惠）。
      */
-    const customAmount = amountByType?.[feeType];
-    // ★ 2026-10-16 用户口径：实缴不能大于应缴（收费弹窗已限制，后端再兜一道）
-    if (customAmount != null && customAmount > std.amount) {
-      throw new BizError(
-        BizCode.PARAM_ERROR,
-        `${feeTypeName} 实缴 ¥${centToYuan(customAmount)} 不能大于应缴 ¥${centToYuan(std.amount)}`,
-      );
+    let dueAmount = std.amount;
+    let paid: number;
+    if (feeType === FeeType.ACCOMMODATION) {
+      const months = Math.min(12, Math.max(1, Math.round(accommodationMonths ?? ACCOMMODATION_BASE_MONTHS)));
+      const unit = Math.round(std.amount / ACCOMMODATION_BASE_MONTHS);
+      dueAmount = unit * months;
+      paid = dueAmount;
+    } else if (feeType === FeeType.TRIAL_FEE) {
+      /**
+       * ★ 2026-10-26 用户口径：「试学费默认 5000，可以自己设置」
+       *
+       * 试学费是老师和家长谈定的金额，不是财务标准价的折扣，所以：
+       *   · 不限制上限（可以高于 5000）；
+       *   · 应缴 = 实缴 = 老师填的数，**不产生优惠**（否则会被要求填优惠名目）。
+       * 没传金额时仍按财务标准（默认 5000）收。
+       */
+      const customAmount = amountByType?.[feeType];
+      paid = customAmount != null ? customAmount : std.amount;
+      dueAmount = paid;
+    } else {
+      const customAmount = amountByType?.[feeType];
+      // ★ 2026-10-16 用户口径：实缴不能大于应缴（收费弹窗已限制，后端再兜一道）
+      if (customAmount != null && customAmount > std.amount) {
+        throw new BizError(
+          BizCode.PARAM_ERROR,
+          `${feeTypeName} 实缴 ¥${centToYuan(customAmount)} 不能大于应缴 ¥${centToYuan(std.amount)}`,
+        );
+      }
+      paid = customAmount != null ? customAmount : std.amount;
+      /**
+       * ★ 2026-10-26 用户口径：「优惠只能优惠学费，其他金额不可以优惠」
+       *    只有学费允许低于标准价，其余各项一律按标准全额收。
+       */
+      if (paid < std.amount && feeType !== FeeType.TUITION) {
+        throw new BizError(
+          BizCode.PARAM_ERROR,
+          `优惠只能用于学费，「${feeTypeName}」不能低于应缴 ¥${centToYuan(std.amount)}`,
+        );
+      }
     }
-    const paid = customAmount != null ? customAmount : std.amount;
     items.push({
       feeType,
       feeTypeName,
       amount: paid,
-      standardAmount: std.amount,
-      discount: std.amount - paid,
+      standardAmount: dueAmount,
+      discount: dueAmount - paid,
     });
   }
 
@@ -662,10 +734,28 @@ export async function createCombinedFees(
   const dueTotal = items.reduce((s, i) => s + (i.standardAmount ?? i.amount), 0);
   const discountTotal = dueTotal - total;
 
+  /**
+   * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目」
+   *
+   * 只要这一单少收了钱（discountTotal > 0），就必须说清是按什么名目少的。
+   * 前端已经把「优惠名目」做成必选，这里再兜一道 —— 直接调接口绕不过去。
+   */
+  const reason = (discountReason || '').trim();
+  if (discountTotal > 0 && !reason) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `本次优惠 ¥${centToYuan(discountTotal)} 需要选择优惠名目（奖学金 / 活动优惠 / 困难减免…），否则财务无法核对`,
+    );
+  }
+  /** 优惠名目的落地值：没优惠就不留痕（避免「无优惠」的单子上挂着名目） */
+  const discountReasonText = discountTotal > 0 ? reason : null;
+
   const detailText = items.map((i) => `${i.feeTypeName}${centToYuan(i.amount)}`).join('/');
   const discountText =
     discountTotal > 0
-      ? `（应缴 ¥${centToYuan(dueTotal)}，优惠 ¥${centToYuan(discountTotal)}）`
+      ? `（应缴 ¥${centToYuan(dueTotal)}，优惠 ¥${centToYuan(discountTotal)}${
+          discountReasonText ? `·名目：${discountReasonText}` : ''
+        }）`
       : discountTotal < 0
         ? `（应缴 ¥${centToYuan(dueTotal)}，补收 ¥${centToYuan(-discountTotal)}）`
         : '';
@@ -722,6 +812,8 @@ export async function createCombinedFees(
     pay_method: payMethod || null,
     batch_no: Date.now(),
     item_detail: JSON.stringify(items),
+    // ★ 2026-10-26 优惠名目（有优惠才有值）
+    discount_reason: discountReasonText,
     create_time: new Date(),
     create_by: operator.name,
     create_by_name: operator.name,
@@ -775,6 +867,10 @@ export async function createFees(
   /** ★ 2026-10-19 用户口径：只要缴费就要有凭证 —— 单类型也必须带 */
   voucherUrl?: string,
   voucherNo?: string,
+  /** ★ 2026-10-26 住宿费月数（1~12，默认 6） */
+  accommodationMonths?: number,
+  /** ★ 2026-10-26 优惠名目（有优惠时必填） */
+  discountReason?: string,
 ): Promise<ConsultFeeCreateResult> {
   const stu = await findStudent(consultStudentId);
   if (!stu) {
@@ -802,6 +898,8 @@ export async function createFees(
       amountByType,
       voucherUrl,
       voucherNo,
+      accommodationMonths,
+      discountReason,
     );
   }
 
@@ -833,21 +931,70 @@ export async function createFees(
       // ⚠️ 默认不传 amount 给财务，让财务自己按标准取值，避免两边算不一致；
       //    ★ 2026-10-15 例外：本次老师自定义了金额（如试学费实收 3000）→ 明确传给财务
       const std = await financeClient.getStandard(feeType, deptCode);
-      const customAmount = amountByType?.[feeType];
-      // ★ 2026-10-16 用户口径：实缴不能大于应缴
-      if (customAmount != null && customAmount > std.amount) {
-        throw new BizError(
-          BizCode.PARAM_ERROR,
-          `${feeTypeName} 实缴 ¥${centToYuan(customAmount)} 不能大于应缴 ¥${centToYuan(std.amount)}`,
+      /**
+       * ★ 2026-10-26 住宿费按月数：标准价 = 6 个月，
+       *    应缴 = 月单价 × 月数，实缴同额（必须显式告诉财务金额）。
+       */
+      let amount: number;
+      let customAmount: number | undefined;
+      let standardAmount = std.amount;
+      if (feeType === FeeType.ACCOMMODATION) {
+        const months = Math.min(
+          12,
+          Math.max(1, Math.round(accommodationMonths ?? ACCOMMODATION_BASE_MONTHS)),
         );
+        const unit = Math.round(std.amount / ACCOMMODATION_BASE_MONTHS);
+        amount = unit * months;
+        standardAmount = amount;
+        customAmount = amount;
+      } else if (feeType === FeeType.TRIAL_FEE) {
+        /**
+         * ★ 2026-10-26 用户口径：「试学费默认 5000，可以自己设置」
+         *
+         * 谈定多少就收多少：不做上限校验，应缴 = 实缴（不算优惠、不要名目）。
+         * 金额必须显式传给财务，否则财务会按自己的标准价（5000）入账。
+         */
+        customAmount = amountByType?.[feeType];
+        amount = customAmount != null ? customAmount : std.amount;
+        standardAmount = amount;
+        customAmount = amount;
+      } else {
+        customAmount = amountByType?.[feeType];
+        // ★ 2026-10-16 用户口径：实缴不能大于应缴
+        if (customAmount != null && customAmount > std.amount) {
+          throw new BizError(
+            BizCode.PARAM_ERROR,
+            `${feeTypeName} 实缴 ¥${centToYuan(customAmount)} 不能大于应缴 ¥${centToYuan(std.amount)}`,
+          );
+        }
+        // ★ 2026-10-26 用户口径：优惠只能优惠学费
+        if (customAmount != null && customAmount < std.amount && feeType !== FeeType.TUITION) {
+          throw new BizError(
+            BizCode.PARAM_ERROR,
+            `优惠只能用于学费，「${feeTypeName}」不能低于应缴 ¥${centToYuan(std.amount)}`,
+          );
+        }
+        amount = customAmount != null ? customAmount : std.amount;
       }
-      const amount = customAmount != null ? customAmount : std.amount;
 
       // ---- 2. 校验来源（规则3-① 的前置检查，财务侧还会再校验一次）----
       if (std.sourceModule !== SourceModule.CONSULT) {
         throw new BizError(
           BizCode.SOURCE_MODULE_MISMATCH,
           `${feeTypeName} 应由「${std.sourceModuleName}」发起，咨询模块无权建单。`,
+        );
+      }
+
+      /**
+       * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目」
+       *    单类型收费（最常见就是只缴学费）有优惠时同样必须给名目。
+       */
+      const singleDiscount = standardAmount - amount;
+      const singleReason = (discountReason || '').trim();
+      if (singleDiscount > 0 && !singleReason) {
+        throw new BizError(
+          BizCode.PARAM_ERROR,
+          `${feeTypeName} 优惠 ¥${centToYuan(singleDiscount)} 需要选择优惠名目（奖学金 / 活动优惠 / 困难减免…），否则财务无法核对`,
         );
       }
 
@@ -903,11 +1050,14 @@ export async function createFees(
                   feeType,
                   feeTypeName,
                   amount,
-                  standardAmount: std.amount,
-                  discount: std.amount - amount,
+                  // ★ 2026-10-26 住宿费按月的应缴 = 实缴（月数变化不是优惠）
+                  standardAmount,
+                  discount: standardAmount - amount,
                 },
               ])
             : null,
+        // ★ 2026-10-26 优惠名目（有优惠才有值，没优惠留 NULL）
+        discount_reason: standardAmount - amount > 0 ? (discountReason || '').trim() || null : null,
         create_time: new Date(),
         create_by: operator.name,
         create_by_name: operator.name,
@@ -1331,8 +1481,29 @@ export async function syncFromFinance(orderIds?: string[]): Promise<{ updated: n
   if (orderIds?.length) {
     query = query.whereIn('id', orderIds);
   } else {
-    // 只要还没到账的（已到账/已驳回的不用再查）
-    query = query.whereIn('status', [CFS.NO_VOUCHER, CFS.PENDING]);
+    /**
+     * ★ 2026-10-22 用户口径：「财务侧状态和操作人不对」
+     *
+     * 原来只同步「未到账」的单（NO_VOUCHER / PENDING），已到账的单不再回读 →
+     * 它们的 finance_pay_status 永远停在最后一次同步时的 2（待核对），
+     * 财务核对人和核对时间更是从没落过库，列表里只能显示咨询侧发起人。
+     *
+     * 现在把「已到账但财务信息还不完整」的单也纳入同步：
+     *   status = ARRIVED 且（finance_pay_status 不是已缴 3 或 核对人/时间缺失）
+     * 只补快照，不再动状态机（到账推进有幂等守卫，但没必要多跑）。
+     */
+    query = query.whereIn('status', [CFS.NO_VOUCHER, CFS.PENDING, CFS.ARRIVED]).andWhere((qb: any) => {
+      qb.whereIn('status', [CFS.NO_VOUCHER, CFS.PENDING]).orWhere((qb2: any) => {
+        qb2
+          .where('status', CFS.ARRIVED)
+          .andWhere((qb3: any) => {
+            qb3
+              .whereNull('finance_pay_status')
+              .orWhereNot('finance_pay_status', PayStatus.VERIFIED)
+              .orWhereNull('finance_verified_by');
+          });
+      });
+    });
   }
   const rows = await query;
 
@@ -1342,6 +1513,9 @@ export async function syncFromFinance(orderIds?: string[]): Promise<{ updated: n
     try {
       const detail: any = await financeClient.getFeeDetail(row.finance_fee_id);
       const payStatus = detail?.payStatus;
+      /** ★ 2026-10-22 财务核对人 / 核对时间（财务侧 detail 已返回，之前没落库） */
+      const verifiedByName: string | null = detail?.verifiedByName ?? null;
+      const verifiedTime: string | null = detail?.verifiedTime ?? null;
 
       let nextStatus: ConsultFeeStatus | null = null;
       let rejectReason: string | null = null;
@@ -1356,8 +1530,22 @@ export async function syncFromFinance(orderIds?: string[]): Promise<{ updated: n
         nextStatus = CFS.PENDING;
       }
 
+      /* ---------- ★ 2026-10-22 快照差异：状态 / 财务侧 payStatus / 核对人与时间 ---------- */
+      const prevVerifiedTime = row.finance_verified_time ? formatTime(row.finance_verified_time) : null;
+      const patch: Record<string, any> = {};
+      if (payStatus != null && payStatus !== row.finance_pay_status) {
+        patch.finance_pay_status = payStatus;
+      }
+      if ((verifiedByName || null) !== ((row.finance_verified_by as string) || null)) {
+        patch.finance_verified_by = verifiedByName;
+      }
+      if (verifiedTime && verifiedTime !== prevVerifiedTime) {
+        patch.finance_verified_time = verifiedTime;
+      }
+
       if (nextStatus !== null && nextStatus !== row.status) {
         await db(FEE_ORDER_TABLE).where({ id: row.id }).update({
+          ...patch,
           status: nextStatus,
           finance_pay_status: payStatus,
           reject_reason: rejectReason,
@@ -1387,11 +1575,16 @@ export async function syncFromFinance(orderIds?: string[]): Promise<{ updated: n
           );
         }
         updated++;
-      } else if (payStatus !== row.finance_pay_status) {
-        // 状态没变但 payStatus 变了（如 待缴→已缴），也更新一下
+      } else if (Object.keys(patch).length) {
+        /**
+         * 状态没变，但财务侧快照变了（待缴→待核对、核对人补录、核对时间补录…），
+         * 也要落库 —— 否则「财务侧状态 / 操作人」会永远停在第一次同步的样子。
+         */
         await db(FEE_ORDER_TABLE).where({ id: row.id }).update({
-          finance_pay_status: payStatus,
+          ...patch,
+          update_time: new Date(),
         });
+        updated++;
       }
     } catch (err: any) {
       // 财务侧查不到这张单（可能被删了）不报错，跳过
@@ -1462,6 +1655,38 @@ const ARRIVAL_ADVANCEABLE_STATES: ConsultState[] = [
 
 const canAdvanceOnArrival = (cur: ConsultState): boolean =>
   ARRIVAL_ADVANCEABLE_STATES.includes(cur);
+
+/**
+ * ★ 2026-10-22 「→ 待分班(4)」专用前置集合 —— 修「试学中被财务同步打回待分班」
+ *
+ * 【真实事故（幺幺，2026-10-22）】
+ *   08:09 试学费到账 → 待分班
+ *   08:12 班主任接收 → **试学中**（正确）
+ *   10:34 财务侧再同步一次同一笔到账 → 又跑了一遍本函数 →
+ *         收款单还是「试学费」→ target 被算成「待分班」→ **状态被降级**
+ *   → 用户在「学生管理」里看到「分完班了状态还是待分班」。
+ *
+ * 根因：`ARRIVAL_ADVANCEABLE_STATES` 为了支持「试学中 → 补费转正」，
+ *   把 TRIAL(5) 也当成了可推进源；于是「试学费重复到账」这条老路径
+ *   把 5 当成了起点，一路推到 4（倒退）。
+ *
+ * 修法：把「往前推到待分班」和「往后推到正式在读」分成两个集合：
+ *   · 推「待分班」只允许从**缴费环节**（待分配/待面试/咨询中/缴费待确认）出发；
+ *   · 推「正式在读」只允许从**试学中**出发（补费转正）。
+ *   已经是 待分班/试学中/正式在读 的，到账重放一律不再改状态。
+ */
+const TO_WAIT_CLASS_STATES: ConsultState[] = [
+  ConsultState.WAIT_ASSIGN, // 1
+  ConsultState.WAIT_INTERVIEW, // 2
+  ConsultState.TRIAL_FEE_PENDING, // 3
+  ConsultState.FULL_FEE_PENDING, // 6
+];
+
+/** 可以「往前推到待分班」吗（已经是 4/5/7 的一律不动） */
+const canGoWaitClass = (cur: ConsultState): boolean => TO_WAIT_CLASS_STATES.includes(cur);
+
+/** 可以「从试学中补费转正」吗（只有真正入班试学中的才允许） */
+const canGoFormal = (cur: ConsultState): boolean => cur === ConsultState.TRIAL;
 
 export async function advanceStudentStateOnArrival(row: any): Promise<void> {
   const stu = await findStudent(row.consult_student_id);
@@ -1539,19 +1764,20 @@ export async function advanceStudentStateOnArrival(row: any): Promise<void> {
     );
 
     if (isTrialOnly) {
-      if (canAdvanceOnArrival(cur)) {
+      if (canGoWaitClass(cur)) {
         target = ConsultState.TRIAL_WAIT_CLASS;
         gate = '分期首付已到账';
       }
-    } else if (canAdvanceOnArrival(cur)) {
-      // ★ 2026-10-20 同口径：还没分班 → 先「待分班」，分完班再落正式
-      if (!stu.class_id) {
-        target = ConsultState.TRIAL_WAIT_CLASS;
-        gate = '分期首付已到账，待分配班级';
-      } else {
-        target = ConsultState.FORMAL;
-        gate = '分期首付已到账';
-      }
+    } else if (canGoFormal(cur)) {
+      /* 已经在试学中（= 班主任已接收）→ 分期款到账即可转正 */
+      target = ConsultState.FORMAL;
+      gate = '分期首付已到账';
+    } else if (canGoWaitClass(cur)) {
+      /* ★ 2026-10-22 同口径：还没被班主任接收 → 只推「待分班」，
+       *   落「正式在读」要等接收那一刻（receive-ack 按是否全款到齐判定），
+       *   否则会出现「正式在读但人还没进班」。 */
+      target = ConsultState.TRIAL_WAIT_CLASS;
+      gate = '分期首付已到账，待分配班级';
     }
 
     if (target && target !== cur) {
@@ -1570,7 +1796,10 @@ export async function advanceStudentStateOnArrival(row: any): Promise<void> {
   }
 
   if (row.fee_type === FeeType.TRIAL_FEE) {
-    if (canAdvanceOnArrival(cur)) {
+    /* ★ 2026-10-22 只允许「从缴费环节往前推到待分班」。
+     *   已经是 待分班(4)/试学中(5)/正式在读(7) 的，试学费重复到账不再动状态
+     *   —— 否则「接收成试学中」会被财务同步一次次打回「待分班」（幺幺事故）。 */
+    if (canGoWaitClass(cur)) {
       target = ConsultState.TRIAL_WAIT_CLASS;
       gate = '试学费已到账';
     }
@@ -1582,16 +1811,19 @@ export async function advanceStudentStateOnArrival(row: any): Promise<void> {
      * 补费单不属于 FULL_FEE_TYPES，所以不能走下面「全款全部到齐」的判断
      * （那样会永远不成立，钱到了状态不动）。
      *
-     * 落点与学费到账同口径：没分班先「待分班」，有班直接「正式在读」。
+     * ★ 2026-10-22 落点收紧：
+     *   · 已在「试学中」→ 正式在读（这是补费转正的正常路径）；
+     *   · 还在缴费环节 → 待分班，等班主任接收；
+     *   · 已经是正式在读/待分班 → 不动（幂等重放）。
+     *   不再看 `stu.class_id` —— 它在「分配班级（推送）」时就写了，
+     *   只能说明「分过班」，不代表班主任已经接收建档。
      */
-    if (canAdvanceOnArrival(cur)) {
-      if (!stu.class_id) {
-        target = ConsultState.TRIAL_WAIT_CLASS;
-        gate = '补费已到账，待分配班级';
-      } else {
-        target = ConsultState.FORMAL;
-        gate = '补费已到账';
-      }
+    if (canGoFormal(cur)) {
+      target = ConsultState.FORMAL;
+      gate = '补费已到账';
+    } else if (canGoWaitClass(cur)) {
+      target = ConsultState.TRIAL_WAIT_CLASS;
+      gate = '补费已到账，待分配班级';
     }
   } else if (FULL_FEE_TYPES.includes(row.fee_type)) {
     if (
@@ -1613,13 +1845,20 @@ export async function advanceStudentStateOnArrival(row: any): Promise<void> {
          *   用户口径：「交完试学费或学费就分配班级」——学费到账后学生同样要
          *   走「待分班」，分完班才落「正式在读」。原来直接跳 FORMAL，
          *   会出现「正式在读但没班」的脏状态（分配班级按钮还得靠兜底显示）。
+         *
+         * ★ 2026-10-22 再收紧：**不看 `stu.class_id`**
+         *   class_id 在「分配班级」推送时就写进咨询表了，用它判断「已分班」
+         *   会把「已推送、班主任还没接收」误当成已入班 → 直接跳正式在读。
+         *   现在只在两种情况下转正式：
+         *     ① 已经试学中（receieve 过）→ 补缴尾款转正；
+         *     ② 其余缴费环节 → 一律先「待分班」。
          */
-        if (!stu.class_id) {
-          target = ConsultState.TRIAL_WAIT_CLASS;
-          gate = '全款费用已全部到账，待分配班级';
-        } else {
+        if (canGoFormal(cur)) {
           target = ConsultState.FORMAL;
           gate = '全款费用已全部到账';
+        } else if (canGoWaitClass(cur)) {
+          target = ConsultState.TRIAL_WAIT_CLASS;
+          gate = '全款费用已全部到账，待分配班级';
         }
       }
     }
