@@ -674,12 +674,12 @@
           </el-col>
           <el-col :span="8">
             <!-- 2026-10-15 改版：原「出生日期」输入框改为身份证号，出生日期/年龄由身份证号自动带出 -->
-            <el-form-item label="身份证号" prop="idCard" :required="!form.id">
+            <el-form-item label="身份证号" prop="idCard" required>
               <el-input v-model="form.idCard" maxlength="18" placeholder="录入后自动计算年龄" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="部门" prop="deptCode" :required="!form.id">
+            <el-form-item label="部门" prop="deptCode" required>
               <el-select v-model="form.deptCode" clearable placeholder="请选择" style="width: 100%" @change="onFormDeptChange">
                 <el-option v-for="(n, v) in DEPT_NAME" :key="v" :label="n" :value="Number(v)" />
               </el-select>
@@ -712,7 +712,7 @@
           </el-col>
           <!-- ★ 2026-10-22 用户口径：不再手选阶段，学生阶段跟随所在班级自动带出 -->
           <el-col :span="8">
-            <el-form-item label="状态" prop="studentStatus" :required="!form.id">
+            <el-form-item label="状态" prop="studentStatus" required>
               <!-- ★ 2026-10-21 批注：下拉不再提供「已就业」（改由列表【已就业】按钮写入）；
                    已经是「已就业」的学生是终态，状态字段直接锁死，不可改回其它状态。
                    同批批注：「学生状态为【退学】的，任何操作都不可更改该状态」→ 退学一并锁死。 -->
@@ -723,28 +723,28 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="手机号" prop="phone" :required="!form.id">
+            <el-form-item label="手机号" prop="phone" required>
               <el-input v-model="form.phone" maxlength="20" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <!-- 2026-10-15 改版：「手机号」后新增【家长姓名】字段 -->
-            <el-form-item label="家长姓名" prop="parentName" :required="!form.id">
+            <el-form-item label="家长姓名" prop="parentName" required>
               <el-input v-model="form.parentName" maxlength="30" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="家长手机" prop="parentPhone" :required="!form.id">
+            <el-form-item label="家长手机" prop="parentPhone" required>
               <el-input v-model="form.parentPhone" maxlength="20" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="籍贯" prop="nativePlace" :required="!form.id">
+            <el-form-item label="籍贯" prop="nativePlace" required>
               <el-input v-model="form.nativePlace" maxlength="50" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="学历" prop="education" :required="!form.id">
+            <el-form-item label="学历" prop="education" required>
               <!-- 2026-10-15 三次调整：学历固定下拉，不随部门联动，单独选择 -->
               <el-select v-model="form.education" clearable filterable style="width: 100%">
                 <el-option v-for="e in EDUCATION_OPTIONS" :key="e" :label="e" :value="e" />
@@ -752,12 +752,12 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="毕业学校" prop="graduateSchool" :required="!form.id">
+            <el-form-item label="毕业学校" prop="graduateSchool" required>
               <el-input v-model="form.graduateSchool" maxlength="50" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="入学日期" prop="enrollDate" :required="!form.id">
+            <el-form-item label="入学日期" prop="enrollDate" required>
               <el-date-picker v-model="form.enrollDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
             </el-form-item>
           </el-col>
@@ -776,7 +776,7 @@
                账号仍由系统按学号自动生成，详情页「校园网账号」页签照旧只读展示；
                表单 state 保留 → 编辑老学生时原值随保存回传，不会被清空。 -->
           <el-col :span="24">
-            <el-form-item label="家庭住址" prop="homeAddress" :required="!form.id">
+            <el-form-item label="家庭住址" prop="homeAddress" required>
               <el-input v-model="form.homeAddress" maxlength="200" />
             </el-form-item>
           </el-col>
@@ -1210,18 +1210,18 @@ const formAge = ref<number | null>(null);
  *
  *   · **学号**（按「LZ+班级编号+序号」自动生成）与 **年龄**（按身份证号自动算）是只读派生字段，
  *     人工填不了 → 靠「班级」「身份证号」必填间接保证，这里不放规则；
- *   · 其余字段 **新增时必填**；编辑时放宽 —— 老数据这些字段本来就可能是空的，
- *     全拦死会导致连改个手机号都保存不了（与本文件 classId 的既有口径一致）；
+ *   · ★ 2026-10-26 补充批注：「编辑学生和编辑班级同步新增学生和新增班级的必选项」
+ *     → 必填**不再区分新增/编辑**，编辑时同样校验（老数据缺字段时，保存会指出缺哪项，补上即可）；
  *   · 红星常显（下面 el-form-item 上写了 required），具体提示语走各字段自己的 validator；
  *   · ★ 2026-10-26 补充批注：「必选项前端只显示红星，只有保存时没填才显示文字」
  *     → 所有必填校验的 trigger 统一用 `'submit'`：输入/失焦/切换下拉**都不弹红字**，
  *       只有点【保存】调用 validate() 时才出提示
  *       （el-form 的 validate() 不看 trigger，所以 'submit' 只起到「不参与交互触发」的作用）。
  */
-const requiredOnCreate = (msg: string) => [
+const requiredRule = (msg: string) => [
   {
     validator: (_rule: unknown, value: unknown, callback: (e?: Error) => void) => {
-      if (form.id || String(value ?? '').trim()) callback();
+      if (String(value ?? '').trim()) callback();
       else callback(new Error(msg));
     },
     trigger: 'submit',
@@ -1231,14 +1231,13 @@ const requiredOnCreate = (msg: string) => [
 const rules: FormRules = {
   studentName: [{ required: true, message: '姓名必填', trigger: 'submit' }],
   gender: [{ required: true, message: '性别必填', trigger: 'submit' }],
-  // ★ 2026-10-22：学号按班级编号生成，没班级就没有学号 → 新增时班级必填
-  //   （编辑历史学生时放宽：老数据可能本来就没班级，不能因此改不了别的字段）
+  // ★ 2026-10-22：学号按班级编号生成，没班级就没有学号 → 班级必填
+  // ★ 2026-10-26：编辑也必填（与新增口径同步）
   classId: [
     {
-      // required 只负责显示红星，真正的判断在 validator 里（编辑时允许为空）
       required: true,
       validator: (_r, v: string, cb) => {
-        if (form.id || v) cb();
+        if (v) cb();
         else cb(new Error('请选择班级（学号按班级编号生成）'));
       },
       trigger: 'submit',
@@ -1246,7 +1245,7 @@ const rules: FormRules = {
   ],
   idCard: [
     // ★ 2026-10-26：身份证号进入必填范围（年龄由它自动计算）
-    ...requiredOnCreate('请填写身份证号'),
+    ...requiredRule('请填写身份证号'),
     {
       validator: (_r, v: string, cb) => {
         if (!v || /^(\d{15}|\d{17}[\dXx])$/.test(v.trim())) cb();
@@ -1255,17 +1254,17 @@ const rules: FormRules = {
       trigger: 'submit',
     },
   ],
-  // ★ 2026-10-26：以下均按红框纳入必填（新增时）
-  deptCode: requiredOnCreate('请选择部门'),
-  studentStatus: requiredOnCreate('请选择状态'),
-  phone: requiredOnCreate('请填写学生手机号'),
-  parentName: requiredOnCreate('请填写家长姓名'),
-  parentPhone: requiredOnCreate('请填写家长手机'),
-  nativePlace: requiredOnCreate('请填写籍贯'),
-  education: requiredOnCreate('请选择学历'),
-  graduateSchool: requiredOnCreate('请填写毕业学校'),
-  enrollDate: requiredOnCreate('请选择入学日期'),
-  homeAddress: requiredOnCreate('请填写家庭住址'),
+  // ★ 2026-10-26：以下均按红框纳入必填（新增 / 编辑一致）
+  deptCode: requiredRule('请选择部门'),
+  studentStatus: requiredRule('请选择状态'),
+  phone: requiredRule('请填写学生手机号'),
+  parentName: requiredRule('请填写家长姓名'),
+  parentPhone: requiredRule('请填写家长手机'),
+  nativePlace: requiredRule('请填写籍贯'),
+  education: requiredRule('请选择学历'),
+  graduateSchool: requiredRule('请填写毕业学校'),
+  enrollDate: requiredRule('请选择入学日期'),
+  homeAddress: requiredRule('请填写家庭住址'),
 };
 
 /**

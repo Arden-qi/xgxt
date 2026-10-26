@@ -113,6 +113,33 @@ const dialogState = () => ev(`(() => {
 })()`);
 const hasLabel = (st, t) => st.labels.some((l) => l.text.includes(t));
 
+/** 把某个标签对应的输入框清空（触发 v-model），用于验证「编辑时也必填」 */
+async function clearByLabel(label) {
+  return ev(`(() => {
+    const d = [...document.querySelectorAll('.el-dialog')].filter(x => x.offsetParent !== null).pop();
+    if (!d) return 'NO_DIALOG';
+    const it = [...d.querySelectorAll('.el-form-item')].find(x =>
+      (x.querySelector('.el-form-item__label')?.innerText || '').trim() === ${JSON.stringify(label)});
+    if (!it) return 'NO_ITEM';
+    const inp = it.querySelector('input.el-input__inner');
+    if (!inp) return 'NO_INPUT';
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(inp, '');
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    return 'OK';
+  })()`);
+}
+
+/** 点第一条数据行的【编辑】 */
+const clickRowEdit = () => ev(`(() => {
+  const rows = [...document.querySelectorAll('.el-table__row')].filter(r => r.offsetParent !== null);
+  if (!rows.length) return 'NO_ROW';
+  const btn = [...rows[0].querySelectorAll('button, .el-button')].find(b => b.innerText.trim() === '编辑');
+  if (!btn) return 'NO_BTN';
+  btn.click();
+  return 'OK';
+})()`);
+
 /** 在弹窗里打开第 n 个 el-select（0 = 部门）并点选指定文字的下拉项 */
 async function pickSelect(text, index = 0) {
   const r1 = await ev(`(() => {
@@ -290,6 +317,51 @@ async function pickSelect(text, index = 0) {
   check('提示含「家长手机」', st.errors.some((e) => e.includes('家长手机')));
   check('无未捕获异常', pageErrors.length === 0, pageErrors[0] || '');
   await shot('req_student_empty_save.png');
+
+  /* ---------- ④ 编辑班级：必填项与新增同步 ---------- */
+  console.log('\n=== ④ 编辑班级：必填项与新增同步 ===');
+  await nav('/teaching/class', 3500);
+  await sleep(800);
+  check('打开【编辑班级】', (await clickRowEdit()) === 'OK');
+  await sleep(1600);
+  st = await dialogState();
+  console.log('  字段:', st.labels.map((l) => l.text + (l.required ? '*' : '')).join(' / '));
+  check('编辑：班级名称有红星', st.labels.some((l) => l.text.includes('班级名称') && l.required));
+  check('编辑：部门有红星', st.labels.some((l) => l.text.includes('部门') && l.required));
+  check('编辑：阶段方案有红星', st.labels.some((l) => l.text.includes('阶段方案') && l.required));
+  check('编辑：班级编号无红星（只读，改不了）',
+    st.labels.some((l) => l.text.includes('班级编号') && !l.required));
+  check('清空「班级名称」', (await clearByLabel('班级名称')) === 'OK');
+  check('点【保存】(编辑班级)', (await clickBtn('保存')) === 'OK');
+  await sleep(1300);
+  st = await dialogState();
+  console.log('  报错:', st.errors.join(' | ') || '(无)');
+  check('编辑班级：保存时同样拦必填', st.errors.some((e) => e.includes('班级名称')), st.errors.join('|'));
+  await shot('req_class_edit_required.png');
+  await clickBtn('取消');
+  await sleep(700);
+
+  /* ---------- ⑤ 编辑学生：必填项与新增同步 ---------- */
+  console.log('\n=== ⑤ 编辑学生：必填项与新增同步 ===');
+  await nav('/teaching/student', 3500);
+  await sleep(800);
+  check('打开【编辑学生】', (await clickRowEdit()) === 'OK');
+  await sleep(1600);
+  st = await dialogState();
+  console.log('  字段:', st.labels.map((l) => l.text + (l.required ? '*' : '')).join(' / '));
+  check('编辑：手机号有红星', st.labels.some((l) => l.text.includes('手机号') && l.required));
+  check('编辑：家庭住址有红星', st.labels.some((l) => l.text.includes('家庭住址') && l.required));
+  check('编辑：备注无红星', st.labels.some((l) => l.text.includes('备注') && !l.required));
+  check('清空「手机号」', (await clearByLabel('手机号')) === 'OK');
+  check('点【保存】(编辑学生)', (await clickBtn('保存')) === 'OK');
+  await sleep(1300);
+  st = await dialogState();
+  console.log('  报错:', st.errors.join(' | ') || '(无)');
+  check('编辑学生：保存时同样拦必填',
+    st.errors.some((e) => e.includes('手机号')), st.errors.join('|'));
+  await shot('req_student_edit_required.png');
+  await clickBtn('取消');
+  await sleep(600);
 
   console.log(`\n${fails.length ? 'FAILED: ' + fails.join(' / ') : 'ALL PASS'}`);
   child.kill();
