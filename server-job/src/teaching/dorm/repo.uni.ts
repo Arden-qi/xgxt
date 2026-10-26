@@ -47,6 +47,7 @@ import type {
   DormBedRow,
   DormChangeCreateBody,
   DormChangeRow,
+  DormClassRoomRow,
   DormListQuery,
   DormResidentRow,
   DormRow,
@@ -727,6 +728,79 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
      *   联动过滤不会因为「班级表 id 和学生快照 id 不一致」而漏人；
      *   学生表里查不到的（班还没招学生）→ 再从班级表把「我的班」补出来。
      */
+    /**
+     * ★ 2026-10-26：班级名下分派到的房间（含床位）—— 学生档案新增学生时联动用
+     *
+     * 数据来源：`sms_edu.t_edu_dorm_assignment`（class_name → room_id）。
+     * 每间房附上床位（含占用者姓名），前端把占用床禁选。
+     */
+    async classRooms(className: string): Promise<DormClassRoomRow[]> {
+      const cn = str(className) || '';
+      if (!cn) return [];
+
+      /**
+       * ★ 2026-10-26：学生档案「新增学生」的 楼栋 → 宿舍 → 床位 联动数据源
+       *
+       * 房间/床位一律走统一表（T_DORM / T_BED，按 edu_stage 过滤），
+       * **不要**再裸查 sms_job 老表 —— P8 归一后老表已 DROP（见 ecb9729）。
+       * 分派关系仍在 `sms_edu.t_edu_dorm_assignment`（未归一），其 room_id 与统一表 id 同源。
+       */
+      const assigned = (await db(ASSIGN_T)
+        .where({ class_name: cn, is_deleted: false })
+        .distinct('room_id')) as any[];
+      const ids = assigned.map((a) => str(a.room_id) || '').filter(Boolean);
+      if (!ids.length) return [];
+
+      const rooms = (await T_DORM()
+        .where({ is_deleted: false })
+        .whereIn('id', ids)) as any[];
+      if (!rooms.length) return [];
+      rooms.sort((a: any, b: any) =>
+        ((str(a.building) || '') + (str(a.room_no) || '')).localeCompare(
+          (str(b.building) || '') + (str(b.room_no) || ''),
+        ),
+      );
+
+      const beds = (await T_BED().where({ is_deleted: false }).whereIn('dorm_id', ids)) as any[];
+      const bedMap = new Map<string, any[]>();
+      for (const b of beds) {
+        const key = str(b.dorm_id) || '';
+        if (!bedMap.has(key)) bedMap.set(key, []);
+        bedMap.get(key)!.push(b);
+      }
+      for (const list of bedMap.values()) {
+        list.sort((a: any, b: any) => Number(a.bed_no ?? 0) - Number(b.bed_no ?? 0));
+      }
+
+      return rooms.map((r) => {
+        const id = str(r.id) || '';
+        const list = bedMap.get(id) || [];
+        const building = str(r.building) || '';
+        const room = str(r.room_no) || '';
+        const fallbackNo = building ? building + '-' + room : room;
+        return {
+          roomId: id,
+          building,
+          room,
+          dormNo: str(r.dorm_no) || fallbackNo,
+          bedCount: Number(r.bed_count ?? list.length),
+          occupiedCount: list.filter((b) => Number(b.bed_status) === 2).length,
+          beds: list.map((b) => ({
+            bedId: str(b.id) || '',
+            bedNo: str(b.bed_no) || '',
+            bedLabel: bedNoText(str(b.bed_no) || ''),
+            bedStatus: Number(b.bed_status ?? 1),
+            bedStatusName: DORM_BED_STATUS_NAME[Number(b.bed_status ?? 1)] ?? '',
+            studentId: str(b.student_id) || null,
+            studentNo: str(b.student_no) || null,
+            studentName: str(b.student_name) || null,
+            gender: numOrNull(b.student_gender),
+            checkInDate: fmtDate(b.check_in_date),
+            className: null,
+          })),
+        } as DormClassRoomRow;
+      });
+    },
     async checkinClasses(user): Promise<Array<{ classId: string | null; className: string }>> {
       const mine = await resolveMyClasses(user);
       const out = new Map<string, { classId: string | null; className: string }>();
