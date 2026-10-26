@@ -429,3 +429,17 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2026-10-07  0:08:25
+
+-- ---------------------------------------------------------------
+-- ★ 2026-10-26 补：催费设置表（KV 配置，如「提前几天提醒」）
+--   原来只由 scripts/_migrate-finance-setting-20261026.mjs 建，
+--   建库 SQL 里没有 → 新环境只导 init SQL 会缺这张表（催费设置页报「数据表不存在」）。
+--   按仓库约定「加表两手都写」补进来；IF NOT EXISTS 保证重复导入安全。
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `t_finance_setting` (
+  `setting_key`   varchar(64)  NOT NULL COMMENT '配置键',
+  `setting_value` varchar(255) NOT NULL DEFAULT '' COMMENT '配置值',
+  `update_time`   datetime     DEFAULT NULL COMMENT '更新时间',
+  `update_by`     varchar(64)  DEFAULT NULL COMMENT '更新人',
+  PRIMARY KEY (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='财务配置（催费提醒等）';

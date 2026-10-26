@@ -41,6 +41,12 @@ const TABLES = {
      *   1 = 父亲，2 = 母亲；家长联系人姓名仍放 parent_contact。
      */
     ['parent_relation', "tinyint(4) DEFAULT NULL COMMENT '家长关系 1父亲 2母亲'"],
+    /**
+     * ★ 2026-10-26 补：`education`（学历）—— 代码 student.route/service 已在读写，
+     *   但本机库缺这一列 → 新建/编辑学生会报 Unknown column。
+     *   建库 SQL（sql/init/sms_consult.sql:437）里本来就有，属于「老库没跟上」。
+     */
+    ['education', "varchar(20) DEFAULT NULL COMMENT '学历（★ 2026-10-22 新建学生时可录入）'"],
   ],
   t_consult_fee_order: [
     /**
@@ -48,6 +54,13 @@ const TABLES = {
      *   有优惠（实缴 < 应缴）时必填，取值见 shared-types 的 DISCOUNT_REASONS。
      */
     ['discount_reason', "varchar(50) DEFAULT NULL COMMENT '优惠名目（奖学金/活动优惠/困难减免…），无优惠为 NULL'"],
+    /**
+     * ★ 2026-10-26 补：财务核对回写咨询收款单的两个字段。
+     *   consult/services/fee-order.service.ts 已在读（详情展示「核对人/核对时间」、
+     *   核销前的 orWhereNull('finance_verified_by') 判断），库缺列会直接报 Unknown column。
+     */
+    ['finance_verified_by', "varchar(50) DEFAULT NULL COMMENT '财务核对人姓名（★ 2026-10-22 从财务侧同步）'"],
+    ['finance_verified_time', "datetime DEFAULT NULL COMMENT '财务核对时间（★ 2026-10-22 从财务侧同步）'"],
   ],
 };
 
