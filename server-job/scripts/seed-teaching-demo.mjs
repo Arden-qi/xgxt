@@ -116,7 +116,10 @@ async function classesOf(stage) {
   return d.list || [];
 }
 async function studentsOfClass(stage, classId) {
-  const d = await api('GET', `/api/teaching/student/list?stage=${stage}&classId=${classId}&page=1&size=200`);
+  // ★ 2026-10-23：学生档案接口只收 jh / class / emp（10-21 批注删掉了 job / edu 学段），
+  //   实训班的学生档案挂在「就业部(emp)」学段下 → 查学生时把 job 折算成 emp。
+  const studentStage = stage === 'job' ? 'emp' : stage;
+  const d = await api('GET', `/api/teaching/student/list?stage=${studentStage}&classId=${classId}&page=1&size=200`);
   return d.list || [];
 }
 
@@ -307,7 +310,8 @@ async function seedLeave(stage, students) {
   if (had.length) return 0;
   const plans = [
     { bizType: 1, leaveReason: '家庭原因，申请休学一学期', final: false, off: 6 },
-    { bizType: 2, leaveReason: '已转学，申请办理退学', final: true, off: 20 },
+    // ★ 2026-10-23：异动日期只能选「今天前后 10 天」内（后端 leave 校验），20 天会被拦
+    { bizType: 2, leaveReason: '已转学，申请办理退学', final: true, off: 8 },
   ];
   let n = 0;
   for (let i = 0; i < plans.length && i < students.length; i++) {
