@@ -72,6 +72,7 @@ const ORDER = [
 const POST_STEPS = [
   ['scripts/fix-consult-columns.mjs', '咨询表补列', 'sms_consult'],
   ['scripts/_migrate-finance-refund-20261022.mjs', '财务退费结构', 'sms_finance', ['--apply']],
+  ['scripts/_migrate-finance-bill-expire-20261026.mjs', '账单到期日/应缴金额', 'sms_finance', ['--apply']],
 ];
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
