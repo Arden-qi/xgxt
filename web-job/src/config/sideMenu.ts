@@ -192,12 +192,29 @@ export function useSideMenu() {
     });
   });
 
-  /** 统一菜单：★ 工作台置顶 + 门户模块 + 教学管理 */
-  const visibleMenu = computed<ViewGroup[]>(() => [
-    WORKBENCH_GROUP,
-    ...portalGroups.value,
-    ...jobGroups.value,
-  ]);
+  /**
+   * ★ 2026-10-26 用户指定的一级菜单顺序：
+   *     工作台 → 市场咨询 → 教学管理 → 财务管理 → 权限管理
+   *
+   *   原来是把「门户模块（市场咨询/财务管理/权限管理）」整段排在
+   *   「教学管理」前面，于是侧栏是 工作台 → 市场咨询 → 财务管理 → 权限管理 → 教学管理。
+   *   现在按下面的名单排序；名单外的分组保持原有相对顺序、排到最后（新增板块不会被藏掉）。
+   */
+  const MENU_ORDER = ['工作台', '市场咨询', '教学管理', '财务管理', '权限管理'];
+
+  /** 统一菜单：★ 工作台置顶 + 门户模块 + 教学管理（按 MENU_ORDER 排） */
+  const visibleMenu = computed<ViewGroup[]>(() => {
+    const all = [WORKBENCH_GROUP, ...portalGroups.value, ...jobGroups.value];
+    const rank = (title: string) => {
+      const i = MENU_ORDER.indexOf(title);
+      return i < 0 ? MENU_ORDER.length : i;
+    };
+    return all
+      .map((g, i) => ({ g, i }))
+      /* 先按名单序号；同序号（名单外）再按原始顺序，保证稳定 */
+      .sort((a, b) => rank(a.g.title) - rank(b.g.title) || a.i - b.i)
+      .map((x) => x.g);
+  });
 
   /** 默认展开所有分组 */
   const defaultOpeneds = computed(() =>
