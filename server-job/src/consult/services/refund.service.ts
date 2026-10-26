@@ -242,7 +242,20 @@ export async function applyRefund(
     ConsultState.TRIAL,
     ConsultState.TRIAL_FEE_PENDING,
   ];
-  if (!allowed.includes(stu.consult_state)) {
+  /**
+   * ★ 2026-10-26 自愈：状态卡在「退费中」，但根本没有在途退费单
+   *
+   * 现场（王麻子 / TK20261026-002）：财务驳回时只把退费单改成「已驳回」，
+   * **忘了回滚学生状态** → 人一直停在「退费·待财务打款(9)」，
+   * 于是「发起退费」下拉选不到他、学生管理里也没有任何后续操作，流程断死。
+   *
+   * 现在：状态是 8/9 但查不到在途退费单（下面那段在途校验会兜住真有单的情况），
+   * 说明是历史脏数据 —— 放行，并在跟进历史里留一条自愈记录。
+   * 已退费(10) / 流失(12) 仍然一律拒绝。
+   */
+  const staleRefundState =
+    stu.consult_state === ConsultState.REFUND_MGR || stu.consult_state === ConsultState.REFUND_FINANCE;
+  if (!allowed.includes(stu.consult_state) && !staleRefundState) {
     throw new BizError(
       BizCode.INVALID_STATUS,
       `当前状态「${CONSULT_STATE_NAME[stu.consult_state] || stu.consult_state}」不允许发起退费（仅「咨询中 / 待分班 / 试学中」可发起）。已退费 / 退费中 / 流失的学生不能重复发起，如需直接退学请联系教务模块处理。`,
@@ -299,6 +312,26 @@ export async function applyRefund(
     );
   }
 
+  /**
+   * ★ 2026-10-26 「驳回后能退回到哪」必须在发起时就记下来
+   *
+   * 老逻辑是驳回一律退回「试学中(5)」—— 待分班(4) 的人被驳回后凭空分了班，
+   * 后续「分配班级」按钮也没了。现在把发起时的状态存进 origin_state，
+   * 驳回时按它回滚；历史单没这个字段，就按「有没有分班」推断。
+   */
+  const originState: number = staleRefundState ? derivePreRefundState(stu) : stu.consult_state;
+  if (staleRefundState) {
+    await addHistory(
+      consultStudentId,
+      '系统',
+      `检测到学生状态卡在「${CONSULT_STATE_NAME[stu.consult_state] || stu.consult_state}」，` +
+        `但没有任何在途退费单（历史单据已被驳回、状态未回滚），` +
+        `按「${CONSULT_STATE_NAME[originState] || originState}」重新发起退费`,
+      '系统',
+      'REFUND_STATE_SELF_HEAL',
+    );
+  }
+
   // ---- 试算 ----
   const calc = await calcRefund(
     consultStudentId,
@@ -348,6 +381,8 @@ export async function applyRefund(
     refund_amount: calc.refundAmount,
 
     status,
+    /** ★ 2026-10-26 发起时的状态，驳回时用来回滚 */
+    origin_state: originState,
     remark: payload.remark || null,
 
     create_time: new Date(),
@@ -373,6 +408,66 @@ export async function applyRefund(
   }
 
   return { refundId, refundNo };
+}
+
+/* ============================================================
+ * ⭐ 驳回 → 学生状态回滚（经理驳回 / 财务驳回共用）
+ * ============================================================ */
+
+/**
+ * 推断「发起退费之前」学生应该处于什么状态（历史单没有 origin_state 时用）
+ *
+ * 已分班（class_id 有值）→ 试学中(5)；还没分班 → 待分班(4)。
+ * 退费只允许从「咨询中 / 待分班 / 试学中」发起，所以这两个落点够了。
+ */
+function derivePreRefundState(stu: any): ConsultState {
+  return String(stu?.class_id || '').trim() ? ConsultState.TRIAL : ConsultState.TRIAL_WAIT_CLASS;
+}
+
+/**
+ * 驳回退费单后，把学生状态从「退费中」退回到发起之前
+ *
+ * ⚠️ 2026-10-26 为什么必须有这个函数：
+ *   财务驳回那条链路（syncRefundFromFinance，rs=7）**只改了退费单状态，
+ *   没回滚学生状态** → 学生永远停在「退费·待财务打款(9)」：
+ *     · 「发起退费」下拉按状态排除 8/9 → 搜不到这个人，没法二次发起；
+ *     · 学生管理里状态是退费的，actionsOf 一个动作都不返回 → 没有后续操作；
+ *     · 退费列表里那张单已经是「已驳回」，但没有任何入口能重新提交。
+ *   结果就是一次财务驳回把学生彻底卡死，流程闭不上环。
+ *
+ * @param source '经理' | '财务' —— 只影响历史文案，处理逻辑完全一致
+ */
+async function restoreStudentAfterReject(
+  row: any,
+  opts: { reason: string; byName: string; byTitle?: string; source: '经理' | '财务' },
+): Promise<void> {
+  const stu = await findStudent(row.consult_student_id);
+  if (!stu) return;
+
+  const cur = Number(stu.consult_state);
+  /**
+   * 只回滚「还停在退费中」的学生。
+   * 万一驳回期间有人手工把状态改成别的（例如已流失），以人工为准，不覆盖。
+   */
+  if (cur !== ConsultState.REFUND_MGR && cur !== ConsultState.REFUND_FINANCE) return;
+
+  const restorable: number[] = [
+    ConsultState.TRIAL_FEE_PENDING,
+    ConsultState.TRIAL_WAIT_CLASS,
+    ConsultState.TRIAL,
+  ];
+  const origin = Number(row.origin_state);
+  const target = restorable.includes(origin) ? origin : derivePreRefundState(stu);
+
+  await changeState(row.consult_student_id, target, {
+    byName: opts.byName,
+    byTitle: opts.byTitle,
+    action: opts.source === '财务' ? 'REFUND_FINANCE_REJECT' : 'REFUND_REJECT',
+    historyText:
+      `${opts.source}驳回退费申请：${opts.reason}。` +
+      `学生状态由「${CONSULT_STATE_NAME[cur] || cur}」退回「${CONSULT_STATE_NAME[target] || target}」，` +
+      `可修改后重新发起退费`,
+  });
 }
 
 /* ============================================================
@@ -436,12 +531,17 @@ export async function rejectRefund(
     update_by: operator.name,
   });
 
-  // ⚠️ 按业务规则：经理驳回的，学生退回试学中，可修改后重新提交
-  await changeState(row.consult_student_id, ConsultState.TRIAL, {
+  /**
+   * ★ 2026-10-26 退回「发起之前的状态」（origin_state），不再一律退回试学中
+   *
+   * 待分班(4) 的学生被驳回后如果直接变试学中，等于凭空分了班 ——
+   * 「分配班级」按钮也跟着消失（canEnroll 只认 4）。走统一回滚逻辑。
+   */
+  await restoreStudentAfterReject(row, {
+    reason: rejectReason,
     byName: operator.name,
     byTitle: operator.title,
-    action: 'REFUND_REJECT',
-    historyText: `驳回退费申请：${rejectReason}。学生退回「试学中」，可修改后重新提交`,
+    source: '经理',
   });
 }
 
@@ -599,16 +699,24 @@ export async function syncRefundFromFinance(refundIds?: string[]): Promise<{ upd
         await db(REFUND_TABLE).where({ id: row.id }).update({
           status: CRS.REJECTED,
           reject_reason: detail.rejectReason || '财务驳回',
+          // ★ 2026-10-26 以前这里留 null，列表上看不出是谁驳回的
+          reject_by_name: detail.financeRejectBy || '财务模块',
           update_time: new Date(),
           update_by: 'system-sync',
         });
-        await addHistory(
-          row.consult_student_id,
-          '财务模块',
-          `退费单被财务驳回：${detail.rejectReason || '未说明原因'}`,
-          '系统',
-          'REFUND_FINANCE_REJECT',
-        );
+        /**
+         * ★ 2026-10-26 关键修复：财务驳回必须把学生状态一起回滚
+         *
+         * 原来这里只改了退费单状态 + 写一条历史，学生一直停在
+         * 「退费·待财务打款(9)」→ 退费下拉选不到、学生管理也没按钮，
+         * 财务驳回一次就把人卡死（现场：王麻子 / TK20261026-002）。
+         */
+        await restoreStudentAfterReject(row, {
+          reason: detail.rejectReason || '财务驳回',
+          byName: '财务模块',
+          byTitle: '系统',
+          source: '财务',
+        });
         updated++;
       }
     } catch (err: any) {

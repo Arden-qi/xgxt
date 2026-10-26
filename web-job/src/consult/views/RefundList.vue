@@ -120,19 +120,19 @@ const studentSearching = ref(false);
 /**
  * ★ 2026-10-26 用户口径：「退费的、流失的、申请中的不可以再发起退费了」
  *              「缴费中的要退费也不能选择」
+ *              「财务驳回之后要能二次发起退费」（第二次修正）
  *
- * 这些状态下再发起退费都是错账，直接从候选里剔掉，别等到提交才报错：
- *   · 退费·待经理审批 8 / 退费·待财务打款 9 → 已在途（申请中）
- *   · 已退费 10                              → 已经退完了
- *   · 流失 12                                → 没交过费 / 已按流失结案，不走退费
- *   · 缴费中·待确认 6                        → 钱还没到账（见下方 excludePendingFee）
+ * 这里只按「**状态决定**的人」排除：
+ *   · 已退费 10 → 已经退完了
+ *   · 流失 12   → 没交过费 / 已按流失结案，不走退费
+ *   · 缴费中·待确认 6 → 钱还没到账（另有 excludePendingFee 兜住其他状态的人）
  *
- * 后端 `/student/list` 用 `excludeStates` 排除（不然搜出来的 20 条可能全被剔空），
- * 前端再兜一层过滤，防止缓存里的旧列表把禁用学生带进来。
+ * ⚠️ 退费中(8/9) 故意**不在这里**排除：
+ *   财务驳回后学生状态可能没回滚（历史 bug），按状态排会把「单子已经驳回、
+ *   等着人改完重新提交」的人一起挡住 —— 这就是「驳回后再也发起不了」的根因。
+ *   现在改用 `excludePendingRefund=1`：只有**真有在途退费单**的才排除。
  */
 const REFUND_BLOCKED_STATES: number[] = [
-  ConsultState.REFUND_MGR,
-  ConsultState.REFUND_FINANCE,
   ConsultState.REFUNDED,
   ConsultState.LOST,
   ConsultState.FULL_FEE_PENDING,
@@ -146,9 +146,11 @@ async function searchStudents(keyword: string) {
      * ★ 2026-10-22 用户口径：「发起退费的学生姓名要有全部的」
      *
      * 不传状态 → 咨询中 / 待分班 / 试学中 / 正式在读 都能搜到；
-     * ★ 2026-10-26 起改成「排除」模式：只剔除退费中 / 已退费 / 流失 / 缴费中。
+     * ★ 2026-10-26 起改成「排除」模式：只剔除已退费 / 流失 / 缴费中。
      * ★ excludePendingFee=1：有在途收费单（待上传凭证 / 待财务确认）的学生也剔掉，
      *   钱还没确认到账，谈不上退费（用户口径：「缴费中的要退费也不能选择」）。
+     * ★ excludePendingRefund=1：只排除「真在途」的退费单（待经理审批 / 待财务打款）。
+     *   已驳回的人必须能搜到 —— 否则财务驳回一次就再也发起不了。
      */
     const res = await fetchStudentList({
       page: 1,
@@ -156,6 +158,7 @@ async function searchStudents(keyword: string) {
       keyword: keyword || undefined,
       excludeStates: REFUND_BLOCKED_STATES.join(','),
       excludePendingFee: 1,
+      excludePendingRefund: 1,
     });
     studentOptions.value = res.list
       .filter((s: ConsultStudentListItem) => !REFUND_BLOCKED_STATES.includes(s.consultState))
@@ -523,12 +526,25 @@ onMounted(load);
 
         <el-table-column prop="applyAt" label="发起时间" min-width="140" />
 
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
             <template v-if="canApprove(row)">
               <el-button link type="success" @click="doApprove(row)">批准</el-button>
               <el-button link type="danger" @click="doReject(row)">驳回</el-button>
             </template>
+            <!--
+              ★ 2026-10-26 用户口径：「财务驳回之后没办法二次发起退费」
+              已驳回的单直接给一个「重新发起」：带着这个学生打开申请弹窗，
+              改完金额/天数就能重新提交，不用再去下拉里大海捞针。
+            -->
+            <el-button
+              v-else-if="row.status === CRS.REJECTED"
+              link
+              type="primary"
+              @click="openApply(row)"
+            >
+              重新发起
+            </el-button>
             <span v-else class="stu-sub">—</span>
           </template>
         </el-table-column>
@@ -559,7 +575,9 @@ onMounted(load);
       <div class="rule-title">审批与打款</div>
       <p>
         咨询老师发起 → <b>咨询经理审批</b> → 上报财务 → <b>财务打款</b> → 状态流转为「已退费」。
-        <b>咨询经理自己发起则自审自批</b>，直接进入「待财务打款」。驳回的退回「试学中」，可修改后重新提交。
+        <b>咨询经理自己发起则自审自批</b>，直接进入「待财务打款」。
+        驳回（经理驳回或财务驳回）的，学生状态退回<b>发起之前的状态</b>（待分班 / 试学中），
+        可在本页该条记录上点<b>「重新发起」</b>，改完再提交。
       </p>
     </el-card>
 
@@ -575,8 +593,8 @@ onMounted(load);
             reserve-keyword
             :remote-method="searchStudents"
             :loading="studentSearching"
-            placeholder="输入学生姓名搜索（退费中 / 已退费 / 流失 / 缴费中的学生不可选）"
-            no-data-text="没有可发起退费的学生（退费中 / 已退费 / 流失 / 缴费中已排除）"
+            placeholder="输入学生姓名搜索（已退费 / 流失 / 缴费中 / 已有在途退费单的不可选）"
+            no-data-text="没有可发起退费的学生（已退费 / 流失 / 缴费中 / 已有在途退费单已排除）"
             style="width: 100%"
             @change="onStudentChange"
           >

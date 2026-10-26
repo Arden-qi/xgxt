@@ -282,10 +282,18 @@ if (!ONLY_CODE) {
   for (const f of files) {
     const db = path.basename(f, '.sql');
     const sql = fs.readFileSync(path.join(INIT_DIR, f), 'utf8');
-    const created = [...new Set([...sql.matchAll(/CREATE TABLE `([^`]+)`/g)].map((m) => m[1]))];
-    if (!created.length) {
-      // legacy-teaching.sql / uni-tables.sql 这类不按库对齐的文件，跳过对比
-      lines.push(`  · ${db}：未按库建表（${created.length} 张），跳过`);
+    /* ★ 2026-10-26：允许 `CREATE TABLE IF NOT EXISTS \`x\`` —— 原来正则要求引号紧跟
+       CREATE TABLE，写成 IF NOT EXISTS 的表（如 sms_finance 的 t_finance_setting）会被漏掉，
+       反而报成「库里多」。 */
+    const created = [
+      ...new Set(
+        [...sql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?`([^`]+)`/gi)].map((m) => m[1]),
+      ),
+    ];
+    /* ★ 2026-10-26：跨库脚本（legacy-teaching / uni-tables）不按「文件名=库名」对齐，
+       要跳过 —— 否则放宽正则后它们会被当成 sms_ 库去比，误报「库里 0 张」。 */
+    if (!/^sms_/.test(db) || !created.length) {
+      lines.push(`  · ${db}：跨库/未按库建表（${created.length} 张），跳过`);
       continue;
     }
     const actual = new Set();
