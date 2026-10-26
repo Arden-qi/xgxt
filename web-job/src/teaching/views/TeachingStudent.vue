@@ -2025,8 +2025,19 @@ const quitSaving = ref(false);
 const quitRow = ref<StudentRow | null>(null);
 const quitForm = reactive({ applyReason: '', effectDate: '' as string });
 
-function canTrialAct(row: StudentRow): boolean {
-  return !isReadOnlyUser.value && row.stage === 'class' && row.studentStatus === 3;
+/**
+ * 是否显示【退学】按钮。
+ *
+ * ★ 2026-10-26 用户口径：**试学中的学生不给退学按钮** ——
+ *   试学阶段还没正式入读，退学应走咨询侧（退费 → 已退费 / 流失），
+ *   在学籍列表里直接点「退学」反而会造成「咨询还在跟进、学籍先退学」的不一致。
+ *
+ *   原来这里返回 `stage==='class' && studentStatus===3`（正好就是试学中），
+ *   所以试学中的行都有这个按钮。现在一律不显示；以后若要给「正式在读」放开，
+ *   把条件改成 `[StudentStatus.STUDYING, ...].includes(...)` 即可（退学申请弹窗仍在）。
+ */
+function canTrialAct(_row: StudentRow): boolean {
+  return false;
 }
 
 function money(cent?: number | null): string {
