@@ -16,6 +16,8 @@ import {
   ConsultState,
   CONSULT_STATE_NAME,
   LEAD_CHANNEL_NAME,
+  // ★ 2026-10-26 家长关系（父亲 / 母亲）
+  PARENT_RELATION_NAME,
   BASE_FIELDS,
   EXTRA_FIELDS,
 } from 'shared-types/consult';
@@ -149,6 +151,11 @@ export function toDetail(row: any): ConsultStudent {
 
     intendCourse: row.intend_course || undefined,
     parentContact: row.parent_contact || undefined,
+    /** ★ 2026-10-26 家长联系人关系：1父亲 2母亲（新建学生时选择） */
+    parentRelation: row.parent_relation ?? undefined,
+    parentRelationName: row.parent_relation
+      ? nameOf(PARENT_RELATION_NAME, row.parent_relation)
+      : undefined,
     parentPhone: row.parent_phone || undefined,
 
     idCard: row.id_card || undefined,

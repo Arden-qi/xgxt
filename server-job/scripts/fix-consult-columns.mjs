@@ -24,12 +24,32 @@ require('dotenv').config({ path: path.join(ROOT, '.env') });
 const mysql = require(path.join(ROOT, 'node_modules', 'mysql2', 'promise.js'));
 
 const DB = process.env.DB_NAME_CONSULT || 'sms_consult';
-const TABLE = 't_consult_student';
 
-const COLUMNS = [
-  ['referrer_name', "varchar(50) DEFAULT NULL COMMENT '转介绍招生老师姓名（来源=转介绍时填）'"],
-  ['referrer_phone', "varchar(20) DEFAULT NULL COMMENT '转介绍招生老师电话'"],
-];
+/**
+ * 需要补列的表 + 列定义（幂等：列已存在就跳过）
+ *
+ * ★ 2026-10-26 从「只补 t_consult_student」扩成多表，
+ *    发起收费那边加了优惠名目（t_consult_fee_order.discount_reason），
+ *    以后再有别的表要补列，往这里加一段就行，别再开新脚本。
+ */
+const TABLES = {
+  t_consult_student: [
+    ['referrer_name', "varchar(50) DEFAULT NULL COMMENT '招生老师姓名（来源=市场来源时填）'"],
+    ['referrer_phone', "varchar(20) DEFAULT NULL COMMENT '招生老师电话（来源=市场来源时随人带出）'"],
+    /**
+     * ★ 2026-10-26 用户口径：「家长联系人选一下性别，父亲还是母亲」
+     *   1 = 父亲，2 = 母亲；家长联系人姓名仍放 parent_contact。
+     */
+    ['parent_relation', "tinyint(4) DEFAULT NULL COMMENT '家长关系 1父亲 2母亲'"],
+  ],
+  t_consult_fee_order: [
+    /**
+     * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目，优惠只能优惠学费」
+     *   有优惠（实缴 < 应缴）时必填，取值见 shared-types 的 DISCOUNT_REASONS。
+     */
+    ['discount_reason', "varchar(50) DEFAULT NULL COMMENT '优惠名目（奖学金/活动优惠/困难减免…），无优惠为 NULL'"],
+  ],
+};
 
 /** 控制台颜色：Windows 传统 cmd 不认 ANSI，会显示成 ←[32m 乱码 → 那时走纯文本 */
 const USE_COLOR =
@@ -53,28 +73,32 @@ const C = {
     charset: 'utf8mb4',
   });
   try {
-    const [[t]] = await conn.query(
-      'SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = ? AND table_name = ?',
-      [DB, TABLE],
-    );
-    if (!Number(t.n)) {
-      console.log(C.dim(`  — ${DB}.${TABLE} 不存在，跳过（咨询库没导入时属正常）`));
-      return;
-    }
+    for (const [TABLE, COLUMNS] of Object.entries(TABLES)) {
+      const [[t]] = await conn.query(
+        'SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = ? AND table_name = ?',
+        [DB, TABLE],
+      );
+      if (!Number(t.n)) {
+        console.log(C.dim(`  — ${DB}.${TABLE} 不存在，跳过（咨询库没导入时属正常）`));
+        continue;
+      }
 
-    const [cols] = await conn.query(
-      'SELECT column_name AS c FROM information_schema.columns WHERE table_schema = ? AND table_name = ?',
-      [DB, TABLE],
-    );
-    const have = new Set(cols.map((r) => r.c));
+      const [cols] = await conn.query(
+        'SELECT column_name AS c FROM information_schema.columns WHERE table_schema = ? AND table_name = ?',
+        [DB, TABLE],
+      );
+      const have = new Set(cols.map((r) => r.c));
 
-    let added = 0;
-    for (const [name, ddl] of COLUMNS) {
-      if (have.has(name)) continue;
-      await conn.query(`ALTER TABLE \`${DB}\`.\`${TABLE}\` ADD COLUMN \`${name}\` ${ddl}`);
-      added++;
+      let added = 0;
+      for (const [name, ddl] of COLUMNS) {
+        if (have.has(name)) continue;
+        await conn.query(`ALTER TABLE \`${DB}\`.\`${TABLE}\` ADD COLUMN \`${name}\` ${ddl}`);
+        added++;
+      }
+      console.log(
+        added ? C.ok(`  ✓ ${DB}.${TABLE} 补了 ${added} 列`) : C.dim(`  ✓ ${DB}.${TABLE} 列已齐全`),
+      );
     }
-    console.log(added ? C.ok(`  ✓ ${DB}.${TABLE} 补了 ${added} 列`) : C.dim(`  ✓ ${DB}.${TABLE} 列已齐全`));
   } finally {
     await conn.end().catch(() => {});
   }

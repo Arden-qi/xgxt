@@ -121,6 +121,14 @@ export function centToYuan(c: number): string {
 }
 
 /**
+ * ★ 2026-10-26 住宿费基准月数
+ *
+ * 财务「住宿费」标准价按【6 个月】录（如 2700 = 450 × 6）。
+ * 学生可自选缴纳月数（1~12），月单价 = 标准价 ÷ 6。
+ */
+const ACCOMMODATION_BASE_MONTHS = 6;
+
+/**
  * ★ 2026-10-16 解析合并缴费单的明细 JSON（脏数据返回空数组，不影响主流程）
  *
  * 里面带 standardAmount / discount（应缴 / 优惠），前端据此展示「应缴 / 实缴 / 优惠」。
@@ -306,6 +314,8 @@ export function toOrderView(row: any): ConsultFeeOrder {
     itemDetail: detail.length ? detail : undefined,
     dueAmount: detail.length ? dueTotal : undefined,
     discountAmount: detail.length ? dueTotal - Number(row.amount || 0) : undefined,
+    /** ★ 2026-10-26 优惠名目（有优惠的单据才有） */
+    discountReason: row.discount_reason || undefined,
 
     /* ---------- ★ 2026-10-16 分期付款 ---------- */
     planId: row.plan_id || undefined,
@@ -597,6 +607,20 @@ export async function createCombinedFees(
    */
   voucherUrl?: string,
   voucherNo?: string,
+  /**
+   * ★ 2026-10-26 住宿费按月缴纳（1~12，默认 6）
+   *
+   * 用户口径：「住宿费一个月 450，默认缴纳 6 个月，可以自己选择缴纳几个月」。
+   * 财务「住宿费」标准价是【6 个月】的价（2700 = 450 × 6），
+   * 所以本函数里住宿费的应缴 = 标准价 ÷ 6 × 月数，实缴同额（月数变化不算优惠）。
+   */
+  accommodationMonths?: number,
+  /**
+   * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目」
+   *
+   * 有优惠（实缴 < 应缴）时必须给名目 —— 财务核对时要知道这笔少收的钱按什么批的。
+   */
+  discountReason?: string,
 ): Promise<ConsultFeeCreateResult> {
   const stu = await findStudent(consultStudentId);
   if (!stu) {
@@ -648,22 +672,56 @@ export async function createCombinedFees(
      * ★ 2026-10-16 应缴 / 实缴 / 优惠：
      *    standardAmount = 财务标准的应缴；amount = 本次实缴（老师可改，改了就是优惠/补收）。
      *    discount = 应缴 - 实缴（>0 优惠，<0 补收）。
+     *
+     * ★ 2026-10-26 住宿费按月数：标准价是 6 个月的价，
+     *    应缴 = 月单价 × 月数，实缴同额（月数少不算优惠）。
      */
-    const customAmount = amountByType?.[feeType];
-    // ★ 2026-10-16 用户口径：实缴不能大于应缴（收费弹窗已限制，后端再兜一道）
-    if (customAmount != null && customAmount > std.amount) {
-      throw new BizError(
-        BizCode.PARAM_ERROR,
-        `${feeTypeName} 实缴 ¥${centToYuan(customAmount)} 不能大于应缴 ¥${centToYuan(std.amount)}`,
-      );
+    let dueAmount = std.amount;
+    let paid: number;
+    if (feeType === FeeType.ACCOMMODATION) {
+      const months = Math.min(12, Math.max(1, Math.round(accommodationMonths ?? ACCOMMODATION_BASE_MONTHS)));
+      const unit = Math.round(std.amount / ACCOMMODATION_BASE_MONTHS);
+      dueAmount = unit * months;
+      paid = dueAmount;
+    } else if (feeType === FeeType.TRIAL_FEE) {
+      /**
+       * ★ 2026-10-26 用户口径：「试学费默认 5000，可以自己设置」
+       *
+       * 试学费是老师和家长谈定的金额，不是财务标准价的折扣，所以：
+       *   · 不限制上限（可以高于 5000）；
+       *   · 应缴 = 实缴 = 老师填的数，**不产生优惠**（否则会被要求填优惠名目）。
+       * 没传金额时仍按财务标准（默认 5000）收。
+       */
+      const customAmount = amountByType?.[feeType];
+      paid = customAmount != null ? customAmount : std.amount;
+      dueAmount = paid;
+    } else {
+      const customAmount = amountByType?.[feeType];
+      // ★ 2026-10-16 用户口径：实缴不能大于应缴（收费弹窗已限制，后端再兜一道）
+      if (customAmount != null && customAmount > std.amount) {
+        throw new BizError(
+          BizCode.PARAM_ERROR,
+          `${feeTypeName} 实缴 ¥${centToYuan(customAmount)} 不能大于应缴 ¥${centToYuan(std.amount)}`,
+        );
+      }
+      paid = customAmount != null ? customAmount : std.amount;
+      /**
+       * ★ 2026-10-26 用户口径：「优惠只能优惠学费，其他金额不可以优惠」
+       *    只有学费允许低于标准价，其余各项一律按标准全额收。
+       */
+      if (paid < std.amount && feeType !== FeeType.TUITION) {
+        throw new BizError(
+          BizCode.PARAM_ERROR,
+          `优惠只能用于学费，「${feeTypeName}」不能低于应缴 ¥${centToYuan(std.amount)}`,
+        );
+      }
     }
-    const paid = customAmount != null ? customAmount : std.amount;
     items.push({
       feeType,
       feeTypeName,
       amount: paid,
-      standardAmount: std.amount,
-      discount: std.amount - paid,
+      standardAmount: dueAmount,
+      discount: dueAmount - paid,
     });
   }
 
@@ -676,10 +734,28 @@ export async function createCombinedFees(
   const dueTotal = items.reduce((s, i) => s + (i.standardAmount ?? i.amount), 0);
   const discountTotal = dueTotal - total;
 
+  /**
+   * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目」
+   *
+   * 只要这一单少收了钱（discountTotal > 0），就必须说清是按什么名目少的。
+   * 前端已经把「优惠名目」做成必选，这里再兜一道 —— 直接调接口绕不过去。
+   */
+  const reason = (discountReason || '').trim();
+  if (discountTotal > 0 && !reason) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `本次优惠 ¥${centToYuan(discountTotal)} 需要选择优惠名目（奖学金 / 活动优惠 / 困难减免…），否则财务无法核对`,
+    );
+  }
+  /** 优惠名目的落地值：没优惠就不留痕（避免「无优惠」的单子上挂着名目） */
+  const discountReasonText = discountTotal > 0 ? reason : null;
+
   const detailText = items.map((i) => `${i.feeTypeName}${centToYuan(i.amount)}`).join('/');
   const discountText =
     discountTotal > 0
-      ? `（应缴 ¥${centToYuan(dueTotal)}，优惠 ¥${centToYuan(discountTotal)}）`
+      ? `（应缴 ¥${centToYuan(dueTotal)}，优惠 ¥${centToYuan(discountTotal)}${
+          discountReasonText ? `·名目：${discountReasonText}` : ''
+        }）`
       : discountTotal < 0
         ? `（应缴 ¥${centToYuan(dueTotal)}，补收 ¥${centToYuan(-discountTotal)}）`
         : '';
@@ -736,6 +812,8 @@ export async function createCombinedFees(
     pay_method: payMethod || null,
     batch_no: Date.now(),
     item_detail: JSON.stringify(items),
+    // ★ 2026-10-26 优惠名目（有优惠才有值）
+    discount_reason: discountReasonText,
     create_time: new Date(),
     create_by: operator.name,
     create_by_name: operator.name,
@@ -789,6 +867,10 @@ export async function createFees(
   /** ★ 2026-10-19 用户口径：只要缴费就要有凭证 —— 单类型也必须带 */
   voucherUrl?: string,
   voucherNo?: string,
+  /** ★ 2026-10-26 住宿费月数（1~12，默认 6） */
+  accommodationMonths?: number,
+  /** ★ 2026-10-26 优惠名目（有优惠时必填） */
+  discountReason?: string,
 ): Promise<ConsultFeeCreateResult> {
   const stu = await findStudent(consultStudentId);
   if (!stu) {
@@ -816,6 +898,8 @@ export async function createFees(
       amountByType,
       voucherUrl,
       voucherNo,
+      accommodationMonths,
+      discountReason,
     );
   }
 
@@ -847,21 +931,70 @@ export async function createFees(
       // ⚠️ 默认不传 amount 给财务，让财务自己按标准取值，避免两边算不一致；
       //    ★ 2026-10-15 例外：本次老师自定义了金额（如试学费实收 3000）→ 明确传给财务
       const std = await financeClient.getStandard(feeType, deptCode);
-      const customAmount = amountByType?.[feeType];
-      // ★ 2026-10-16 用户口径：实缴不能大于应缴
-      if (customAmount != null && customAmount > std.amount) {
-        throw new BizError(
-          BizCode.PARAM_ERROR,
-          `${feeTypeName} 实缴 ¥${centToYuan(customAmount)} 不能大于应缴 ¥${centToYuan(std.amount)}`,
+      /**
+       * ★ 2026-10-26 住宿费按月数：标准价 = 6 个月，
+       *    应缴 = 月单价 × 月数，实缴同额（必须显式告诉财务金额）。
+       */
+      let amount: number;
+      let customAmount: number | undefined;
+      let standardAmount = std.amount;
+      if (feeType === FeeType.ACCOMMODATION) {
+        const months = Math.min(
+          12,
+          Math.max(1, Math.round(accommodationMonths ?? ACCOMMODATION_BASE_MONTHS)),
         );
+        const unit = Math.round(std.amount / ACCOMMODATION_BASE_MONTHS);
+        amount = unit * months;
+        standardAmount = amount;
+        customAmount = amount;
+      } else if (feeType === FeeType.TRIAL_FEE) {
+        /**
+         * ★ 2026-10-26 用户口径：「试学费默认 5000，可以自己设置」
+         *
+         * 谈定多少就收多少：不做上限校验，应缴 = 实缴（不算优惠、不要名目）。
+         * 金额必须显式传给财务，否则财务会按自己的标准价（5000）入账。
+         */
+        customAmount = amountByType?.[feeType];
+        amount = customAmount != null ? customAmount : std.amount;
+        standardAmount = amount;
+        customAmount = amount;
+      } else {
+        customAmount = amountByType?.[feeType];
+        // ★ 2026-10-16 用户口径：实缴不能大于应缴
+        if (customAmount != null && customAmount > std.amount) {
+          throw new BizError(
+            BizCode.PARAM_ERROR,
+            `${feeTypeName} 实缴 ¥${centToYuan(customAmount)} 不能大于应缴 ¥${centToYuan(std.amount)}`,
+          );
+        }
+        // ★ 2026-10-26 用户口径：优惠只能优惠学费
+        if (customAmount != null && customAmount < std.amount && feeType !== FeeType.TUITION) {
+          throw new BizError(
+            BizCode.PARAM_ERROR,
+            `优惠只能用于学费，「${feeTypeName}」不能低于应缴 ¥${centToYuan(std.amount)}`,
+          );
+        }
+        amount = customAmount != null ? customAmount : std.amount;
       }
-      const amount = customAmount != null ? customAmount : std.amount;
 
       // ---- 2. 校验来源（规则3-① 的前置检查，财务侧还会再校验一次）----
       if (std.sourceModule !== SourceModule.CONSULT) {
         throw new BizError(
           BizCode.SOURCE_MODULE_MISMATCH,
           `${feeTypeName} 应由「${std.sourceModuleName}」发起，咨询模块无权建单。`,
+        );
+      }
+
+      /**
+       * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目」
+       *    单类型收费（最常见就是只缴学费）有优惠时同样必须给名目。
+       */
+      const singleDiscount = standardAmount - amount;
+      const singleReason = (discountReason || '').trim();
+      if (singleDiscount > 0 && !singleReason) {
+        throw new BizError(
+          BizCode.PARAM_ERROR,
+          `${feeTypeName} 优惠 ¥${centToYuan(singleDiscount)} 需要选择优惠名目（奖学金 / 活动优惠 / 困难减免…），否则财务无法核对`,
         );
       }
 
@@ -917,11 +1050,14 @@ export async function createFees(
                   feeType,
                   feeTypeName,
                   amount,
-                  standardAmount: std.amount,
-                  discount: std.amount - amount,
+                  // ★ 2026-10-26 住宿费按月的应缴 = 实缴（月数变化不是优惠）
+                  standardAmount,
+                  discount: standardAmount - amount,
                 },
               ])
             : null,
+        // ★ 2026-10-26 优惠名目（有优惠才有值，没优惠留 NULL）
+        discount_reason: standardAmount - amount > 0 ? (discountReason || '').trim() || null : null,
         create_time: new Date(),
         create_by: operator.name,
         create_by_name: operator.name,

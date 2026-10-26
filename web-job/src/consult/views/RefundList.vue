@@ -14,7 +14,7 @@ import type {
   ConsultRefundCalcResult,
   ConsultStudentListItem,
 } from 'shared-types/consult';
-import { ConsultRefundStatus as CRS, CONSULT_REFUND_STATUS_NAME } from 'shared-types/consult';
+import { ConsultRefundStatus as CRS, CONSULT_REFUND_STATUS_NAME, ConsultState } from 'shared-types/consult';
 import {
   fetchRefundList,
   fetchRefundStats,
@@ -114,8 +114,26 @@ const DEDUCT_OPTIONS = [
 ];
 
 /* ---------- 学生选择（★ 2026-10-08：必填项由「学生ID」改为「学生姓名」） ---------- */
-const studentOptions = ref<Array<{ consultStudentId: string; studentName: string; consultStateName?: string }>>([]);
+const studentOptions = ref<Array<{ consultStudentId: string; studentName: string; consultState?: number; consultStateName?: string }>>([]);
 const studentSearching = ref(false);
+
+/**
+ * ★ 2026-10-26 用户口径：「退费的、流失的、申请中的不可以再发起退费了」
+ *
+ * 这些状态下再发起退费都是错账，直接从候选里剔掉，别等到提交才报错：
+ *   · 退费·待经理审批 8 / 退费·待财务打款 9 → 已在途（申请中）
+ *   · 已退费 10                              → 已经退完了
+ *   · 流失 12                                → 没交过费 / 已按流失结案，不走退费
+ *
+ * 后端 `/student/list` 用 `excludeStates` 排除（不然搜出来的 20 条可能全被剔空），
+ * 前端再兜一层过滤，防止缓存里的旧列表把禁用学生带进来。
+ */
+const REFUND_BLOCKED_STATES: number[] = [
+  ConsultState.REFUND_MGR,
+  ConsultState.REFUND_FINANCE,
+  ConsultState.REFUNDED,
+  ConsultState.LOST,
+];
 
 /** 远程搜索学生（按姓名/学号模糊匹配），供下拉选择 */
 async function searchStudents(keyword: string) {
@@ -124,26 +142,41 @@ async function searchStudents(keyword: string) {
     /**
      * ★ 2026-10-22 用户口径：「发起退费的学生姓名要有全部的」
      *
-     * 之前只列「试学中」，正式在读 / 待分班的学生搜不到，退不了。
-     * 现在不传状态 → 全部学生都能搜（下拉里带状态标注，方便区分）。
-     * 能不能退由后端退费规则判断（已退费 / 退费中会被拦下并给出原因）。
+     * 不传状态 → 咨询中 / 待分班 / 试学中 / 正式在读 都能搜到；
+     * ★ 2026-10-26 起改成「排除」模式：只剔除退费中 / 已退费 / 流失。
      */
     const res = await fetchStudentList({
       page: 1,
       size: 20,
       keyword: keyword || undefined,
+      excludeStates: REFUND_BLOCKED_STATES.join(','),
     });
-    studentOptions.value = res.list.map((s: ConsultStudentListItem) => ({
-      consultStudentId: s.consultStudentId,
-      studentName: s.studentName,
-      consultStateName: s.consultStateName,
-    }));
+    studentOptions.value = res.list
+      .filter((s: ConsultStudentListItem) => !REFUND_BLOCKED_STATES.includes(s.consultState))
+      .map((s: ConsultStudentListItem) => ({
+        consultStudentId: s.consultStudentId,
+        studentName: s.studentName,
+        consultState: s.consultState,
+        consultStateName: s.consultStateName,
+      }));
   } catch {
     studentOptions.value = [];
   } finally {
     studentSearching.value = false;
   }
 }
+
+/** 当前选中的学生（提交前兜底校验用；openApply 带出的行可能没有状态，则交给后端拦） */
+const applyStudent = computed(() =>
+  studentOptions.value.find((s) => s.consultStudentId === applyForm.value.consultStudentId),
+);
+
+/** 当前选中的学生是否已不允许再发起退费 */
+const applyStudentBlocked = computed(
+  () =>
+    !!applyStudent.value?.consultState &&
+    REFUND_BLOCKED_STATES.includes(applyStudent.value.consultState),
+);
 
 function openApply(row?: ConsultRefundOrder) {
   applyForm.value = {
@@ -301,6 +334,13 @@ async function doCalc() {
 async function submitApply() {
   if (!applyForm.value.consultStudentId) {
     ElMessage.warning('请选择学生');
+    return;
+  }
+  // ★ 2026-10-26 退费中 / 已退费 / 流失的学生不允许再发起退费
+  if (applyStudentBlocked.value) {
+    ElMessage.warning(
+      `「${applyStudent.value?.studentName}」当前状态为「${applyStudent.value?.consultStateName}」，不能再发起退费`,
+    );
     return;
   }
   if (!applyForm.value.lossReason) {
@@ -529,7 +569,8 @@ onMounted(load);
             reserve-keyword
             :remote-method="searchStudents"
             :loading="studentSearching"
-            placeholder="输入学生姓名搜索选择"
+            placeholder="输入学生姓名搜索（退费中 / 已退费 / 流失的学生不可选）"
+            no-data-text="没有可发起退费的学生（退费中 / 已退费 / 流失已排除）"
             style="width: 100%"
             @change="onStudentChange"
           >

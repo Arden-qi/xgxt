@@ -26,6 +26,8 @@ import {
   ConsultFeeStatus,
   ConsultState,
   PAY_METHODS,
+  // ★ 2026-10-26 优惠名目字典（奖学金 / 活动优惠 / 困难减免…）
+  DISCOUNT_REASONS,
 } from 'shared-types/consult';
 import {
   fetchFeeList,
@@ -41,8 +43,7 @@ import {
   // ★ 2026-10-20 补费（试学转正尾款 / 差额补收）
   createSupplementFee,
   fetchSupplementPlan,
-  // ★ 2026-10-16 分期付款
-  createInstallment,
+  // ★ 2026-10-16 分期付款（发起收费已取消分期，仅保留分期计划查询/补缴）
   payInstallmentStage,
   fetchInstallmentDetail,
 } from '@/consult/api/consult';
@@ -105,53 +106,62 @@ function resetQuery() {
  *   ① 收费类型二选一：试学费（整档）/ 正式学费（多选，合计自动算）
  *   ② 缴费方式改下拉选择：微信支付 / 支付宝支付 / 银行卡转账 / 现金 / 其他
  *   ③ 凭证就在这个弹窗里上传，不用建完单再去列表二次操作
- *   ★ 2026-10-16：正式学费含「试学费」并列项（试学结束后补缴）
+ *
+ * ★ 2026-10-26 用户口径：「取消掉试学费」——
+ *   收费类型二选一整个去掉，发起收费只有正式学费（多选明细 + 自动合计）。
  */
-type FeeCategory = 'TRIAL' | 'FORMAL';
 
 /**
  * ★ 2026-10-23 用户口径：费用类型筛选只留 3 个 —— 学费 / 试学费 / 补学费
  *
  * 住宿费 / 餐费 / 保险费 / 押金 / 校服 是「学费里的明细项」，
  * 发起收费时作为勾选项（见 FORMAL_FEE_ITEMS），不再作为独立费用类型出现在筛选里。
+ *
+ * ⚠️ 历史单据里仍有「试学费」，筛选项保留，否则老数据查不出来。
  */
 const FEE_TYPE_FILTER_OPTIONS = [FeeType.TUITION, FeeType.TRIAL_FEE, FeeType.SUPPLEMENT].map(
   (v) => ({ value: v, label: FEE_TYPE_NAME[v] }),
 );
 
 /**
- * 正式学费的可选项（含试学费，共 7 项）
+ * 正式学费的可选项（6 项）
  *
  * ⚠️ fallback 只是【财务标准取不到时的兜底展示值】（单位：元），
  *    真实金额一律以 t_finance_fee_standard 为准（规则2：金额由财务取值，不让手填）。
  *    calc 是给老师看的算式说明（如住宿费 = 450 × 6 个月）。
+ *
+ * ★ 2026-10-26 用户口径：
+ *    ① 「试学费默认 5000，可以自己设置，还有正式学费」——
+ *       本弹窗顶部有「收费类型」二选一：试学费（单收一笔，金额可改）/ 正式学费（勾选下列各项）。
+ *       试学费不是这里的勾选项，它走独立的金额输入（见 trialAmount）。
+ *    ② 「住宿费一个月 450，默认缴纳 6 个月，可以自己选择缴纳几个月」——
+ *       住宿费不是固定 2700，而是「月单价 × 月数」，见 accommodationMonths。
  */
 const FORMAL_FEE_ITEMS = [
   { feeType: FeeType.TUITION, label: '学费', calc: '', fallback: 28000 },
-  /**
-   * ★ 2026-10-16 用户口径：试学费与学费是并列费用项，正式学费可以包含试学费
-   *    （如悠悠：学费 28000 + 试学费 5000 = 33000）。
-   *    试学期间单独收试学费走「试学费」类型；试学结束后未收的，
-   *    转正式时勾选「试学费」一并补缴。
-   */
-  { feeType: FeeType.TRIAL_FEE, label: '试学费', calc: '试学结束后补缴', fallback: 5000 },
-  { feeType: FeeType.ACCOMMODATION, label: '住宿费', calc: '450 × 6', fallback: 2700 },
+  { feeType: FeeType.ACCOMMODATION, label: '住宿费', calc: '', fallback: 2700 },
   { feeType: FeeType.DEPOSIT, label: '押金', calc: '', fallback: 200 },
   { feeType: FeeType.INSURANCE, label: '保险费', calc: '', fallback: 150 },
   { feeType: FeeType.MEAL, label: '餐费', calc: '', fallback: 850 },
   { feeType: FeeType.UNIFORM, label: '校服', calc: '', fallback: 500 },
 ];
 
-/** 试学费的兜底金额（单位：元） */
-const TRIAL_FEE_FALLBACK = 5000;
-
 /**
- * ★ 2026-10-15 试学费金额可自定义
+ * ★ 2026-10-26 住宿费按月计价
  *
- * null = 老师没改过 → 跟随财务费用标准；
- * 有值  = 老师本次手填的实收金额（试学金额常因优惠/减免而变，所以要能改）。
+ * 财务「住宿费」标准价是【6 个月】的价（2700 = 450 × 6），
+ * 所以月单价 = 标准价 ÷ 6；老师选几个月就乘几个月。
  */
-const trialAmount = ref<number | null>(null);
+const ACCOMMODATION_BASE_MONTHS = 6;
+/** 住宿月数：默认 6 个月，可改成 1~12 个月 */
+const accommodationMonths = ref(ACCOMMODATION_BASE_MONTHS);
+/** 住宿费月单价（元）：财务标准 ÷ 6，取不到标准用 450 兜底 */
+const accommodationUnitPrice = computed(() => {
+  const std = standardMap.value[FeeType.ACCOMMODATION];
+  return std == null ? 450 : std / 100 / ACCOMMODATION_BASE_MONTHS;
+});
+/** 住宿费应缴（元）= 月单价 × 月数 */
+const accommodationAmount = computed(() => accommodationUnitPrice.value * accommodationMonths.value);
 
 /**
  * ★ 2026-10-16 正式学费的「实缴金额」（元）
@@ -161,23 +171,63 @@ const trialAmount = ref<number | null>(null);
  */
 const formalPaid = ref<number | null>(null);
 
+/* ============================================================
+ * ★ 2026-10-26 收费类型：试学费 / 正式学费（用户口径恢复试学费）
+ *
+ * 「发起收费哪里，费用类型，试学费默认 5000 可以自己设置，还有正式学费」
+ *   · 试学费：单收一笔，金额默认取财务标准（5000），老师可以改成实际谈定的数；
+ *   · 正式学费：勾选费用项目（学费/住宿费/押金/保险费/餐费/校服），走优惠规则。
+ *
+ * 默认选「正式学费」—— 日常绝大多数是正式收费，试学费是少数场景，
+ * 默认落在试学费上容易误建单。
+ * ============================================================ */
+type FeeCategory = 'TRIAL' | 'FORMAL';
+
+/** 试学费默认金额兜底（元）：财务标准取不到时用 5000 */
+const TRIAL_FEE_FALLBACK = 5000;
+
+/**
+ * 试学费实收金额（元）
+ *
+ * null = 老师没改过 → 跟随财务标准（默认 5000）；
+ * 有值 = 老师本次填的金额（试学费常按家长谈定的数收，所以必须能改）。
+ */
+const trialAmount = ref<number | null>(null);
+
+/** 试学费金额输入框：没改过时显示标准值，改了就用老师的 */
+const trialAmountInput = computed({
+  get: () => trialAmount.value ?? amountYuan(FeeType.TRIAL_FEE, TRIAL_FEE_FALLBACK),
+  set: (v: number) => {
+    trialAmount.value = Number.isFinite(v) ? v : null;
+  },
+});
+
 const createVisible = ref(false);
 const creating = ref(false);
 const createForm = ref<{
   consultStudentId: string;
+  /** ★ 2026-10-26 收费类型：试学费 / 正式学费 */
   category: FeeCategory;
   formalFeeTypes: number[];
   payMethod: string;
   /** 弹窗内选择的凭证（base64 预览/上传用） */
   dataUrl: string;
   voucherNo: string;
+  /**
+   * ★ 2026-10-26 优惠名目（有优惠时必选）
+   *
+   * 用户口径：「优惠金额要有明确的名目」—— 优惠不能只是一个差额，
+   * 必须说明是按什么名目少的（奖学金 / 活动优惠 / 困难减免…）。
+   */
+  discountReason: string;
 }>({
   consultStudentId: '',
-  category: 'TRIAL',
+  category: 'FORMAL',
   formalFeeTypes: [],
   payMethod: '',
   dataUrl: '',
   voucherNo: '',
+  discountReason: '',
 });
 
 /* ---------- 学生选择（★ 2026-10-08：必填项由「学生ID」改为「学生姓名」） ---------- */
@@ -247,35 +297,45 @@ function amountYuan(feeType: number, fallback: number): number {
   return std == null ? fallback : std / 100;
 }
 
-/** 试学费金额输入（元）：没改过时显示标准值，改了就用老师的 */
-const trialAmountInput = computed({
-  get: () => trialAmount.value ?? amountYuan(FeeType.TRIAL_FEE, TRIAL_FEE_FALLBACK),
-  set: (v: number) => {
-    trialAmount.value = Number.isFinite(v) ? v : null;
-  },
-});
+/** 金额展示：整数不带小数尾巴（450 而不是 450.00） */
+function fmtYuan(n: number): string {
+  return String(Number(n.toFixed(2)));
+}
+
+/**
+ * 单项费用的【应缴】金额（元）
+ *
+ * ★ 2026-10-26 住宿费按月计价：应缴 = 月单价 × 月数（默认 6 个月）；
+ *    其余各项仍按财务费用标准取值。
+ */
+function itemAmount(item: { feeType: number; fallback: number }): number {
+  if (item.feeType === FeeType.ACCOMMODATION) return accommodationAmount.value;
+  return amountYuan(item.feeType, item.fallback);
+}
+
+/** 单项费用的算式说明（住宿费显示「450 × 6 个月」） */
+function itemCalc(item: { feeType: number }): string {
+  if (item.feeType !== FeeType.ACCOMMODATION) return '';
+  return `${fmtYuan(accommodationUnitPrice.value)} × ${accommodationMonths.value} 个月`;
+}
 
 /**
  * 本次发起的合计金额（单位：元）
  *
- * ★ 2026-10-16 正式学费：合计 = 【实缴】（可能含优惠），不再是应缴；
- *    试学费保持原来的「老师手填金额」语义。
+ * ★ 2026-10-16 正式学费：合计 = 【实缴】（可能含优惠），不再是应缴。
+ * ★ 2026-10-26 试学费：合计 = 老师填的试学费金额（试学费没有优惠概念）。
  */
-const createTotal = computed(() => {
-  if (createForm.value.category === 'TRIAL') {
-    return trialAmountInput.value;
-  }
-  return formalPaidInput.value;
-});
+const createTotal = computed(() =>
+  createForm.value.category === 'TRIAL' ? trialAmountInput.value : formalPaidInput.value,
+);
 
-/** 正式学费的【应缴】合计（元）：勾选各项的财务标准之和 */
-const formalDue = computed(() => {
-  if (createForm.value.category !== 'FORMAL') return 0;
-  return createForm.value.formalFeeTypes.reduce((sum, ft) => {
+/** 正式学费的【应缴】合计（元）：勾选各项的财务标准之和（住宿费按月数） */
+const formalDue = computed(() =>
+  createForm.value.formalFeeTypes.reduce((sum, ft) => {
     const item = FORMAL_FEE_ITEMS.find((i) => i.feeType === ft);
-    return sum + (item ? amountYuan(item.feeType, item.fallback) : 0);
-  }, 0);
-});
+    return sum + (item ? itemAmount(item) : 0);
+  }, 0),
+);
 
 /** 正式学费的【实缴】输入框：没改过时显示应缴，改了就用老师的（元）
  *  ★ 2026-10-16 用户口径：实缴不能大于应缴，超出直接钳回应缴 */
@@ -293,82 +353,37 @@ const formalPaidInput = computed({
 /** 正式学费的【优惠】（元）：应缴 - 实缴（实缴已被钳制 ≤ 应缴，不会为负） */
 const formalDiscount = computed(() => formalDue.value - formalPaidInput.value);
 
-/** 改勾选 / 切换收费类型时，实缴回到「按应缴」 */
+/**
+ * ★ 2026-10-26 用户口径：「优惠只能优惠学费，其他金额不可以优惠」
+ *
+ * 优惠（应缴 - 实缴）只能从【学费】里扣：
+ *   - 勾了学费 → 学费实缴 = 学费应缴 - 优惠，其余各项照标准全额收；
+ *   - 没勾学费 → 不允许有优惠（提交时拦，这里给红字提示）。
+ */
+const canDiscount = computed(() => createForm.value.formalFeeTypes.includes(FeeType.TUITION));
+/** 优惠超过了学费应缴（学费减到负数）→ 直接拦住，提示调实缴 */
+const discountTooMuch = computed(() => {
+  if (formalDiscount.value <= 0) return false;
+  return formalDiscount.value > amountYuan(FeeType.TUITION, 28000);
+});
+
+/** 改勾选 / 改住宿月数 / 切换收费类型时，实缴回到「按应缴」 */
 watch(
-  () => [createForm.value.category, createForm.value.formalFeeTypes.join(',')],
+  () => [
+    createForm.value.category,
+    createForm.value.formalFeeTypes.join(','),
+    accommodationMonths.value,
+  ],
   () => {
     formalPaid.value = null;
   },
 );
 
-/* ============================================================
- * ★ 2026-10-16 分期付款
- *
- * 用户口径：分期的学生首付到账即可分班，尾款挂在待缴余额里继续收。
- * 老师在「发起收费」时选分期 → 填期数 → 系统自动平均分配 → 可再手改每期金额与到期日。
- * ============================================================ */
-
-/** 收款方式：一次性 / 分期 */
-type PayMode = 'ONCE' | 'INSTALLMENT';
-const payMode = ref<PayMode>('ONCE');
-
-/** 期数（2 ~ 12） */
-const stageCount = ref(3);
-
-/** 期次明细：金额单位「元」 */
-const stages = ref<Array<{ stageNo: number; amount: number; dueDate: string }>>([]);
-
-const p2 = (n: number) => String(n).padStart(2, '0');
-
-/** 第 i 期的默认到期日：今天 + 30×(i-1) 天 */
-function defaultDueDate(i: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + 30 * (i - 1));
-  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
-}
-
 /**
- * 按当前实缴金额平均分配到各期
+ * 本次实际要发起的费用类型列表
  *
- * ⚠️ 除不尽的零头全部落在【最后一期】上，保证各期之和 = 实缴（分不丢不涨）。
+ * ★ 2026-10-26 试学费 → 只发一张试学费单；正式学费 → 勾选的那些项。
  */
-function splitEvenly() {
-  const totalCent = Math.round(Number(createTotal.value || 0) * 100);
-  const n = stageCount.value;
-  if (totalCent <= 0 || n < 2) {
-    stages.value = [];
-    return;
-  }
-  const base = Math.floor(totalCent / n);
-  const arr: Array<{ stageNo: number; amount: number; dueDate: string }> = [];
-  let sum = 0;
-  for (let i = 1; i <= n; i++) {
-    const cent = i === n ? totalCent - sum : base;
-    sum += cent;
-    arr.push({ stageNo: i, amount: cent / 100, dueDate: defaultDueDate(i) });
-  }
-  stages.value = arr;
-}
-
-/** 各期之和（元） */
-const stagesSum = computed(() =>
-  stages.value.reduce((s, i) => s + (Number(i.amount) || 0), 0),
-);
-
-/** 各期之和与实缴的差额（元）；不为 0 时禁止提交（后端也会拦） */
-const stagesDiff = computed(() => stagesSum.value - Number(createTotal.value || 0));
-
-/** 本期是否有到期日已过（提示老师，不阻断） */
-const anyOverdue = computed(() =>
-  stages.value.some((s) => !!s.dueDate && s.dueDate < `${new Date().getFullYear()}-${p2(new Date().getMonth() + 1)}-${p2(new Date().getDate())}`),
-);
-
-/** 实缴金额变化 / 切换到分期时，重新平均分配 */
-watch([() => createTotal.value, stageCount, payMode], () => {
-  if (payMode.value === 'INSTALLMENT') splitEvenly();
-});
-
-/** 本次实际要发起的费用类型列表 */
 const currentFeeTypes = computed<FeeType[]>(() =>
   createForm.value.category === 'TRIAL'
     ? [FeeType.TRIAL_FEE]
@@ -394,19 +409,21 @@ function onCreateFileChange(e: Event) {
 function openCreate(row?: ConsultFeeOrder) {
   createForm.value = {
     consultStudentId: row?.consultStudentId || '',
-    category: 'TRIAL',
+    // ★ 2026-10-26 每次打开默认「正式学费」
+    category: 'FORMAL',
     formalFeeTypes: [],
     payMethod: '',
     dataUrl: '',
     voucherNo: '',
+    // ★ 2026-10-26 优惠名目每次打开都清空（不能把上一单的名目带过来）
+    discountReason: '',
   };
   // 每次打开都回到「按标准取值」，不把上一次手填的金额带过来
-  trialAmount.value = null;
   formalPaid.value = null;
-  // ★ 2026-10-16 分期：默认一次性，期数回到 3 期
-  payMode.value = 'ONCE';
-  stageCount.value = 3;
-  stages.value = [];
+  // ★ 2026-10-26 试学费金额回到财务标准（默认 5000），不记住上一单的手填值
+  trialAmount.value = null;
+  // ★ 2026-10-26 住宿月数默认 6 个月（财务标准价对应的月数）
+  accommodationMonths.value = ACCOMMODATION_BASE_MONTHS;
   // 从行内带出学生：把该学生放进候选，保证下拉能显示姓名
   studentOptions.value = row?.consultStudentId
     ? [{ consultStudentId: row.consultStudentId, studentName: row.studentName }]
@@ -426,7 +443,7 @@ async function submitCreate() {
     return;
   }
   const feeTypes = currentFeeTypes.value;
-  if (!feeTypes.length) {
+  if (f.category === 'FORMAL' && !feeTypes.length) {
     ElMessage.warning('请至少勾选一项费用');
     return;
   }
@@ -440,23 +457,22 @@ async function submitCreate() {
   }
 
   /**
-   * ★ 2026-10-15 试学费金额自定义：
-   *   老师手填的金额（元）→ 换算成分传给后端，后端会同时写给财务，两边口径一致。
-   *   正式学费六项不传 → 仍按财务费用标准取值。
+   * ★ 2026-10-26 金额怎么传：
+   *   ① 试学费：金额由老师填（默认 5000），原样传给后端，不算优惠、不要名目；
+   *   ② 正式学费：住宿费按「月单价 × 月数」计价 → 传 accommodationMonths；
+   *      优惠只允许从【学费】里扣，其余各项一律按标准全额，不参与优惠。
    */
-  let amountByType: Record<number, number> | undefined;
+  const amountByType: Record<number, number> = {};
+  let diff = 0;
+
   if (f.category === 'TRIAL') {
-    const yuan = Number(trialAmountInput.value);
-    if (!Number.isFinite(yuan) || yuan <= 0) {
+    const trialYuan = Number(trialAmountInput.value);
+    if (!Number.isFinite(trialYuan) || trialYuan <= 0) {
       ElMessage.warning('请填写试学费金额（需大于 0）');
       return;
     }
-    amountByType = { [FeeType.TRIAL_FEE]: Math.round(yuan * 100) };
+    amountByType[FeeType.TRIAL_FEE] = Math.round(trialYuan * 100);
   } else {
-    /**
-     * ★ 2026-10-16 正式学费：实缴 ≠ 应缴 时，差额落在【学费】上
-     *    （没有勾学费就落在第一项）。优惠后该项金额不能为负。
-     */
     const due = Number(formalDue.value);
     const paid = Number(formalPaidInput.value);
     if (!Number.isFinite(paid) || paid <= 0) {
@@ -468,35 +484,35 @@ async function submitCreate() {
       ElMessage.warning('实缴金额不能大于应缴金额');
       return;
     }
-    const diff = due - paid; // ≥0 优惠（实缴已被钳制 ≤ 应缴）
-    if (diff !== 0 && f.formalFeeTypes.length) {
-      const target = f.formalFeeTypes.includes(FeeType.TUITION)
-        ? FeeType.TUITION
-        : f.formalFeeTypes[0];
-      const item = FORMAL_FEE_ITEMS.find((i) => i.feeType === target);
-      const std = item ? amountYuan(item.feeType, item.fallback) : 0;
-      const targetPaid = std - diff;
-      if (targetPaid < 0) {
+    diff = due - paid; // ≥0 优惠（实缴已被钳制 ≤ 应缴）
+    if (diff > 0) {
+      /**
+       * ★ 2026-10-26 用户口径：「优惠只能优惠学费，其他金额不可以优惠」
+       *
+       * 没勾学费 → 没有优惠的落点，直接拦住（不能把住宿费/餐费打折）。
+       */
+      if (!f.formalFeeTypes.includes(FeeType.TUITION)) {
         ElMessage.warning(
-          `优惠金额过大：「${item?.label || ''}」应缴 ¥${std.toFixed(2)}，无法再减 ¥${diff.toFixed(2)}。请调整实缴金额。`,
+          '优惠只能抵扣学费：本次没勾「学费」。请勾选学费后重新填写实缴金额，或把实缴调回应缴金额',
         );
         return;
       }
-      amountByType = { [target]: Math.round(targetPaid * 100) };
-    }
-  }
-
-  /* ---------- ★ 2026-10-16 分期：各期之和必须等于实缴 ---------- */
-  if (payMode.value === 'INSTALLMENT') {
-    if (stages.value.length < 2) {
-      ElMessage.warning('分期至少需要 2 期');
-      return;
-    }
-    if (Math.abs(stagesDiff.value) > 0.001) {
-      ElMessage.warning(
-        `各期合计 ¥${stagesSum.value.toFixed(2)} 与实缴金额 ¥${Number(createTotal.value).toFixed(2)} 不一致（差 ¥${stagesDiff.value.toFixed(2)}），请调整`,
-      );
-      return;
+      const tuitionStd = amountYuan(FeeType.TUITION, 28000);
+      if (diff > tuitionStd) {
+        ElMessage.warning(
+          `优惠金额过大：学费应缴 ¥${tuitionStd.toFixed(2)}，最多只能优惠这么多。请调整实缴金额。`,
+        );
+        return;
+      }
+      /**
+       * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目」
+       *    有优惠就必须选名目，不允许只留一个说不清的差额。
+       */
+      if (!f.discountReason) {
+        ElMessage.warning('请选择优惠名目（奖学金 / 活动优惠 / 困难减免…）');
+        return;
+      }
+      amountByType[FeeType.TUITION] = Math.round((tuitionStd - diff) * 100);
     }
   }
 
@@ -511,36 +527,18 @@ async function submitCreate() {
      */
     const up = await uploadFile(f.dataUrl, 'voucher');
 
-    /* ---------- ★ 2026-10-16 分期：建计划 + 立刻发起第 1 期 ---------- */
-    if (payMode.value === 'INSTALLMENT') {
-      const plan = await createInstallment({
-        consultStudentId: f.consultStudentId,
-        feeTypes,
-        amountByType,
-        payMethod: f.payMethod,
-        stages: stages.value.map((s) => ({
-          stageNo: s.stageNo,
-          amount: Math.round(Number(s.amount) * 100),
-          dueDate: s.dueDate || undefined,
-        })),
-        // ★ 第 1 期的凭证随计划一起落库
-        voucherUrl: up.url,
-        voucherNo: f.voucherNo || undefined,
-      });
-
-      ElMessage.success(
-        `分期计划 ${plan.planNo} 已创建（共 ${plan.stageCount} 期，应收 ¥${plan.totalAmountYuan}），凭证已上传，等待财务确认`,
-      );
-      createVisible.value = false;
-      load();
-      return;
-    }
-
     const res = await createFees({
       consultStudentId: f.consultStudentId,
       feeTypes,
       payMethod: f.payMethod,
-      amountByType,
+      amountByType: Object.keys(amountByType).length ? amountByType : undefined,
+      // ★ 2026-10-26 住宿费月数（只有正式学费勾了住宿费才传）
+      accommodationMonths:
+        f.category === 'FORMAL' && f.formalFeeTypes.includes(FeeType.ACCOMMODATION)
+          ? accommodationMonths.value
+          : undefined,
+      // ★ 2026-10-26 优惠名目（没优惠就不传，别给单据挂个空名目）
+      discountReason: diff > 0 ? f.discountReason || undefined : undefined,
       voucherUrl: up.url,
       voucherNo: f.voucherNo || undefined,
     });
@@ -1203,13 +1201,14 @@ onMounted(load);
     </el-card>
 
     <!-- ============ 发起收费 ============ -->
+    <!-- ★ 2026-10-26 用户口径：收费类型分「试学费（金额可自定义）/ 正式学费」；取消分期；优惠只能抵扣学费；住宿费按月计缴 -->
     <el-dialog v-model="createVisible" title="发起收费" width="640px">
       <el-alert type="info" :closable="false" show-icon class="mb">
         <template #title>
-          金额由财务按「费用标准」自动取值，无需手动填写；
-          选「正式学费」后可勾选多项，合计金额自动计算。
-          <b>缴费凭证请在这里一并上传</b> —— 一次性收费建单后列表里没有补传入口；
-          分期单如漏传，可在列表「操作」列或分期计划里点「补缴凭证」补上。
+          <b>试学费</b>金额默认取财务标准（5000），可按实际谈定的数修改（不算优惠）；
+          <b>正式学费</b>金额由财务按「费用标准」自动取值，勾选多项时合计自动计算
+          （住宿费按「月单价 × 月数」计，默认 6 个月）。
+          <b>缴费凭证请在这里一并上传</b> —— 建单后列表里没有补传入口。
         </template>
       </el-alert>
 
@@ -1235,14 +1234,18 @@ onMounted(load);
           </el-select>
         </el-form-item>
 
+        <!-- ★ 2026-10-26 收费类型：试学费 / 正式学费 -->
         <el-form-item label="收费类型" required>
           <el-radio-group v-model="createForm.category">
             <el-radio value="TRIAL">试学费</el-radio>
             <el-radio value="FORMAL">正式学费</el-radio>
           </el-radio-group>
+          <span v-if="createForm.category === 'TRIAL'" class="fee-note">
+            单收一笔试学费，金额默认 ¥{{ fmtYuan(amountYuan(FeeType.TRIAL_FEE, TRIAL_FEE_FALLBACK)) }}，可按实际谈定的数修改
+          </span>
         </el-form-item>
 
-        <!-- 试学费：金额可自定义（默认取标准值，可直接改） -->
+        <!-- 试学费：金额可自定义（默认 5000，直接改数字即可） -->
         <el-form-item v-if="createForm.category === 'TRIAL'" label="试学费金额" required>
           <el-input-number
             v-model="trialAmountInput"
@@ -1253,25 +1256,52 @@ onMounted(load);
           />
           <span class="fee-note">
             默认按财务标准取值（¥{{ amountYuan(FeeType.TRIAL_FEE, TRIAL_FEE_FALLBACK).toFixed(2) }}），
-            实收金额不同可直接修改
+            实收金额不同可直接修改；试学费不参与优惠，谈定多少就收多少
           </span>
         </el-form-item>
 
-        <!-- 正式学费：多选 + 自动算合计 -->
-        <el-form-item v-if="createForm.category === 'FORMAL'" label="费用项目" required>
+        <!-- 费用项目：卡片式多选框 + 自动算合计 -->
+        <el-form-item v-if="createForm.category === 'FORMAL'" required>
+          <template #label>
+            费用项目
+            <span class="fee-lbl-hint">可多选</span>
+          </template>
           <el-checkbox-group v-model="createForm.formalFeeTypes" class="fee-grid">
             <el-checkbox v-for="i in FORMAL_FEE_ITEMS" :key="i.feeType" :value="i.feeType">
-              {{ i.label }}
-              <b class="fee-amt">¥{{ amountYuan(i.feeType, i.fallback).toFixed(2) }}</b>
-              <span v-if="i.calc" class="fee-calc">{{ i.calc }}</span>
+              <span class="fee-name">{{ i.label }}</span>
+              <b class="fee-amt">¥{{ itemAmount(i).toFixed(2) }}</b>
+              <span v-if="itemCalc(i)" class="fee-calc">{{ itemCalc(i) }}</span>
             </el-checkbox>
           </el-checkbox-group>
           <div v-if="!createForm.formalFeeTypes.length" class="stu-sub mt8">
-            勾选本次要缴的费用项，合计会自动计算
+            勾选本次要缴的费用项（可多选），合计会自动计算
           </div>
         </el-form-item>
 
-        <!-- ★ 2026-10-16 正式学费：应缴 / 实缴 / 优惠 -->
+        <!-- ★ 2026-10-26 住宿费按月缴纳：默认 6 个月，可自选 1~12 个月 -->
+        <el-form-item
+          v-if="createForm.category === 'FORMAL' && createForm.formalFeeTypes.includes(FeeType.ACCOMMODATION)"
+          label="住宿月数"
+          required
+        >
+          <el-input-number
+            v-model="accommodationMonths"
+            :min="1"
+            :max="12"
+            :step="1"
+            :precision="0"
+            style="width: 140px"
+          />
+          <span class="fee-note">
+            月单价 ¥{{ fmtYuan(accommodationUnitPrice) }}（财务标准价 ¥{{
+              amountYuan(FeeType.ACCOMMODATION, 2700).toFixed(2)
+            }} ÷ 6 个月），本次缴 {{ accommodationMonths }} 个月 → 住宿费合计 ¥{{
+              accommodationAmount.toFixed(2)
+            }}
+          </span>
+        </el-form-item>
+
+        <!-- 应缴 / 实缴 / 优惠（仅正式学费：试学费是谈定价，没有应缴/优惠的概念） -->
         <el-form-item v-if="createForm.category === 'FORMAL'" label="应缴金额">
           <b class="amount-strong">¥{{ formalDue.toFixed(2) }}</b>
           <span class="fee-note">按财务费用标准自动计算</span>
@@ -1285,94 +1315,46 @@ onMounted(load);
             :precision="2"
             style="width: 200px"
           />
-          <span class="fee-note">学生实际交的钱，不能大于应缴金额</span>
+          <span class="fee-note">学生实际交的钱，不能大于应缴金额；少收的部分算作学费优惠</span>
         </el-form-item>
         <el-form-item v-if="createForm.category === 'FORMAL'" label="优惠金额">
           <b :class="formalDiscount > 0 ? 'discount-strong' : 'amount-strong'">
             ¥{{ formalDiscount.toFixed(2) }}
           </b>
-          <span class="fee-note">
-            {{ formalDiscount > 0 ? '优惠（应缴 - 实缴）' : '无优惠' }}
+          <span v-if="formalDiscount <= 0" class="fee-note">无优惠</span>
+          <!-- ★ 2026-10-26 优惠只能抵扣学费，其他费用项一律按标准全额收 -->
+          <span v-else-if="!canDiscount" class="fee-note danger-text">
+            优惠只能抵扣学费，但本次没勾「学费」—— 请勾选学费，或把实缴调回应缴金额
           </span>
+          <span v-else-if="discountTooMuch" class="fee-note danger-text">
+            优惠金额超过学费应缴（¥{{ amountYuan(FeeType.TUITION, 28000).toFixed(2) }}），请调整实缴金额
+          </span>
+          <span v-else class="fee-note">从学费里扣（应缴 - 实缴），其余费用项不参与优惠</span>
+        </el-form-item>
+
+        <!--
+          ★ 2026-10-26 用户口径：「优惠金额要有明确的名目，优惠只能优惠学费」
+            有优惠才出现，且必选 —— 财务核对时要知道这笔少收的钱按什么批的。
+        -->
+        <el-form-item v-if="createForm.category === 'FORMAL' && formalDiscount > 0 && canDiscount" label="优惠名目" required>
+          <el-select
+            v-model="createForm.discountReason"
+            placeholder="请选择优惠名目"
+            style="width: 240px"
+          >
+            <el-option v-for="r in DISCOUNT_REASONS" :key="r" :label="r" :value="r" />
+          </el-select>
+          <span class="fee-note">名目会写进单据，财务按此核对减免</span>
         </el-form-item>
 
         <el-form-item label="合计金额">
           <b class="amount-strong">¥{{ createTotal.toFixed(2) }}</b>
-          <span v-if="createForm.category === 'FORMAL'" class="fee-note">本次实际收取（= 实缴）</span>
-        </el-form-item>
-
-        <!-- ★ 2026-10-16 收款方式：一次性 / 分期 -->
-        <el-form-item label="收款方式" required>
-          <el-radio-group v-model="payMode">
-            <el-radio value="ONCE">一次性缴清</el-radio>
-            <el-radio value="INSTALLMENT">分期付款</el-radio>
-          </el-radio-group>
-          <span v-if="payMode === 'INSTALLMENT'" class="fee-note">
-            首付（第 1 期）到账即可分班，尾款挂在待缴余额里继续收
+          <span class="fee-note">
+            {{ createForm.category === 'TRIAL' ? '本次实际收取（= 试学费金额）' : '本次实际收取（= 实缴）' }}
           </span>
         </el-form-item>
 
-        <!-- 分期：期数 + 每期金额与到期日 -->
-        <el-form-item v-if="payMode === 'INSTALLMENT'" label="分期计划" required>
-          <div class="stage-box">
-            <div class="stage-head">
-              <span>分</span>
-              <el-input-number
-                v-model="stageCount"
-                :min="2"
-                :max="12"
-                :step="1"
-                size="small"
-                style="width: 110px"
-              />
-              <span>期</span>
-              <el-button link type="primary" @click="splitEvenly">重新平均分配</el-button>
-              <span class="stage-sum">
-                合计 ¥{{ stagesSum.toFixed(2) }}
-                <b v-if="Math.abs(stagesDiff) > 0.001" class="extra-strong">
-                  （差 ¥{{ stagesDiff.toFixed(2) }}，需与实缴一致）
-                </b>
-                <b v-else class="discount-strong">✓ 与实缴一致</b>
-              </span>
-            </div>
-
-            <el-table :data="stages" size="small" border max-height="240">
-              <el-table-column label="期次" width="70" align="center">
-                <template #default="{ row }">第 {{ row.stageNo }} 期</template>
-              </el-table-column>
-              <el-table-column label="本期金额（元）" min-width="130">
-                <template #default="{ row }">
-                  <el-input-number
-                    v-model="row.amount"
-                    :min="0"
-                    :step="100"
-                    :precision="2"
-                    :controls="false"
-                    size="small"
-                    style="width: 100%"
-                  />
-                </template>
-              </el-table-column>
-              <el-table-column label="到期日" min-width="150">
-                <template #default="{ row }">
-                  <el-date-picker
-                    v-model="row.dueDate"
-                    type="date"
-                    value-format="YYYY-MM-DD"
-                    placeholder="选择到期日"
-                    size="small"
-                    style="width: 100%"
-                  />
-                </template>
-              </el-table-column>
-            </el-table>
-
-            <div class="stu-sub mt8">
-              各期金额之和必须等于实缴金额 ¥{{ Number(createTotal).toFixed(2) }}；
-              除不尽的零头会自动落在最后一期。到期日只用于提醒，过了不会自动改状态。
-            </div>
-          </div>
-        </el-form-item>
+        <!-- ★ 2026-10-26 用户口径：「分期付款这个可以取消掉」—— 收款方式整块去掉，一律一次性缴清 -->
 
         <el-form-item label="缴费方式" required>
           <el-select
@@ -1518,6 +1500,10 @@ onMounted(load);
           <span class="fee-note">
             {{ (detailRow.discountAmount || 0) > 0 ? '优惠' : (detailRow.discountAmount || 0) < 0 ? '补收' : '无优惠' }}
           </span>
+        </el-descriptions-item>
+        <!-- ★ 2026-10-26 优惠名目：让看单的人知道这笔少收的钱按什么批的 -->
+        <el-descriptions-item v-if="detailRow.discountReason" label="优惠名目">
+          {{ detailRow.discountReason }}
         </el-descriptions-item>
 
         <el-descriptions-item label="缴费方式">{{ detailRow.payMethod || '—' }}</el-descriptions-item>
@@ -1909,22 +1895,80 @@ onMounted(load);
   margin-top: 8px;
 }
 
-/* ---- 正式学费：费用项目多选区 ---- */
+/* ---- 正式学费：朴素多选框（无卡片外框） ---- */
+.fee-lbl-hint {
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #a8abb2;
+}
+
 .fee-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 24px;
   width: 100%;
 }
 
+/* 去掉每一项的外框/底色，只留勾选框 + 文字 */
+.fee-grid :deep(.el-checkbox) {
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  align-items: flex-start;
+}
+
+.fee-grid :deep(.el-checkbox:hover),
+.fee-grid :deep(.el-checkbox.is-checked) {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.fee-grid :deep(.el-checkbox__input) {
+  margin-top: 3px;
+}
+
+/* 勾选框 = 正方形（默认圆角看着像单选，这里强制拉直） */
+.fee-grid :deep(.el-checkbox__inner) {
+  width: 15px;
+  height: 15px;
+  border-radius: 0 !important;
+}
+
+.fee-grid :deep(.el-checkbox__inner::after) {
+  left: 4px;
+  top: 1px;
+  width: 3px;
+  height: 7px;
+}
+
+.fee-grid :deep(.el-checkbox__label) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  padding-left: 8px;
+  line-height: 1.5;
+  font-size: 14px;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.fee-name {
+  color: #303133;
+}
+
 .fee-amt {
-  margin-left: 4px;
   color: #e6a23c;
   font-weight: 600;
 }
 
 .fee-calc {
-  margin-left: 4px;
   font-size: 12px;
   color: #909399;
 }
