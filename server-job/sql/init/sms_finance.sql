@@ -106,6 +106,7 @@ CREATE TABLE `t_finance_bill` (
   `voucher_no` varchar(64) DEFAULT NULL COMMENT '凭证编号',
   `pay_method` int DEFAULT NULL COMMENT '支付方式 1现金2转账3微信4支付宝',
   `remark` varchar(500) DEFAULT NULL COMMENT '备注',
+  `expire_date` date DEFAULT NULL COMMENT '★ 2026-10-26 到期日（餐费/住宿费/保险费按「缴费金额÷费用标准」算出；学费等无到期概念）',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_bill_no` (`bill_no`),
   KEY `idx_bill_student_id` (`student_id`),
@@ -150,6 +151,7 @@ CREATE TABLE `t_finance_fee` (
   `head_teacher_name` varchar(50) DEFAULT NULL COMMENT '班主任姓名',
   `fee_type` int NOT NULL COMMENT '缴费类型 1学费2住宿费3餐费4保险费5试学费',
   `amount` int NOT NULL COMMENT '金额（单位：分）',
+  `standard_amount` int DEFAULT NULL COMMENT '★ 2026-10-26 应缴金额（分）：实缴=amount，优惠=standard_amount-amount',
   `pay_status` int NOT NULL DEFAULT '1' COMMENT '缴费状态 1待缴2已缴3已核对4逾期5冻结',
   `pay_date` date DEFAULT NULL COMMENT '缴费日期',
   `expire_date` date DEFAULT NULL COMMENT '到期日期（临期名单查询用）',
@@ -362,6 +364,26 @@ LOCK TABLES `t_finance_refund` WRITE;
 INSERT INTO `t_finance_refund` VALUES ('RFD-1','2026-10-06 21:25:29','SEED','2026-10-06 21:25:29','SEED',0,'TK20261001001','FSB-J26013','J26013','陈嘉豪','CLS-JH-G2601','G2601',1,1,500000,'退学退费',6,1,'2026-09-16 09:00:00','247ac904-bfa3-4d73-bb63-744a56b94bd1','孙敏','2026-09-18 09:00:00','fee4256c-1de5-4c3e-9a3e-3d02ac01c3ea','2026-09-20 09:00:00','c60aa8d6-43b6-4c67-b5ce-9a4f23029c34',NULL,NULL,'2026-09-21 09:00:00','2026-09-24 09:00:00','9e73138b-d35e-de46-9873-3836bed7cd60',NULL,1,NULL,'演示退费');
 /*!40000 ALTER TABLE `t_finance_refund` ENABLE KEYS */;
 UNLOCK TABLES;
+
+--
+-- Table structure for table `t_finance_setting`
+--
+-- ★ 2026-10-26 补：财务配置 KV 表（催费提醒天数 urgeAheadDays 等）。
+--   原来只由 scripts/_migrate-finance-setting-20261026.mjs 建，init SQL 没写 →
+--   新机器初始化后缺表、催费提醒设置页直接报「数据表不存在」。
+--
+
+DROP TABLE IF EXISTS `t_finance_setting`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_finance_setting` (
+  `setting_key` varchar(64) NOT NULL COMMENT '配置键',
+  `setting_value` varchar(255) NOT NULL DEFAULT '' COMMENT '配置值',
+  `update_time` datetime DEFAULT NULL COMMENT '更新时间',
+  `update_by` varchar(64) DEFAULT NULL COMMENT '更新人',
+  PRIMARY KEY (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='财务配置（催费提醒等）';
+/*!40101 SET character_set_client = @saved_cs_client */;
 
 --
 -- Table structure for table `t_student_base`
