@@ -23,6 +23,8 @@ import {
   ConsultFeeStatus,
   CONSULT_FEE_STATUS_NAME,
   ConsultRole,
+  // ★ 2026-10-26 来源渠道：市场来源(6) 才需要选招生老师
+  LeadChannel,
   nameOf,
 } from 'shared-types/consult';
 import type { ConsultToFormalResult } from 'shared-types/consult';
@@ -55,6 +57,8 @@ import {
   centToYuan,
 } from '../services/fee-order.service';
 import { listConsultants } from '../services/account.service';
+// ★ 2026-10-26 招生老师候选（新建学生 · 市场来源）
+import { listRecruitTeachers } from '../services/recruit-teacher.service';
 import { financeClient } from '../services/finance.client';
 // ★ 2026-10-16 数据范围：咨询师只看/只操作自己名下的学生
 import {
@@ -99,6 +103,13 @@ const listSchema = z.object({
   sourceChannel: z.coerce.number().int().optional(),
   intendCourse: z.string().optional(),
   consultState: z.coerce.number().int().optional(),
+  /**
+   * ★ 2026-10-26 排除状态（逗号分隔，如 `8,9,10,12`）
+   *
+   * 发起退费的学生下拉用：退费中 / 已退费 / 流失 的学生不能再发起退费。
+   * 单独用 consultState 只能「只查某状态」，排除需要用 whereNotIn。
+   */
+  excludeStates: z.string().optional(),
   deptCode: z.coerce.number().int().optional(),
   keyword: z.string().optional(),
 });
@@ -121,6 +132,17 @@ studentRouter.get(
     if (q.sourceChannel) query.andWhere('source_channel', q.sourceChannel);
     if (q.intendCourse) query.andWhere('intend_course', 'like', `%${q.intendCourse}%`);
     if (q.consultState) query.andWhere('consult_state', q.consultState);
+    /**
+     * ★ 2026-10-26 排除状态（逗号分隔）
+     *   非法值（非数字/空）直接忽略，不因为拼错就返回空列表。
+     */
+    if (q.excludeStates) {
+      const excluded = q.excludeStates
+        .split(',')
+        .map((v) => Number(v.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0);
+      if (excluded.length) query.whereNotIn('consult_state', excluded);
+    }
     // ★ 2026-10-15 部门筛选（前端「全部部门」下拉）：1=初高部 2=大学部
     if (q.deptCode) query.andWhere('dept_code', q.deptCode);
 
@@ -339,29 +361,49 @@ const addSchema = z.object({
   studentName: z.string().min(1, '姓名必填').max(50),
   gender: z.coerce.number().int().min(1).max(2, '性别只能是 1(男) 或 2(女)'),
   /**
-   * ★ 2026-10-23：手机号统一成「必填」，且报错要说人话。
+   * ★ 2026-10-26 用户口径：「手机号设定为 11 位去重」→ 11 位手机号 + 全库唯一。
    *
-   * 【为什么改】用户报障：新建学生只填了姓名就点确定 → 弹「参数「phone」类型不正确」。
-   *   链路是：前端把空手机号当 undefined → JSON 里这个字段直接消失 →
-   *   zod 报 invalid_type（字段缺失）→ 翻译成「类型不正确」，
-   *   用户根本看不出是「手机号没填」。
-   *   现在前端也标了必填（红星 + 提交拦截），两边口径一致；
-   *   后端再兜一层：缺字段 / 空串 / 全空格 → 一律「请填写学生手机号」。
+   * ★ 2026-10-26 合并上游后：consult/middleware/validate.ts 已改成「zod 文案带中文就原样透传」，
+   *   所以 11 位格式可以直接写在 schema 里，报错就是这句中文，
+   *   不会再被翻成「参数「phone」格式不正确」（那是我方旧版绕路的原因，已不需要）。
+   *
+   * 【分工】必填 / 11 位格式 → schema（这一层）；去重要查库、还要报「已被某某占用」→ handler。
+   *   缺字段 / 空串 / 纯空格 → 一律「请填写学生手机号」。
    */
   phone: z
     .string({ required_error: '请填写学生手机号', invalid_type_error: '请填写学生手机号' })
     .trim()
     .min(1, '请填写学生手机号')
-    .max(20, '手机号最多 20 位'),
+    .regex(/^1[3-9]\d{9}$/, '学生手机号需为 1 开头的 11 位数字'),
   sourceChannel: z.coerce.number().int().min(1).max(9, '来源渠道取值非法'),
+  /** ★ 2026-10-26 表单已去掉「来源备注」，保留入参只为兼容老调用方 */
   sourceRemark: optionalStr(100),
-  // ★ 2026-10-15 来源=转介绍(3)时填写的招生老师信息
+  /**
+   * ★ 2026-10-26 招生老师：只服务「来源=市场来源(6)」
+   *   前端是下拉选择（选项来自系统账号），手机号随人一起带出。
+   *   转介绍(3) 不再填招生老师。
+   */
   referrerName: optionalStr(50),
   referrerPhone: optionalStr(20),
   // ★ 2026-10-15 表单已取消「意向课程」输入框，改为选填，避免旧调用方被必填校验挡住
   intendCourse: optionalStr(100),
+  /** 家长联系人姓名 */
   parentContact: optionalStr(50),
-  parentPhone: optionalStr(20),
+  /**
+   * ★ 2026-10-26 家长联系人关系：1父亲 2母亲
+   *   用户口径：「家长联系人选一下性别，父亲还是母亲」
+   */
+  parentRelation: z.coerce.number().int().min(1).max(2, '家长关系只能是 1(父亲) 或 2(母亲)').optional(),
+  /**
+   * 家长电话
+   *
+   * ★ 2026-10-26 用户口径：「家长电话号不去重，可以重复」
+   *   → 只做格式校验（手机号或座机），不做任何唯一性判断。
+   */
+  parentPhone: z.preprocess(
+    emptyToUndef,
+    z.string().trim().max(20, '家长电话最多 20 位').optional(),
+  ),
   deptCode: z.coerce.number().int().min(1).max(2).optional(),
   /**
    * ★ 2026-10-22 用户口径：新建学生表单的「部门」换成「年龄」。
@@ -371,6 +413,8 @@ const addSchema = z.object({
    * 保留 deptCode 只为兼容老调用方 / 历史数据。
    */
   age: z.coerce.number().int().min(1, '年龄需在 1~100 之间').max(100, '年龄需在 1~100 之间').optional(),
+  /** ★ 2026-10-22 学历：与接收端建档共用 EDUCATION_OPTIONS（初中/高中/专科/本科/研究生） */
+  education: optionalStr(20),
 });
 
 studentRouter.post(
@@ -379,6 +423,15 @@ studentRouter.post(
   wrap(async (req, res) => {
     const body = (req as any).validated as z.infer<typeof addSchema>;
     const operator = req.user!;
+
+    /* ---- ★ 2026-10-26 学生手机号：11 位格式已在 addSchema 里校验，这里只做查库去重 ---- */
+    /* ---- 家长电话：允许手机号 / 座机，且**不去重**（可重复） ---- */
+    if (body.parentPhone && !/^[0-9-]{6,20}$/.test(body.parentPhone)) {
+      throw new BizError(
+        BizCode.PARAM_ERROR,
+        '家长电话只能填数字或短横线（6~20 位），手机号、座机都可以',
+      );
+    }
 
     // 手机号去重（同号可能是重复录入）
     const dup = await db(STUDENT_TABLE)
@@ -391,6 +444,17 @@ studentRouter.post(
       );
     }
 
+    /**
+     * ★ 2026-10-26 用户口径：
+     *   「选了市场来源之后选择招生老师，手机号是一起的……转介绍的话就不用出现招生老师了」
+     *   → 只有「市场来源」必须选招生老师（含手机号）；
+     *     其它渠道（家访/线上/转介绍/到校/电话/其他）一律不落招生老师。
+     */
+    const isMarket = body.sourceChannel === LeadChannel.MARKET;
+    if (isMarket && !body.referrerName) {
+      throw new BizError(BizCode.PARAM_ERROR, '来源为「市场来源」时，请选择招生老师');
+    }
+
     const id = randomUUID();
     await db(STUDENT_TABLE).insert({
       id,
@@ -399,14 +463,19 @@ studentRouter.post(
       phone: body.phone,
       source_channel: body.sourceChannel,
       source_remark: body.sourceRemark ?? null,
-      // ★ 2026-10-15 转介绍招生老师（仅来源=转介绍时前端会传）
-      referrer_name: body.sourceChannel === 3 ? body.referrerName ?? null : null,
-      referrer_phone: body.sourceChannel === 3 ? body.referrerPhone ?? null : null,
+      // ★ 2026-10-26 招生老师：仅「市场来源」落库（转介绍不再填）
+      referrer_name: isMarket ? body.referrerName ?? null : null,
+      referrer_phone: isMarket ? body.referrerPhone ?? null : null,
       intend_course: body.intendCourse ?? null,
       parent_contact: body.parentContact ?? null,
+      // ★ 2026-10-26 家长关系（1父亲 2母亲）
+      parent_relation: body.parentRelation ?? null,
+      // ⚠️ 家长电话不去重：同号（比如家长有两个孩子）是正常情况
       parent_phone: body.parentPhone ?? null,
       // ★ 2026-10-22 新建学生表单「年龄」；不填则为 null，接收入班时可补
       age: body.age ?? null,
+      /** ★ 2026-10-22 学历（不填为 null） */
+      education: body.education ?? null,
       dept_code: body.deptCode ?? DeptCode.JUNIOR_SENIOR,
       // 新学生默认「待分配」，等经理分配跟进人
       consult_state: ConsultState.WAIT_ASSIGN,
@@ -453,6 +522,8 @@ const extraSchema = z.object({
   remark: optionalStr(500),
   intendCourse: optionalStr(100),
   parentContact: optionalStr(50),
+  /** ★ 2026-10-26 家长关系 1父亲 2母亲 */
+  parentRelation: z.coerce.number().int().min(1).max(2).optional(),
   parentPhone: optionalStr(20),
 });
 
@@ -480,6 +551,7 @@ studentRouter.put(
     if (body.remark !== undefined) patch.remark = body.remark ?? null;
     if (body.intendCourse !== undefined) patch.intend_course = body.intendCourse ?? null;
     if (body.parentContact !== undefined) patch.parent_contact = body.parentContact ?? null;
+    if (body.parentRelation !== undefined) patch.parent_relation = body.parentRelation ?? null;
     if (body.parentPhone !== undefined) patch.parent_phone = body.parentPhone ?? null;
 
     await db(STUDENT_TABLE).where({ id: body.id }).update(patch);
@@ -709,6 +781,25 @@ studentRouter.post(
     const stu = await findStudent(body.consultStudentId);
     if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
 
+    /**
+     * ★ 2026-10-22 用户口径：「流失不是取消吗？只有咨询中有流失这个操作」
+     *
+     *   流失是**咨询阶段**的放弃动作（还没入班就不来了）；
+     *   已经分班的（待分班 / 试学中 / 正式在读）要走退费流程，
+     *   不能在这里记流失 —— 否则在读人数少一个、流失率虚高，
+     *   而财务侧又没有对应的退费单，账对不上。
+     *
+     *   前端按钮已经只在「咨询中」显示，这里是后端兜底
+     *   （防接口直调、防旧页面缓存）。
+     */
+    const curState = Number(stu.consult_state);
+    if (curState !== ConsultState.TRIAL_FEE_PENDING) {
+      throw new BizError(
+        BizCode.INVALID_STATUS,
+        `「${String(stu.student_name)}」当前状态是「${nameOf(CONSULT_STATE_NAME, curState)}」，只有「咨询中」的学生才能记录流失；已分班的请走退费流程`,
+      );
+    }
+
     await changeState(body.consultStudentId, ConsultState.LOST, {
       byName: operator.userName,
       byTitle: operator.roleTitle,
@@ -873,6 +964,22 @@ studentRouter.get(
   '/consultants',
   wrap(async (_req, res) => {
     res.json(ok(await listConsultants()));
+  }),
+);
+
+/* ============================================================
+ * 10.1 招生老师候选（新建学生「来源=市场来源」下拉）
+ *      GET /api/consult/student/recruiters
+ *
+ * ★ 2026-10-26 用户口径：
+ *   「选了市场来源之后选择招生老师，手机号是一起的，招生老师下拉选项」
+ *   → 选项必须来自系统真实账号，且带 phone（选中即回填手机号）。
+ * ============================================================ */
+
+studentRouter.get(
+  '/recruiters',
+  wrap(async (_req, res) => {
+    res.json(ok(await listRecruitTeachers()));
   }),
 );
 
@@ -1667,7 +1774,8 @@ studentRouter.post(
         phone: stu.phone || null,
         parentPhone: stu.parent_phone || null,
         age: stu.age ?? null,
-        // 学历字段咨询侧没有，留空由班主任接收时补
+        /** ★ 2026-10-22 学历随推送单带给接收端（班主任建档时直接落库，不用再问一遍） */
+        education: stu.education ?? null,
         origin: stu.source_remark || null,
         graduateSchool: stu.school || null,
         homeAddress: stu.address || null,
