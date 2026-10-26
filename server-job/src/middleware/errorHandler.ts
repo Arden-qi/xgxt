@@ -114,13 +114,30 @@ function translateDbError(err: any): string | null {
     );
   }
 
+  /* ★ 2026-10-23：字段不存在也要点名是哪张表哪一列。
+   *
+   * 【为什么】2026-10-23 用户报「阶段方案保存不了」，前端只看到
+   *   「数据库字段/表不存在（可能是迁移脚本没跑）」——
+   *   不看 MySQL 原文根本不知道该补什么。真实原因是
+   *   `Unknown column 'stage_code' in 'field list'`：
+   *   迁移 20261022_001_add_scheme_stage_code 没执行（不是表没了，也不是代码写错）。
+   */
+  if (err.code === 'ER_BAD_FIELD_ERROR') {
+    const raw = String(err.sqlMessage || err.message || '');
+    const col = /Unknown column '([^']+)'/i.exec(raw)?.[1];
+    const table = /\b(?:from|into|update)\s+`?([a-z0-9_]+)`?/i.exec(raw)?.[1];
+    return (
+      `数据库缺少字段${col ? `「${col}」` : ''}${table ? `（表 ${table}）` : ''} —— ` +
+      '多半是迁移脚本没跑：cd server-job && npm run migrate'
+    );
+  }
+
   const map: Record<string, string> = {
     ER_DUP_ENTRY: '数据已存在，请勿重复添加',
     ER_NO_REFERENCED_ROW_2: '关联的数据不存在',
     ER_ROW_IS_REFERENCED_2: '该数据被其他记录引用，无法删除',
     ER_ACCESS_DENIED_ERROR: '数据库账号或密码错误',
     ECONNREFUSED: '无法连接数据库，请检查数据库是否启动',
-    ER_BAD_FIELD_ERROR: '数据库字段不存在（可能是迁移脚本没跑）',
     ER_DATA_TOO_LONG: '输入的内容太长了',
   };
 

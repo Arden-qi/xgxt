@@ -314,6 +314,12 @@ async function submitNew() {
     ElMessage.warning('请填写学生姓名');
     return;
   }
+  /** ★ 2026-10-23：手机号必填（后端也要求）。空值以前会被当成 undefined 从 JSON 里丢掉，
+   *   后端 zod 收到的就是「没有这个字段」，于是报「参数「phone」类型不正确」。 */
+  if (!newForm.value.phone.trim()) {
+    ElMessage.warning('请填写学生手机号');
+    return;
+  }
   const f = newForm.value;
   // ★ 2026-10-15 来源=转介绍时招生老师姓名必填
   if (f.sourceChannel === 3 && !f.referrerName.trim()) {
@@ -323,7 +329,7 @@ async function submitNew() {
   const res = await addStudent({
     studentName: f.studentName.trim(),
     gender: f.gender,
-    phone: f.phone || undefined,
+    phone: f.phone.trim(),
     // ★ 2026-10-22：「部门」换成「年龄」（部门改为分配班级时选学部）
     age: f.age ?? undefined,
     sourceChannel: f.sourceChannel,
@@ -1555,8 +1561,10 @@ onMounted(load);
             <el-radio :value="2">女</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="手机号">
-          <el-input v-model="newForm.phone" placeholder="学生本人手机号" />
+        <!-- ★ 2026-10-23：手机号改为必填（与后端 z.string().min(1) 口径一致）。
+             原来这里没红星、提交也不拦，空着能点确定 → 后端报「参数「phone」类型不正确」。 -->
+        <el-form-item label="手机号" required>
+          <el-input v-model="newForm.phone" placeholder="学生本人手机号" maxlength="20" />
         </el-form-item>
         <el-form-item label="年龄">
           <!-- ★ 2026-10-22 用户口径：原来的「部门」在这里没有意义（部门是分配班级时才选的学部），
