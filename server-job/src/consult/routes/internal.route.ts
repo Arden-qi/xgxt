@@ -630,13 +630,21 @@ consultInternalRouter.post(
       update_time: now,
     });
 
-    // 学生：走 changeState（会写跟进历史 + 同步财务冻结/解冻），落到「流失」
+    /**
+     * 学生：走 changeState（会写跟进历史 + 同步财务冻结/解冻）。
+     *
+     * ★ 2026-10-26 修：原来是 `ConsultState.LOST`（流失 12）。
+     *   用户实测：财务退费出款后，学生档案（学籍）仍停在「试学中」——
+     *   因为 12→11 流失 不在学籍同步目标里，等于没同步。
+     *   退费完成在咨询侧本来就该是「已退费(10)」，映射到学籍 7「退学」，
+     *   这样教学档案才会跟着变（见 teaching/student/service.ts 的 CONSULT_SYNC_TARGETS）。
+     */
     let synced = false;
     try {
-      const r = await changeState(row.consult_student_id, ConsultState.LOST, {
+      const r = await changeState(row.consult_student_id, ConsultState.REFUNDED, {
         byName: '财务出款',
         byTitle: '系统',
-        historyText: `财务已出款（${b.financeRefundNo || row.finance_refund_no || '退费单'}），学生置为流失`,
+        historyText: `财务已出款（${b.financeRefundNo || row.finance_refund_no || '退费单'}），学生置为「已退费」`,
         action: 'refund-paid',
       } as any);
       synced = !!r?.synced;

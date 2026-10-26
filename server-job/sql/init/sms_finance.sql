@@ -364,6 +364,26 @@ INSERT INTO `t_finance_refund` VALUES ('RFD-1','2026-10-06 21:25:29','SEED','202
 UNLOCK TABLES;
 
 --
+-- Table structure for table `t_finance_setting`
+--
+
+-- ★ 2026-10-26 补：财务配置（催费提醒等 KV 表）
+--   来源：队友 2026-10-26 加的催费设置（`finance/services/urge.service.ts` 读 urgeAheadDays）。
+--   当时只留了建表脚本 `scripts/_migrate-finance-setting-20261026.mjs`，没写进 init SQL →
+--   按《数据库变更约定》补齐（新表必须同时进 init SQL + 迁移/脚本），否则新机器初始化会缺表。
+DROP TABLE IF EXISTS `t_finance_setting`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `t_finance_setting` (
+  `setting_key` varchar(64) NOT NULL COMMENT '配置键',
+  `setting_value` varchar(255) NOT NULL DEFAULT '' COMMENT '配置值',
+  `update_time` datetime DEFAULT NULL COMMENT '更新时间',
+  `update_by` varchar(64) DEFAULT NULL COMMENT '更新人',
+  PRIMARY KEY (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='财务配置（催费提醒等）';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `t_student_base`
 --
 
@@ -429,3 +449,17 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2026-10-07  0:08:25
+
+-- ---------------------------------------------------------------
+-- ★ 2026-10-26 补：催费设置表（KV 配置，如「提前几天提醒」）
+--   原来只由 scripts/_migrate-finance-setting-20261026.mjs 建，
+--   建库 SQL 里没有 → 新环境只导 init SQL 会缺这张表（催费设置页报「数据表不存在」）。
+--   按仓库约定「加表两手都写」补进来；IF NOT EXISTS 保证重复导入安全。
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `t_finance_setting` (
+  `setting_key`   varchar(64)  NOT NULL COMMENT '配置键',
+  `setting_value` varchar(255) NOT NULL DEFAULT '' COMMENT '配置值',
+  `update_time`   datetime     DEFAULT NULL COMMENT '更新时间',
+  `update_by`     varchar(64)  DEFAULT NULL COMMENT '更新人',
+  PRIMARY KEY (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='财务配置（催费提醒等）';

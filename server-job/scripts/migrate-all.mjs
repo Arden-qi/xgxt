@@ -79,6 +79,14 @@ const POST_STEPS = [
   // ★ 2026-10-26 催费设置表（提前天数等 KV 配置）
   ['scripts/_migrate-finance-setting-20261026.mjs', '催费设置表', 'sms_finance', ['--apply']],
 
+  /*
+   * ★ 2026-10-26：教学域「催费」→「缴费」改名。
+   *   只改代码不改权限库 → 页面名与 t_perm_menu.item_name 对不上，
+   *   非管理员账号的 rolePageDefaults 推导不出 /teaching/fee，侧栏整块消失。
+   *   脚本幂等；已经改过 / 新库（导入的 sms_perm.sql 已是新名字）都会秒过。
+   */
+  ['scripts/fix-teach-fee-item-name.mjs', '教学缴费改名', 'sms_perm'],
+
   /**
    * ★ 2026-10-22：咨询状态对账
    *
@@ -95,6 +103,14 @@ const POST_STEPS = [
    * 用入班历史 / 建档日补齐，只补空不覆盖。
    */
   ['scripts/repair-trial-start.mjs', '进班日对账', 'sms_consult'],
+  /**
+   * ★ 2026-10-26：退费状态对账
+   *
+   * 财务驳回只改了退费单状态、没回滚学生状态 → 人卡在「退费中(8/9)」，
+   * 退费下拉选不到、学生管理也没操作，流程闭不上环。
+   * 代码已修（驳回统一走 restoreStudentAfterReject），这里补存量数据。
+   */
+  ['scripts/repair-refund-state.mjs', '退费状态对账', 'sms_consult'],
 ];
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));

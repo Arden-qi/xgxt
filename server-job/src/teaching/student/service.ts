@@ -253,7 +253,19 @@ function dedupeByStudentNo(rows: StudentRow[]): StudentRow[] {
  *   · 咨询模块不可用 → 直接跳过，列表照常打开（不能因为跨模块超时让档案页打不开）。
  * ============================================================ */
 const CONSULT_SYNCABLE = new Set<number>([StudentStatus.TRIAL, 4, StudentStatus.STUDYING]);
-const CONSULT_SYNC_TARGETS = new Set<number>([StudentStatus.TRIAL, 4, StudentStatus.STUDYING]);
+/**
+ * ★ 2026-10-26：目标里补「退学(7)」。
+ *
+ *   咨询「已退费(10)」→ 学籍「退学(7)」，原来 7 不在目标集合 →
+ *   财务退费出款后学生档案仍停在「试学中」（用户实测王五）。
+ *   保留原三档（试学/预在读/在读）不动，其余状态仍不同步（避免误改休学/就业等）。
+ */
+const CONSULT_SYNC_TARGETS = new Set<number>([
+  StudentStatus.TRIAL,
+  4,
+  StudentStatus.STUDYING,
+  StudentStatus.QUIT,
+]);
 
 async function syncConsultStatuses(rows: StudentRow[]): Promise<void> {
   const todo = rows.filter((r) => r.studentNo && CONSULT_SYNCABLE.has(Number(r.studentStatus)));
