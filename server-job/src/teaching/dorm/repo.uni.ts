@@ -60,7 +60,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { DormCandidateRow, DormRepo } from './types';
 import { bedNoText } from 'shared-types/class';
 import { hasRole, RoleCode, StudentStatus } from 'shared-types';
-import { tbl, tblIns, upd, uniDb } from '../shared/uniTable';
+import { tbl, tblIns, upd, uniDb, USE_UNI_TABLE, UNI_MAP } from '../shared/uniTable';
 import { visibleClassIds } from '../shared/dataScope';
 import { listBuildingNames as listDormBuildingNames } from './building.service';
 import { loadClassStatus, loadClassStatuses } from './classStatus';
@@ -88,6 +88,26 @@ const STUDENT_SOURCES = [
  *   切读打开时，表名由 UNI_MAP 换成统一表，库名只用于查映射表 → 三学段都落同一张。
  */
 const SRC_DB = 'sms_job';
+
+/**
+ * ★ 2026-10-26：按 id 全学段查房间/床位表（统一表或老表）。
+ *
+ * 【为什么需要】
+ *   `T_DORM()` / `T_BED()` 是「本学段」闭包（makeRepo(stage) 注入 edu_stage，
+ *   见 line 137），会附加 `where edu_stage = 本学段`。
+ *   但班级分派关系 `t_edu_dorm_assignment` 是**跨学段**的 —— 初高班也能分到实训/大学楼
+ *   （注释 line 276 明说：「1号楼是初高房间，也能分给大学班 Q20」）。
+ *   → 用 T_DORM() 按 stage=jh 查 G2601/J2602 分到的 JDORM-1 / fe2dfb4c（都是 job 学段房间）
+ *     会恒为 0，学生档案「新增学生」的楼栋→宿舍→床位联动因此选不出房间。
+ *
+ * 【修法】
+ *   房间 id 已通过分派关系拿到（全局唯一，跨学段），按 id 查**不需要再卡学段**，
+ *   直接落统一表（开关开）或老表（开关关），不附加 edu_stage 过滤。
+ */
+function byIdTable(table: string): any {
+  const uni = UNI_MAP[`${SRC_DB}.${table}`];
+  return USE_UNI_TABLE ? uniDb(uni) : db(table);
+}
 
 
 
@@ -751,7 +771,7 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
       const ids = assigned.map((a) => str(a.room_id) || '').filter(Boolean);
       if (!ids.length) return [];
 
-      const rooms = (await T_DORM()
+      const rooms = (await byIdTable(DORM_T)
         .where({ is_deleted: false })
         .whereIn('id', ids)) as any[];
       if (!rooms.length) return [];
@@ -761,7 +781,7 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
         ),
       );
 
-      const beds = (await T_BED().where({ is_deleted: false }).whereIn('dorm_id', ids)) as any[];
+      const beds = (await byIdTable(BED_T).where({ is_deleted: false }).whereIn('dorm_id', ids)) as any[];
       const bedMap = new Map<string, any[]>();
       for (const b of beds) {
         const key = str(b.dorm_id) || '';
