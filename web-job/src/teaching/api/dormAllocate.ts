@@ -64,6 +64,8 @@ export interface AllocateStudentRow {
   studentName: string;
   gender: number;
   genderName: string;
+  /** ★ 学籍状态：退宿申请只列「休学(6) / 退学(7)」 */
+  studentStatus?: number | null;
   classId: string | null;
   className: string | null;
   headTeacherName: string | null;
@@ -96,6 +98,8 @@ export function searchAllocateStudents(params: {
   className?: string;
   keyword?: string;
   limit?: number;
+  /** ★ 学籍状态过滤：退宿申请传 [6,7]（休学/退学）；不传 = 不限制 */
+  statuses?: number[];
 }): Promise<AllocateStudentRow[]> {
   return http.get<AllocateStudentRow[]>('/api/teaching/dorm/allocate/students', params);
 }

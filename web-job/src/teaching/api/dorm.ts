@@ -317,6 +317,28 @@ export interface DormCandidateRow {
   dormNo: string | null;
 }
 
+/**
+ * ★ 2026-10-26：班级名下的宿舍（学生档案「新增学生」时 楼栋→宿舍→床位 联动）
+ * 按班级的分派关系取房，每间房带床位（含占用者）；占用床前端禁选。
+ */
+export interface DormClassRoomRow {
+  roomId: string;
+  /** 楼栋名（如「1号楼」） */
+  building: string;
+  /** 房号（如「101」） */
+  room: string;
+  /** 宿舍编号「楼栋-房号」，直接作为 dormNo 入库 */
+  dormNo: string;
+  bedCount: number;
+  occupiedCount: number;
+  beds: DormBedRow[];
+}
+
+export async function listDormClassRooms(q: { stage?: DormStage; className: string }) {
+  const r = await http.get(`${BASE}/class-rooms${qs(q)}`);
+  return r as unknown as { buildings: string[]; rooms: DormClassRoomRow[] };
+}
+
 export async function listDormCandidates(
   q: {
     stage?: DormStage;

@@ -79,12 +79,22 @@ teachingDormAllocateRouter.get(
 teachingDormAllocateRouter.get(
   '/students',
   wrap(async (req, res) => {
+    // 学籍状态过滤：退宿申请传 statuses=6,7（休学/退学）；不传 = 不限制
+    let statuses: number[] | undefined;
+    if (req.query.statuses !== undefined && req.query.statuses !== '') {
+      const raw = Array.isArray(req.query.statuses)
+        ? (req.query.statuses as unknown[])
+        : String(req.query.statuses).split(',');
+      const parsed = raw.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+      if (parsed.length) statuses = parsed;
+    }
     res.json(
       ok(
         await svc.searchStudents({
           className: str(req.query.className),
           keyword: str(req.query.keyword),
           limit: Number(req.query.limit) || 50,
+          statuses,
         }),
         '查询成功',
       ),

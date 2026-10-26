@@ -24,6 +24,7 @@ import type {
   DormBedRow,
   DormChangeCreateBody,
   DormChangeRow,
+  DormClassRoomRow,
   DormListQuery,
   DormResidentRow,
   DormRow,
@@ -98,6 +99,11 @@ export interface DormRepo {
    *   · 班主任/教员/助教 → 只返回名下班级。
    */
   checkinClasses(user: any): Promise<Array<{ classId: string | null; className: string }>>;
+  /**
+   * ★ 2026-10-26：班级名下分派到的房间（含床位）
+   * 学生档案新增学生时的「楼栋 → 宿舍 → 床位」三级联动数据源。
+   */
+  classRooms(className: string): Promise<DormClassRoomRow[]>;
   /** 分派床位（学生入住） */
   /** ★ 2026-10-22：user 用于班主任房间范围校验（userId 仅作操作留痕） */
   assign(body: DormAssignBody, user: any): Promise<void>;
