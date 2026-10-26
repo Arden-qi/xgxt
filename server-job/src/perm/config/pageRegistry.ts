@@ -271,7 +271,7 @@ const TEACH: RegistryBoard = {
       title: '宿舍管理',
       path: '/teaching/dorm',
       pageCodes: ['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view'],
-      remark: '各学段宿舍分派、调换与退宿',
+      remark: '四个页签：宿舍房间 / 分派宿舍 / 申请审批 / 楼栋设置',
     },
     {
       key: 'fee',

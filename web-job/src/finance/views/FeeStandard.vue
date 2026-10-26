@@ -28,7 +28,7 @@
       <!-- 工具条：左主按钮，右统计 -->
       <div class="table-toolbar">
         <div class="tools">
-          <el-button type="primary" @click="handleAdd">新增标准</el-button>
+          <el-button v-if="canManageStandard" type="primary" @click="handleAdd">新增标准</el-button>
         </div>
         <div class="tools">
           <span class="stat-line">
@@ -87,15 +87,19 @@
         </el-table-column>
         <el-table-column label="操作" width="150" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="handleEdit(row)">修改金额</el-button>
-            <el-button
-              link
-              :type="row.isEnabled ? 'warning' : 'success'"
-              size="small"
-              @click="handleToggle(row)"
-            >
-              {{ row.isEnabled ? '停用' : '启用' }}
-            </el-button>
+            <!-- ★ 2026-10-26：与后端 finance:standard:manage 同口径，只勾「查看」则整列只读 -->
+            <template v-if="canManageStandard">
+              <el-button link type="primary" size="small" @click="handleEdit(row)">修改金额</el-button>
+              <el-button
+                link
+                :type="row.isEnabled ? 'warning' : 'success'"
+                size="small"
+                @click="handleToggle(row)"
+              >
+                {{ row.isEnabled ? '停用' : '启用' }}
+              </el-button>
+            </template>
+            <span v-else style="color: var(--el-text-color-placeholder)">—</span>
           </template>
         </el-table-column>
       </el-table>
@@ -205,6 +209,11 @@ import {
 } from 'shared-types/finance';
 import { fetchStandardList, saveStandard, deleteStandard } from '@/finance/api/finance';
 import { formatAmount, dash } from '@/finance/utils/finance';
+// ★ 2026-10-26：与后端 finance:standard:manage 同口径 —— 只勾「查看」的职位不能改标准
+import { hasPerm } from '@/store/permission';
+
+/** 有没有「费用标准维护」操作权 */
+const canManageStandard = computed(() => hasPerm('finance:standard:manage'));
 
 /* ---------- 列表 ---------- */
 
