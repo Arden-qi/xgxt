@@ -354,6 +354,21 @@ const createSchema = z.object({
     .record(z.string(), z.coerce.number().int().min(0, '自定义金额必须大于等于 0（单位：分）'))
     .optional(),
   /**
+   * ★ 2026-10-26 住宿费按月缴纳
+   *
+   * 用户口径：「住宿费一个月 450，默认缴纳 6 个月，可以自己选择缴纳几个月」。
+   * 财务「住宿费」标准价是 6 个月的价，所以月单价 = 标准价 ÷ 6，
+   * 应缴 = 月单价 × accommodationMonths（不传按 6 个月）。
+   */
+  accommodationMonths: z.coerce.number().int().min(1).max(12).optional(),
+  /**
+   * ★ 2026-10-26 用户口径：「优惠金额要有明确的名目，优惠只能优惠学费」
+   *
+   * 实缴 < 应缴（即存在优惠）时必须传名目，handler 里校验 + 报人话提示；
+   * 名目取值见 shared-types 的 DISCOUNT_REASONS。
+   */
+  discountReason: z.string().max(50).optional(),
+  /**
    * ★ 2026-10-19 用户口径：「只要缴费就要有凭证」。
    *    发起收费必须带缴费凭证，建单即落库（财务侧建单即待核对），
    *    不再有「先建单、再补传凭证」的中间态。
@@ -404,6 +419,10 @@ feeRouter.post(
             amountByType,
             body.voucherUrl,
             body.voucherNo,
+            // ★ 2026-10-26 住宿费月数
+            body.accommodationMonths,
+            // ★ 2026-10-26 优惠名目（有优惠时必填，service 里兜底校验）
+            body.discountReason,
           )
         : await createFees(
             body.consultStudentId,
@@ -413,6 +432,8 @@ feeRouter.post(
             amountByType,
             body.voucherUrl,
             body.voucherNo,
+            body.accommodationMonths,
+            body.discountReason,
           );
 
     res.json(ok(result, result.message));

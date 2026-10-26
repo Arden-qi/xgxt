@@ -71,7 +71,24 @@ const ORDER = [
  */
 const POST_STEPS = [
   ['scripts/fix-consult-columns.mjs', '咨询表补列', 'sms_consult'],
+  /* ★ 2026-10-26 合并上游：财务退费结构（3 列 + 明细表 + 唯一索引），第 4 位是透传给脚本的参数 */
   ['scripts/_migrate-finance-refund-20261022.mjs', '财务退费结构', 'sms_finance', ['--apply']],
+  /**
+   * ★ 2026-10-22：咨询状态对账
+   *
+   * 「教学侧已建档入班、咨询侧还停在待分班 / 没学号」这类历史数据，
+   * 靠一次幂等对账补齐（只升不降、不碰退费流失）。
+   * 必须排在学籍库（class / class-jh）迁移之后 —— 它要读那边的档案。
+   */
+  ['scripts/repair-consult-state.mjs', '咨询状态对账', 'sms_consult'],
+  /**
+   * ★ 2026-10-23：进班日（trial_start）对账
+   *
+   * 已入班但 trial_start 为空的学生（缴全款直接转正式的走 FORMAL 分支，
+   * 早期没写这一列），退费弹窗算不出最早可选日 → 日历能选到几个月前。
+   * 用入班历史 / 建档日补齐，只补空不覆盖。
+   */
+  ['scripts/repair-trial-start.mjs', '进班日对账', 'sms_consult'],
 ];
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
