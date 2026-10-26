@@ -29,7 +29,7 @@ import { assertStatusUnlocked } from '../shared/statusLock';
 import { db as jobDb } from '../../utils/db';
 import { db as classDb } from '../../class/db';
 import { db as classJhDb } from '../../class-jh/utils/db';
-import { tbl } from '../shared/uniTable';
+import { tbl, uniDb } from '../shared/uniTable';
 import type { StudentStage } from '../shared/dto';
 
 const T_STUDENT = 't_class_student';
@@ -51,8 +51,17 @@ function qbOf(stage: StageLike): Knex.QueryBuilder {
       return tbl(classDb, 'sms_class', T_STUDENT, 'class');
     case 'job':
       return tbl(jobDb, 'sms_job', T_JOB_STUDENT, 'job');
+    /**
+     * ★ 2026-10-25 修：「就业」学段的学生在库里可能是 edu_stage='job'（实训升上来的）
+     *   也可能是 'emp'。原来 `tbl(...,'emp')` 会被注入 edu_stage='emp' →
+     *   库里那条 'job' 的学生查不到 → 点【已就业】报「学生不存在」
+     *   （用户实测：学生 999 在就业部列表能看到，点已就业却提示不存在）。
+     *   与 repo.emp 的取数口径保持一致：edu_stage in ('job','emp') 且 dept_code=3。
+     */
     case 'emp':
-      return tbl(jobDb, 'sms_job', T_JOB_STUDENT, 'emp');
+      return uniDb('t_uni_student')
+        .whereIn('edu_stage', ['job', 'emp'])
+        .andWhere('dept_code', 3);
     case 'edu':
     default:
       // 教务：库名前缀直接写死（该库不在统一表映射里）

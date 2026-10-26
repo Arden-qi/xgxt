@@ -58,6 +58,31 @@
       </div>
 
       <!--
+        ★ 2026-10-26 班级汇总（只在筛选了班级时出现）
+        用户口径：「筛选出班级之后增加查看所有的费用的金额总额」
+        统计口径是该班全部账单（不受分页影响），所以翻页时这个数字不变。
+      -->
+      <div v-if="classSummary" class="class-summary">
+        <div class="cs-head">
+          <span class="cs-title">{{ classSummary.className }} 班 · 缴费汇总</span>
+          <span class="cs-sub">{{ classSummary.studentCount }} 位学员有缴费记录</span>
+        </div>
+        <div class="cs-body">
+          <div class="cs-total">
+            <span class="cs-label">全班缴费总额</span>
+            <span class="cs-value">{{ formatAmount(classSummary.totalAmount) }}</span>
+          </div>
+          <div class="cs-groups">
+            <div v-for="g in classSummary.groups" :key="g.key" class="cs-item">
+              <span class="g-name">{{ g.name.replace('缴费记录', '') }}</span>
+              <span class="g-amount">{{ formatAmount(g.amount) }}</span>
+              <span class="g-count">{{ g.count }} 笔</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!--
         ============ 明细表（按学员归集）============
         ⭐ 原型规则（学管财务管理原型-20260923）：
            一行 = 一个学员；四类列各自显示 金额 + 笔数 + 最近缴费日期；
@@ -98,6 +123,14 @@
                   最近缴费 {{ row[g.key]?.latestDate || '—' }}
                 </template>
                 <template v-else>暂无缴费记录</template>
+                <!--
+                  ★ 2026-10-26 到期日（仅餐费 / 住宿费 / 保险费有此值）
+                  用户口径：不用展开就能看到「这顿饭吃到哪天 / 这个床位住到哪天」。
+                  续费是接续计算的，所以这里显示的就是当前有效期的截止日。
+                -->
+                <div v-if="row[g.key]?.expireDate" class="expire">
+                  到期 {{ row[g.key].expireDate }}
+                </div>
               </div>
             </div>
           </template>
@@ -109,66 +142,13 @@
               link
               type="primary"
               size="small"
-              @click="toggleExpand(row)"
+              @click="openDetail(row)"
             >
-              {{ isExpanded(row.studentId) ? '收起 ‹' : '详情 ›' }}
+              详情 ›
             </el-button>
           </template>
         </el-table-column>
 
-        <!--
-          ============ 展开行：四类分组（默认折叠）============
-          ⚠️ 两级展开：
-             第一级 = 这个学员的四类费用分组（本展开行）
-             第二级 = 点某个分组标题，展开该组每笔缴费记录
-        -->
-        <el-table-column type="expand" width="1" class-name="expand-col">
-          <template #default="{ row }">
-            <div class="detail">
-              <div class="dgrid">
-                <div
-                  v-for="g in GROUP_COLS"
-                  :key="g.key"
-                  class="dbox"
-                  :class="{ open: isGroupOpen(row.studentId, g.key) }"
-                >
-                  <h4 @click="toggleGroup(row.studentId, g.key)">
-                    <span class="dt">{{ row[g.key]?.name || g.title }}</span>
-                    <em>{{ row[g.key]?.count ?? 0 }} 笔</em>
-                    <span class="money">{{ formatAmount(row[g.key]?.amount) }}</span>
-                    <i class="ar">{{ isGroupOpen(row.studentId, g.key) ? '收起 ‹' : '展开 ›' }}</i>
-                  </h4>
-                  <div v-if="isGroupOpen(row.studentId, g.key)" class="dbody">
-                    <div v-if="!(row[g.key]?.records || []).length" class="none">
-                      暂无缴费记录
-                    </div>
-                    <div
-                      v-for="rec in row[g.key]?.records || []"
-                      :key="rec.billNo"
-                      class="rec"
-                    >
-                      <div class="l">
-                        <b>{{ rec.feeTypeName }} {{ formatAmount(rec.amount) }}</b>
-                        <span>{{ rec.date }} · 凭证号 {{ rec.voucherNo || '—' }}</span>
-                      </div>
-                      <el-button
-                        v-if="rec.voucherUrl"
-                        link
-                        type="primary"
-                        size="small"
-                        @click="openPreview(rec.voucherUrl)"
-                      >
-                        查看凭证
-                      </el-button>
-                      <span v-else class="no-voucher">无凭证</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="dtip">点击任一费用分组可展开该组的全部缴费记录与凭证</div>
-            </div>
-          </template>
-        </el-table-column>
       </el-table>
 
       <!-- 分页文案条 -->
@@ -185,6 +165,110 @@
         />
       </div>
     </el-card>
+
+    <!--
+      ============ 学生费用明细弹窗（2026-10-26 用户要求）============
+      原来是在表格里两级展开（先展开学员、再展开分组），用户觉得在表内不好看，
+      改成：点「详情」弹窗看这个学生的全部费用，点任意一笔再弹缴费单。
+    -->
+    <!--
+      ★ 2026-10-26 学员详情弹窗 · Tab 版（用户要求照学生档案弹窗的样式）
+      顶部 Tab 切换：基础信息 / 五类缴费记录；点记录再弹缴费单（共用 FeeDetailDialog）。
+    -->
+    <el-dialog
+      v-model="detailVisible"
+      width="920px"
+      top="5vh"
+      destroy-on-close
+      class="stu-dlg"
+      :show-close="true"
+    >
+      <template #header>
+        <div class="dlg-head">
+          <span class="dh-name">{{ detailRow?.studentName || '学员' }} · 学员详情</span>
+          <span class="dh-meta">
+            {{ dash(detailRow?.studentNo) }} | {{ dash(detailRow?.className) }} |
+            {{ dash(detailRow?.deptName) }}
+          </span>
+        </div>
+      </template>
+
+      <el-tabs v-if="detailRow" v-model="activeTab" class="fee-tabs">
+        <!-- ========== 基础信息 ========== -->
+        <el-tab-pane label="基础信息" name="base">
+          <el-descriptions :column="3" border size="small">
+            <el-descriptions-item label="学号">{{ dash(detailRow.studentNo) }}</el-descriptions-item>
+            <el-descriptions-item label="姓名">{{ detailRow.studentName }}</el-descriptions-item>
+            <el-descriptions-item label="班级">{{ dash(detailRow.className) }}</el-descriptions-item>
+            <el-descriptions-item label="部门">{{ dash(detailRow.deptName) }}</el-descriptions-item>
+            <el-descriptions-item label="缴费笔数">{{ detailRow.totalCount }} 笔</el-descriptions-item>
+            <el-descriptions-item label="缴费合计">
+              <b class="sum-total">{{ formatAmount(detailRow.totalAmount) }}</b>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div class="sum-row">
+            <div v-for="g in GROUP_COLS" :key="g.key" class="sum-item">
+              <span class="s-name">{{ g.title }}</span>
+              <span class="s-amount">{{ formatAmount(detailRow[g.key]?.amount) }}</span>
+              <span class="s-count">{{ detailRow[g.key]?.count ?? 0 }} 笔</span>
+              <span v-if="detailRow[g.key]?.expireDate" class="s-expire">
+                到期 {{ detailRow[g.key].expireDate }}
+              </span>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- ========== 五类缴费记录 ========== -->
+        <el-tab-pane
+          v-for="g in GROUP_COLS"
+          :key="g.key"
+          :label="g.title"
+          :name="g.key"
+        >
+          <div class="tab-head">
+            <span>
+              {{ detailRow[g.key]?.count ?? 0 }} 笔 · 合计
+              <b>{{ formatAmount(detailRow[g.key]?.amount) }}</b>
+            </span>
+            <span v-if="detailRow[g.key]?.expireDate" class="expire-inline">
+              到期 {{ detailRow[g.key].expireDate }}
+            </span>
+          </div>
+          <el-table :data="detailRow[g.key]?.records || []" size="small" border>
+            <el-table-column prop="date" label="日期" width="110" />
+            <el-table-column prop="feeTypeName" label="费用项" width="110" />
+            <el-table-column label="金额" width="130" align="right">
+              <template #default="{ row }">
+                <b class="rec-amount">{{ formatAmount(row.amount) }}</b>
+              </template>
+            </el-table-column>
+            <el-table-column prop="billNo" label="账单号" width="150" />
+            <el-table-column prop="voucherNo" label="凭证号" min-width="120">
+              <template #default="{ row }">{{ row.voucherNo || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="90" align="center">
+              <template #default="{ row }">
+                <el-button link type="primary" size="small" @click="openFeeDetail(row)">
+                  详情 ›
+                </el-button>
+              </template>
+            </el-table-column>
+            <template #empty>暂无缴费记录</template>
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
+
+      <template #footer>
+        <el-button @click="detailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!--
+      缴费单详情 · 与缴费管理共用同一个组件（2026-10-26 用户要求「同一个缴费单、同样式」）
+      传 feeId 由组件自己拉详情；缴费类型、应缴实缴、这笔钱包含哪些、凭证，全都一致。
+    -->
+    <FeeDetailDialog v-model="feeDetailVisible" :fee-id="feeDetailId" />
 
     <!-- ============ 凭证大图预览 ============ -->
     <el-image-viewer
@@ -219,6 +303,7 @@ import { ElMessage } from 'element-plus';
 
 import type { BillStudentRow, BillStudentQuery, DeptCode } from 'shared-types/finance';
 import { fetchBillStudents, fetchBillClasses } from '@/finance/api/finance';
+import FeeDetailDialog from '@/finance/components/FeeDetailDialog.vue';
 import { formatAmount, dash } from '@/finance/utils/finance';
 
 /** 五类费用列（顺序与原型一致：学费 / 餐费 / 住宿费 / 保险费 + 杂费） */
@@ -234,6 +319,18 @@ const GROUP_COLS = [
 const loading = ref(false);
 const tableData = ref<BillStudentRow[]>([]);
 const total = ref(0);
+/**
+ * ★ 2026-10-26 班级汇总（筛选了班级才有）
+ *
+ * 用户口径：「筛选出班级之后增加查看所有的费用的金额总额」，并按类型拆分。
+ * 后端算的是**该班全部账单**（不受分页影响），所以数字不会随翻页变化。
+ */
+const classSummary = ref<{
+  className: string;
+  studentCount: number;
+  totalAmount: number;
+  groups: { key: string; name: string; amount: number; count: number }[];
+} | null>(null);
 const classOptions = ref<string[]>([]);
 
 /** 部门 Tab：all / 初高部(1) / 大学部(2) */
@@ -297,6 +394,8 @@ async function loadData() {
     const data = await fetchBillStudents(query);
     tableData.value = data.list;
     total.value = data.total;
+    // ★ 2026-10-26 筛了班级时后端会带 classSummary，没筛就是 null
+    classSummary.value = (data as any).classSummary ?? null;
     // 换页后收起展开行，避免「上一页的展开态串到下一页」
     expandedStudents.value = new Set();
     openGroups.value = new Set();
@@ -397,6 +496,58 @@ function openPreview(url?: string) {
   previewVisible.value = true;
 }
 
+/* ============================================================
+ * ★ 2026-10-26 学生费用明细弹窗（用户要求：从表格内展开改成弹窗）
+ * ============================================================ */
+const detailVisible = ref(false);
+const detailRow = ref<BillStudentRow | null>(null);
+const detailTitle = computed(() => {
+  const r = detailRow.value;
+  if (!r) return '费用明细';
+  const no = r.studentNo ? `（${r.studentNo}）` : '';
+  return `${r.studentName}${no} 的费用明细`;
+});
+
+/* ★ 2026-10-26 弹窗内分组的折叠状态（默认全展开，可单独收起） */
+const dlgOpenGroups = ref<Set<string>>(new Set());
+function dlgGroupOpen(key: string) {
+  return dlgOpenGroups.value.has(key);
+}
+function toggleDlgGroup(key: string) {
+  const s = new Set(dlgOpenGroups.value);
+  if (s.has(key)) s.delete(key);
+  else s.add(key);
+  dlgOpenGroups.value = s;
+}
+
+const activeTab = ref('base');
+
+function openDetail(row: BillStudentRow) {
+  detailRow.value = row;
+  activeTab.value = 'base';
+  // 打开时默认五组全展开（用户看明细的诉求就是「一眼看全」），可手动收起
+  dlgOpenGroups.value = new Set(GROUP_COLS.map((g) => g.key));
+  detailVisible.value = true;
+}
+
+/* ============================================================
+ * ★ 2026-10-26 点明细里的某一笔 → 弹该笔的缴费单
+ *
+ * 账单记录带 sourceId（= t_finance_fee.id），直接查缴费单详情。
+ * 合并单拆账后多条账单共用同一个 sourceId，点哪一条都是同一张缴费单，符合预期。
+ * ============================================================ */
+const feeDetailVisible = ref(false);
+const feeDetailId = ref('');
+
+function openFeeDetail(rec: { sourceId?: string; billNo?: string }) {
+  if (!rec?.sourceId) {
+    ElMessage.warning('这条账单没有关联缴费单（可能是历史数据）');
+    return;
+  }
+  feeDetailId.value = rec.sourceId;
+  feeDetailVisible.value = true;
+}
+
 onMounted(() => {
   loadClassOptions();
   loadData();
@@ -431,6 +582,96 @@ onMounted(() => {
   font-size: 11.5px;
   color: #9C8D88;
   margin-top: 2px;
+}
+
+/* ★ 2026-10-26 餐费 / 住宿费 / 保险费的到期日（不展开就能看到） */
+.cell2 .expire {
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #B8741A;
+}
+
+/* ★ 2026-10-26 班级汇总卡（筛了班级才出现） */
+.class-summary {
+  margin: 0 0 12px;
+  padding: 12px 16px;
+  border: 1px solid #E4E9F2;
+  border-radius: 8px;
+  background: #F8FAFD;
+}
+
+.cs-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.cs-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #2F5597;
+}
+
+.cs-sub {
+  font-size: 11.5px;
+  color: #8A94A6;
+}
+
+.cs-body {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.cs-total {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 150px;
+}
+
+.cs-label {
+  font-size: 11.5px;
+  color: #8A94A6;
+}
+
+.cs-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #B22A23;
+}
+
+.cs-groups {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.cs-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 16px;
+  border-left: 1px dashed #DDE3ED;
+}
+
+.cs-item .g-name {
+  font-size: 11.5px;
+  color: #8A94A6;
+}
+
+.cs-item .g-amount {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.cs-item .g-count {
+  font-size: 11px;
+  color: #B0B8C4;
 }
 
 .income {
@@ -513,7 +754,137 @@ onMounted(() => {
 }
 
 .rec:last-child {
-  border-bottom: none;
+  border-bottom: none;}
+
+/* ★ 2026-10-26 学员详情弹窗（Tab 版，照学生档案弹窗的样式，主色跟财务红色走） */
+.dlg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dh-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #443432;
+}
+
+.dh-meta {
+  font-size: 12px;
+  color: #9C8D88;
+}
+
+.fee-tabs :deep(.el-tabs__item.is-active) {
+  color: #B22A23;
+  font-weight: 600;
+}
+
+.fee-tabs :deep(.el-tabs__item:hover) {
+  color: #B22A23;
+}
+
+.fee-tabs :deep(.el-tabs__active-bar) {
+  background-color: #B22A23;
+}
+
+.sum-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.sum-item {
+  flex: 1 1 160px;
+  min-width: 160px;
+  padding: 10px 12px;
+  border: 1px solid #EFE7E2;
+  border-radius: 8px;
+  background: #FCFAF9;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sum-item .s-name {
+  font-size: 11.5px;
+  color: #9C8D88;
+}
+
+.sum-item .s-amount {
+  font-size: 16px;
+  font-weight: 700;
+  color: #B22A23;
+}
+
+.sum-item .s-count {
+  font-size: 11px;
+  color: #B0A6A1;
+}
+
+.sum-item .s-expire {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #B8741A;
+}
+
+.sum-total {
+  color: #B22A23;
+  font-size: 14px;
+}
+
+.tab-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  color: #6B5D57;
+}
+
+.tab-head b {
+  color: #B22A23;
+  font-size: 14px;
+}
+
+.rec-amount {
+  color: #B22A23;
+}
+
+/* ★ 2026-10-26 弹窗里可点击的记录行（点了弹缴费单） */
+.rec-clickable {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 8px 8px;
+  transition: background 0.15s;
+}
+
+.rec-clickable:hover {
+  background: #F7F3EF;
+}
+
+/* ★ 2026-10-26 弹窗分组标题里的到期日 */
+.expire-inline {
+  margin-left: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #B8741A;
+}
+
+/* ★ 2026-10-26 缴费单弹窗里的应缴 / 实缴 / 优惠 */
+.fd-money {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fd-money .k {
+  display: inline-block;
+  min-width: 28px;
+  color: #A2938E;
+  font-size: 11.5px;
 }
 
 .rec .l b {

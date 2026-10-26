@@ -202,7 +202,14 @@ async function doApprove(row: DormChangeRow) {
   }
   try {
     await approveDormChange({ stage: row.stage, id: row.changeId });
-    ElMessage.success('已通过，床位与学生宿舍已更新');
+    /**
+     * ★ 2026-10-25：通过后自动把筛选切到「已通过」。
+     *   原来审批完仍停在「待审批」筛选 → 这一行立刻从列表里消失，
+     *   用户以为「审批没保存 / 单据丢了」（数据其实已落库，只是被筛掉了）。
+     */
+    query.status = 4;
+    query.page = 1;
+    ElMessage.success('已通过，床位与学生宿舍已更新；单据已归档到「已通过」');
     await load();
   } catch (e) {
     ElMessage.error((e as Error).message || '审批失败');
@@ -224,7 +231,10 @@ async function doReject(row: DormChangeRow) {
   }
   try {
     await rejectDormChange({ stage: row.stage, id: row.changeId, reason });
-    ElMessage.success('已驳回');
+    /* ★ 2026-10-25：驳回后切到「已驳回」，避免同样"消失"的错觉 */
+    query.status = 5;
+    query.page = 1;
+    ElMessage.success('已驳回；单据已归档到「已驳回」');
     await load();
   } catch (e) {
     ElMessage.error((e as Error).message || '驳回失败');

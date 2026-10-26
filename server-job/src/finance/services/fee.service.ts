@@ -27,6 +27,7 @@ import { db, knexRaw } from '../utils/db';
 import { BizError } from '../middleware/errorHandler';
 import { nextBillNoForPay } from '../utils/orderNo';
 import { getStandard, isVoucherReusable, expectedSourceOf } from './fee-standard.service';
+import { addMonths } from '../utils/dateMath';
 import { findArchiveStudent } from './student-archive';
 // ★ 2026-10-22 核对到账后立即回推咨询侧（推进学生状态 + 同步教学学籍）
 import { remotePost } from '../../shared/http';
@@ -98,7 +99,34 @@ export function toFeeListItem(r: any) {
     headTeacherName: r.head_teacher_name ?? undefined,
     feeType: r.fee_type,
     feeTypeName: FEE_TYPE_NAME[r.fee_type] || '',
+    /**
+     * ★ 2026-10-26 合并单的全部费用类型名（用户要求「缴费类型全写上」）
+     *
+     * 合并单的 `fee_type` 只是第一项（学费），光看它会以为整笔都是学费。
+     * 这里把 item_detail 里的类型名全部取出来，前端直接拼「学费、餐费、住宿费…」。
+     * 单项单返回 undefined，前端继续用 feeTypeName（不改变原有单类型显示）。
+     */
+    feeTypeNames: (() => {
+      const items = parseItemDetail(r.item_detail);
+      if (items.length <= 1) return undefined;
+      const names = items
+        .map((i: any) => i.feeTypeName || FEE_TYPE_NAME[Number(i.feeType)] || '')
+        .filter(Boolean);
+      return names.length > 1 ? names : undefined;
+    })(),
     amount: Number(r.amount),
+    /**
+     * ★ 2026-10-26 应缴 / 优惠（用户口径：缴费管理里要看到「应缴、实缴、优惠」）
+     *
+     * 老单据在迁移里已回填 standard_amount = amount，所以优惠显示 0；
+     * 万一是迁移前遗留的 NULL，这里也按「应缴=实缴」兜底，不显示空。
+     * 优惠取 max(0, ...)：实缴超过应缴属于异常数据，不显示负数误导人。
+     */
+    standardAmount: r.standard_amount != null ? Number(r.standard_amount) : Number(r.amount),
+    discount: Math.max(
+      0,
+      (r.standard_amount != null ? Number(r.standard_amount) : Number(r.amount)) - Number(r.amount),
+    ),
     sourceModule: r.source_module ?? undefined,
     sourceModuleName: r.source_module
       ? SOURCE_MODULE_NAME[r.source_module]
@@ -293,7 +321,19 @@ export function buildFeeQuery(q: any): Knex.QueryBuilder {
    */
   if (q.className) query.andWhere('class_name', q.className);
   if (q.deptCode) query.andWhere('dept_code', q.deptCode);
-  if (q.feeType) query.andWhere('fee_type', q.feeType);
+  /**
+   * ★ 2026-10-26 类型筛选要能命中「合并单里包含该费用」的单据
+   *
+   * 合并单的 fee_type 只是第一项（学费），按 feeType=餐费 筛会漏掉
+   * 「学费+餐费」这种单。所以除了 fee_type 精确匹配，再匹配 item_detail 里的分项。
+   * （item_detail 是 TEXT 存 JSON，用 LIKE 匹配 `"feeType":N`，N 为 1~8 不会歧义）
+   */
+  if (q.feeType) {
+    const ft = Number(q.feeType);
+    query.andWhere((b: any) => {
+      b.where('fee_type', ft).orWhereRaw('item_detail LIKE ?', [`%"feeType":${ft}%`]);
+    });
+  }
   if (q.sourceModule) query.andWhere('source_module', q.sourceModule);
   if (q.payStatus) query.andWhere('pay_status', q.payStatus);
   if (q.startDate) query.andWhere('pay_date', '>=', q.startDate);
@@ -325,7 +365,19 @@ export function buildFeeLedgerQuery(q: any): Knex.QueryBuilder {
   if (q.classId) query.andWhere('class_id', q.classId);
   if (q.className) query.andWhere('class_name', q.className);
   if (q.deptCode) query.andWhere('dept_code', q.deptCode);
-  if (q.feeType) query.andWhere('fee_type', q.feeType);
+  /**
+   * ★ 2026-10-26 类型筛选要能命中「合并单里包含该费用」的单据
+   *
+   * 合并单的 fee_type 只是第一项（学费），按 feeType=餐费 筛会漏掉
+   * 「学费+餐费」这种单。所以除了 fee_type 精确匹配，再匹配 item_detail 里的分项。
+   * （item_detail 是 TEXT 存 JSON，用 LIKE 匹配 `"feeType":N`，N 为 1~8 不会歧义）
+   */
+  if (q.feeType) {
+    const ft = Number(q.feeType);
+    query.andWhere((b: any) => {
+      b.where('fee_type', ft).orWhereRaw('item_detail LIKE ?', [`%"feeType":${ft}%`]);
+    });
+  }
   if (q.sourceModule) query.andWhere('source_module', q.sourceModule);
   if (q.payStatus) query.andWhere('pay_status', q.payStatus);
   if (q.startDate) query.andWhere('pay_date', '>=', q.startDate);
@@ -530,6 +582,68 @@ export async function statsFee(q: any) {
  *
  * @returns 生成的账单号
  */
+/**
+ * ★ 2026-10-26 算这张缴费单的「到期日」（餐费 / 住宿费 / 保险费）
+ *
+ * 用户口径：
+ *   · 缴费金额 ÷ 该费用的缴费标准 = 增加的时长，按月计算
+ *   · 保险费的缴费标准是**年费**（180 元/年），所以按年算、再折成月份
+ *   · 起点从**财务核对日**算；但如果该生该费用还有未到期的余量，
+ *     从上次到期日往后接（续费不重叠、不回退）
+ *
+ * 学费 / 押金 / 校服 / 试学费 / 补费 没有到期概念 → 返回 null。
+ *
+ * @param t       事务（要和账单插入同一个事务，避免账单有、到期日没写）
+ * @param row     缴费单
+ * @param payDate 本次核对日 YYYY-MM-DD
+ */
+async function calcExpireDate(
+  t: Knex.Transaction,
+  row: any,
+  payDate: string,
+): Promise<string | null> {
+  const feeType = Number(row.fee_type);
+  const unit: 'M' | 'Y' | null =
+    feeType === FeeType.MEAL || feeType === FeeType.ACCOMMODATION
+      ? 'M'
+      : feeType === FeeType.INSURANCE
+        ? 'Y'
+        : null;
+  if (!unit) return null;
+
+  // 取该费用在该部门的标准价（没有标准就算不出来，留空而不是瞎算）
+  let std = 0;
+  try {
+    const s = await getStandard(feeType, Number(row.dept_code ?? 1));
+    std = Number(s.amount) || 0;
+  } catch {
+    std = 0;
+  }
+  if (std <= 0) return null;
+
+  const paid = Number(row.amount) || 0;
+  // 缴了钱至少给一个周期（优惠后不足一个标准价时，不能让到期日不动）
+  let units = Math.floor(paid / std);
+  if (units < 1) units = 1;
+  const months = unit === 'Y' ? units * 12 : units;
+
+  // 该生该费用「已入账」账单里最晚的到期日 —— 续费从这里接
+  const prev = await t(BILL_TABLE)
+    .where({
+      student_id: row.student_id,
+      fee_type: feeType,
+      is_deleted: false,
+      bill_type: 1,
+    })
+    .whereNotNull('expire_date')
+    .max('expire_date as d')
+    .first();
+
+  const prevDate = prev?.d ? toDateStr(prev.d) : undefined;
+  const base = prevDate && prevDate > payDate ? prevDate : payDate;
+  return addMonths(base, months);
+}
+
 export async function verifyFee(
   id: string,
   operator: { userId: string; userName: string },
@@ -565,35 +679,75 @@ export async function verifyFee(
     const now = new Date();
     const payDate = toDateStr(row.pay_date) || toDateStr(now)!;
 
-    // ---- 写账单明细 ----
-    await t(BILL_TABLE).insert({
-      id: randomUUID(),
-      create_time: now,
-      create_by: operator.userId,
-      is_deleted: false,
-      bill_no: billNo,
-      bill_type: 1, // 缴费账单
-      source_id: row.id,
-      source_no: row.voucher_no ?? null,
-      student_id: row.student_id,
-      student_no: row.student_no,
-      student_name: row.student_name,
-      class_id: row.class_id ?? null,
-      class_name: row.class_name ?? null,
-      dept_code: row.dept_code ?? null,
-      head_teacher_name: row.head_teacher_name ?? null,
-      fee_type: row.fee_type,
-      amount: row.amount,
-      bill_date: payDate,
-      operator_id: operator.userId,
-      operator_name: operator.userName,
-      voucher_no: row.voucher_no ?? null,
-      pay_method: null,
-      remark:
-        remark ??
-        `缴费核对入账（${FEE_TYPE_NAME[row.fee_type] || ''}）` +
-          (row.voucher_url ? '' : ' · 无电子凭证（现金/线下收款）'),
-    });
+    /**
+     * ★ 2026-10-26 合并单按分项拆账
+     *
+     * 一次缴清多类费用（学费 + 餐费 + 住宿费…）时，缴费单只有 1 个 `fee_type`
+     * （取第一项）和 1 个合计 `amount`，明细存在 `item_detail`。
+     * 如果账单也按合计记一条，就会出两个问题（用户 2026-10-26 实测反馈）：
+     *   · 账单明细里整笔钱全进「学费缴费记录」，餐费/住宿、杂费组永远是空；
+     *   · 到期日只能按学费算（无到期日），餐费/住宿的到期信息彻底丢失。
+     *
+     * 所以核对时按分项拆成多条账单：
+     *   · 第 1 条沿用主账单号，其余 `ZD...-2 / -3`（bill_no 有唯一索引，不能重复）
+     *   · 每条按自己的 fee_type 归组、各自算到期日
+     *   · 各条金额之和 = 缴费单合计（对账口径不变）
+     */
+    const parts: Array<{ feeType: number; amount: number }> = (() => {
+      const items = parseItemDetail(row.item_detail);
+      if (items.length > 1) {
+        return items
+          .map((it: any) => ({
+            feeType: Number(it.feeType ?? it.fee_type ?? 0),
+            amount: Number(it.amount ?? 0),
+          }))
+          .filter((p) => p.feeType > 0 && p.amount > 0);
+      }
+      return [{ feeType: Number(row.fee_type), amount: Number(row.amount) || 0 }];
+    })();
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      // ---- 到期日：按「这一项」的金额算，不是按合计 ----
+      const expireDate = await calcExpireDate(
+        t,
+        { ...row, fee_type: part.feeType, amount: part.amount },
+        payDate,
+      );
+      const subBillNo = i === 0 ? billNo : `${billNo}-${i + 1}`;
+
+      await t(BILL_TABLE).insert({
+        id: randomUUID(),
+        create_time: now,
+        create_by: operator.userId,
+        is_deleted: false,
+        bill_no: subBillNo,
+        bill_type: 1, // 缴费账单
+        source_id: row.id,
+        source_no: row.voucher_no ?? null,
+        student_id: row.student_id,
+        student_no: row.student_no,
+        student_name: row.student_name,
+        class_id: row.class_id ?? null,
+        class_name: row.class_name ?? null,
+        dept_code: row.dept_code ?? null,
+        head_teacher_name: row.head_teacher_name ?? null,
+        fee_type: part.feeType,
+        amount: part.amount,
+        bill_date: payDate,
+        // ★ 2026-10-26 餐费/住宿/保险的到期日（其他费用为 null）
+        expire_date: expireDate,
+        operator_id: operator.userId,
+        operator_name: operator.userName,
+        voucher_no: row.voucher_no ?? null,
+        pay_method: null,
+        remark:
+          remark ??
+          `缴费核对入账（${FEE_TYPE_NAME[part.feeType] || ''}）` +
+            (parts.length > 1 ? ` · 合并单分项 ${i + 1}/${parts.length}` : '') +
+            (row.voucher_url ? '' : ' · 无电子凭证（现金/线下收款）'),
+      });
+    }
 
     // ---- 回写缴费单 ----
     await t(FEE_TABLE).where({ id }).update({
@@ -1017,6 +1171,16 @@ export async function addFee(
 
   /* ---------- 规则2：金额没传就取财务标准 ---------- */
   let amount: number = body.amount;
+  /**
+   * ★ 2026-10-26 应缴金额（standard_amount）
+   *
+   * 用户口径：缴费管理要看到「应缴 / 实缴 / 优惠」三列（优惠 = 应缴 - 实缴）。
+   * 取值优先级：调用方显式传 > 该部门该费用标准价 > 实缴金额（拿不到标准时视为无优惠）。
+   * 历史单据已在迁移里回填成「应缴=实缴」，所以老数据优惠显示 0。
+   */
+  let standardAmount: number | null =
+    body.standardAmount != null ? Number(body.standardAmount) : null;
+
   if (amount == null) {
     if (body.deptCode == null) {
       throw new BizError(
@@ -1026,6 +1190,34 @@ export async function addFee(
     }
     const std = await getStandard(body.feeType, body.deptCode);
     amount = std.amount;
+    if (standardAmount == null) standardAmount = std.amount;
+  } else if (standardAmount == null && body.deptCode != null) {
+    // 传了实缴但没传应缴 → 按标准价补上。取不到标准就留 null（下面兜底成实缴）
+    try {
+      const std = await getStandard(body.feeType, body.deptCode);
+      standardAmount = std.amount;
+    } catch {
+      standardAmount = null;
+    }
+  }
+
+  /**
+   * ★ 2026-10-26 合并单的应缴要按分项汇总，不能取「第一项的标准价」
+   *
+   * 一次缴学费 + 餐费 + 住宿时，`fee_type` 只是第一项（学费），
+   * 拿它的标准价 26000 当应缴 → 实缴 27580 就显得「多交了 1580」，
+   * 优惠被算成 0、应缴金额也失真。正确口径是各项应缴之和。
+   */
+  if (
+    Array.isArray(body.itemDetail) &&
+    body.itemDetail.length > 1 &&
+    body.standardAmount == null
+  ) {
+    const sum = body.itemDetail.reduce(
+      (s: number, it: any) => s + Number(it?.standardAmount ?? it?.amount ?? 0),
+      0,
+    );
+    if (sum > 0) standardAmount = sum;
   }
 
   /* ---------- 规则3-①：来源模块校验 ---------- */
@@ -1064,6 +1256,8 @@ export async function addFee(
     head_teacher_name: body.headTeacherName ?? null,
     fee_type: body.feeType,
     amount,
+    // ★ 2026-10-26 应缴金额（拿不到标准/没传时视为无优惠，= 实缴）
+    standard_amount: standardAmount ?? amount,
     source_module: sourceModule,
     pay_status: resolvedPayStatus,
     pay_date: body.payDate ?? (body.voucherUrl ? now : null),

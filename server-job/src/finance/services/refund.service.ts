@@ -348,8 +348,50 @@ async function notifyUpstreamPaid(
   payMethod?: number,
   remark?: string,
 ): Promise<void> {
-  if (row.source_module !== 'teaching') return;
   if (!row.source_stage || !row.source_refund_id) return;
+
+  /**
+   * ★ 2026-10-26 咨询单回写
+   *
+   * 原来第一行就是 `if (row.source_module !== 'teaching') return;`
+   * —— 咨询退费出款后**永远不会回写**，学生卡在「退费·待财务打款(9)」。
+   * 现在给咨询单单独一条通道（咨询侧新增了内部接口）。
+   */
+  if (row.source_module === 'consult') {
+    try {
+      await remotePost(
+        'consult',
+        '/api/consult/student/internal/refund-finance-paid',
+        {
+          refundId: row.source_refund_id,
+          financeRefundId: row.id,
+          financeRefundNo: row.order_no,
+          billNo,
+          payTime: toTimeStr(payTime),
+          payMethod: payMethod ?? null,
+          remark: remark ?? null,
+        },
+        {
+          timeout: 5000,
+          raw: true,
+          headers: { 'x-internal-token': config.internalToken },
+        },
+      );
+      // eslint-disable-next-line no-console
+      console.log(
+        `[退费出款回写] 成功（咨询）：财务单 ${row.order_no} → ${row.source_refund_id}`,
+      );
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[退费出款回写] 失败（咨询，不影响出款）：财务单 ${row.order_no}`,
+        err?.message,
+      );
+    }
+    return;
+  }
+
+  if (row.source_module !== 'teaching') return;
 
   try {
     await remotePost(

@@ -1,5 +1,10 @@
 <template>
   <div class="page-container">
+    <!--
+      ★ 2026-10-26 用户要求：费用标准页加一个子页面，用来配置催费提前天数
+    -->
+    <el-tabs v-model="activeTab" class="std-tabs">
+      <el-tab-pane label="费用标准" name="standard">
     <!-- ============ 说明 ============ -->
     <el-alert type="info" :closable="false" show-icon class="tip">
       <template #title>
@@ -176,7 +181,75 @@
         <el-button type="primary" :loading="submitting" @click="handleSubmit">保存</el-button>
       </template>
     </el-dialog>
-  </div>
+
+      </el-tab-pane>
+
+      <!-- ========== 催费设置（2026-10-26 新增） ========== -->
+      <el-tab-pane label="催费设置" name="urge">
+        <el-card shadow="never" class="urge-card">
+          <el-alert type="info" :closable="false" show-icon>
+            <template #title>催费提醒规则</template>
+            <div class="urge-desc">
+              按<b>财务账单的到期日</b>提醒续费，只针对<b>餐费 / 住宿费 / 保险费</b>
+              —— 这三类才有到期概念（学费/押金/校服没有）。
+              到期日在财务核对入账时按「缴费金额 ÷ 该费用标准」算出，续费会自动往后接。
+            </div>
+          </el-alert>
+
+          <div class="urge-form">
+            <span class="uf-label">提前</span>
+            <el-input-number
+              v-model="urgeAheadDays"
+              :min="0"
+              :max="365"
+              :step="1"
+              controls-position="right"
+              style="width: 130px"
+            />
+            <span class="uf-unit">天提醒</span>
+            <el-button type="primary" :loading="urgeSaving" @click="saveUrgeAhead">保存</el-button>
+            <span class="uf-tip">到期日距今 ≤ 该天数时进入催费名单；已逾期的一直留在名单里</span>
+          </div>
+
+          <div class="urge-preview">
+            <div class="up-head">
+              <span class="up-title">当前催费名单</span>
+              <span class="up-sub">共 {{ urgeRows.length }} 条 · 按剩余天数升序</span>
+            </div>
+            <el-table
+              v-loading="urgeLoading"
+              :data="urgeRows"
+              size="small"
+              border
+              max-height="380"
+              empty-text="当前没有需要催的费用"
+            >
+              <el-table-column prop="studentName" label="姓名" width="90" />
+              <el-table-column label="学号" width="130">
+                <template #default="{ row }">{{ row.studentNo || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="班级" width="90">
+                <template #default="{ row }">{{ row.className || '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="feeTypeName" label="费用" width="90" align="center" />
+              <el-table-column prop="expireDate" label="到期日" width="110" align="center" />
+              <el-table-column label="剩余" width="100" align="center">
+                <template #default="{ row }">
+                  <span :class="row.remainDays < 0 ? 'rd-over' : 'rd-soon'">
+                    {{ row.remainDays < 0 ? '逾期 ' + -row.remainDays + ' 天' : row.remainDays + ' 天' }}
+                  </span>
+                </template>
+              </el-table-column>
+              <el-table-column label="建议续费" width="110" align="right">
+                <template #default="{ row }">
+                  {{ row.suggestAmount ? formatAmount(row.suggestAmount) : '—' }}
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-card>
+      </el-tab-pane>
+    </el-tabs>  </div>
 </template>
 
 <script setup lang="ts">
@@ -191,7 +264,7 @@
  *   ② 每个 「费用类型 + 部门」 只能有一条标准（重复会被后端拦）
  */
 
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 
 import {
@@ -203,7 +276,15 @@ import {
   type FeeStandardItem,
   type FeeStandardListQuery,
 } from 'shared-types/finance';
-import { fetchStandardList, saveStandard, deleteStandard } from '@/finance/api/finance';
+import {
+  fetchStandardList,
+  saveStandard,
+  deleteStandard,
+  fetchUrgeAheadDays,
+  saveUrgeAheadDays,
+  fetchUrgeList,
+  type UrgeExpireRow,
+} from '@/finance/api/finance';
 import { formatAmount, dash } from '@/finance/utils/finance';
 
 /* ---------- 列表 ---------- */
@@ -392,6 +473,60 @@ async function handleToggle(row: FeeStandardItem) {
   }
 }
 
+
+/* ============================================================
+ * ★ 2026-10-26 催费设置（用户要求：费用标准页加子页面配置提前天数）
+ * ============================================================ */
+const activeTab = ref('standard');
+
+watch(activeTab, (v) => {
+  if (v === 'urge') {
+    loadUrgeAhead();
+    loadUrgeRows();
+  }
+});
+const urgeAheadDays = ref(15);
+const urgeRows = ref<UrgeExpireRow[]>([]);
+const urgeLoading = ref(false);
+const urgeSaving = ref(false);
+
+async function loadUrgeAhead() {
+  try {
+    const r = await fetchUrgeAheadDays();
+    urgeAheadDays.value = Number(r?.days ?? 15);
+  } catch {
+    /* 读不到就用默认 15，不打扰用户 */
+  }
+}
+
+async function loadUrgeRows() {
+  urgeLoading.value = true;
+  try {
+    const r = await fetchUrgeList();
+    urgeRows.value = r?.rows ?? [];
+  } catch (e) {
+    console.error('加载催费名单失败', e);
+    urgeRows.value = [];
+  } finally {
+    urgeLoading.value = false;
+  }
+}
+
+async function saveUrgeAhead() {
+  urgeSaving.value = true;
+  try {
+    const r = await saveUrgeAheadDays(Number(urgeAheadDays.value));
+    urgeAheadDays.value = Number(r?.days ?? urgeAheadDays.value);
+    ElMessage.success(`已保存：到期前 ${urgeAheadDays.value} 天开始催费`);
+    await loadUrgeRows();
+  } catch (e) {
+    console.error('保存催费天数失败', e);
+    ElMessage.error('保存失败');
+  } finally {
+    urgeSaving.value = false;
+  }
+}
+
 onMounted(loadData);
 </script>
 
@@ -420,5 +555,78 @@ onMounted(loadData);
 .field-tip {
   font-size: 12px;
   color: #9C8D88;
+}
+
+/* ===== ★ 2026-10-26 催费设置 Tab ===== */
+.std-tabs :deep(.el-tabs__item.is-active) {
+  color: #B22A23;
+  font-weight: 600;
+}
+
+.std-tabs :deep(.el-tabs__item:hover) {
+  color: #B22A23;
+}
+
+.std-tabs :deep(.el-tabs__active-bar) {
+  background-color: #B22A23;
+}
+
+.urge-card {
+  border: none;
+}
+
+.urge-desc {
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #6B5D57;
+}
+
+.urge-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0 16px;
+}
+
+.uf-label,
+.uf-unit {
+  font-size: 13px;
+  color: #443432;
+}
+
+.uf-tip {
+  margin-left: 6px;
+  font-size: 11.5px;
+  color: #9C8D88;
+}
+
+.up-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.up-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #443432;
+}
+
+.up-sub {
+  font-size: 11.5px;
+  color: #9C8D88;
+}
+
+.rd-over {
+  color: #B22A23;
+  font-weight: 600;
+}
+
+.rd-soon {
+  color: #B8741A;
+  font-weight: 600;
 }
 </style>
