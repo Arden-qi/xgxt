@@ -749,7 +749,7 @@ import { useBreadcrumbStageKey } from '@/store/breadcrumb';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import { SetUp } from '@element-plus/icons-vue';
-import { isReadOnlyUser, myRoles } from '@/store/permission';
+import { isReadOnlyUser, isHeadTeacher, myRoles, myUserId } from '@/store/permission';
 import { visibleStageOptions } from '@/teaching/access';
 import { http } from '@/api/request';
 // ★ 2026-10-22：阶段方案设计从「系统设置」搬进班级管理，以弹窗呈现
@@ -1229,6 +1229,23 @@ async function openCreate() {
   formPlanId.value = formPlanOptions.value[0]?.id || '';
   editStatusFrom.value = null;
   editVisible.value = true;
+
+  /**
+   * ★ 2026-10-23：班主任建班，把「班主任」默认填成自己
+   *
+   * 【为什么】用户反馈：新建班级提示「班级已创建」，列表里却一条都没有。
+   *   根因是数据范围只认「班主任/教员/助教 是我」，而表单默认三格全空
+   *   （或者随手选了别的老师）→ 新建的这一行不属于任何人 → 建完就看不见。
+   *   后端已补「创建人可见」兜底，这里再把默认值填对，
+   *   让「谁建的班就是谁的班」这件显而易见的事在界面上也成立。
+   *   学管 / 校长 / 教务建班不受影响（他们本来就能看全部），仍需手动指定班主任。
+   */
+  if (isHeadTeacher.value && myUserId.value) {
+    if (!staffOptions.value.length) await loadStaff();
+    const me = staffOptions.value.find((u) => u.id === myUserId.value);
+    form.headTeacherId = myUserId.value;
+    form.headTeacherName = me?.userName || '';
+  }
 }
 
 async function openEdit(row: ClassRow) {

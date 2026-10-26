@@ -38,30 +38,59 @@ import { assertStudentIdInScope } from '../services/data-scope';
 export const refundRouter = Router();
 
 /**
- * ★ 2026-10-22 试学期间下限校验（用户口径）
+ * ★ 2026-10-22 / 2026-10-23 试学期间最早可选日 = 「人真正进班那天」
  *
- * 「试学期间的时间从分配班级进班试学开始计算，日期之前没进班或者没来之前不能选择」
+ * 用户口径：「试学期间的时间从分配班级进班试学开始计算，没进班或者没来之前不能选择」
+ *          「退费日期选择最开始的日期是分班之后开始」
  *
- *   · 进班试学日 = `t_student.trial_start`（班主任接收入班那一刻写入的日期）
- *   · 试学期间不得早于它 —— 之前人还没进班，这段时间不该算试学消耗
- *     （不拦的话可以把 8 月一直算到今天，多扣住宿餐费，退费金额被做小）
- *   · 没有 trial_start（老数据/直接转正式的）就不设下限，只能靠人工把关
+ * 【取值链（逐个兜底，保证一定有值）】
+ *   1. `t_consult_student.trial_start` —— 试学分班时写的进班日，最准
+ *   2. 跟进历史里最早的入班动作（ASSIGN_CLASS / ENROLL_TO_CLASS）日期
+ *      —— ★ 缴全款直接转「正式在读」的学生，receive-ack 以前只在试学分支写
+ *         trial_start，正式分支是空的，这类学生就靠这条补（截图里的何静宜就是）
+ *   3. 建档日 `create_time` —— 连入班记录都没有（还没分班）的，至少不能早于建档
  *
- * 前端日历也会按同一天禁用更早的日期，这里是**后端二次拦截**，防直接调接口。
+ * 【为什么必须有值】
+ *   早先 earliest 为 null 时前端「不设下限」，日历可以一路翻到几个月前，
+ *   试学天数被算成 80 天，多扣住宿/餐费，退费金额被做小。
  *
  * ⚠️ 日期必须用 formatDate 归一成 `YYYY-MM-DD` 再比：
  *    mysql2 在部分配置下把 date 列读成 Date 对象，`String(date).slice(0,10)`
  *    会得到 "Thu Oct 22" 这种串，字符串比较直接失效（踩过）。
  */
+export async function resolveEarliestTrialStart(
+  stu: any,
+): Promise<{ date: string; source: 'TRIAL_START' | 'CLASS_HISTORY' | 'CREATE_TIME' }> {
+  const direct = formatDate(stu?.trial_start);
+  if (direct) return { date: direct, source: 'TRIAL_START' };
+
+  const row: any = await db('t_consult_history')
+    .where({ consult_student_id: stu.id, is_deleted: false })
+    .whereIn('action', ['ASSIGN_CLASS', 'ENROLL_TO_CLASS'])
+    .orderBy('create_time', 'asc')
+    .first();
+  const byHistory = formatDate(row?.create_time);
+  if (byHistory) return { date: byHistory, source: 'CLASS_HISTORY' };
+
+  return { date: formatDate(stu?.create_time), source: 'CREATE_TIME' };
+}
+
+/**
+ * 试学期间下限校验（后端二次拦截，防直接调接口 / 旧页面缓存）
+ *
+ * 前端日历也会按同一天禁用更早的日期，两边用的是同一个日期源。
+ */
 async function assertTrialStartNotBeforeClass(consultStudentId: string, trialStart: string): Promise<void> {
   const stu = await findStudent(consultStudentId);
   if (!stu) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在');
-  const min = formatDate(stu.trial_start);
+
+  const { date: min, source } = await resolveEarliestTrialStart(stu);
   if (!min) return;
   if (trialStart < min) {
+    const what = source === 'CREATE_TIME' ? '建档日期' : '进班日期';
     throw new BizError(
       BizCode.PARAM_ERROR,
-      `试学期间不能早于进班试学日期（${min}）：该学生在那之前还没进班，不计试学消耗`,
+      `试学期间不能早于${what}（${min}）：该学生在那之前还没${source === 'CREATE_TIME' ? '建档' : '进班'}，不计试学消耗`,
     );
   }
 }
@@ -368,13 +397,18 @@ refundRouter.get(
     const { today } = await import('../services/student.service');
     const end = today();
     /**
-     * ★ 2026-10-22 试学期间最早可选日 = 进班试学日
+     * ★ 2026-10-22 / 2026-10-23 试学期间最早可选日 = 进班日
      *
      * 前端日历用它禁用更早的日期（没进班之前的日期不该能选）。
      * 与 `trialStart` 分开返回：trialStart 是「默认填入的开始日」，
-     * earliestTrialStart 是「允许的最早一天」，没有进班记录时为 null（不设下限）。
+     * earliestTrialStart 是「允许的最早一天」。
+     *
+     * ⚠️ 2026-10-23 起**不再返回 null**：trial_start 缺失时会退到入班历史 / 建档日
+     *    （见 resolveEarliestTrialStart）。正式在读学生以前 trial_start 为空，
+     *    这里返回 null → 前端不设下限 → 能选到几个月前，试学天数被算爆。
      */
-    const earliest = formatDate(stu.trial_start) || null;
+    const earliestInfo = await resolveEarliestTrialStart(stu);
+    const earliest = earliestInfo.date || null;
     const start = earliest || end;
 
     // 用「无物品、无每日消耗」先算一次，给前端初始值（前端会按勾选立即重算）
@@ -387,8 +421,10 @@ refundRouter.get(
         className: stu.class_name,
         trialStart: start,
         trialEnd: end,
-        /** 试学期间最早可选日（= 进班试学日）；null = 没有进班记录，前端不设下限 */
+        /** 试学期间最早可选日（进班日 / 入班历史日 / 建档日）；正常不会为 null */
         earliestTrialStart: earliest,
+        /** 这个下限是怎么来的，前端可据此写提示文案 */
+        earliestSource: earliestInfo.source,
         ...calc,
       }),
     );
