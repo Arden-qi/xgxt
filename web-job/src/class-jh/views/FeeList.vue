@@ -833,7 +833,7 @@ async function collectRowsForExport(): Promise<FeeRow[]> {
 async function handleExport() {
   try {
     const rows = await collectRowsForExport();
-    exportCsv('催费台账', EXPORT_HEADERS, rows.map(toExportRow));
+    exportCsv('缴费台账', EXPORT_HEADERS, rows.map(toExportRow));
     ElMessage.success('导出成功');
   } catch {
     /* 错误已统一处理 */
