@@ -62,6 +62,10 @@ import { tbl, tblAs, tblInsTrx, tblRef } from '../teaching/shared/uniTable';
 import { checkPayDate, saveVoucherImage, PAY_METHOD, PAY_METHOD_NAME } from '../utils/feeVoucher';
 // ★ 2026-10-23 登记缴费反写财务（待缴 → 已缴），与财务 attachVoucher 同口径
 import { pushVoucherToFinance } from '../finance/utils/voucher-push';
+// ★ 2026-10-26 催费名单数据源改为「财务账单到期日」
+import { listUrgeByExpire, getUrgeAheadDays } from '../finance/services/urge.service';
+// ★ 2026-10-26 其余字段以学生档案为准
+import { lookupStudentArchive } from '../teaching/shared/studentArchive';
 
 export const feeCallRouter = Router();
 
@@ -282,63 +286,37 @@ feeCallRouter.get(
     const q = (req as any).validated;
     const operator = getOperator(req);
 
-    const base = tbl(db, DB, TABLE, STAGE).where('is_deleted', false);
-    await applyTrainingScope(base, req, { table: TABLE, dbName: DB });
-
-    if (q.keyword) {
-      base.andWhere((b: any) => {
-        b.where('student_name', 'like', `%${q.keyword}%`)
-          .orWhere('student_no', 'like', `%${q.keyword}%`);
-      });
-    }
-    if (q.feeType !== undefined) base.andWhere('fee_type', q.feeType);
-    if (q.classId) base.andWhere('class_id', q.classId);
-    // 催费单状态：单值 / 逗号多值都支持（`1,2` = 待催缴 + 催缴中）
-    if (q.callStatus !== undefined && q.callStatus !== '') {
-      const arr = String(q.callStatus)
-        .split(',')
-        .map((s: string) => Number(s.trim()))
-        .filter((n: number) => Number.isInteger(n) && n > 0);
-      if (arr.length === 1) base.andWhere('call_status', arr[0]);
-      else if (arr.length > 1) base.whereIn('call_status', arr);
-    }
-    if (q.startDate) base.andWhere('due_date', '>=', q.startDate);
-    if (q.endDate) base.andWhere('due_date', '<=', q.endDate);
     /**
-     * 统一缴费状态筛选（★ 2026-10-22 改为直接按 `pay_status` 筛）
+     * ★ 2026-10-26 用户口径：就业部催费名单也改为**以财务账单到期日为准**
+     *   （与初高/大学同一套：只催餐费/住宿费/保险费，提前 N 天）
      *
-     * 改造前是「把统一的缴费状态翻译成 call_status + 应缴日条件」，
-     * 因为就业库里只有催收进度、没有缴费状态。
-     * 现在 t_job_fee_call 已经有 `pay_status`（与初高同码），所以直接筛这一列；
-     * 只有「逾期」仍然要按日期派生（财务从不写 4，过了应缴日库里还是 1）。
+     * 实现方式：财务名单是「该催谁」的唯一依据；
+     *   本地 `t_job_fee_call` 只在有对应行时补催收进度（call_status）等业务字段，
+     *   没有本地行的，按「待催缴」构造一条只读行（处理催费单仍需要本地行，会提示不存在）。
      */
-    if (q.payStatus !== undefined) {
-      const t = today();
-      if (q.payStatus === PayStatus.UNPAID) {
-        // 待缴 = 库里待缴 且 还没过期（过期的归到逾期，不然「选待缴」会带出显示成逾期的行）
-        base.andWhere('pay_status', PayStatus.UNPAID).andWhere('due_date', '>=', t);
-      } else if (q.payStatus === PayStatus.OVERDUE) {
-        // 逾期 = 库里就是 4，或者「待缴 + 已过应缴日」
-        base.andWhere((b: any) => {
-          b.where('pay_status', PayStatus.OVERDUE).orWhere((x: any) => {
-            x.where('pay_status', PayStatus.UNPAID).andWhere('due_date', '<', t);
-          });
-        });
-      } else {
-        base.andWhere('pay_status', q.payStatus);
-      }
+    const aheadDays = await getUrgeAheadDays();
+    // ★ 2026-10-26 必须按部门过滤，否则三个部门页签会看到同一批人
+    const fin = await listUrgeByExpire(aheadDays, {
+      keyword: q.keyword,
+      feeType: q.feeType,
+      deptCode: 3, // 就业部
+    });
+    if (!fin.rows.length) {
+      res.json(page([], 0, q));
+      return;
     }
-    // 仅看逾期（= 仅看紧急）：未结清 且 已过应缴日，与 decorate 的 payStatus 派生同口径
-    if (q.onlyOverdue) {
-      base
-        .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.OVERDUE])
-        .andWhere('due_date', '<', today());
-    }
+    const finKey = new Set(fin.rows.map((r) => `${r.studentId}::${r.feeType}`));
+    const finStuIds = [...new Set(fin.rows.map((r) => r.studentId))].filter(Boolean);
 
-    // ★ 班主任只看自己的班（数据范围）
-    //   ★ 2026-10-08 修：补上项目经理 —— 原来只判班主任，
-    //     但项目经理被 applyTrainingScope 放进了"不限"分支 → 能看到全校催费单。
-    //     口径：项目经理只认自己带的实训班（与其它模块统一）。
+    const base = tbl(db, DB, TABLE, STAGE)
+      .where('is_deleted', false)
+      .whereIn('student_id', finStuIds)
+      // 2 住宿费 / 3 餐费 / 4 保险费（只有这三类有到期概念）
+      .whereIn('fee_type', [2, 3, 4]);
+
+    if (q.classId) base.andWhere('class_id', q.classId);
+
+    // ★ 班主任 / 项目经理数据范围（与原实现同口径）
     const isAdmin = hasRole(operator.roles, RoleCode.SYS_ADMIN);
     const isPM = hasRole(operator.roles, RoleCode.PROJECT_MANAGER);
     const isHeadTeacher = hasRole(operator.roles, RoleCode.TEACH_HEAD);
@@ -347,8 +325,6 @@ feeCallRouter.get(
     if (!isAdmin && isPM && !isEduAdmin) {
       const myClasses = await tbl(db, DB, CLASS_TABLE, STAGE)
         .where({ project_manager_id: operator.userId, is_deleted: false })
-        // [已停用] ★ 2026-10-08 斌哥拍板：项目经理可见自己带的【所有】实训班（含已结业）—— 去掉未结业限制
-        // .whereNot('class_status', ClassStatus.GRADUATED)
         .select('id');
       const ids = myClasses.map((c: any) => c.id);
       if (ids.length === 0) base.whereRaw('1 = 0');
@@ -359,14 +335,91 @@ feeCallRouter.get(
       base.andWhere('head_teacher_id', operator.userId);
     }
 
-    const [{ c: total }] = (await base.clone().count({ c: '*' })) as Array<{ c: number }>;
-    const rows = await base
-      .clone()
-      .orderBy([{ column: 'call_status', order: 'asc' }, { column: 'due_date', order: 'asc' }])
-      .limit(q.size)
-      .offset((q.page - 1) * q.size);
+    const localRows = (await base.select('*')) as any[];
+    const localMap = new Map<string, any>();
+    for (const l of localRows) localMap.set(`${l.student_id}::${l.fee_type}`, l);
 
-    res.json(page(rows.map((r: any) => decorate(r, operator)), Number(total), q));
+    let list: any[] = [];
+    for (const r of fin.rows) {
+      const k = `${r.studentId}::${r.feeType}`;
+      if (!finKey.has(k)) continue;
+      const l = localMap.get(k);
+      if (l) {
+        // 有本地行：以财务到期日为准，其余业务字段用本地的
+        const merged = {
+          ...l,
+          due_date: r.expireDate,
+          pay_status: r.remainDays < 0 ? PayStatus.OVERDUE : PayStatus.UNPAID,
+        };
+        list.push(decorate(merged, operator));
+      } else {
+        // 无本地行：构造只读行（call_status 固定「待催缴」）
+        list.push(
+          decorate(
+            {
+              id: `fin-${r.studentId}-${r.feeType}`,
+              student_id: r.studentId,
+              student_no: r.studentNo,
+              student_name: r.studentName,
+              class_id: r.classId ?? null,
+              class_name: r.className ?? null,
+              dept_code: r.deptCode ?? null,
+              fee_type: r.feeType,
+              fee_amount: r.suggestAmount ?? 0,
+              due_date: r.expireDate,
+              call_status: 1,
+              pay_status: r.remainDays < 0 ? PayStatus.OVERDUE : PayStatus.UNPAID,
+              phone: null,
+              parent_phone: null,
+              head_teacher_id: null,
+              head_teacher_name: null,
+            },
+            operator,
+          ),
+        );
+      }
+    }
+
+    /**
+     * ★ 2026-10-26 除费用信息外，其余字段以**学生档案**为准（与初高/大学一致）
+     */
+    const arch = await lookupStudentArchive(list.map((x: any) => x.studentId));
+    list = list.map((x: any) => {
+      const a = arch[x.studentId];
+      if (!a) return x;
+      return {
+        ...x,
+        studentNo: a.studentNo || x.studentNo,
+        studentName: a.studentName || x.studentName,
+        classId: a.classId ?? x.classId,
+        className: a.className ?? x.className,
+        deptCode: a.deptCode ?? x.deptCode,
+        phone: a.phone,
+        parentPhone: a.parentPhone,
+        headTeacherName: a.headTeacherName,
+      };
+    });
+
+    // ---- 与原来同口径的筛选 ----
+    if (q.payStatus !== undefined) list = list.filter((x: any) => x.payStatus === q.payStatus);
+    if (q.onlyOverdue) list = list.filter((x: any) => Number(x.overdueDays ?? 0) > 0);
+    if (q.callStatus !== undefined && q.callStatus !== '') {
+      const arr = String(q.callStatus)
+        .split(',')
+        .map((s: string) => Number(s.trim()))
+        .filter((n: number) => Number.isInteger(n) && n > 0);
+      if (arr.length) list = list.filter((x: any) => arr.includes(Number(x.callStatus)));
+    }
+    if (q.startDate) list = list.filter((x: any) => String(x.dueDate || '') >= q.startDate);
+    if (q.endDate) list = list.filter((x: any) => String(x.dueDate || '') <= q.endDate);
+    list.sort((a: any, b: any) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')));
+
+    const total = list.length;
+    const pageNo = Number(q.page || 1);
+    const size = Number(q.size || 20);
+    const paged = list.slice((pageNo - 1) * size, pageNo * size);
+
+    res.json(page(paged, total, q));
   }),
 );
 
@@ -759,9 +812,21 @@ feeCallRouter.post(
      * 只推收款事实 + 1→2，与财务 `attachVoucher()` 同口径；不改其它状态。
      */
     const srcRow = row as Record<string, any>;
-    if (srcRow.source_system === 'finance' && srcRow.source_id) {
+    /**
+     * ★ 2026-10-25 修：财务单定位改以 `finance_fee_id` 为准（老口径兜底）。
+     *
+     *   10-23 的 ID 统一之后，新单据只写 `finance_fee_id`，`source_id` 恒为空；
+     *   而这里原来判的是 `source_system === 'finance' && source_id`、
+     *   并且用 `source_id` 当财务单号 → **条件永远不成立、同步从未执行**，
+     *   表现就是「登记缴费后催费变已缴、财务单还是待缴，财务点不动核对」。
+     *   与文件里判重/口径统一（finance_fee_id 为准）保持一致。
+     */
+    const financeFeeId =
+      String(srcRow.finance_fee_id ?? '').trim() ||
+      (srcRow.source_system === 'finance' && srcRow.source_id ? String(srcRow.source_id) : '');
+    if (financeFeeId) {
       await pushVoucherToFinance({
-        financeFeeId: String(srcRow.source_id),
+        financeFeeId,
         voucherUrl: voucherUrl ?? null,
         payDate: body.payDate,
         remark: body.remark || null,

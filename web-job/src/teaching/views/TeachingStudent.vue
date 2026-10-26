@@ -761,15 +761,67 @@
               <el-date-picker v-model="form.enrollDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
             </el-form-item>
           </el-col>
+          <!-- ★ 2026-10-26 宿舍信息：新增时可联动选择；编辑时全部只读
+               （口径：宿舍只从「宿舍管理」写入，新增学生时可一并指定班级名下的宿舍）
+               楼栋号 → 宿舍号 → 床位号 三级联动，宿舍号展示为「楼栋-房号」 -->
+          <el-col :span="8">
+            <el-form-item label="楼栋号">
+              <el-input
+                v-if="form.id"
+                :model-value="dormBuildingText"
+                placeholder="办理入住后自动带出"
+                disabled
+              />
+              <el-select
+                v-else
+                v-model="form.dormBuilding"
+                clearable
+                filterable
+                :placeholder="dormBuildingPlaceholder"
+                :disabled="!form.classId || !dormBuildingOptions.length"
+                style="width: 100%"
+                @change="onFormDormBuildingChange"
+              >
+                <el-option v-for="b in dormBuildingOptions" :key="b" :label="b" :value="b" />
+              </el-select>
+            </el-form-item>
+          </el-col>
           <el-col :span="8">
             <el-form-item label="宿舍号">
-              <!-- ★ 2026-10-22：只读展示。宿舍只能通过「宿舍管理 → 办理入住/调宿」变更 -->
-              <el-input :model-value="form.dormNo || ''" placeholder="办理入住后自动带出" disabled />
+              <el-input v-if="form.id" :model-value="form.dormNo || ''" placeholder="办理入住后自动带出" disabled />
+              <el-select
+                v-else
+                v-model="form.dormId"
+                clearable
+                filterable
+                placeholder="请先选择楼栋号"
+                :disabled="!form.dormBuilding || !dormRoomOptions.length"
+                style="width: 100%"
+                @change="onFormDormIdChange"
+              >
+                <el-option v-for="r in dormRoomOptions" :key="r.roomId" :label="r.dormNo" :value="r.roomId" />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8" v-if="showBed">
             <el-form-item label="床位号">
-              <el-input :model-value="formBedLabel" placeholder="办理入住后自动带出" disabled />
+              <el-input v-if="form.id" :model-value="formBedLabel" placeholder="办理入住后自动带出" disabled />
+              <el-select
+                v-else
+                v-model="form.bedNo"
+                clearable
+                placeholder="请先选择宿舍号"
+                :disabled="!form.dormId || !formBedList.length"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="b in formBedList"
+                  :key="b.bedId"
+                  :label="bedOptionLabel(b)"
+                  :value="b.bedNo"
+                  :disabled="b.bedStatus !== 1"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <!-- 2026-10-16 按批注：删除「上网账号 / 初始密码」两个输入框（红字「删除框选内容」）。
@@ -872,8 +924,8 @@ import { visibleStageOptions } from '@/teaching/access';
  *   原来是 /api/edu/dorm/list（旧教务宿舍，班主任还没有 edu:dorm:view → 403），
  *   选项为空时宿舍号既显示不了、也改不了。
  */
-import { getDormBeds } from '@/teaching/api/dorm';
-import type { DormBedRow, DormStage } from '@/teaching/api/dorm';
+import { getDormBeds, listDormClassRooms } from '@/teaching/api/dorm';
+import type { DormBedRow, DormClassRoomRow, DormStage } from '@/teaching/api/dorm';
 import {
   listStudents,
   getStudentDetail,
@@ -1194,6 +1246,8 @@ const emptyForm = () => ({
   dormId: '',
   dormNo: '',
   bedNo: '',
+  /** ★ 2026-10-26 新增时用：楼栋 → 宿舍 → 床位 三级联动的第一级 */
+  dormBuilding: '',
   netAccount: '',
   netInitPassword: '',
   remark: '',
@@ -1350,11 +1404,13 @@ function onFormDeptChange(v: number | undefined) {
 /* ============ 2026-10-15 表单改版：宿舍号 / 床位号同步宿舍管理 ============ */
 
 /**
- * ★ 2026-10-22：宿舍号 / 床位号改为**只读展示**
+ * 宿舍信息（★ 2026-10-26）
  *
- * 用户口径：宿舍只能通过「宿舍管理 → 办理入住 / 调宿 / 退宿」变更，
- * 编辑学生弹窗里这两个字段只展示当前值，保存时原值回传、不会被清掉。
- * 床位的中文标签（1-上）仍按需拉一次，只为显示好看。
+ * 编辑态：楼栋号 / 宿舍号 / 床位号全部**只读** —— 宿舍只能通过
+ *   「宿舍管理 → 办理入住 / 调宿 / 退宿」变更（写入口唯一）。
+ * 新增态：选了班级后可以联动选择**该班级名下**的宿舍：
+ *   楼栋号 → 宿舍号（展示「楼栋-房号」）→ 床位号，三级联动。
+ *   数据来自 /api/teaching/dorm/class-rooms（按班级分派关系取房，附床位）。
  */
 const formBedList = ref<DormBedRow[]>([]);
 
@@ -1367,6 +1423,74 @@ async function loadFormBeds(roomId: string) {
   } catch {
     formBedList.value = [];
   }
+}
+
+/** 新增态：当前班级名下分派到的房间（含床位） */
+const dormClassRooms = ref<DormClassRoomRow[]>([]);
+
+/** 楼栋下拉：该班名下的房间涉及哪些楼栋（保持楼栋字典排序） */
+const dormBuildingOptions = computed(() => {
+  const seen: string[] = [];
+  for (const r of dormClassRooms.value) {
+    if (r.building && !seen.includes(r.building)) seen.push(r.building);
+  }
+  return seen;
+});
+
+/** 宿舍下拉：所选楼栋下、该班名下的房间 */
+const dormRoomOptions = computed(() =>
+  dormClassRooms.value.filter((r) => r.building === form.dormBuilding),
+);
+
+/** 编辑态展示用的楼栋号：宿舍号的第一段（如「1号楼-101」→「1号楼」） */
+const dormBuildingText = computed(() => (form.dormNo ? form.dormNo.split('-')[0] : ''));
+
+/** 楼栋下拉的提示语：没选班 / 该班没分派宿舍 / 正常待选，三种口径 */
+const dormBuildingPlaceholder = computed(() => {
+  if (!form.classId) return '请先选择班级';
+  if (!dormClassRooms.value.length) return '该班暂无分派的宿舍';
+  return '请选择楼栋';
+});
+
+/** 床位下拉文案：中文床位号 + 占用者（已住的一律禁选） */
+function bedOptionLabel(b: DormBedRow): string {
+  const label = b.bedLabel || b.bedNo;
+  return b.studentName ? `${label}（${b.studentName}）` : label;
+}
+
+/** 选了班级 → 清掉宿舍三联动，按新班级重新拉名下房间（只影响新增态） */
+async function reloadDormClassRooms() {
+  form.dormBuilding = '';
+  form.dormId = '';
+  form.dormNo = '';
+  form.bedNo = '';
+  formBedList.value = [];
+  dormClassRooms.value = [];
+  if (form.id) return; // 编辑态不加载（只读）
+  const cls = formClassOptions.value.find((c) => c.id === form.classId);
+  if (!cls?.name) return;
+  try {
+    const r = await listDormClassRooms({ stage: (form.stage || 'jh') as DormStage, className: cls.name });
+    dormClassRooms.value = r.rooms || [];
+  } catch {
+    dormClassRooms.value = [];
+  }
+}
+
+/** 楼栋变了 → 宿舍号 / 床位号重新选 */
+function onFormDormBuildingChange() {
+  form.dormId = '';
+  form.dormNo = '';
+  form.bedNo = '';
+  formBedList.value = [];
+}
+
+/** 宿舍号变了 → 带出宿舍编号、刷新该房床位 */
+function onFormDormIdChange(roomId: string) {
+  const room = dormClassRooms.value.find((r) => r.roomId === roomId);
+  form.dormNo = room ? room.dormNo : '';
+  form.bedNo = '';
+  formBedList.value = room?.beds || [];
 }
 
 /** 床位号展示文案：能匹配到中文标签就用标签（1-上），否则原样 */
@@ -1482,10 +1606,11 @@ async function openEdit(row: StudentRow) {
     recruitTeacherPhone: d.market.recruitTeacherPhone || '',
     consultTeacherName: d.market.consultTeacherName || '',
     consultTeacherPhone: d.market.consultTeacherPhone || '',
-    // 宿舍只读展示：宿舍号/床位号直接取详情同步来的值， dormId 仅用于拉床位标签
+    // 宿舍三列只读展示：宿舍号/床位号直接取详情同步来的值，dormId 仅用于拉床位标签
     dormId: b.dormId || '',
     dormNo: b.dormNo || '',
     bedNo: b.bedNo || '',
+    dormBuilding: b.dormNo ? b.dormNo.split('-')[0] : '',
     netAccount: d.net?.netAccount || '',
     netInitPassword: d.net?.netInitPassword || '',
     remark: b.remark || '',
@@ -1507,6 +1632,8 @@ function onFormClassChange(id: string) {
     if (c.deptCode) form.deptCode = c.deptCode;
     form.phaseCode = c.phaseCode ?? undefined;
   }
+  // ★ 2026-10-26：班级变了 → 宿舍三联动重来（新增态才需要加载名下房间）
+  void reloadDormClassRooms();
 }
 
 /* ---------------- ★ 2026-10-20 批注：编辑保存前先列「我改了什么」 ----------------

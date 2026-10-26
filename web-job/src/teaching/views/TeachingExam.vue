@@ -150,6 +150,8 @@ const form = reactive({
   examDate: today(),
   contentTypes: [1] as number[],
   fullScores: {} as Record<string, number | undefined>,
+  /** ★ 2026-10-25：内容项选「其他」时自填的名称（落 contentName 列） */
+  contentNames: {} as Record<string, string>,
   remark: '',
 });
 
@@ -170,9 +172,20 @@ async function openForm(row?: ExamRow) {
     form.examType = row.examType;
     form.examTypeName = row.examTypeCustom || '';
     form.examDate = row.examDate;
-    form.contentTypes = (d.contents || []).map((c) => c.type);
+    /* ★ 2026-10-25：后端详情下发的是 examContentType（camel 化后就是这个名），
+       原来读 c.type 会取到 undefined → 编辑时内容项整片丢失。这里两种字段都认。 */
+    const contents = (d.contents || []).map((c: any) => ({
+      type: Number(c.examContentType ?? c.type ?? 0),
+      fullScore: c.fullScore ?? null,
+      contentName: c.contentName ?? null,
+    }));
+    form.contentTypes = contents.map((c) => c.type);
     form.fullScores = {};
-    for (const c of d.contents || []) form.fullScores[String(c.type)] = c.fullScore ?? undefined;
+    form.contentNames = {};
+    for (const c of contents) {
+      form.fullScores[String(c.type)] = c.fullScore ?? undefined;
+      if (c.contentName) form.contentNames[String(c.type)] = String(c.contentName);
+    }
     form.remark = row.remark || '';
   } else {
     form.id = undefined;
@@ -186,10 +199,14 @@ async function openForm(row?: ExamRow) {
     form.examDate = today();
     form.contentTypes = [1];
     form.fullScores = {};
+    form.contentNames = {};
     form.remark = '';
   }
   formVisible.value = true;
 }
+
+/** 考试**内容项**的「其他」编码（与 examType 的「其他=5」是两套枚举） */
+const OTHER_CONTENT = 4;
 
 async function submitForm() {
   const stage = formStage.value as TeachingStage;
@@ -198,6 +215,10 @@ async function submitForm() {
   if (!form.classId) return ElMessage.warning('请选择班级');
   if (!form.contentTypes.length) return ElMessage.warning('请至少选择一个考试内容项');
   if (form.examType === 5 && !form.examTypeName.trim()) return ElMessage.warning('类型选择「其他」时必须填写具体类型名称');
+  /* ★ 2026-10-25：内容项的「其他」= 4（考试类型的「其他」才是 5，别混） */
+    if (form.contentTypes.includes(OTHER_CONTENT) && !String(form.contentNames[String(OTHER_CONTENT)] ?? '').trim()) {
+    return ElMessage.warning('内容项选择「其他」时必须填写内容名称');
+  }
 
   saving.value = true;
   try {
@@ -211,7 +232,9 @@ async function submitForm() {
       classIds: [form.classId],
       contents: form.contentTypes.map((t) => ({
         type: t,
-        name: EXAM_CONTENT_TYPE_NAME[t],
+        name: t === OTHER_CONTENT ? String(form.contentNames[String(OTHER_CONTENT)] ?? '').trim() : EXAM_CONTENT_TYPE_NAME[t],
+        /* ★ 2026-10-25：内容项「其他」的名称走 name 落 content_name 列 */
+        contentName: t === OTHER_CONTENT ? String(form.contentNames[String(OTHER_CONTENT)] ?? '').trim() : null,
         fullScore: form.fullScores[String(t)] ?? null,
       })),
       remark: form.remark || null,
@@ -409,6 +432,15 @@ const canWrite = computed(() => !isReadOnlyUser.value && availableStages.value.l
             <div v-for="t in form.contentTypes" :key="t" class="te-score-item">
               <span>{{ EXAM_CONTENT_TYPE_NAME[t] }}</span>
               <el-input-number v-model="form.fullScores[String(t)]" :min="0" :max="1000" size="small" controls-position="right" />
+              <!-- ★ 2026-10-25：内容项选「其他」时要能填具体名称，否则后端以「内容名称必填」报错 -->
+              <el-input
+                v-if="t === 4"
+                v-model="form.contentNames['4']"
+                size="small"
+                maxlength="50"
+                placeholder="请填写内容名称（必填）"
+                style="width: 220px"
+              />
             </div>
           </div>
         </el-form-item>

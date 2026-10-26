@@ -81,9 +81,37 @@ check(
 );
 check('床位中文标签按需拉取', form.includes('formBedLabel') && form.includes('getDormBeds'));
 
+// ★ 2026-10-26：新增学生时 楼栋号 → 宿舍号 → 床位号 三级联动（编辑态仍只读）
+check(
+  '新增学生可联动选宿舍（楼栋/宿舍/床位）',
+  form.includes('listDormClassRooms') &&
+    form.includes('dormBuildingOptions') &&
+    form.includes('dormRoomOptions') &&
+    form.includes('onFormDormIdChange') &&
+    form.includes('dormBuildingPlaceholder'),
+);
+check(
+  '编辑态宿舍三列走只读分支',
+  /label="楼栋号"[\s\S]{0,400}v-if="form\.id"/.test(form) &&
+    /label="宿舍号"[\s\S]{0,400}v-if="form\.id"/.test(form),
+);
+
 console.log('\n▶ 运行时检查');
 const token = await login('sunmin');
 check('班主任登录', !!token);
+
+// ★ 2026-10-26：新增学生的「班级名下宿舍」接口（楼栋/宿舍/床位三级联动的数据源）
+{
+  const r = await req('GET', '/api/teaching/dorm/class-rooms?stage=jh&className=G2601', { token });
+  const d = r.body?.data;
+  check(
+    '班级名下宿舍接口可用',
+    r.body?.code === 200 && Array.isArray(d?.buildings) && Array.isArray(d?.rooms),
+    `code=${r.body?.code} 房间=${(d?.rooms || []).length} 楼栋=${(d?.buildings || []).length}`,
+  );
+  const denied = await req('GET', '/api/teaching/dorm/class-rooms?stage=jh&className=NOT_MY_CLASS', { token });
+  check('别的班级拒绝查询', denied.body?.code !== 200, `code=${denied.body?.code}`);
+}
 
 let bedId = '';
 let dormId = '';

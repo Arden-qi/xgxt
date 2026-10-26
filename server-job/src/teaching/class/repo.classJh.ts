@@ -176,7 +176,10 @@ async function scopedClassIds(user: any): Promise<string[] | null> {
     .andWhere((b: any) => {
       b.whereIn('head_teacher_id', uids)
         .orWhereIn('teacher_id', uids)
-        .orWhereIn('assistant_id', uids);
+        .orWhereIn('assistant_id', uids)
+        /* ★ 2026-10-23：同 shared/dataScope.ts —— 自己建的班也算「我的班」，
+         *   否则新建完（班主任没填自己）列表里立刻消失。 */
+        .orWhereIn('create_by', uids);
     })
     .select('id')) as Array<{ id: string }>;
   return rows.map((r) => String(r.id));
