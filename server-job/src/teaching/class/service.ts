@@ -483,16 +483,118 @@ export async function handoverClass(
  *   （2026-10-22 用户报障：每个账号登录都弹没有权限）
  *
  * 【口径】
- *   本函数只吐下拉要用的 id + 姓名，跟着「班级页面权限」走
+ *   本接口跟着「班级页面权限」走
  *   （app.ts 里 /api/teaching/class 已用 requireAnyPage 卡三个学段的班级页面码），
  *   不额外要求权限管理模块。停用 / 已删的账号不返回。
+ *
+ * ★ 2026-10-23 批注：「将每个人员的选择改成职位…同步职位列表，根据职位名称+部门进行选择」
+ *   → 除 id / 姓名外，再下发这个人的**职位名 + 职位码 + 所属部门（换算成教学部门码）**，
+ *     前端按「职位 + 部门」过滤下拉（见 web-job/src/teaching/classStaff.ts）。
+ *     过滤放前端做：账号总共十几个，部门一改就能立刻重算，不必每次都发请求。
  * ============================================================ */
-export async function listStaffOptions(): Promise<Array<{ id: string; userName: string }>> {
-  const rows = (await permDb('t_perm_user')
+
+/** 下拉人员（含职位 / 部门，供前端按「职位 + 部门」过滤） */
+export interface StaffOption {
+  id: string;
+  userName: string;
+  /** 权限管理里的部门 id / 名称（教学部 / 大学部 / 实训教学部…） */
+  deptId: string | null;
+  deptName: string | null;
+  /** 该账号的职位（职位管理里可多条） */
+  roleNames: string[];
+  roleCodes: string[];
+  /**
+   * 换算后的**教学部门码**：1 初高部 / 2 大学部 / 3 就业部
+   *   （一个人可能同时属于两个，例如「教学部」本部 → [1, 2]；其它部门给空数组）
+   */
+  deptCodes: number[];
+}
+
+/**
+ * 权限管理的部门 → 教学部门码。
+ *
+ * 【为什么要换算】两边不是一回事：
+ *   权限管理：教学部下挂 初中部 / 高中部 / 大学部 三个**学段子部门**，
+ *             另外还有独立的 实训教学部 / 就业管理部；
+ *   教学管理：只有 初高部(1) / 大学部(2) / 就业部(3) 三个。
+ *
+ * 【按名字匹配，不写死 D_xxx 主键】不同环境初始化 SQL 的 id 未必一样，
+ *   而且「职位管理」里部门还能改名 —— 写死 id 换个环境就全错。
+ *
+ * ★ 2026-10-23 用户口径：「没有教学部，教学部不用按照要求」
+ *   教学管理里**没有「教学部」这个部门**（只有 初高 / 大学 / 就业），
+ *   所以挂在「教学部」本部的账号**不算任何教学部门**（deptCodes 为空），
+ *   不参与「按部门筛人」—— 之前那版把它强行算成初高+大学共用，是错的。
+ *   这类人要能出现在某个部门的候选里，得在「权限管理 → 账号管理」里
+ *   把部门改到 初中部 / 高中部 / 大学部 / 实训教学部 / 就业管理部。
+ */
+function resolveTeachingDeptCodes(
+  depts: Array<{ id: string; dept_name: string | null }>,
+): Map<string, number[]> {
+  const map = new Map<string, number[]>();
+  for (const d of depts) {
+    const name = String(d.dept_name ?? '');
+    const codes: number[] = [];
+    if (/初中|高中|初高/.test(name)) codes.push(1);
+    else if (/大学/.test(name)) codes.push(2);
+    else if (/实训|就业/.test(name)) codes.push(3);
+    // ⚠️ 其余（教学部本部 / 市场咨询部 / 教务部 / 财务 / 行政…）一律空数组：
+    //    它们不是教学部门，按部门筛人时不出现在任何一档里。
+    map.set(String(d.id), [...new Set(codes)]);
+  }
+  return map;
+}
+
+export async function listStaffOptions(): Promise<StaffOption[]> {
+  const users = (await permDb('t_perm_user')
     .where('is_deleted', false)
     .andWhere('user_status', '正常')
     .orderBy('user_name', 'asc')
-    .select('id', 'user_name as userName')) as any[];
+    .select('id', 'user_name as userName', 'dept_id as deptId')) as any[];
 
-  return rows.map((r) => ({ id: String(r.id), userName: String(r.userName ?? '') }));
+  if (!users.length) return [];
+
+  const depts = (await permDb('t_perm_dept')
+    .where('is_deleted', false)
+    .select('id', 'dept_name')) as Array<{ id: string; dept_name: string | null }>;
+  const deptNameById = new Map(depts.map((d) => [String(d.id), d.dept_name ? String(d.dept_name) : null]));
+  const deptCodeById = resolveTeachingDeptCodes(depts);
+
+  const links = (await permDb('t_perm_user_role')
+    .where('is_deleted', false)
+    .select('user_id as userId', 'role_id as roleId')) as Array<{ userId: string; roleId: string }>;
+  const roles = (await permDb('t_perm_role')
+    .where('is_deleted', false)
+    .select('id', 'role_code as roleCode', 'role_name as roleName')) as Array<{
+    id: string;
+    roleCode: string | null;
+    roleName: string | null;
+  }>;
+  const roleById = new Map(roles.map((r) => [String(r.id), r]));
+
+  const rolesByUser = new Map<string, { names: string[]; codes: string[] }>();
+  for (const l of links) {
+    const role = roleById.get(String(l.roleId));
+    if (!role) continue;
+    const uid = String(l.userId);
+    const box = rolesByUser.get(uid) ?? { names: [], codes: [] };
+    if (role.roleName) box.names.push(String(role.roleName));
+    if (role.roleCode) box.codes.push(String(role.roleCode));
+    rolesByUser.set(uid, box);
+  }
+
+  return users.map((r) => {
+    const id = String(r.id);
+    const deptId = r.deptId ? String(r.deptId) : null;
+    const box = rolesByUser.get(id) ?? { names: [], codes: [] };
+    return {
+      id,
+      userName: String(r.userName ?? ''),
+      deptId,
+      deptName: deptId ? deptNameById.get(deptId) ?? null : null,
+      roleNames: box.names,
+      roleCodes: box.codes,
+      deptCodes: deptId ? deptCodeById.get(deptId) ?? [] : [],
+    };
+  });
 }

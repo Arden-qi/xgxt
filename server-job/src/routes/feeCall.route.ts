@@ -60,6 +60,8 @@ import { syncFeeCallToClass } from '../services/urge-sync.service';
 //   开关关时与原实现等价。
 import { tbl, tblAs, tblInsTrx, tblRef } from '../teaching/shared/uniTable';
 import { checkPayDate, saveVoucherImage, PAY_METHOD, PAY_METHOD_NAME } from '../utils/feeVoucher';
+// ★ 2026-10-23 登记缴费反写财务（待缴 → 已缴），与财务 attachVoucher 同口径
+import { pushVoucherToFinance } from '../finance/utils/voucher-push';
 
 export const feeCallRouter = Router();
 
@@ -132,6 +134,9 @@ function effectivePayStatus(row: any): number {
   const raw = row.pay_status == null ? null : Number(row.pay_status);
   // 老数据还没回填 pay_status 时，按 call_status 折算兜底
   const base = raw ?? (Number(row.call_status) === FeeCallStatus.PAID ? PayStatus.PAID : PayStatus.UNPAID);
+  // ★ 2026-10-25：核对失败(6) 原样返回 —— 钱交过了、只是凭证被财务打回，
+  //   不能掉进下面的「未结清 → 逾期」分支里变成 4
+  if (base === PayStatus.REJECTED) return PayStatus.REJECTED;
   if (base === PayStatus.PAID || base === PayStatus.VERIFIED || base === PayStatus.FROZEN) return base;
   if (base === PayStatus.OVERDUE) return PayStatus.OVERDUE;
   // 未结清 + 过了应缴日 → 逾期
@@ -736,8 +741,33 @@ feeCallRouter.post(
     };
     // 现金且没传截图：保留原来的凭证，不要把它清空
     if (voucherUrl) patch.voucher_url = voucherUrl;
+    /**
+     * ★ 2026-10-25：重新登记 → 清掉「已上传财务时间」，让它重新回到
+     *   「批量上传到财务」候选（详见 class-jh/routes/fee.route.ts 同款注释）。
+     *   ⚠️ 只清时间，不清 `finance_fee_id`（清掉会再建一张财务单 → 重复记账）。
+     */
+    if (row.finance_fee_id) patch.finance_transfer_time = null;
 
     await tbl(db, DB, TABLE, STAGE).where({ id: body.id }).update(patch);
+
+    /**
+     * ★ 2026-10-23：反写财务缴费单（best-effort，失败不阻断登记）
+     *
+     * 这张催费单如果是财务推来的（`source_system='finance'` + `source_id`），
+     * 财务那张单可能还是「待缴(1)」→ 财务点「核对」会被拦「尚未缴费，无法核对」，
+     * 就业催费就永远停在「已缴(2)」到不了「已核对(3)」。
+     * 只推收款事实 + 1→2，与财务 `attachVoucher()` 同口径；不改其它状态。
+     */
+    const srcRow = row as Record<string, any>;
+    if (srcRow.source_system === 'finance' && srcRow.source_id) {
+      await pushVoucherToFinance({
+        financeFeeId: String(srcRow.source_id),
+        voucherUrl: voucherUrl ?? null,
+        payDate: body.payDate,
+        remark: body.remark || null,
+        operatorId: operator.userId,
+      });
+    }
 
     // 催缴状态变了 → 推给班级管理（只读副本），与 /handle 同口径
     await syncFeeCallToClass(body.id);

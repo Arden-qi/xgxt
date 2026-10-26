@@ -226,3 +226,33 @@ export async function getFinanceRefundDetail(
     return null;
   }
 }
+
+/* ============================================================
+ * ⭐ 学籍状态同步 → 财务自动冻结（2026-10-25 新增）
+ *
+ * 【为什么补这个】
+ *   财务侧 `/api/finance/freeze/sync` 早就实现了「休学 → 自动冻结餐费/住宿费」，
+ *   咨询侧 `changeState()` 会调它，但**教学侧改学籍状态时从来没调过**：
+ *   `saveStudent` 只往 `student_status` 写了个数字就完事，
+ *   DTO 里那个 `syncFreeze` 字段和 `frozenCount` 返回值全程没人消费。
+ *   实测：把学生改成休学(6)，`t_finance_freeze` 一条记录都不会有。
+ *
+ * 【口径】
+ *   · 幂等：财务侧已存在生效中的冻结时只同步缴费单，不会重复建单
+ *   · 不阻断：财务挂了/超时不能让学生保存失败（调用方 try/catch）
+ * ============================================================ */
+export async function syncStudentStatusToFinance(payload: {
+  studentId: string;
+  studentStatus: number;
+  changeTime?: string;
+  studentNo?: string;
+  studentName?: string;
+  classId?: string;
+  className?: string;
+  deptCode?: number;
+}): Promise<{ freezeCount: number; unfreezeCount: number; message: string }> {
+  return request<{ freezeCount: number; unfreezeCount: number; message: string }>(
+    '/api/finance/freeze/sync',
+    payload,
+  );
+}

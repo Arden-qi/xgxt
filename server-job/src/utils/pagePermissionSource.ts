@@ -329,8 +329,9 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
   [RoleCode.TEACH_ASSIST]: [...HEAD_TEACHER_JOB_PAGES, ...CLASS_STAFF_PAGES, ...CLASS_JH_STAFF_PAGES],
 
   // ★ 学管主任（2026-09-30 由「教质经理 + 学术经理」合并而来）
-  //   职责：退费审批第 1 步 + 休退学审批 + 催费 + 宿舍；
-  //   并且可以【代替校长审批】（见 approval.ts 的 MANAGER_ROLES）
+  //   职责：退费审批第 1 步 + 休退学审批 + 催费 + 宿舍。
+  //   ⚠️ 2026-10-23 口径变更：学管**不能**代替校长审批（见 shared-types/src/approval.ts
+  //      的 canApprove 注释）。第 1 步审完就交给校长，页面上的审批按钮也不再出现。
   [RoleCode.TEACH_DEAN]: [
     'job:class:view',
     'job:classTransfer:view',
@@ -438,6 +439,11 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
     // ★ 2026-10-05：教学管理（初高）—— 教务在该模块负责【调宿审批】，
     //   所以给宿舍页（其余页面属班主任/经理，不给他）
     ...CLASS_JH_ACAD_PAGES,
+    // ★★ 2026-10-23 补：大学部宿舍页 —— 宿舍管理三学段共用一页，
+    //   教务是「调宿/退宿申请」的审批人；缺这个码时大学部页签的
+    //   申请列表 assertStageView 40302 → 教务收不到班主任提交的申请
+    //   （实测 zhengym change/list?stage=class 返回空）。
+    'class:dorm:view',
   ],
 
   // 就业老师：**只管就业阶段**，实训侧的页面一律不给
@@ -458,6 +464,20 @@ const ROLE_PAGE_PERMISSIONS: Record<string, string[]> = {
     'job:statistics:view',
     'job:empDorm:view',
     'job:empArchive:view',
+    /**
+     * ★★ 2026-10-23：就业老师要能看到「班级管理」里的就业部班级
+     *
+     * 【为什么现在加】用户报障：「交接给相关职位的角色，看不到交接的班级以及班级的详情，
+     *   交接的记录也看不到」。实测 `zhouj`（就业老师）调
+     *   `/api/teaching/class/list?stage=emp` 直接 40302 ——
+     *   他的页面清单里只有档案/复盘/统计/宿舍，**没有 `job:class:view`**，
+     *   于是「升就业」把班交给他之后，他连班级管理菜单都进不去，
+     *   交接记录自然也无从查看（记录挂在班级详情里）。
+     *
+     * 【数据范围不会因此放宽】repo / dataScope 的就业分支只放
+     *   「employment_teacher_id = 自己」的班，别人接手的班一条都看不到。
+     */
+    'job:class:view',
     /**
      * ★★ 2026-10-22 用户要求：「退费 / 催费 / 休学退学审批 要增加大学部与就业部的数据」
      *

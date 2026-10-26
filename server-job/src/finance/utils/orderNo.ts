@@ -42,10 +42,19 @@ export async function nextOrderNo(
   const y = year ?? new Date().getFullYear();
   const head = `${prefix}${y}`;
 
-  // 取同前缀的最大单据号，例如 ZD20260002
+  /**
+   * 取同前缀的最大单据号，例如 ZD20260002
+   *
+   * ★★ 2026-10-23 修：**不能过滤 is_deleted**
+   *   单据号上有唯一索引 `uk_bill_no` —— 索引是**跨软删状态**生效的。
+   *   而这里原来加了 `.where('is_deleted', false)`：一旦最大的那个号属于一条
+   *   **已软删**的账单（实测：ZD20260002 就是一条废弃单），
+   *   下一次生成又会算出 ZD20260002 → INSERT 直接 `Duplicate entry … uk_bill_no`
+   *   → **财务点击「核对」必失败**，而且是「隔一段时间突然不能用了」的隐蔽故障。
+   *   → 号一旦发出去就永久占位（含软删），后续永远往后加。
+   */
   const row = await db(table)
     .where(column, 'like', `${head}%`)
-    .where('is_deleted', false)
     .orderBy(column, 'desc')
     .first(column);
 

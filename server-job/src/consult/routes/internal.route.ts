@@ -88,6 +88,48 @@ function assertInTrial(stu: Record<string, any>, actionName: string): void {
 }
 
 /* ============================================================
+ * 0. ★ 2026-10-23 批量查学生状态（服务间内部接口）
+ *    POST /api/consult/student/internal/states-by-nos
+ *    body: { nos: string[] }  →  { items: [{ studentNo, consultState, stateName, studentStatus }] }
+ *
+ * 【为什么需要】
+ *   用户口径：「转正式的按钮删掉，状态同步咨询那边的学生状态」。
+ *   转正不再由班主任手动发起，档案页的状态要跟咨询侧走 ——
+ *   但档案页一次要显示一页学生，只能**批量**问一次，不可能一个个 GET。
+ *
+ * 【认人键】student_no（= 教学侧学号；接收建档时 receive-ack 会把学号回写到这里）。
+ *   查不到的学号直接不返回（教学侧自己新建的学生，没有咨询记录，属正常）。
+ * ============================================================ */
+consultInternalRouter.post(
+  '/states-by-nos',
+  validate(z.object({ nos: z.array(z.string().min(1)).max(200, '单次最多 200 个学号') })),
+  wrap(async (req, res) => {
+    const { nos } = (req as any).validated as { nos: string[] };
+    const keys = [...new Set(nos.map((s) => String(s).trim()).filter(Boolean))];
+    if (!keys.length) {
+      res.json(ok({ items: [] }, '查询成功'));
+      return;
+    }
+
+    const rows = (await db(STUDENT_TABLE)
+      .where({ is_deleted: false })
+      .whereIn('student_no', keys)
+      .select('student_no', 'consult_state', 'student_status')) as Array<Record<string, any>>;
+
+    res.json(
+      ok({
+        items: rows.map((r) => ({
+          studentNo: String(r.student_no),
+          consultState: Number(r.consult_state ?? 0),
+          stateName: nameOf(CONSULT_STATE_NAME, Number(r.consult_state ?? 0)),
+          studentStatus: r.student_status == null ? null : Number(r.student_status),
+        })),
+      }),
+    );
+  }),
+);
+
+/* ============================================================
  * 1. 试学转正 · 补费预览
  *    GET /api/consult/student/internal/trial-plan?consultNo=S20260012
  *

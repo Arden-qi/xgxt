@@ -12,7 +12,8 @@
         本页合并了 <b>3 个部门</b>的班级信息（初高部 / 大学部 / 就业部，实训班归就业部）。
         <span class="muted">
           班级状态码（1 开放 / 2 封班 / 5 实训 / 6 待就业 / 7 已就业：升实训后自动为 5 实训、
-          升就业后为 6 待就业、【已就业】确认后为 7 已就业；封班即终态，可解封回开放）；
+          升就业后为 6 待就业（按钮变【待就业】并出现【已就业】）、
+          【已就业】确认后为 7 已就业（班内还有非「已就业 / 退学」学生时不可操作）；封班即终态，可解封回开放）；
           「班级编号」「结业日期」只有就业部有，「出勤率」初高按当日、其余部门按累计 —— 表单会按部门自动隐藏不适用的字段。
         </span>
       </template>
@@ -186,11 +187,14 @@
           >
             升实训
           </el-button>
-          <!-- ★ 2026-10-21 批注：升实训之后出现【升就业】——
-               点一下弹确认，把该班学生状态改为「待就业」，班级状态也改「待就业」
-               （改完按钮自动变成【已就业】）。已经是待就业 / 已就业的班不再显示。 -->
+          <!-- ★ 2026-10-23 批注第 2 条：「**就业部**才有【升就业】」——
+               就业部在库里是 job（实训班）/ emp（就业部自建班）两个学段，
+               两个都要出现按钮（见 isEmploymentStage）。
+               点一下弹确认，把该班学生状态改为「待就业」，班级状态也改「待就业」。
+               升就业成功后这个按钮**变成【待就业】**（只表示当前态，不可再点），
+               后面再出现【已就业】。已是待就业 / 已就业的班不再显示【升就业】。 -->
           <el-button
-            v-if="!isReadOnlyUser && row.stage === 'job' && canUpgradeEmployment(row)"
+            v-if="!isReadOnlyUser && isEmploymentStage(row.stage) && canUpgradeEmployment(row)"
             link
             type="warning"
             :loading="employmentSaving === row.classId"
@@ -198,11 +202,15 @@
           >
             升就业
           </el-button>
-          <!-- ★ 2026-10-21 批注第 3 条：【升就业】成功后该位置变成【已就业】。
-               点击 → 先识别整班学生状态 → 一次确认（全班已就业/退学）
-               或「提示各状态人数 + 强制确认 + 再次确认」→ 班级状态改「已就业」。 -->
+          <!-- ★ 2026-10-23 补充批注：「状态变为待就业就**不显示**【待就业】这个按钮了」
+               原来升就业成功后按钮变成灰的【待就业】占位，现在整块去掉 ——
+               待就业状态只由「状态」列的标签体现，操作列只留可点的【已就业】。 -->
+          <!-- ★ 2026-10-23 批注第 3 条：【待就业】之后才有【已就业】。
+               点击 → 识别整班学生状态 →
+                 全部「已就业 / 退学」→ 提示班级人数 / 就业人数 → 确认改「已就业」；
+                 还有别的状态 → 只提示各状态人数及人员，**不可操作**。 -->
           <el-button
-            v-if="!isReadOnlyUser && row.stage === 'job' && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
+            v-if="!isReadOnlyUser && isEmploymentStage(row.stage) && Number(row.classStatus) === CLASS_STATUS_CODE.WAIT_EMPLOY"
             link
             type="success"
             :loading="employedSaving === row.classId"
@@ -351,9 +359,16 @@
           </el-col>
           <!-- ★ 2026-10-21 用户口径：班级编号三部门统一（初高部/大学部/就业部），必填 -->
           <!-- ★ 2026-10-22 用户口径：去掉「生成」按钮，一律由相关人员手工填写 -->
+          <!-- ★ 2026-10-23 用户口径：「班级编号只能新建班级可创建，编辑班级里的班级编号不可更改」
+               → 只有新增时能填，编辑时只读（后端 save 也会忽略编辑传上来的编号）。 -->
           <el-col :span="8">
             <el-form-item label="班级编号" prop="classCode">
-              <el-input v-model="form.classCode" maxlength="32" placeholder="Q17/J101/T101" />
+              <el-input
+                v-model="form.classCode"
+                maxlength="32"
+                :disabled="!!form.id"
+                :placeholder="form.id ? '班级编号创建后不可修改' : 'Q17/J101/T101'"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -402,109 +417,87 @@
             </el-form-item>
           </el-col>
           <!-- 2026-10-15 改版：删除「班主任/教员/助教」工号/ID 输入框，
-               姓名字段直接接入权限管理的用户列表，下拉选择（选人自动带 ID） -->
+               姓名字段直接接入权限管理的用户列表，下拉选择（选人自动带 ID）
+               ★ 2026-10-23 批注：标签去掉「姓名」（班主任姓名 → 班主任），
+                 下拉按「职位 + 部门」过滤 —— 部门选初高部就只显示初高部的班主任。
+                 规则与兜底见 @/teaching/classStaff.ts（staffOf）。 -->
           <el-col :span="8">
-            <el-form-item label="班主任姓名">
+            <el-form-item label="班主任">
               <el-select
                 v-model="form.headTeacherId"
                 clearable
                 filterable
-                placeholder="接入权限管理，请选择"
+                placeholder="按职位选人，请选择"
                 :loading="staffLoading"
                 style="width: 100%"
                 @change="onStaffChange('headTeacher', $event)"
               >
-                <el-option
-                  v-for="u in withFallback(staffOptions, form.headTeacherId, form.headTeacherName)"
-                  :key="u.id"
-                  :label="u.userName"
-                  :value="u.id"
-                />
+                <el-option v-for="u in formStaff('headTeacher')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="教员姓名">
+            <el-form-item label="教员">
               <el-select
                 v-model="form.teacherId"
                 clearable
                 filterable
-                placeholder="接入权限管理，请选择"
+                placeholder="按职位选人，请选择"
                 :loading="staffLoading"
                 style="width: 100%"
                 @change="onStaffChange('teacher', $event)"
               >
-                <el-option
-                  v-for="u in withFallback(staffOptions, form.teacherId, form.teacherName)"
-                  :key="u.id"
-                  :label="u.userName"
-                  :value="u.id"
-                />
+                <el-option v-for="u in formStaff('teacher')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="助教姓名">
+            <el-form-item label="助教">
               <el-select
                 v-model="form.assistantId"
                 clearable
                 filterable
-                placeholder="接入权限管理，请选择"
+                placeholder="按职位选人，请选择"
                 :loading="staffLoading"
                 style="width: 100%"
                 @change="onStaffChange('assistant', $event)"
               >
-                <el-option
-                  v-for="u in withFallback(staffOptions, form.assistantId, form.assistantName)"
-                  :key="u.id"
-                  :label="u.userName"
-                  :value="u.id"
-                />
+                <el-option v-for="u in formStaff('assistant')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
-          <!-- 2026-10-16 按批注：加回「项目经理姓名 / 就业老师姓名」——不再是工号/ID 输入框，
-               而是和 班主任/教员/助教 同一套规则：下拉取自「权限管理」用户列表，选人自动带 ID。
+          <!-- 2026-10-16 按批注：加回「项目经理 / 就业老师」——不再是工号/ID 输入框，
+               而是和 班主任/教员/助教 同一套规则：下拉按「职位 + 部门」过滤，选人自动带 ID。
                ★ 只有「阶段 = 实训」时才必填（见 isTrainPhase / rules）。
                ⚠️ 初高部的表没有这几列，所以只对 大学部 / 实训 显示（与「大学学号」下线的口径一致）。 -->
           <template v-if="form.stage !== 'jh'">
             <el-col :span="8">
-              <el-form-item label="项目经理姓名" prop="projectManagerName">
+              <el-form-item label="项目经理" prop="projectManagerName">
                 <el-select
                   v-model="form.projectManagerId"
                   clearable
                   filterable
-                  placeholder="接入权限管理，请选择"
+                  placeholder="按职位选人，请选择"
                   :loading="staffLoading"
                   style="width: 100%"
                   @change="onStaffChange('projectManager', $event)"
                 >
-                  <el-option
-                    v-for="u in withFallback(staffOptions, form.projectManagerId, form.projectManagerName)"
-                    :key="u.id"
-                    :label="u.userName"
-                    :value="u.id"
-                  />
+                  <el-option v-for="u in formStaff('projectManager')" :key="u.id" :label="u.userName" :value="u.id" />
                 </el-select>
               </el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="就业老师姓名" prop="employmentTeacherName">
+              <el-form-item label="就业老师" prop="employmentTeacherName">
                 <el-select
                   v-model="form.employmentTeacherId"
                   clearable
                   filterable
-                  placeholder="接入权限管理，请选择"
+                  placeholder="按职位选人，请选择"
                   :loading="staffLoading"
                   style="width: 100%"
                   @change="onStaffChange('employmentTeacher', $event)"
                 >
-                  <el-option
-                    v-for="u in withFallback(staffOptions, form.employmentTeacherId, form.employmentTeacherName)"
-                    :key="u.id"
-                    :label="u.userName"
-                    :value="u.id"
-                  />
+                  <el-option v-for="u in formStaff('employmentTeacher')" :key="u.id" :label="u.userName" :value="u.id" />
                 </el-select>
               </el-form-item>
             </el-col>
@@ -561,7 +554,7 @@
           type="info"
           :closable="false"
           show-icon
-          title="班主任 / 教员 / 助教 均为可选，姓名来自「权限管理」的用户列表；初高部的表没有「项目经理姓名 / 就业老师姓名 / 大学学号」这几列，所以这个学段不显示"
+          title="班主任 / 教员 / 助教 均为可选，下拉按「职位 + 部门」过滤（如部门选初高部，班主任只列初高部的班主任；该部门没有该职位时退回只按职位列人）；初高部的表没有「项目经理 / 就业老师」这两列，所以这个学段不显示"
         />
       </el-form>
       <template #footer>
@@ -613,7 +606,8 @@
                 style="width: 100%"
                 @change="onHandoverPick(row)"
               >
-                <el-option v-for="u in staffOptions" :key="u.id" :label="u.userName" :value="u.id" />
+                <!-- ★ 2026-10-23：每个岗位只列「该职位 + 该部门」的人 -->
+                <el-option v-for="u in row.options" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </template>
           </el-table-column>
@@ -648,6 +642,7 @@
         <template #title>
           升实训会把这个班<b>连同学生</b>整体转到就业部：新班<b>不再有班主任 / 教员 / 助教</b>，
           只保留项目经理与就业老师；原班级从大学部移除。学生状态统一变为「实训中」。
+          <br /><b>班级编号沿用原班级，不会重新生成</b>（编号只在新建班级时确定，之后任何操作都不改）。
         </template>
       </el-alert>
       <el-form label-width="100px" class="tv-form">
@@ -660,6 +655,13 @@
           <el-col :span="12">
             <el-form-item label="部门">
               <el-input model-value="就业部" disabled />
+            </el-form-item>
+          </el-col>
+          <!-- ★ 2026-10-23 批注：「班级编号只有新建班级时创建更改，后续任何操作都不可更改」
+               → 升实训**沿用原编号**，这里只读展示，不给编辑。 -->
+          <el-col :span="12">
+            <el-form-item label="班级编号">
+              <el-input :model-value="trainingForm.srcClassCode" disabled placeholder="升实训后保持不变" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -683,7 +685,7 @@
                 :loading="staffLoading"
                 style="width: 100%"
               >
-                <el-option v-for="u in staffOptions" :key="u.id" :label="u.userName" :value="u.id" />
+                <el-option v-for="u in trainingStaff('projectManager')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -696,7 +698,7 @@
                 :loading="staffLoading"
                 style="width: 100%"
               >
-                <el-option v-for="u in staffOptions" :key="u.id" :label="u.userName" :value="u.id" />
+                <el-option v-for="u in trainingStaff('employmentTeacher')" :key="u.id" :label="u.userName" :value="u.id" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -753,7 +755,6 @@ import { http } from '@/api/request';
 // ★ 2026-10-22：阶段方案设计从「系统设置」搬进班级管理，以弹窗呈现
 import StageSchemePanel from '@/teaching/components/StageSchemePanel.vue';
 import { DeptCode, StudentStatus } from 'shared-types';
-import type { PermUserListItem } from 'shared-types/perm';
 import {
   listClasses,
   getClassDetail,
@@ -767,6 +768,7 @@ import {
   upgradeClassToEmployment,
   getEmploymentProgress,
   confirmClassEmployed,
+  getStaffOptions,
   isSystemClassStatus,
   CLASS_STATUS_TAG,
   CLASS_STATUS_SELECTABLE,
@@ -781,8 +783,12 @@ import {
   type ClassStage,
   type ClassStageMeta,
   type ClassSummary,
+  type EmploymentProgress,
+  type StaffOption,
   type StagePlanOption,
 } from '@/teaching/api/class';
+// ★ 2026-10-23：岗位选人 —— 按「职位 + 部门」过滤（见文件头注释）
+import { staffOf, STAGE_DEPT_CODE, type StaffKind } from '@/teaching/classStaff';
 // 教室「楼栋-房间号」格式：归一 + 校验（前后端同一套规则，见文件头注释）
 import {
   CLASSROOM_EXAMPLE,
@@ -1003,16 +1009,19 @@ const isTrainPhase = computed(() => Number(form.phaseCode) === TRAIN_PHASE_CODE)
  */
 const rules = computed<FormRules>(() => ({
   // ★ 2026-10-21：班级编号三部门统一必填（历史班级留空，首次编辑时补）
-  classCode: [
-    { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
-    {
-      validator: (_rule, value, callback) => {
-        if (String(value ?? '').trim()) callback();
-        else callback(new Error('请填写班级编号，如 Q17 / J101 / T101'));
-      },
-      trigger: 'submit',
-    },
-  ],
+  // ★ 2026-10-23：编辑时编号只读、也不再校验必填（防止老数据编号为空时保存被卡）
+  classCode: form.id
+    ? []
+    : [
+        { required: true, message: '请填写班级编号，如 Q17 / J101 / T101', trigger: 'blur' },
+        {
+          validator: (_rule, value, callback) => {
+            if (String(value ?? '').trim()) callback();
+            else callback(new Error('请填写班级编号，如 Q17 / J101 / T101'));
+          },
+          trigger: 'submit',
+        },
+      ],
   projectManagerName: isTrainPhase.value
     ? [{ required: true, message: '实训阶段必填', trigger: 'change' }]
     : [],
@@ -1140,10 +1149,16 @@ function onFormDeptChange(v: number | undefined) {
   onFormStageChange();
 }
 
-/* ============ 2026-10-15 改版：班主任/教员/助教接入「权限管理」用户列表 ============ */
+/* ============ 2026-10-15 改版：班主任/教员/助教接入「权限管理」用户列表 ============
+ * ★ 2026-10-23 批注：下拉不再是「全部账号」，改成**按职位 + 部门**过滤 ——
+ *   班主任只列「职位 = 班主任」的人，且部门是当前班级部门的人；
+ *   该部门下没这个职位（典型：项目经理只在实训教学部）→ 退回只按职位筛。
+ *   规则与兜底集中在 @/teaching/classStaff.ts（staffOf），这里只负责喂数据。
+ */
 
 const staffLoading = ref(false);
-const staffOptions = ref<PermUserListItem[]>([]);
+/** 全量人员（含职位 / 部门码），三处下拉共用一份，部门一改即时重算 */
+const staffOptions = ref<StaffOption[]>([]);
 
 async function loadStaff() {
   staffLoading.value = true;
@@ -1154,14 +1169,9 @@ async function loadStaff() {
      *   初高 / 大学 / 就业账号一进班级管理就 403：
      *   ① 拦截器弹「您没有该操作的权限」（用户报障：每个账号登录都弹没有权限）；
      *   ② 更实际的问题：staffOptions 被清空 → 新建班级选不了班主任/教员/助教。
-     *   新接口跟着班级页面权限走，只返回 id + 姓名，够下拉用。
+     *   新接口跟着班级页面权限走，只返回 id + 姓名（★ 10-23 起再加职位 / 部门码），够下拉用。
      *   拉取仍带 silent：万一以后某个账号连班级页面权限都没有，也只是下拉空着，不弹窗。 */
-    const rows = await http.get<Array<{ id: string; userName: string }>>(
-      '/api/teaching/class/staff-options',
-      undefined,
-      { silent: true },
-    );
-    staffOptions.value = (rows || []) as unknown as PermUserListItem[];
+    staffOptions.value = (await getStaffOptions()) || [];
   } catch {
     staffOptions.value = [];
   } finally {
@@ -1169,18 +1179,24 @@ async function loadStaff() {
   }
 }
 
-/** 编辑老班级时，原工号/ID 可能不在权限用户列表里 —— 兜底补一个选项，避免显示成裸 ID */
-function withFallback(
-  list: PermUserListItem[],
-  id: string | null | undefined,
-  name: string | null | undefined,
-): PermUserListItem[] {
-  if (!id || list.some((u) => u.id === id)) return list;
-  return [{ id, userName: name || id } as PermUserListItem, ...list];
+/** 班级表单里某个岗位的可选人（按表单当前部门过滤；已选的人不在候选里也补一条） */
+function formStaff(kind: StaffKind): StaffOption[] {
+  const picked: Record<StaffKind, [string | null | undefined, string | null | undefined]> = {
+    headTeacher: [form.headTeacherId, form.headTeacherName],
+    teacher: [form.teacherId, form.teacherName],
+    assistant: [form.assistantId, form.assistantName],
+    projectManager: [form.projectManagerId, form.projectManagerName],
+    employmentTeacher: [form.employmentTeacherId, form.employmentTeacherName],
+  };
+  const [id, name] = picked[kind];
+  return staffOf(staffOptions.value, kind, form.deptCode, id, name);
 }
 
-/** 岗位种类：前三个是建班岗位，后两个是交棒岗位（阶段=实训时必填） */
-type StaffKind = 'headTeacher' | 'teacher' | 'assistant' | 'projectManager' | 'employmentTeacher';
+/** 升实训弹窗两个岗位：部门固定按「就业部(3)」过滤 */
+function trainingStaff(kind: 'projectManager' | 'employmentTeacher'): StaffOption[] {
+  const id = kind === 'projectManager' ? trainingForm.projectManagerId : trainingForm.employmentTeacherId;
+  return staffOf(staffOptions.value, kind, DeptCode.EMPLOYMENT, id, null);
+}
 
 /** 选人自动带姓名；清空时姓名一并清掉 */
 function onStaffChange(kind: StaffKind, id: string) {
@@ -1200,8 +1216,10 @@ function onPlanChange() {
 }
 
 /** 列表/详情里「阶段」列的回显（阶段名由后端按阶段码解析下发） */
-function phaseTextOf(row: Pick<ClassRow, 'phaseName'>): string {
-  return row.phaseName || '—';
+function phaseTextOf(row: Pick<ClassRow, 'phaseName' | 'phaseCode'>): string {
+  /* ★ 2026-10-23：阶段码在字典里没有中文名时（跨部门号段 / 方案新增阶段），
+     原来显示「—」→ 用户以为编辑没生效；现在兜底显示「阶段 321」。 */
+  return row.phaseName || (row.phaseCode != null ? `阶段 ${row.phaseCode}` : '—');
 }
 
 async function openCreate() {
@@ -1241,6 +1259,13 @@ async function openEdit(row: ClassRow) {
   } catch {
     /* 忽略：沿用上一次的 meta */
   }
+  /**
+   * ★ 2026-10-23：编辑回填方案 —— 优先级：班级已存方案 → 按阶段码反查方案 → 该部门第一个。
+   *   原来不回填，阶段下拉按「默认第一个方案」过滤，用户看到的阶段选不中原来的值，
+   *   改完保存后表格里阶段看起来「没变」（前端下拉与库里阶段码对不上）。
+   */
+  formPlanId.value =
+    (row.schemeId as string | null) || planIdOfPhase(row.phaseCode) || formPlanOptions.value[0]?.id || '';
   Object.assign(form, emptyForm(row.stage), {
     id: row.classId,
     className: row.className,
@@ -1302,7 +1327,17 @@ async function doSave() {
   }
   saving.value = true;
   try {
-    await saveClass({ ...form });
+    /**
+     * ★ 2026-10-23：方案三字段要跟着保存（formPlanId 只是联动用的 ref，不在 form 里）。
+     *   方案阶段名按当前选中的阶段选项取 label —— 阶段码在字典里查不到名（如就业部
+     *   号段的 321 配在初高班）时，列表用它兜底显示，不再是一片空白。
+     */
+    const phaseOpt = formPhaseOptions.value.find((p) => p.value === form.phaseCode);
+    await saveClass({
+      ...form,
+      schemeId: formPlanId.value || null,
+      schemeStageName: phaseOpt?.label ?? null,
+    });
     ElMessage.success(form.id ? '班级已更新' : '班级已创建');
     editVisible.value = false;
     load();
@@ -1364,6 +1399,8 @@ interface HandoverRoleItem {
   /** 留空 = 该岗位不换人 */
   newId: string;
   newName: string;
+  /** ★ 2026-10-23：该岗位的可选人（按职位 + 部门过滤，打开弹窗时算好） */
+  options: StaffOption[];
 }
 
 const handoverVisible = ref(false);
@@ -1392,13 +1429,18 @@ function openHandover(row: ClassRow) {
     handoverDate: todayStr(),
     reason: '',
   });
-  const all: HandoverRoleItem[] = [
+  const seeds: Array<Omit<HandoverRoleItem, 'options'>> = [
     { key: 'headTeacher', label: '班主任', oldId: row.headTeacherId || '', oldName: row.headTeacherName || '', newId: '', newName: '' },
     { key: 'teacher', label: '教员', oldId: row.teacherId || '', oldName: row.teacherName || '', newId: '', newName: '' },
     { key: 'assistant', label: '助教', oldId: row.assistantId || '', oldName: row.assistantName || '', newId: '', newName: '' },
     { key: 'projectManager', label: '项目经理', oldId: row.projectManagerId || '', oldName: row.projectManagerName || '', newId: '', newName: '' },
     { key: 'employmentTeacher', label: '就业老师', oldId: row.employmentTeacherId || '', oldName: row.employmentTeacherName || '', newId: '', newName: '' },
   ];
+  const all: HandoverRoleItem[] = seeds.map((r) => ({
+    ...r,
+    // ★ 2026-10-23：每个岗位的下拉按「该职位 + 该班部门」过滤，原负责人兜底保留
+    options: staffOf(staffOptions.value, r.key, STAGE_DEPT_CODE[row.stage], r.oldId, r.oldName),
+  }));
   // 初高没有后两个岗位（那两张表没这两列），不展示
   handoverRoles.value = row.stage === 'jh' ? all.slice(0, 3) : all;
   handoverVisible.value = true;
@@ -1451,6 +1493,8 @@ const trainingSaving = ref(false);
 const trainingForm = reactive({
   classId: '',
   srcName: '',
+  /** ★ 2026-10-23：源班编号 —— 升实训**沿用**它，弹窗里只读展示 */
+  srcClassCode: '',
   studentCount: 0,
   className: '',
   phaseCode: undefined as number | undefined,
@@ -1491,6 +1535,7 @@ function openTraining(row: ClassRow) {
   Object.assign(trainingForm, {
     classId: row.classId,
     srcName: row.className,
+    srcClassCode: row.classCode || '—',
     studentCount: row.studentCount ?? 0,
     // 批注：班级名称可以修改，也可以保持原班级名称不变
     className: row.className,
@@ -1553,22 +1598,23 @@ async function doTrainingUpgrade() {
   }
 }
 
-/* ---------------- ★ 升就业 / 已就业（2026-10-21 批注第 2、3 条） ----------------
- * 批注原文：
+/* ---------------- ★ 升就业 / 已就业（2026-10-21 批注第 2、3 条，2026-10-23 改口径） ----------------
+ * 批注原文（2026-10-23）：
  *   「2. 点击【升就业】，并且升就业成功之后，则班级状态改为【待就业】，
- *     【升就业】按钮改为已就业」
+ *     【升就业】按钮改为【待就业】」
  *   「3. 点击【已就业】系统识别整个班级的学生状态，若状态都已经变为已就业、退学，
  *     则提示整班都已就业并显示班级人数和就业人数，确认要将班级状态改为已就业吗，
- *     确认之后，班级的状态该为【已就业】；若识别班级内仍存在其他状态的学生，
- *     则进行提示班级各个状态的人数，并且提示确认要强制将本班状态改为【已就业】，
- *     确认之后需要再次确认，再次确认之后状态改为已就业」
+ *     确认之后班级状态改为【已就业】；若识别班级内仍存在其他状态的学生，
+ *     则进行提示班级各个状态的人数及人员，**不可进行【已就业】操作**」
  *
  * 落地：
- *   · 升就业 → 学生状态 实训中(8) → 待就业(9)，班级状态 实训(5) → 待就业(6)；
- *     按钮自动换成【已就业】（v-if 看 classStatus === 6）。
+ *   · 升就业 → 学生状态 实训中(8) → 待就业(9)，班级状态 原状态 → 待就业(6)；
+ *     操作列按钮从【升就业】变【待就业】（灰、不可点），并出现【已就业】。
+ *     ★ 2026-10-23：入口放开到整个「就业部」（job 实训班 + emp 就业部自建班）。
  *   · 已就业 → 先查整班学生状态分布：
- *       settled（全班都是已就业/退学）→ 一次确认 → 班级状态改 已就业(7)；
- *       否则 → 列出各状态人数 + 强制确认 + **再次确认** → 改 已就业(7)。
+ *       settled（全班都是已就业/退学）→ 提示班级人数 / 就业人数 → 一次确认 → 班级状态改 已就业(7)；
+ *       否则 → 只弹提示，逐条列出「状态 人数：姓名、姓名…」+ 明确「不可操作」，
+ *              **不再有强制确认 / 再次确认**（2026-10-23 批注推翻了 10-21 那版口径）。
  *   · 已就业只改**班级状态**，学生状态一个不动（学生档案里逐个点【已就业】才写 10）。
  */
 const CLASS_STATUS_CODE = { TRAINING: 5, WAIT_EMPLOY: 6, EMPLOYED: 7 } as const;
@@ -1576,10 +1622,57 @@ const CLASS_STATUS_CODE = { TRAINING: 5, WAIT_EMPLOY: 6, EMPLOYED: 7 } as const;
 const employmentSaving = ref('');
 const employedSaving = ref('');
 
-/** 实训班还没到「待就业 / 已就业」→ 才显示【升就业】 */
+/**
+ * ★ 2026-10-23 批注第 2 条：「**就业部**才有【升就业】」
+ *
+ *   界面上「就业部」是一张卡，但行的 stage 有两个内部值（同一张表分开存）：
+ *     job —— 升实训造出来的实训班
+ *     emp —— 直接在就业部建的班
+ *   三个按钮（升就业 / 灰【待就业】/ 已就业）都只对这两个学段出现；
+ *   初高部、大学部一个都不出现。原来只判断 'job'，就业部里 emp 的班
+ *   （如 SX2601 / SX2602）操作列没有任何按钮。
+ */
+function isEmploymentStage(stage: string): boolean {
+  return stage === 'job' || stage === 'emp';
+}
+
+/** 就业部班级还没到「待就业 / 已就业」→ 才显示【升就业】 */
 function canUpgradeEmployment(row: ClassRow): boolean {
   const s = Number(row.classStatus);
   return s !== CLASS_STATUS_CODE.WAIT_EMPLOY && s !== CLASS_STATUS_CODE.EMPLOYED;
+}
+
+/** 「已就业 10 人、退学 2 人」这种一句话摘要（settled 弹窗用） */
+function progressSummary(p: EmploymentProgress): string {
+  return `已就业 <b>${p.employed}</b> 人、退学 <b>${p.quit}</b> 人`;
+}
+
+/** 某个状态下的学生姓名串（太多时截断，避免弹窗撑爆） */
+function namesOf(item: { count: number; students: Array<{ studentName: string | null; studentNo: string | null }> }): string {
+  const MAX = 30;
+  const names = item.students
+    .slice(0, MAX)
+    .map((s) => escText(s.studentName || s.studentNo || '未命名'))
+    .join('、');
+  return item.count > MAX ? `${names} …等 ${item.count} 人` : names;
+}
+
+/**
+ * 未结清的状态块：一行一个状态，「待就业 3 人：甲、乙、丙」
+ *   已就业 / 退学 是允许的两态，不在这里重复列（弹窗正文会单独给出人数）。
+ */
+function unsettledHtml(p: EmploymentProgress): string {
+  const rows = p.items.filter(
+    (i) => i.status !== StudentStatus.EMPLOYED && i.status !== StudentStatus.QUIT,
+  );
+  return rows
+    .map(
+      (i) =>
+        `<div class="ec-row"><span class="ec-st">${escText(i.statusName)}</span>` +
+        `<span class="ec-ct">${i.count} 人</span>` +
+        `<span class="ec-nm">${namesOf(i)}</span></div>`,
+    )
+    .join('');
 }
 
 async function doEmploymentUpgrade(row: ClassRow) {
@@ -1587,7 +1680,7 @@ async function doEmploymentUpgrade(row: ClassRow) {
     await ElMessageBox.confirm(
       `是否将该班级（${escText(row.className)}，${row.studentCount ?? 0} 人）的<b>学生状态改为「待就业」</b>？` +
         '<br/><br/><span>班级本身不搬动、不改名；已是「已就业」的学生不会被改动。<br/>' +
-        '确认后班级状态也会变为「待就业」，按钮变为【已就业】。</span>',
+        '确认后班级状态也会变为「待就业」，按钮变为【待就业】。</span>',
       '升就业确认',
       {
         type: 'warning',
@@ -1612,58 +1705,56 @@ async function doEmploymentUpgrade(row: ClassRow) {
   }
 }
 
-/** 【已就业】：识别整班学生状态 → 确认（不满足时二次确认）→ 班级状态改「已就业」 */
+/**
+ * 【已就业】：识别整班学生状态
+ *   全部「已就业 / 退学」→ 确认 → 班级状态改「已就业」
+ *   还有别的状态       → 只提示（人数 + 人员），**不可操作**
+ */
 async function doConfirmEmployed(row: ClassRow) {
-  let p;
+  let p: EmploymentProgress;
   try {
     p = await getEmploymentProgress(row.classId);
   } catch (e) {
     ElMessage.error((e as Error).message || '识别班级学生状态失败');
     return;
   }
-  // 「已就业 12 人　退学 2 人　待就业 3 人」
-  const lines = p.items.map((i) => `${escText(i.statusName)} ${i.count} 人`).join('　');
+
+  if (!p.settled) {
+    /* ★ 2026-10-23 批注：仍有学生不是「已就业 / 退学」→ 提示各状态人数及人员，
+     *   不可进行【已就业】操作。这里只弹一个「我知道了」，没有任何确认按钮。
+     *   （后端 confirmClassEmployed 也做了同样的拦截，双保险） */
+    await ElMessageBox.alert(
+      `<div class="ec-tip">本班共 <b>${p.total}</b> 人，其中 ${progressSummary(p)}，` +
+        `还有 <b>${p.pending}</b> 人未到「已就业 / 退学」，<b>不可改为「已就业」</b>：</div>` +
+        `<div class="ec-box">${unsettledHtml(p)}</div>` +
+        `<div class="ec-tip2">请先在【教学管理 → 学生档案】里把这 ${p.pending} 人确认为「已就业」` +
+        `（或办理退学），再回来点【已就业】。</div>`,
+      '不可改为已就业',
+      {
+        type: 'warning',
+        confirmButtonText: '我知道了',
+        dangerouslyUseHTMLString: true,
+        customClass: 'ec-msgbox',
+      },
+    ).catch(() => undefined);
+    return;
+  }
+
+  // 全班都已是「已就业 / 退学」→ 提示班级人数 / 就业人数，一次确认
   try {
-    if (p.settled) {
-      // 全班都已是「已就业 / 退学」→ 一次确认即可
-      await ElMessageBox.confirm(
-        `已识别整班 <b>${p.total}</b> 人：已就业 <b>${p.employed}</b> 人、退学 <b>${p.quit}</b> 人。` +
-          `<br/><br/>确认要将班级状态改为「已就业」吗？`,
-        '已就业确认',
-        {
-          type: 'success',
-          confirmButtonText: '确认改为已就业',
-          cancelButtonText: '取消',
-          dangerouslyUseHTMLString: true,
-        },
-      );
-    } else {
-      // 还有其它状态的学生 → 先提示各状态人数，再强制确认 + 再次确认
-      await ElMessageBox.confirm(
-        `本班共 <b>${p.total}</b> 人，当前学生状态：<br/><b>${lines}</b><br/><br/>` +
-          `其中还有 <b>${p.pending}</b> 人未到「已就业 / 退学」。<br/>` +
-          `确认要<b>强制</b>将本班状态改为「已就业」吗？`,
-        '已就业确认',
-        {
-          type: 'warning',
-          confirmButtonText: '确认强制改为已就业',
-          cancelButtonText: '取消',
-          dangerouslyUseHTMLString: true,
-        },
-      );
-      // 批注原文：「确认之后需要再次确认，再次确认之后状态改为已就业」
-      await ElMessageBox.confirm(
-        `再次确认：把「${escText(row.className)}」的班级状态改为「已就业」？<br/>` +
-          `<span>（学生档案里的学生状态不会被改动）</span>`,
-        '再次确认',
-        {
-          type: 'warning',
-          confirmButtonText: '再次确认',
-          cancelButtonText: '取消',
-          dangerouslyUseHTMLString: true,
-        },
-      );
-    }
+    const headline = p.employed
+      ? `整班都已就业：本班 <b>${p.total}</b> 人，其中 ${progressSummary(p)}。`
+      : `本班 <b>${p.total}</b> 人已全部退学（已就业 0 人）。`;
+    await ElMessageBox.confirm(
+      `${headline}<br/><br/>确认要将班级状态改为「已就业」吗？`,
+      '已就业确认',
+      {
+        type: 'success',
+        confirmButtonText: '确认改为已就业',
+        cancelButtonText: '取消',
+        dangerouslyUseHTMLString: true,
+      },
+    );
   } catch {
     return;
   }
@@ -1781,5 +1872,64 @@ onMounted(() => {
 }
 .danger {
   color: #CD3A33;
+}
+</style>
+
+<!--
+  ★ 2026-10-23：【已就业】的「不可操作」提示框
+     ElMessageBox 渲染在 body 上（teleport），scoped 样式够不到，
+     所以这段必须是**非 scoped** 的全局样式；class 前缀 ec- 避免污染。
+-->
+<style>
+.ec-msgbox {
+  max-width: 560px;
+}
+.ec-msgbox .el-message-box__message {
+  max-height: 52vh;
+  overflow: auto;
+}
+.ec-msgbox .ec-tip {
+  line-height: 1.7;
+  color: #303133;
+}
+.ec-msgbox .ec-tip2 {
+  margin-top: 10px;
+  line-height: 1.7;
+  font-size: 12px;
+  color: #909399;
+}
+.ec-msgbox .ec-box {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #fafafa;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+}
+.ec-msgbox .ec-row {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  border-bottom: 1px dashed #ebeef5;
+}
+.ec-msgbox .ec-row:last-child {
+  border-bottom: none;
+}
+.ec-msgbox .ec-st {
+  flex: 0 0 auto;
+  min-width: 56px;
+  color: #C9852E;
+  font-weight: 600;
+}
+.ec-msgbox .ec-ct {
+  flex: 0 0 auto;
+  min-width: 34px;
+  color: #303133;
+}
+.ec-msgbox .ec-nm {
+  flex: 1 1 auto;
+  color: #606266;
+  word-break: break-all;
 }
 </style>

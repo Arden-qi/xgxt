@@ -391,6 +391,11 @@ async function submitNew() {
     ElMessage.warning('请填写学生姓名');
     return;
   }
+  // ★ 手机号必填（与后端 addSchema 的 required_error 口径一致，文案也统一）
+  if (!f.phone.trim()) {
+    ElMessage.warning('请填写学生手机号');
+    return;
+  }
   // ★ 手机号 11 位（不需要校验重复，重复由后端拦并提示是哪位学生占用）
   if (!/^1[3-9]\d{9}$/.test(f.phone)) {
     ElMessage.warning('学生手机号需为 11 位手机号（1 开头的 11 位数字）');

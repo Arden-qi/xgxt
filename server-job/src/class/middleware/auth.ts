@@ -46,6 +46,20 @@ async function fillClassIds(user: AuthUser): Promise<void> {
   const me = [...new Set([user.userId, user.businessUserId, (user as any).portalUserId]
     .map((x) => String(x || '')).filter(Boolean))];
   if (!me.length) return;
+
+  /* ★ 2026-10-23 合并补充：class 模块的 user 是本模块自己 verifyToken 解出来的，
+     不走主系统 authMiddleware → businessUserId 可能没填。
+     此时按账号反查权限库 id 兜底（与主系统「ID 统一改造」同一目标）。 */
+  if (!(user as any).businessUserId && (user as any).account) {
+    try {
+      const pu = (await db('sms_perm.t_perm_user')
+        .where({ account: String((user as any).account) })
+        .first()) as any;
+      if (pu?.id) me.push(String(pu.id));
+    } catch {
+      /* 权限库不可用 → 只按已有 id 匹配 */
+    }
+  }
   const ids = new Set<string>(user.classIds || []);
 
   /** 责任人列：大学部是班主任三岗；就业/实训还多两岗 */

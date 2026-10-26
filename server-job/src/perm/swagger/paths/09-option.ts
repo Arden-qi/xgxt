@@ -48,7 +48,7 @@
  *                       type: array
  *                       items:
  *                         $ref: '#/components/schemas/PermOptionItem'
- *                       description: 正常 / 已停用 / 已锁定
+ *                       description: 正常 / 已停用
  *                     deptLevels:
  *                       type: array
  *                       items:

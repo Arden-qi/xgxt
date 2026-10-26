@@ -21,12 +21,13 @@
  * 【返回值约定】`null` = 不限；`[]` = 一个班都看不到（务必按「查不到」处理）
  */
 
-import { BizCode, ClassStatus, RoleCode, hasRole } from 'shared-types';
+import { BizCode, RoleCode, hasRole } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { db as classDb } from '../../class/db';
 import { db as classJhDb } from '../../class-jh/utils/db';
 import { db as jobDb } from '../../utils/db';
 import type { TeachingStage } from './dto';
+import { CLASS_STATUS } from './dto';
 import { tbl } from './uniTable';
 
 type Side = 'training' | 'university' | 'all';
@@ -80,6 +81,7 @@ export async function visibleClassIds(
         .filter(Boolean),
     ),
   ];
+
   if (!ids.length) return [];
 
   /* ★ 2026-10-21：就业部（emp）独立学段，按「就业老师」隔离
@@ -110,20 +112,30 @@ export async function visibleClassIds(
     const isPM = hasRole(roles, RoleCode.PROJECT_MANAGER);
     const isJob = hasRole(roles, RoleCode.JOB_STAFF);
     if (!isPM && !isJob) return [];
+    /* ★ 2026-10-23：「交棒给就业老师」的判据改了
+     *
+     * 原来用 `class_status = ClassStatus.GRADUATED(4 已结业)` ——
+     * 但 2026-10-22 批注已经把「已结业」整体下线（封班即终态），
+     * 4 永远不会出现 → 就业老师这条路**一行都查不出来**，
+     * 交接给他的实训班在「实训」侧完全消失（用户报障的另一半原因）。
+     *
+     * 现行口径：升就业成功 = 班级状态 6 待就业，确认后 7 已就业 —— 这才叫「已交棒」。
+     */
+    const HANDED_OVER = [CLASS_STATUS.WAIT_EMPLOY, CLASS_STATUS.EMPLOYED];
     try {
       const rows = (await tbl(jobDb, 'sms_job', 't_job_class', 'job')
         .where('is_deleted', 0)
         .andWhere((q: any) => {
           if (isPM) {
-            // 实训：我负责且未结业（结业 = 已交棒给就业老师）
+            // 实训：我负责且**还没交棒**（6/7 之后归就业老师）
             q.where((w: any) =>
-              w.whereIn('project_manager_id', ids).andWhereNot('class_status', ClassStatus.GRADUATED),
+              w.whereIn('project_manager_id', ids).andWhereNotIn('class_status', HANDED_OVER),
             );
           }
           if (isJob) {
-            // 就业：已结业（交棒）且 employment_teacher 是我
+            // 就业：已交棒（6 待就业 / 7 已就业）且 employment_teacher 是我
             q.orWhere((w: any) =>
-              w.whereIn('employment_teacher_id', ids).andWhere('class_status', ClassStatus.GRADUATED),
+              w.whereIn('employment_teacher_id', ids).andWhereIn('class_status', HANDED_OVER),
             );
           }
         })

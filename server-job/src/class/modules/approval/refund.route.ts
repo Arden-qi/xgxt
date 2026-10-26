@@ -10,7 +10,7 @@ import { requirePerm } from '../../lib/permGuard';
 import { rowsToCamel } from '../../lib/case';
 import { buildApplyNo, now, seqOfApplyNo, uuid } from '../../lib/ids';
 import { FeeTypeName, RefundStatusHandlerRole, RefundStatusName } from '../../lib/dict';
-import { hasAnyRole, isPrincipal, isStudyManager } from '../../lib/authUser';
+import { hasAnyRole, isPrincipal } from '../../lib/authUser';
 import { assertClassAccess } from '../../middleware/dataScope';
 import { applySyncScope } from '../shared/syncScope';
 import {
@@ -54,8 +54,26 @@ function canApproveAt(user: NonNullable<import('express').Request['user']>, stat
   // ⚠️ 这里只能判断「登录人」是否具备节点角色，不能判断「节点允许的角色里是否含 ADMIN」——
   //    后者恒为真，会导致任何角色都能审批该节点（曾出现的越权漏洞）。
   if (roles.some((r) => user.roles.includes(r))) return true;
-  // 学管在本链上是「经理」，允许其在后续节点代为推进，避免流程卡死
-  if (isStudyManager(user) && status !== RefundStatus.PENDING_FINANCE) return true;
+
+  /**
+   * ★ 2026-10-23 已**删除**旧的「学管代为推进」口子。
+   *
+   * 原代码：
+   *   `if (isStudyManager(user) && status !== RefundStatus.PENDING_FINANCE) return true;`
+   * 注释写的理由是「学管在本链上是经理，允许其在后续节点代为推进，避免流程卡死」。
+   *
+   * 问题（用户 2026-10-23 口径：「退费中学管审批后是校长审批，学管不能代替校长审批」）：
+   *   · 这条是 `status !== 待财务` 的全放行 —— 学管不只能批「待校长」，
+   *     连「待教务核算」也一并吃掉，等于把中间两个节点都架空；
+   *   · 「避免卡死」是伪需求：真卡住是没人有该角色，应当补人/补角色，
+   *     不是让一个角色通吃 —— 审批轨迹上看不出是谁在哪个节点签的字。
+   *
+   * 现在：各节点只认 `NODE_ROLE` 里配置的角色（待校长 = PRINCIPAL_ROLES），
+   *      学管在「待校长」节点调用会走 route 里 `!canApproveAt` 分支 → 40302。
+   *
+   * ⚠️ 统一链（`/api/teaching/refund/*`）走 shared-types 的 `canApprove()`，
+   *    那边同日也删掉了同一口子，两套链路口径一致。
+   */
   return false;
 }
 

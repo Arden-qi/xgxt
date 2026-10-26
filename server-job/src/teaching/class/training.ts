@@ -140,7 +140,12 @@ export async function upgradeClassToTraining(
   if (!students.length) throw new BizError(BizCode.PARAM_ERROR, '该班级没有学生，无法升实训');
 
   const newId = randomUUID();
-  const classCode = await genClassCode();
+  /**
+   * ★ 2026-10-23 修：升实训**沿用原班编号**（用户口径：升实训不应该改变班级编号）。
+   *   原来无条件 genClassCode() 重新生成 → 用户看到「19 班」升实训后编号变了。
+   *   只有原班没有编号（老数据）时才兜底生成。
+   */
+  const classCode = String(src.class_code ?? '').trim() || (await genClassCode());
   const now = new Date();
   const today = ymd(now);
   const userId = user?.userId || 'system';

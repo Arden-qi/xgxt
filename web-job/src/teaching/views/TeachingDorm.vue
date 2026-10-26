@@ -179,16 +179,6 @@
           title="该学段的宿舍数据由教务同步，不能在这里分派/退宿；请走「调宿/退宿申请」"
         />
 
-        <!-- ★ 2026-10-22：本班封班后，空床位分配权交回教务，班主任不再能填床 -->
-        <el-alert
-          v-if="isOnlyHeadTeacher && curDorm.assignedClassStatus === 2"
-          class="tdv-tip"
-          type="warning"
-          :closable="false"
-          show-icon
-          title="本班已封班：该宿舍空床位的分配权已交回教务，你仍可发起调宿/退宿申请"
-        />
-
         <div class="tdv-bed-head">
           <el-tag :type="DORM_STATUS_TAG[curDorm.roomStatus] || 'info'">
             {{ curDorm.roomStatusName }}
@@ -217,8 +207,10 @@
               <span v-else class="muted">{{ b.bedStatusName }}</span>
             </div>
             <div class="tdv-bed__ops">
+              <!-- ★ 2026-10-23 用户口径：班主任的床位界面与教务一致，可自己分配床位
+                   （原来「本班封班后空床交回教务」的限制取消；封班提示条一并移除） -->
               <el-button
-                v-if="b.bedStatus === 1 && canEdit(curDorm) && !(isOnlyHeadTeacher && curDorm?.assignedClassStatus === 2)"
+                v-if="b.bedStatus === 1 && canEdit(curDorm)"
                 link
                 type="primary"
                 size="small"
@@ -697,7 +689,6 @@ import DormChangeApproval from './DormChangeApproval.vue';
 import BuildingSettingPanel from '@/class-jh/components/setting/BuildingSettingPanel.vue';
 /** ★ 2026-10-20 调宿弹窗：班级 / 学生搜索 / 楼栋床位（与分派宿舍同一套接口） */
 import {
-  listAllocateClasses,
   listAllocateBuildings,
   listAllocateRooms,
   searchAllocateStudents,
@@ -1306,7 +1297,7 @@ const changeLoading = ref(false);
 const changeSaving = ref(false);
 
 /** 班级下拉（来自班级管理已建班级） */
-const changeClasses = ref<AllocateClassRow[]>([]);
+const changeClasses = ref<DormCheckinClassRow[]>([]);
 /** 学生搜索结果（姓名 / 学号前后模糊） */
 const changeStudents = ref<AllocateStudentRow[]>([]);
 const studentLoading = ref(false);
@@ -1374,7 +1365,13 @@ async function openChange() {
    */
   void onChangeCategory();
   try {
-    changeClasses.value = (await listAllocateClasses()) || [];
+    /**
+     * ★ 2026-10-23 修：班级下拉换成「按登录人可见学段」的班级
+     *   （listCheckinClasses：班主任=自己名下的班、教务=可见学段全部班）。
+     *   原来用 listAllocateClasses()（跨三学段全量 + 不做数据范围过滤）→
+     *   大学部班主任的下拉里冒出初高班（G2601），看到了别的部门的数据。
+     */
+    changeClasses.value = (await listDormCheckinClasses()) || [];
   } catch (e) {
     ElMessage.error((e as Error).message || '加载班级失败');
     changeClasses.value = [];

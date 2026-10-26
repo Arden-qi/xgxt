@@ -28,7 +28,10 @@ import {
   ACCOUNT_TABLE,
   login,
   toAccountView,
-  visibleModulesOf,
+  /* ★ 2026-10-23：按「职位 → 页面」台账合成可见模块（登录 + 刷新身份都走它） */
+  resolveVisibleModules,
+  /* ★ 2026-10-23：头衔为空时用职位名兜底（否则顶栏/工作台显示「模块负责人」） */
+  resolveAccountTitle,
   landingPathOf,
   /* ★ 2026-10-15 新增：登录人自助改密 */
   verifyOwnPassword,
@@ -59,6 +62,32 @@ router.post(
 );
 
 /* ============================================================
+ * 1.5 演示账号实时信息（公开，免登录）
+ *     ★ 2026-10-24：登录页快捷账号的姓名/头衔改为实时拉取 ——
+ *     以前是前端写死的一份快照，账号改了职位后登录页还显示旧职位
+ *     （孙敏：账号管理里已是项目经理，登录页还挂着「班主任（双语）」）。
+ *     只回 姓名 + 头衔，不含密码等敏感字段；账号名登录页本来就展示。
+ * ============================================================ */
+
+router.get(
+  '/demo',
+  wrap(async (_req, res) => {
+    const rows: any[] = await db(ACCOUNT_TABLE)
+      .where('is_deleted', false)
+      .select('account', 'user_name', 'title');
+    res.json(
+      ok(
+        rows.map((r) => ({
+          account: String(r.account),
+          userName: String(r.user_name || ''),
+          title: String(r.title || ''),
+        })),
+      ),
+    );
+  }),
+);
+
+/* ============================================================
  * 2. 当前登录人 + 可见模块
  * ============================================================ */
 
@@ -68,10 +97,16 @@ router.get(
   wrap(async (req, res) => {
     const u = req.user!;
     const account = { ...u } as SysAccount;
+    /* ★ 2026-10-23：老 token 里的头衔可能是空的（登录时还没这个兜底），
+     *   这里补一次，避免用户不重新登录就一直看到「模块负责人」。 */
+    if (!account.title) account.title = await resolveAccountTitle(account);
     res.json(
       ok({
         account,
-        visibleModules: visibleModulesOf(account),
+        /* ★ 2026-10-23：刷新身份时同样按台账重算 ——
+         *   管理员改完职位权限后，用户重新登录或刷新页面就能看到变化，
+         *   不必等 token 过期。 */
+        visibleModules: await resolveVisibleModules(account),
         landingPath: landingPathOf(account),
       }),
     );

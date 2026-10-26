@@ -28,6 +28,10 @@ import type {
 export interface StudentStat {
   total: number;
   studying: number;
+  /** ★ 2026-10-23 新增：实训中（status=8，只有就业部会有）
+   *  不加这一项，就业部的 5 个学生全部落在「哪个卡片都不算」的缝里，
+   *  顶部显示 总人数 5 / 在读 0 / 试学 0 / 休学 0 / 退学 0 —— 看起来就像「没数据」。 */
+  training: number;
   trial: number;
   suspended: number;
   quit: number;

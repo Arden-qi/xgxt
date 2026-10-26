@@ -28,18 +28,14 @@ import type {
   DeptOverview,
   PermDept,
   PermDeptTreeNode,
-  PermModule,
   PermRoleListItem,
   PermUserListItem,
-  RolePermMap,
 } from 'shared-types/perm';
-import { deptApi, roleApi, userApi, assignApi } from '@/perm/api/perm';
+import { deptApi, roleApi, userApi } from '@/perm/api/perm';
 import ProtoDialog from '@/perm/components/ProtoDialog.vue';
 import ProtoConfirm from '@/perm/components/ProtoConfirm.vue';
-import PermTreeDialog from '@/perm/components/PermTreeDialog.vue';
 import UserDetailDialog from '@/perm/components/UserDetailDialog.vue';
 import UserEditDialog from '@/perm/components/UserEditDialog.vue';
-import { roleIconOf } from '@/perm/utils/roleIcon';
 import { toast } from '@/perm/utils/toast';
 
 /** 部门层级上限（shared-types 的 DeptLevel：1 校级 / 2 部门 / 3 学段） */
@@ -469,62 +465,11 @@ function openUserDetail(u: PermUserListItem): void {
   userDetailOpen.value = true;
 }
 
-/* ============================================================
- * 七、职位权限弹窗（「看权限 / 编辑权限」）
- *
- * 【用户反馈】「部门管理页面里面看权限和编辑权限的操作都有问题，点击后应该弹出相应的页面」
- * 原先两处都只是 router.push('/assign') —— 跳过去还不知道该选哪个职位，等于把活儿丢给用户。
- * 现在直接就地叠一层权限树：查看态只读、编辑态可勾选并保存。
- * ============================================================ */
-
-const permOpen = ref(false);
-const permLoading = ref(false);
-const permReadonly = ref(true);
-const permRole = ref<PermRoleListItem | null>(null);
-const permModules = ref<PermModule[]>([]);
-const permPerms = ref<RolePermMap>({});
-
-/**
- * ⚠️ PermTreeDialog 内部是 el-dialog，`title` 按【纯文本】渲染（不走 v-html），
- *    所以这里不能塞 <span> 之类的标记，否则界面上会原样显示尖括号。
- */
-const permTitle = computed(() => {
-  const r = permRole.value;
-  if (!r) return '配置权限';
-  if (permLoading.value) return `加载权限中… · ${r.roleName}`;
-  return `${permReadonly.value ? '查看权限' : '编辑权限'} · ${r.roleName}`;
-});
-
-async function openRolePerm(r: PermRoleListItem, readonly: boolean): Promise<void> {
-  permRole.value = r;
-  permReadonly.value = readonly;
-  permPerms.value = {};
-  permOpen.value = true;
-  permLoading.value = true;
-  try {
-    const d = await assignApi.tree(r.id);
-    permModules.value = d.modules || [];
-    permPerms.value = d.perms || {};
-  } catch {
-    /* 已提示 */
-  } finally {
-    permLoading.value = false;
-  }
-}
-
-async function onRolePermConfirm(perms: RolePermMap): Promise<void> {
-  const r = permRole.value;
-  if (!r) return;
-  try {
-    const res = await assignApi.save(r.id, perms);
-    toast(`「${r.roleName}」权限已保存，共 ${res.permCount} 项`);
-    // 让弹窗里的「权限数」立刻跟上（deptRolesList 是 roleApi.list 的快照）
-    const hit = deptRolesList.value.find((x) => x.id === r.id);
-    if (hit) hit.permCount = res.permCount;
-  } catch {
-    /* 已提示 */
-  }
-}
+/* ★ 2026-10-23 按用户要求：部门下职位弹窗的「看权限 / 编辑权限」入口（连同就地叠的
+ *   PermTreeDialog 权限树、perm* 状态、openRolePerm / onRolePermConfirm）**全部删除**。
+ *   用户口径与「账号详情」一致：这类操作不要在部门管理里再开一个口子，
+ *   要看 / 改职位权限请走「职位权限分配」页。
+ *   历史上这两处曾是 router.push('/assign')，后来改成就地弹树；现在连入口一起去掉。 */
 
 /**
  * 账号编辑：就地弹窗，不再跳「账号管理」
@@ -571,14 +516,11 @@ async function onUserEdited(): Promise<void> {
         <div class="n g">{{ overview?.stageTotal ?? '—' }}</div>
         <div class="l">下设子部门</div>
       </div>
-      <div class="k" @click="toast('全部门职位均在此列表')">
-        <div class="n p">{{ overview?.roleTotal ?? '—' }}</div>
-        <div class="l">归属职位数</div>
-      </div>
-      <div class="k" @click="toast(`共 ${overview?.userTotal ?? 0} 个账号已归属部门`)">
-        <div class="n w">{{ overview?.userTotal ?? '—' }}</div>
-        <div class="l">归属账号数</div>
-      </div>
+      <!-- ★ 2026-10-23 按用户要求删除「归属职位数 / 归属账号数」两张 KPI 卡：
+           这两个数是全部门（含下设子部门）去重后的总数，与表格里「职位数 / 账号数」两列不同源、
+           也不好在一屏内核对，留着容易被误读成"表格各行相加"。职位 / 账号规模请看下方表格，
+           或直接去「职位管理」「账号管理」两页看总数。
+           （后端 /dept/overview 仍返回 roleTotal / userTotal，本页不再展示。） -->
     </div>
 
     <!-- ==================== 部门结构（原型第 2693~2720 行） ==================== -->
@@ -656,6 +598,7 @@ async function onUserEdited(): Promise<void> {
                 </div>
               </td>
             </tr>
+            <!-- ★ 2026-10-23 按用户要求删除表格底部的「合计」行（含"去重，父行已含子部门"说明） -->
             <tr v-if="!rows.length">
               <td colspan="6">
                 <div class="empty">
@@ -735,24 +678,20 @@ async function onUserEdited(): Promise<void> {
     />
 
     <!-- ==================== 部门下职位（原型 deptRoles） ==================== -->
+    <!-- ★ 2026-10-23：「操作」整列（看权限 / 编辑权限）已按用户要求删除，
+         现在只有「职位名称 + 账号数」两列 -->
     <ProtoDialog v-model="rolesOpen" :title="rolesTitle" size="md">
       <table v-if="deptRolesList.length" class="tb">
         <thead>
           <tr>
             <th>职位名称</th>
             <th>账号数</th>
-            <th>操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="r in deptRolesList" :key="r.id">
             <td><b>👤 {{ r.roleName }}</b></td>
             <td class="num">{{ r.userCount }}</td>
-            <td>
-              <span class="lk" @click="openRolePerm(r, true)">看权限</span>
-              <span class="sep">|</span>
-              <span class="lk" @click="openRolePerm(r, false)">编辑权限</span>
-            </td>
           </tr>
         </tbody>
       </table>
@@ -782,7 +721,7 @@ async function onUserEdited(): Promise<void> {
           <tr v-for="u in deptUsersList" :key="u.id">
             <td><b>{{ u.userName }}</b></td>
             <td><code style="font-size: 11.5px">{{ u.account }}</code></td>
-            <td>{{ u.deptName }}</td>
+            <td>{{ u.deptPath || u.deptName }}</td>
             <td>
               <span
                 v-for="n in u.roleNames"
@@ -813,16 +752,8 @@ async function onUserEdited(): Promise<void> {
       </template>
     </ProtoDialog>
 
-    <!-- ==================== 职位权限（看权限 / 编辑权限，就地弹窗） ==================== -->
-    <PermTreeDialog
-      v-model="permOpen"
-      :title="permTitle"
-      :modules="permModules"
-      :perms="permPerms"
-      :readonly="permReadonly"
-      :subtitle="permRole ? roleIconOf(permRole) + ' ' + permRole.roleName : ''"
-      @confirm="onRolePermConfirm"
-    />
+    <!-- ★ 2026-10-23：原「职位权限（看权限 / 编辑权限）」就地权限树弹窗已按用户要求删除，
+         要看 / 改职位权限请走「职位权限分配」页。 -->
 
     <!-- ==================== 账号详情（就地弹窗，不跳账号管理） ==================== -->
     <!-- ★ 2026-10-19：底部「去编辑」按钮已删除（组件里已无此按钮，故也无 @edit 绑定）；

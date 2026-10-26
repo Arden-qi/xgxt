@@ -17,6 +17,8 @@ import { tbl, tblTrx, tblInsTrx, uniUpdCols } from '../../../teaching/shared/uni
 import { boolFlag } from '../../../utils/query';
 import { checkPayDate, saveVoucherImage, PAY_METHOD, PAY_METHOD_NAME } from '../../../utils/feeVoucher';
 import { actorId, actorIds, isActor } from '../../../utils/actor';
+// ★ 2026-10-23 登记缴费反写财务（待缴 → 已缴），与财务 attachVoucher 同口径
+import { pushVoucherToFinance } from '../../../finance/utils/voucher-push';
 
 /**
  * ★ 第 10 批：催费域切读
@@ -267,7 +269,14 @@ urgeRouter.get(
     }
     if (query.startDate) base.where('expire_date', '>=', query.startDate);
     if (query.endDate) base.where('expire_date', '<=', query.endDate);
-    if (query.onlyOverdue) base.where('expire_date', '<', t).whereNot('pay_status', PayStatus.PAID);
+    // 仅看紧急（= 未结清 且 已过应缴日）
+    // ★ 2026-10-25：原来是 `whereNot(pay_status, PAID)`，把「已核对(3)」「核对失败(6)」
+    //   也算进紧急了 —— 钱都交过了不该催。改成与就业 `feeCall.route.ts` 同口径的白名单。
+    if (query.onlyOverdue) {
+      base
+        .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.OVERDUE])
+        .andWhere('expire_date', '<', t);
+    }
     if (query.keyword) {
       const k = query.keyword;
       base.where(function (this: Knex.QueryBuilder) {
@@ -426,10 +435,13 @@ urgeRouter.get(
  *   钱怎么交的、交了多少、哪天交的、有没有凭证一概没有 → 页面上操作列只能显示「—」。
  *
  * 【写哪里】
- *   只写本模块自己的副本 `sms_common.t_class_urge_sync`（pay_method / paid_amount /
- *   pay_date / voucher_url / pay_remark + pay_status）。**不回写上游财务** ——
- *   这张表本身就是财务推来的只读副本，反写会与财务核对流程打架
- *   （初高台账能反写是因为它是「本模块建的台账 + 财务单副本」双重身份，这里不是）。
+ *   主写本模块自己的副本 `sms_common.t_class_urge_sync`（pay_method / paid_amount /
+ *   pay_date / voucher_url / pay_remark + pay_status）。
+ *   ★ 2026-10-23 起**另做一步有限的财务反写**：这张副本如果是财务推来的
+ *   （`source_system='finance'` + `source_id`），把凭证/日期/备注 + 状态「待缴(1) → 已缴(2)」
+ *   推回那**一张**财务单 —— 否则财务侧仍是待缴，点「核对」会被拦「尚未缴费，无法核对」，
+ *   催费就永远停在「已缴」到不了「已核对」。
+ *   边界：只推收款事实 + 1→2，**绝不**替财务写 3 已核对，也不碰其它财务单。
  *
  * 【状态怎么变】
  *   未结清（待缴 1 / 逾期 4）→ 已缴 2；已缴 / 已核对保持原状，只补登记信息。
@@ -473,8 +485,13 @@ urgeRouter.post(
     }
 
     const rawStatus = Number(rec.pay_status ?? PayStatus.UNPAID);
+    // ★ 2026-10-25：核对失败(6) 重新登记 = 重传凭证 → 回到已缴，等财务再核一遍
     const nextStatus =
-      rawStatus === PayStatus.UNPAID || rawStatus === PayStatus.OVERDUE ? PayStatus.PAID : rawStatus;
+      rawStatus === PayStatus.UNPAID ||
+      rawStatus === PayStatus.OVERDUE ||
+      rawStatus === PayStatus.REJECTED
+        ? PayStatus.PAID
+        : rawStatus;
 
     const patch: Record<string, unknown> = {
       pay_method: b.payMethod,
@@ -486,10 +503,36 @@ urgeRouter.post(
     };
     // 现金且没传截图：保留原来的凭证，不要把它清空
     if (voucherUrl) patch.voucher_url = voucherUrl;
+    /**
+     * ★ 2026-10-25：重新登记 → 清掉「已上传财务时间」，让它重新回到
+     *   「批量上传到财务」候选（详见 class-jh/routes/fee.route.ts 同款注释）。
+     *   ⚠️ 只清时间，不清 `finance_fee_id`（那是财务那张单的唯一凭据，
+     *      清掉会再建一张新单 → 财务重复记账）。
+     */
+    if (rec.finance_fee_id) patch.finance_transfer_time = null;
 
     await SYNC()
       .where({ id: b.urgeId })
       .update((await uniUpdCols(commonDb, SRC_COMMON, SYNC_T, patch)) as never);
+
+    /**
+     * ★ 2026-10-23：反写财务缴费单（best-effort，失败不阻断登记）
+     *
+     * 这行如果是财务推下来的（`source_system='finance'` + `source_id`），
+     * 财务那张单初始可能还是「待缴(1)」→ 财务点「核对」会被拦「尚未缴费」。
+     * 所以把凭证/日期/备注 + 状态（仅 1 → 2）推到财务，与财务 `attachVoucher()` 同口径。
+     * 「只读副本」的边界仍然守：**只推这一张单的收款事实，不改财务的任何其它状态（3 已核对必须财务自己写）**。
+     */
+    const srcRow = rec as Record<string, any>;
+    if (srcRow.source_system === 'finance' && srcRow.source_id) {
+      await pushVoucherToFinance({
+        financeFeeId: String(srcRow.source_id),
+        voucherUrl: voucherUrl ?? null,
+        payDate: b.payDate,
+        remark: b.remark ?? null,
+        operatorId: user.userId,
+      });
+    }
 
     return ok(
       res,

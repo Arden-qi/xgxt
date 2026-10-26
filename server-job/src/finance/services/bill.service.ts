@@ -21,6 +21,7 @@ import {
   StudentStatus,
 } from 'shared-types/finance';
 import { toDateStr, FEE_TABLE, isTempStudentNo } from './fee.service';
+import { lookupArchive } from './student-archive';
 import { REFUND_TABLE } from './refund.service';
 import { FREEZE_TABLE } from './freeze.service';
 
@@ -123,12 +124,30 @@ function emptyGroup(name: string) {
  * 💡 只取 bill_type = 1（缴费账单）。退费是另一条线（账单明细/退费明细），
  *    不混进「每个学生缴了哪些费」这本账里。
  */
-function buildBillStudentQuery(q: any) {
+/**
+ * 账单明细查询条件
+ *
+ * @param classScope 按班级筛选时，从**学籍档案**反查出来的学生范围
+ *
+ *   账单表的 `class_name` 是建单那一刻的快照：学生在咨询阶段缴费时还没分班，
+ *   这一列就是空；等分班之后再按班级筛，这些学生会被漏掉（用户反馈：筛 J101 看不到李四）。
+ *   所以传了 className 时，除了账单上的班级，还要并上档案里属于该班的学生。
+ */
+function buildBillStudentQuery(
+  q: any,
+  classScope?: { ids: string[]; nos: string[] } | null,
+) {
   const query = db(BILL_TABLE).where('is_deleted', false).where('bill_type', 1);
 
   if (q.studentNo) query.andWhere('student_no', 'like', `%${q.studentNo}%`);
   if (q.studentName) query.andWhere('student_name', 'like', `%${q.studentName}%`);
-  if (q.className) query.andWhere('class_name', q.className);
+  if (q.className) {
+    query.andWhere((qb: any) => {
+      qb.where('class_name', q.className);
+      if (classScope?.ids.length) qb.orWhereIn('student_id', classScope.ids);
+      if (classScope?.nos.length) qb.orWhereIn('student_no', classScope.nos);
+    });
+  }
   if (q.deptCode) query.andWhere('dept_code', q.deptCode);
   if (q.startDate) query.andWhere('bill_date', '>=', q.startDate);
   if (q.endDate) query.andWhere('bill_date', '<=', q.endDate);
@@ -173,7 +192,26 @@ export interface BillFeeRecordOut {
  *    真到万级以上再改成 SQL GROUP BY + 明细二次查询。
  */
 export async function listBillStudents(q: any): Promise<{ rows: any[]; total: number }> {
-  const bills: any[] = await buildBillStudentQuery(q).select('*').orderBy('bill_date', 'desc');
+  /**
+   * ★ 2026-10-22 按班级筛选时，先到学籍档案里反查该班学生
+   *
+   * 统一表 `sms_common.t_uni_student` 的 `source_id` 就是咨询学生 id
+   * （= 账单的 `student_id`），所以两边能对上。
+   */
+  let classScope: { ids: string[]; nos: string[] } | null = null;
+  if (q.className) {
+    const st: any[] = await db('sms_common.t_uni_student')
+      .where({ class_name: q.className, is_deleted: false })
+      .select('source_id', 'student_no');
+    classScope = {
+      ids: st.map((s) => String(s.source_id || '')).filter(Boolean),
+      nos: st.map((s) => String(s.student_no || '')).filter(Boolean),
+    };
+  }
+
+  const bills: any[] = await buildBillStudentQuery(q, classScope)
+    .select('*')
+    .orderBy('bill_date', 'desc');
 
   // ---- 一次性把关联的缴费单查出来（拿 voucher_url / 上传人 / 上传时间）----
   const sourceIds: string[] = [...new Set(bills.map((b: any) => b.source_id).filter(Boolean))] as string[];
@@ -249,6 +287,33 @@ export async function listBillStudents(q: any): Promise<{ rows: any[]; total: nu
     }
     return r;
   });
+
+  /**
+   * ★ 2026-10-22 用学籍档案补齐班级 / 部门
+   *
+   * 账单里的 `class_id / class_name` 是**建单那一刻**的快照：
+   * 学生在咨询阶段缴费时还没分班 → 快照是空的；等班主任接收建档、
+   * 分班之后，账单表里的这两列仍然是空，于是「账单明细」看不到班级
+   * （用户反馈：李四明明在 J101，账单明细班级一栏是空的）。
+   *
+   * 只在档案有值时覆盖，不抹掉账单里的原值。
+   */
+  const lookup = await lookupArchive(
+    list.map((r: any) => r.studentId),
+    list.map((r: any) => r.studentNo),
+  );
+  for (const r of list as any[]) {
+    const a =
+      lookup.byId.get(String(r.studentId)) ||
+      (r.studentNo ? lookup.byNo.get(String(r.studentNo)) : undefined);
+    if (!a) continue;
+    if (a.classId) r.classId = a.classId;
+    if (a.className) r.className = a.className;
+    if (a.deptCode != null) {
+      r.deptCode = a.deptCode;
+      r.deptName = DEPT_NAME[a.deptCode];
+    }
+  }
 
   // 学员排序：按最近有缴费的日期倒序（近期有往来的排前面），再按学号稳定
   const latestOf = (r: any) =>

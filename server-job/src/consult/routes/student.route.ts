@@ -361,14 +361,20 @@ const addSchema = z.object({
   studentName: z.string().min(1, '姓名必填').max(50),
   gender: z.coerce.number().int().min(1).max(2, '性别只能是 1(男) 或 2(女)'),
   /**
-   * ★ 2026-10-26 用户口径：「手机号设定为 11 位去重」
-   *   → 11 位手机号 + 全库唯一。
+   * ★ 2026-10-26 用户口径：「手机号设定为 11 位去重」→ 11 位手机号 + 全库唯一。
    *
-   * ⚠️ 这里只做「必填 + 长度」，11 位格式与去重放在 handler 里校验：
-   *    参数中间件会把 zod 的 invalid_string 统一翻成「格式不正确」，
-   *    写死在这里用户只会看到「参数「phone」 格式不正确」，看不出到底要什么。
+   * ★ 2026-10-26 合并上游后：consult/middleware/validate.ts 已改成「zod 文案带中文就原样透传」，
+   *   所以 11 位格式可以直接写在 schema 里，报错就是这句中文，
+   *   不会再被翻成「参数「phone」格式不正确」（那是我方旧版绕路的原因，已不需要）。
+   *
+   * 【分工】必填 / 11 位格式 → schema（这一层）；去重要查库、还要报「已被某某占用」→ handler。
+   *   缺字段 / 空串 / 纯空格 → 一律「请填写学生手机号」。
    */
-  phone: z.string().trim().min(1, '手机号必填').max(20),
+  phone: z
+    .string({ required_error: '请填写学生手机号', invalid_type_error: '请填写学生手机号' })
+    .trim()
+    .min(1, '请填写学生手机号')
+    .regex(/^1[3-9]\d{9}$/, '学生手机号需为 1 开头的 11 位数字'),
   sourceChannel: z.coerce.number().int().min(1).max(9, '来源渠道取值非法'),
   /** ★ 2026-10-26 表单已去掉「来源备注」，保留入参只为兼容老调用方 */
   sourceRemark: optionalStr(100),
@@ -418,13 +424,7 @@ studentRouter.post(
     const body = (req as any).validated as z.infer<typeof addSchema>;
     const operator = req.user!;
 
-    /* ---- ★ 2026-10-26 学生手机号：11 位 + 唯一 ---- */
-    if (!/^1[3-9]\d{9}$/.test(body.phone)) {
-      throw new BizError(
-        BizCode.PARAM_ERROR,
-        '学生手机号需为 11 位手机号（1 开头的 11 位数字）',
-      );
-    }
+    /* ---- ★ 2026-10-26 学生手机号：11 位格式已在 addSchema 里校验，这里只做查库去重 ---- */
     /* ---- 家长电话：允许手机号 / 座机，且**不去重**（可重复） ---- */
     if (body.parentPhone && !/^[0-9-]{6,20}$/.test(body.parentPhone)) {
       throw new BizError(

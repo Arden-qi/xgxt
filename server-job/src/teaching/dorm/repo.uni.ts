@@ -196,57 +196,52 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
    *   实训没有「宿舍管理员」这个角色，教务老师（ACAD_STAFF）就是宿舍口的管理者。
    */
   async function scopedDormIds(user: any): Promise<string[] | null> {
-    /* ★ 2026-10-19：统一走「交棒模型」的班级范围（与出勤/成绩/班级同口径）
-         · 项目经理 → 自己负责且未结业的实训班
-         · 就业老师 → 已结业（交棒）的班
-         · 班主任三人组 → 自己带的班
-         原来这里只按 head/teacher/assistant 查，项目经理/就业老师匹配不到 → 恒为空。 */
-    const classIds = await visibleClassIds(stage, user);
-    if (classIds === null) return null;
-    if (!classIds.length) return [];
+    /**
+     * ★ 2026-10-23 重写：班主任的宿舍范围改为**跨学段**按「分派 ∪ 入住」计算。
+     *
+     *   原来先按【房间学段】取我的班级（visibleClassIds(stage, user)）再找分派 ——
+     *   但分派弹窗给房不分学段（初高的房间 1号楼 分给了大学班 Q20），
+     *   张海涛在 jh 学段名下没有任何班 → classIds=[] → 范围为空 →
+     *   打开分派的房间直接 40302「该宿舍不在你的数据范围内」。
+     *
+     *   现在用 resolveMyClasses（跨三学段、三岗 id 双口径）拿「我的班」，
+     *   范围 = ① 分派给本班的房间（ASSIGN，只有班名快照）∪ ② 本班学生已入住的房间
+     *   （教学域学生档案 t_uni_student 的 dorm_id，权威来源）。
+     */
+    const mine = await resolveMyClasses(user);
+    if (mine.privileged) return null;
 
     const ids = new Set<string>();
 
-    /**
-     * ★ 2026-10-21（远端）：班主任要能看到**教务分派给本班的宿舍**，哪怕还没有学生入住 ——
-     *   否则教务刚分派完、班主任还没填学生时，他看到的仍是「暂无数据」，分派等于白做。
-     *   分派表只有 class_name 快照（没有 class_id），所以先按我的班取班名再匹配。
-     */
-    try {
-      const myNames = (await uniDb('t_uni_class')
-        .whereIn('id', classIds)
-        .where({ is_deleted: 0 })
-        .select('class_name')) as Array<{ class_name: string }>;
-      const nameList = myNames.map((r) => String(r.class_name || '')).filter(Boolean);
-      if (nameList.length) {
+    // ① 分派给本班的房间（ASSIGN 只有班名快照，按班名匹配）
+    if (mine.names.length) {
+      try {
         const assigned = (await db(ASSIGN_T)
-          .whereIn('class_name', nameList)
+          .whereIn('class_name', mine.names)
           .where({ is_deleted: false })
           .distinct('room_id')) as any[];
         for (const a of assigned) if (str(a.room_id)) ids.add(String(a.room_id));
+      } catch {
+        /* 分派表不存在 → 跳过 */
       }
-    } catch {
-      /* 分派表不存在 → 跳过 */
     }
 
-    /* ② 本班学生已经入住的房间（学生主档 dorm_id 是权威来源）
-     *   统一表 sms_common.t_uni_student 为主，sms_perm.t_student_base 兜底老数据；
-     *   两者都按 classIds 限定，不再用「班名」模糊匹配。 */
-    const stayingSources: Array<() => any> = [
-      () => tbl(db, SRC_DB, STUDENT_T, stage).whereIn('class_id', classIds),
-      () => db(PERM_STUDENT).whereIn('class_id', classIds),
-    ];
-    for (const src of stayingSources) {
+    // ② 本班学生已入住的房间（教学域学生档案，dorm_id 权威；班 id / 班名都试）
+    if (mine.ids.length || mine.names.length) {
       try {
-        const rows = (await src()
+        const rows = (await uniDb('t_uni_student')
           .where({ is_deleted: false })
           .whereIn('student_status', IN_SCHOOL_STATUS)
           .whereNotNull('dorm_id')
           .andWhere('dorm_id', '<>', '')
+          .andWhere((w: any) => {
+            if (mine.ids.length) w.orWhereIn('class_id', mine.ids);
+            if (mine.names.length) w.orWhereIn('class_name', mine.names);
+          })
           .distinct('dorm_id')) as any[];
         for (const r of rows) if (str(r.dorm_id)) ids.add(String(r.dorm_id));
       } catch {
-        /* 表不存在 → 跳过 */
+        /* 查不到 → 跳过 */
       }
     }
     return [...ids];
@@ -337,9 +332,18 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
      * 学生在住。学生主档的 `dorm_id` 才是「谁住哪」的权威来源（和入住/退宿
      * 流程写的是同一列）。床位表数字只作为兜底（房间没有任何学生指向它时）。
      */
-    const staying = await tbl(db, SRC_DB, STUDENT_T, stage)
+    /**
+     * ★ 2026-10-23 修：已住人数改按【教学域学生档案 t_uni_student】统计。
+     *
+     *   原来走 tbl(...STUDENT_T, stage)——jh 学段会落到 t_uni_student_base_jh
+     *   （另一张投影表，恒空）→ 初高房间的「已住人数」永远数不出来，
+     *   只能靠床位表兜底；入住/退宿后学生档案变了、这里却不跟着变
+     *   （用户实测：退宿审批通过后已住人数不变）。
+     *   三学段学生档案现在统一在 t_uni_student（edu_stage 区分），改查这里。
+     */
+    const staying = await uniDb('t_uni_student')
       .whereIn('dorm_id', ids)
-      .where({ is_deleted: false })
+      .where({ is_deleted: false, edu_stage: stage })
       .whereIn('student_status', IN_SCHOOL_STATUS)
       .select('dorm_id');
     const occByDorm = new Map<string, number>();
@@ -748,6 +752,18 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
 
       if (!mine.names.length && !mine.ids.length) return [];
 
+      /**
+       * ★ 2026-10-23 修：学生表 distinct 出的班级要**∩ 本学段班级** ——
+       *   门户学生表（PERM_STUDENT）不分学段，初高班（G2601）的学生也在里面，
+       *   大学班主任的「办理入住/调宿」班级下拉因此冒出别的部门的班。
+       */
+      const stageClassNames = new Set<string>(
+        ((await db(STAGE_CLASS_TABLE[stage])
+          .where({ is_deleted: false, edu_stage: stage })
+          .select('class_name')) as any[])
+          .map((r) => str(r.class_name))
+          .filter((x): x is string => !!x),
+      );
       for (const table of ['stage', PERM_STUDENT]) {
         try {
           const base = table === PERM_STUDENT ? db(PERM_STUDENT) : tbl(db, SRC_DB, STUDENT_T, stage);
@@ -758,7 +774,11 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
               if (mine.names.length) b.orWhereIn('class_name', mine.names);
             })
             .distinct('class_id', 'class_name')) as any[];
-          for (const r of rows) add(r.class_id, r.class_name);
+          for (const r of rows) {
+            const cn: string = str(r.class_name) || '';
+            if (stageClassNames.size && !stageClassNames.has(cn)) continue;
+            add(r.class_id, cn);
+          }
         } catch {
           /* 跳过 */
         }
@@ -899,6 +919,16 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
         .first();
       if (!st) {
         st = await db(PERM_STUDENT)
+          .where({ id: String(body.studentId), is_deleted: false })
+          .first();
+      }
+      /**
+       * ★ 2026-10-23 补：教学域学生档案兜底（t_uni_student，id 全局唯一不分学段）。
+       *   跨学段分派场景（初高房间分给大学班）按房间学段查学生会落空 ——
+       *   学生在 class 学段、房间在 jh，tbl(STUDENT_T,'jh') 查不到 → 「学生不存在」。
+       */
+      if (!st) {
+        st = await uniDb('t_uni_student')
           .where({ id: String(body.studentId), is_deleted: false })
           .first();
       }
@@ -1143,12 +1173,20 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
           .where({ id: String(body.studentId), is_deleted: false })
           .first();
       }
+      /* ★ 2026-10-23：教学域学生档案兜底（t_uni_student，id 全局唯一不分学段）——
+         跨学段分派场景（初高房间分给大学班）学生在 class 学段、页面在 jh 时按
+         tbl(STUDENT_T, stage) 查会落空。 */
+      if (!st) {
+        st = await uniDb('t_uni_student')
+          .where({ id: String(body.studentId), is_deleted: false })
+          .first();
+      }
       if (!st) throw new Error('学生不存在');
   
       let oldDorm: any = null;
       let newDorm: any = null;
-      if (body.oldDormId) oldDorm = await T_DORM().where({ id: String(body.oldDormId) }).first();
-      if (body.newDormId) newDorm = await T_DORM().where({ id: String(body.newDormId) }).first();
+      if (body.oldDormId) oldDorm = await roomById(String(body.oldDormId));
+      if (body.newDormId) newDorm = await roomById(String(body.newDormId));
 
       /**
        * ★ 2026-10-22：调宿目标同样受「开放班锁定」约束
@@ -1164,7 +1202,7 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
   
       // 目标床位必须空闲（退宿不需要）
       if (!isCheckout && body.newBedId) {
-        const bed = await T_BED().where({ id: String(body.newBedId), is_deleted: false }).first();
+        const bed = await bedById(String(body.newBedId));
         if (!bed) throw new Error('目标床位不存在');
         if (Number(bed.bed_status) === 2) throw new Error('目标床位已被占用，请换一个');
         if (Number(bed.bed_status) === 3) throw new Error('目标床位已停用');
@@ -1188,11 +1226,11 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
       let oldBedNo: string | null = null;
       let newBedNo: string | null = null;
       if (body.oldBedId) {
-        const ob = await T_BED().where({ id: String(body.oldBedId) }).first();
+        const ob = await bedById(String(body.oldBedId));
         if (ob) oldBedNo = bedNoText(ob.bed_no);
       }
       if (!isCheckout && body.newBedId) {
-        const nb = await T_BED().where({ id: String(body.newBedId) }).first();
+        const nb = await bedById(String(body.newBedId));
         if (nb) newBedNo = bedNoText(nb.bed_no);
       }
 
@@ -1251,13 +1289,14 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
        */
       let oldBedId = a.old_bed_id ? String(a.old_bed_id) : '';
       if (!oldBedId && a.student_id) {
-        const ob = await T_BED()
+        /* ★ 跨学段：床位行跟随房间学段，用 uniDb 直查（id 全局唯一） */
+        const ob = await uniDb('t_uni_dorm_bed')
           .where({ is_deleted: false, bed_status: 2, student_id: String(a.student_id) })
           .first();
         if (ob) oldBedId = String(ob.id);
       }
       if (oldBedId) {
-        await T_BED().where({ id: oldBedId }).update({
+        await uniDb('t_uni_dorm_bed').where({ id: oldBedId }).update({
           bed_status: 1,
           student_id: null,
           student_no: null,
@@ -1270,7 +1309,7 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
       }
       // ② 占用新床位
       if (a.new_bed_id) {
-        await T_BED().where({ id: String(a.new_bed_id) }).update({
+        await uniDb('t_uni_dorm_bed').where({ id: String(a.new_bed_id) }).update({
           bed_status: 2,
           student_id: a.student_id,
           student_no: a.student_no,
@@ -1282,14 +1321,21 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
         });
       }
       // ③ 学生主档同步（本学段表没有该学生时，退回门户学生表，见 changeCreate 的兜底说明）
-      const synced = await tbl(db, SRC_DB, STUDENT_T, stage)
+      let synced = await tbl(db, SRC_DB, STUDENT_T, stage)
         .where({ id: String(a.student_id) })
         .update({
           dorm_id: a.new_dorm_id ?? null,
           dorm_no: a.new_dorm_no ?? null,
         });
       if (!synced) {
-        await db('sms_perm.t_student_base').where({ id: String(a.student_id) }).update({
+        synced = await db('sms_perm.t_student_base').where({ id: String(a.student_id) }).update({
+          dorm_id: a.new_dorm_id ?? null,
+          dorm_no: a.new_dorm_no ?? null,
+        });
+      }
+      /* ★ 2026-10-23：教学域学生档案兜底（跨学段场景 tbl(STUDENT_T, stage) 会落空） */
+      if (!synced) {
+        await uniDb('t_uni_student').where({ id: String(a.student_id) }).update({
           dorm_id: a.new_dorm_id ?? null,
           dorm_no: a.new_dorm_no ?? null,
         });
@@ -1353,11 +1399,26 @@ const STAGE_CLASS_TABLE: Record<TeachingStage, string> = {
     },
   };
   
-  /** 实时重算 used_count（冗余列，但原表有这个列，别让它长期失真） */
+  /**
+   * ★ 2026-10-23：床位 / 房间按 id 精确查——**跨学段**。
+   *   分派弹窗给房不分学段（初高房间分给大学班），床位行的 edu_stage 跟随房间，
+   *   按【页面学段】的 T_BED()/T_DORM() 查会落空（实测报「目标床位不存在」）。
+   *   床位/房间 id 都是全局 UUID，直查统一表即可，无需学段过滤。
+   */
+  const bedById = async (id: string) =>
+    (await uniDb('t_uni_dorm_bed')
+      .where({ id: String(id), is_deleted: false })
+      .first()) as any;
+  const roomById = async (id: string) =>
+    (await uniDb('t_uni_dorm_room')
+      .where({ id: String(id), is_deleted: false })
+      .first()) as any;
+
+  /** 实时重算 used_count（冗余列，但原表有这个列，别让它长期失真）——跨学段版 */
   async function refreshUsedCount(dormId: string): Promise<void> {
-    const beds = await T_BED().where({ dorm_id: dormId, is_deleted: false });
+    const beds = await uniDb('t_uni_dorm_bed').where({ dorm_id: dormId, is_deleted: false });
     const used = beds.filter((b: any) => Number(b.bed_status) === 2).length;
-    await T_DORM().where({ id: dormId }).update({ used_count: used, update_time: new Date() });
+    await uniDb('t_uni_dorm_room').where({ id: dormId }).update({ used_count: used, update_time: new Date() });
   }
   
   /** 按 bed_count 补齐 / 裁剪床位行（床位是独立表，房间表只存总数） */

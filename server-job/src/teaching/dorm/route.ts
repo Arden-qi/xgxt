@@ -90,6 +90,8 @@ function requireId(v: unknown, label = '宿舍ID'): string {
 function queryOf(req: Request): DormListQuery {
   return {
     stage: optStage(req.query.stage) as TeachingStage,
+    // ★ 2026-10-23：按房间查在住名单（service 据此解析房间自己的学段）
+    dormId: str(req.query.dormId),
     building: str(req.query.building),
     dormType: numOrUndef(req.query.dormType),
     roomStatus: numOrUndef(req.query.roomStatus),

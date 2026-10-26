@@ -232,6 +232,8 @@ export interface PermUserListItem {
   age: number;
   deptId: string;
   deptName: string;
+  /** ★ 2026-10-23：带上级的完整部门路径（「教学部-初中部」），界面展示统一用它 */
+  deptPath?: string;
   /** 职位 ID 数组 */
   roleIds: string[];
   /** 职位名称数组 */
@@ -306,6 +308,8 @@ export interface PermAuthProfile {
   account: string;
   deptId: string;
   deptName: string;
+  /** ★ 2026-10-23：带上级的完整部门路径（「教学部-初中部」），界面展示统一用它 */
+  deptPath?: string;
   userStatus: UserStatus;
   /** 职位编码数组，写进 token 的 roles[] */
   roles: string[];
@@ -356,6 +360,15 @@ export interface PermItem {
   remark?: string;
   /** 该职位在此功能点下已勾选的动作名（职位权限详情接口返回） */
   checked?: string[];
+  /**
+   * ★ 2026-10-23 新增：本职位**是否可以分配**这个功能点（页面）
+   *
+   * 由「页面管理 → 职位」里该职位的页面授权决定（见 services/assignScope.ts）：
+   *   · false = 该职位还没有这一页的授权 → 分配树里灰掉、勾不动，保存也会被丢弃
+   *   · true / 未传 = 可以分配（未传时前端按「可以」处理，兼容旧接口）
+   * 想放开：先去「页面管理 → 职位」给这个职位勾上那一页。
+   */
+  assignable?: boolean;
   /**
    * ★ 2026-10-19 新增：是否用户自建
    *
@@ -671,12 +684,11 @@ export interface RoleOverview {
   disabledTotal: number;
 }
 
-/** 账号管理 KPI（5 个，均可点击筛选） */
+/** 账号管理 KPI（4 个，均可点击筛选；lockedTotal 已随「锁定」状态移除） */
 export interface UserOverview {
   userTotal: number;
   normalTotal: number;
   disabledTotal: number;
-  lockedTotal: number;
   needChangePwdTotal: number;
 }
 

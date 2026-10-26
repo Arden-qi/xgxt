@@ -29,7 +29,7 @@
  *         in: query
  *         schema:
  *           type: string
- *           enum: [正常, 已停用, 已锁定]
+ *           enum: [正常, 已停用]
  *       - name: needChangePwd
  *         in: query
  *         schema:
@@ -179,7 +179,7 @@
  *   put:
  *     tags:
  *       - 账号管理
- *     summary: 启用 / 停用 / 锁定账号
+ *     summary: 启用 / 停用账号
  *     description: '权限标识 `perm:账号管理:edit`。'
  *     requestBody:
  *       required: true
@@ -196,7 +196,7 @@
  *                 example: U018
  *               userStatus:
  *                 type: string
- *                 enum: [正常, 已停用, 已锁定]
+ *                 enum: [正常, 已停用]
  *                 example: 已停用
  *     responses:
  *       200:
@@ -253,35 +253,8 @@
  *                       example: Xy7#pQ2w
  */
 
-/**
- * @openapi
- * /api/perm/user/unlock:
- *   put:
- *     tags:
- *       - 账号管理
- *     summary: 解锁账号
- *     description: '权限标识 `perm:账号管理:edit`。清零错误次数并置为「正常」。'
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - id
- *             properties:
- *               id:
- *                 type: string
- *                 example: U018
- *     responses:
- *       200:
- *         description: 成功
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/OkNull'
- */
-
+/* ★ 2026-10-25：原 /api/perm/user/unlock（解锁账号）接口文档已随「锁定」状态
+ *   全系统移除一并删除 —— 账号状态只剩「正常 / 已停用」，无锁可解。 */
 /**
  * @openapi
  * /api/perm/user/delete/{id}:
@@ -329,9 +302,6 @@
  *                       type: integer
  *                       example: 15
  *                     disabledTotal:
- *                       type: integer
- *                       example: 1
- *                     lockedTotal:
  *                       type: integer
  *                       example: 1
  *                     needChangePwdTotal:

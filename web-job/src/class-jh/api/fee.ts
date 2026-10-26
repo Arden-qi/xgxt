@@ -94,6 +94,11 @@ export interface TransferCandidate {
   voucherUrl: string | null;
   payRemark: string | null;
   transferred: boolean;
+  /**
+   * ★ 2026-10-25：已有财务单、但之后又重新登记过 →
+   * 本次上传是「更新财务那张单」，不是新建。
+   */
+  retransfer?: boolean;
   /** 已转交时：财务侧缴费单 id */
   financeFeeId: string;
 }
@@ -126,8 +131,10 @@ export interface TransferCandidateResult {
  * 拉转交候选：`dept` 传 all 就是三个部门一起取
  *
  * ★ 2026-10-23 用户要求「列表只显示没有上传过的内容」：
- *   接口已过滤掉 `finance_fee_id` 非空（= 已转交）的行，
- *   `list` 里每一条都是可转交的，前端不需要再自己筛。
+ *   接口已过滤掉「已上传到位」的行，`list` 里每一条都是可转交的。
+ * ★ 2026-10-25 用户追加「重新登记也要出现在列表里，传到财务」：
+ *   重新登记过的行会回到 `list`，并带 `retransfer: true` ——
+ *   提交时后端更新财务原单，不会新建第二张。
  */
 export function fetchTransferCandidatesAll(dept: TransferDept | 'all'): Promise<TransferCandidateResult> {
   return http.get<TransferCandidateResult>('/api/teaching/fee/transfer/candidates', { dept });
@@ -136,8 +143,11 @@ export function fetchTransferCandidatesAll(dept: TransferDept | 'all'): Promise<
 /** 提交转交（三部门统一入口） */
 export function transferFeesAll(
   items: Array<{ dept: TransferDept; feeId: string }>,
-): Promise<FeeTransferResult & { voucherOnly?: number }> {
-  return http.post<FeeTransferResult & { voucherOnly?: number }>('/api/teaching/fee/transfer', { items });
+): Promise<FeeTransferResult & { voucherOnly?: number; retransferred?: number }> {
+  return http.post<FeeTransferResult & { voucherOnly?: number; retransferred?: number }>(
+    '/api/teaching/fee/transfer',
+    { items },
+  );
 }
 
 /** 催费推送（生成可复制文案） */

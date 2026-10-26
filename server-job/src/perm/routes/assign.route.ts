@@ -33,10 +33,27 @@ import {
   loadModules,
   replaceRolePerms,
 } from '../services/perm.service';
+import { assignScopeOfRole, clearAssignScopeCache, filterPermsByScope, itemTitleOf } from '../services/assignScope';
 import { clearRoleDefaultCache } from '../../utils/rolePageDefaults';
 import { clearRoleActionCache } from '../../utils/roleActionOverlay';
 import { clearRoleGrantedOpsCache } from '../../utils/roleGrantedOps';
 import { clearRoleModuleItemsCache } from '../../utils/roleModuleItems';
+/* ★ 2026-10-24：动作行保存后与页面台账联动（见 pageActionSync.ts 头注释） */
+import { syncRolePageActions } from '../services/pageActionSync';
+
+/**
+ * ★★ 2026-10-24 用户口径：「页面管理给了权限，职位权限分配就应该显示出授权来」。
+ * 动作行全量覆盖后跑一次联动，保证两个界面永远一致：
+ *   · 页面（台账/默认）可见但动作行被清空 → 自动补回「查看」
+ *     （页面级开关的最高权威在页面管理 —— 想整个收回一个页面，去页面管理取消勾选；
+ *      在分配页里只取消页面内的其他动作，如核对 / 打印 / 审批）。
+ *   · 页面不可见但仍有动作行 → 删光（动作行 ⊆ 可见页面）。
+ */
+async function syncAfterPermSave(roleId: string, operatorId: string): Promise<void> {
+  await syncRolePageActions(roleId, operatorId).catch((e: any) => {
+    console.error('[pageActionSync] 职位权限分配保存后联动失败：', e?.message || e);
+  });
+}
 
 /**
  * ★ 2026-10-07 新增：保存权限点后立刻清掉下游缓存
@@ -57,6 +74,9 @@ function invalidateAfterPermChange(): void {
   //   这份缓存也必须清 —— 否则管理员取消勾选后，按钮要等 15 秒才消失。
   clearRoleGrantedOpsCache();
   clearRoleModuleItemsCache();
+  // ★ 2026-10-23：可分配范围（页面上限）也缓存了，一并清 ——
+  //   否则刚在页面管理里授权完，分配树还要 8 秒才解锁。
+  clearAssignScopeCache();
 }
 
 export const assignRouter = Router();
@@ -108,23 +128,46 @@ assignRouter.get(
     const role = await db('t_perm_role').where({ id: roleId, is_deleted: false }).first();
     if (!role) throw new BizError(BizCode.ROLE_NOT_FOUND, '职位不存在');
 
-    const [mods, perms, stats] = await Promise.all([
+    const [mods, perms, stats, scope] = await Promise.all([
       loadModules(),
       getRolePermMap(roleId),
       getTreeStats(),
+      assignScopeOfRole(roleId),
     ]);
+
+    /**
+     * ★ 2026-10-23：勾选态也只回**范围内的**。
+     *
+     *   库里可能残留「页面已被页面管理关掉、但动作行还在」的历史数据
+     *   （如教务老师的班级管理/待接收学员）。这种行如果照原样返回，
+     *   前端概览就会把它当成"这职位有这页权限"显示出来 —— 正是用户看到的差异。
+     *   这里先滤掉：界面只呈现范围内的事实；脏数据由 scripts/fix-role-perm-scope 清。
+     */
+    const scopedPerms = filterPermsByScope(perms, scope).perms;
+
+    /**
+     * ★ 2026-10-23：可分配范围（页面上限）
+     *
+     *   「页面管理 → 职位」里没勾的页面，这里一律 assignable=false：
+     *   前端不渲染、后端保存时丢弃。想放开 → 先去页面管理给这个职位勾上那一页。
+     *   （改这里之前先看 services/assignScope.ts 的说明。）
+     */
+    let assignableCount = 0;
 
     // 把勾选态挂到每个功能点上，前端不用再自己算
     const modules: PermModule[] = mods.map((m) => {
       let checkedCount = 0;
       let grantedItemCount = 0;
       const items = m.items.map((it) => {
-        const checked = perms[permKey(m.moduleKey, it.itemName)] || [];
+        const key = permKey(m.moduleKey, it.itemName);
+        const checked = scopedPerms[key] || [];
+        const assignable = !scope.restricted || scope.allowedItems.has(key);
+        if (assignable) assignableCount += 1;
         if (checked.length) {
           checkedCount += checked.length;
           grantedItemCount += 1;
         }
-        return { ...it, checked };
+        return { ...it, checked, assignable };
       });
       return { ...m, items, checkedCount, grantedItemCount };
     });
@@ -132,15 +175,15 @@ assignRouter.get(
     // 实时统计（弹窗底部）
     const allChecked = new Set<string>();
     let coveredModuleCount = 0;
-    Object.keys(perms).forEach((k) => {
-      const codes = perms[k] || [];
+    Object.keys(scopedPerms).forEach((k) => {
+      const codes = scopedPerms[k] || [];
       if (codes.length) coveredModuleCount += 1;
       codes.forEach((c) => allChecked.add(`${k}||${c}`));
     });
     // 覆盖模块数按「模块」去重（不是功能点）
     const coveredModules = new Set(
-      Object.keys(perms)
-        .filter((k) => (perms[k] || []).length)
+      Object.keys(scopedPerms)
+        .filter((k) => (scopedPerms[k] || []).length)
         .map((k) => k.split('||')[0]),
     );
     coveredModuleCount = coveredModules.size;
@@ -156,12 +199,18 @@ assignRouter.get(
           roleStatus: role.role_status,
         },
         modules,
-        perms,
+        perms: scopedPerms,
         stats,
         selected: {
           checkedActionCount: allChecked.size,
           coveredModuleCount,
           totalActionCount: stats.actionCount,
+        },
+        /** 可分配范围（0 = 不设限）；前端据此决定要不要提示「去页面管理授权」 */
+        scope: {
+          restricted: scope.restricted,
+          allowedCount: scope.restricted ? assignableCount : 0,
+          totalCount: stats.itemCount,
         },
       }),
     );
@@ -189,9 +238,27 @@ assignRouter.put(
     if (!role) throw new BizError(BizCode.ROLE_NOT_FOUND, '职位不存在');
 
     const before = Number(role.perm_count || 0);
-    const permCount = await replaceRolePerms(body.roleId, body.perms, req.user?.userId || 'system');
+
+    /**
+     * ★ 2026-10-23：保存前按「可分配范围」过滤
+     *
+     *   前端已经把未授权的页面灰掉了，这里再拦一次是为了防绕过
+     *   （直接调接口 / 旧版前端缓存）。被丢弃的都是「该职位在页面管理里
+     *   本来就没有这一页」的功能点 —— 勾了也不算，否则就会像咨询老师
+     *   那样凭空多出「审批中心」。
+     */
+    const scope = await assignScopeOfRole(body.roleId);
+    const filtered = filterPermsByScope(body.perms, scope);
+
+    const permCount = await replaceRolePerms(
+      body.roleId,
+      filtered.perms,
+      req.user?.userId || 'system',
+    );
     // ★ 立刻让下游（页面默认 + 按钮判权）拿到最新权限点
     invalidateAfterPermChange();
+    // ★ 2026-10-24：与页面台账联动（页面被授权但动作被清空 → 补回「查看」）
+    await syncAfterPermSave(body.roleId, req.user?.userId || 'system');
 
     await addLog({
       operatorId: req.user?.userId,
@@ -201,11 +268,23 @@ assignRouter.put(
       actionType: '权限变更',
       targetObj: `职位 ${role.role_name}`,
       beforeValue: `权限点 ${before}`,
-      afterValue: `权限点 ${permCount}`,
+      afterValue:
+        filtered.dropped > 0
+          ? `权限点 ${permCount}（忽略 ${filtered.dropped} 个未授权页面：${filtered.droppedItems
+              .map(itemTitleOf)
+              .join('、')}）`
+          : `权限点 ${permCount}`,
       ip: clientIp(req),
     });
 
-    res.json(ok({ permCount }, `已应用，共 ${permCount} 个权限点`));
+    res.json(
+      ok(
+        { permCount, dropped: filtered.dropped, droppedItems: filtered.droppedItems.map(itemTitleOf) },
+        filtered.dropped > 0
+          ? `已应用，共 ${permCount} 个权限点；有 ${filtered.dropped} 个页面该职位未获授权，已忽略`
+          : `已应用，共 ${permCount} 个权限点`,
+      ),
+    );
   }),
 );
 
@@ -245,8 +324,30 @@ assignRouter.post(
       throw new BizError(BizCode.PERM_SAVE_EMPTY, `来源职位「${source.role_name}」没有任何权限可复制`);
     }
 
-    const permCount = await replaceRolePerms(targetRoleId, perms, req.user?.userId || 'system');
+    /**
+     * ★ 2026-10-23：复制也要守「目标职位的页面上限」
+     *
+     *   来源职位权限更全（如咨询经理有审批中心、目标咨询老师没有），
+     *   直接整份复制过去就又造出一个越权页面。所以按目标职位的范围过滤：
+     *   只复制它已经有授权的那些页面，其余的忽略并在返回里说清楚。
+     */
+    const scope = await assignScopeOfRole(targetRoleId);
+    const filtered = filterPermsByScope(perms, scope);
+    if (!Object.keys(filtered.perms).some((k) => (filtered.perms[k] || []).length)) {
+      throw new BizError(
+        BizCode.PERM_SAVE_EMPTY,
+        `目标职位「${target.role_name}」没有任何已授权的页面，无法复制；请先在「页面管理 → 职位」里给它授权页面`,
+      );
+    }
+
+    const permCount = await replaceRolePerms(
+      targetRoleId,
+      filtered.perms,
+      req.user?.userId || 'system',
+    );
     invalidateAfterPermChange();
+    // ★ 2026-10-24：复制授权后同样与页面台账联动
+    await syncAfterPermSave(targetRoleId, req.user?.userId || 'system');
 
     await addLog({
       operatorId: req.user?.userId,
@@ -256,11 +357,26 @@ assignRouter.post(
       actionType: '权限变更',
       targetObj: `职位 ${target.role_name}`,
       beforeValue: `权限点 ${target.perm_count}`,
-      afterValue: `复制自「${source.role_name}」，权限点 ${permCount}`,
+      afterValue:
+        filtered.dropped > 0
+          ? `复制自「${source.role_name}」，权限点 ${permCount}（忽略 ${filtered.dropped} 个未授权页面）`
+          : `复制自「${source.role_name}」，权限点 ${permCount}`,
       ip: clientIp(req),
     });
 
-    res.json(ok({ permCount, sourceRoleName: source.role_name }, `已复制权限，共 ${permCount} 个权限点`));
+    res.json(
+      ok(
+        {
+          permCount,
+          sourceRoleName: source.role_name,
+          dropped: filtered.dropped,
+          droppedItems: filtered.droppedItems.map(itemTitleOf),
+        },
+        filtered.dropped > 0
+          ? `已复制权限 ${permCount} 个权限点；有 ${filtered.dropped} 个页面目标职位未获授权，已跳过`
+          : `已复制权限，共 ${permCount} 个权限点`,
+      ),
+    );
   }),
 );
 
@@ -295,11 +411,19 @@ assignRouter.post(
           perms[permKey(m.moduleKey, it.itemName)] = it.actions.map((a) => a.actionCode);
         });
       });
+      /**
+       * ★ 2026-10-23：「全量赋予」也只在本职位已授权的页面里全量。
+       *   否则一次「重置」就把审批中心之类的页面塞给咨询老师，
+       *   与「分配树里点不到」自相矛盾。
+       */
+      perms = filterPermsByScope(perms, await assignScopeOfRole(roleId)).perms;
     }
 
     const before = Number(role.perm_count || 0);
     const permCount = await replaceRolePerms(roleId, perms, req.user?.userId || 'system');
     invalidateAfterPermChange();
+    // ★ 2026-10-24：重置/全量赋予后同样与页面台账联动
+    await syncAfterPermSave(roleId, req.user?.userId || 'system');
 
     await addLog({
       operatorId: req.user?.userId,

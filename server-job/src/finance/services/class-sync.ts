@@ -26,6 +26,8 @@
 
 import { db } from '../utils/db';
 import { classSync } from '../../utils/classSync';
+// ★ 2026-10-25：催费侧「核对失败(6)」由财务「打回(is_rejected)」换算而来，见 urgePayStatusOf
+import { PayStatus } from 'shared-types/class-jh';
 // ★ P3 切读层：推给初高的两张表（`sms_class_jh.t_class_student` / `t_class_fee`）
 //   都已归一 → 读走 tbl()、写走 tblIns()。本文件 `db` 连的是 sms_job，
 //   属于**跨库**调用，`tbl()` 会自动补库名前缀（与改造前的 `db('库.表')` 一致）。
@@ -45,6 +47,27 @@ function dateOnly(v: any): string | null {
 }
 
 /**
+ * 财务单 → 催费侧展示状态
+ *
+ * ★ 2026-10-25：财务「打回」在催费侧要显示成「核对失败(6)」。
+ *
+ *   财务打回（`fee.service.ts::rejectFee`）的做法是把单退回
+ *   `pay_status = 2 已缴` + `is_rejected = 1` + `reject_reason`，
+ *   等班主任重传凭证。如果催费侧照搬 2，班主任打开催费列表看到的还是
+ *   「已缴」，压根不知道截图被打回，也就不会去重传。
+ *
+ *   所以这里做一次换算：**有打回标记 → 6 核对失败**，其余原样透传。
+ *   ⚠️ 6 不算「未结清」：钱确实交过了，只是凭证有问题 →
+ *      初高的 `UNPAID_STATUSES` 不含 6，不会被派生成「逾期 4」。
+ *   ⚠️ 班主任重新登记缴费后，`voucher-push` 会清掉 `is_rejected`，
+ *      催费侧同时把状态推回 2，这条换算自然恢复。
+ */
+function urgePayStatusOf(row: Record<string, any>): number {
+  const raw = Number(row.pay_status ?? PayStatus.UNPAID);
+  return row.is_rejected ? PayStatus.REJECTED : raw;
+}
+
+/**
  * 缴费单 → class 侧 SyncRequest 的 item
  *
  * ⚠️ 状态码是【数字契约】，两个模块的 PayStatus 取值完全一致（1待缴…5冻结），
@@ -54,7 +77,7 @@ function dateOnly(v: any): string | null {
  *    （见 class/modules/shared/studentRef.ts）。
  */
 export function feeToSyncItem(row: Record<string, any>): Record<string, unknown> {
-  const payStatus = Number(row.pay_status ?? 1);
+  const payStatus = urgePayStatusOf(row);
   const amount = Number(row.amount ?? 0);
   return {
     sourceId: String(row.id),
@@ -103,7 +126,11 @@ export async function syncFeeToClass(feeId: string): Promise<void> {
 
 /* ============================================================
  * ★ 2026-10-06 新增：财务管理 → 教学管理（初高）缴费台账副本
- *   sms_class_jh.t_class_fee （幂等键 source_system + source_id）
+ *   sms_class_jh.t_class_fee
+ *
+ * 【幂等键（2026-10-23 升级）】
+ *   ① source_system + source_id → ② 同学号 + 同费用项 → ③ 新建
+ *   （详见 findUrgeTarget 的注释；初高催费页直接读这张表，重复会显示成两行）
  *
  *   为什么要副本：初高「学生详情 · 缴费情况」的取数口径是
  *   **实时为主 + 副本兜底**（用户 2026-10-06 拍板）——
@@ -135,6 +162,63 @@ const JH_STAGE = 'jh' as const;
  */
 const CONN = db as unknown as Parameters<typeof tbl>[0];
 
+/* ============================================================
+ * ★★ 2026-10-23：催费同步的「三级命中」（幂等键升级）
+ *
+ * 【用户口径】「财务核对完一个人的数据，回写催费时在**原记录上改状态**就行，
+ *   没必要再新生成一条已核对的数据。」
+ *
+ * 【为什么原来会新增一行】
+ *   三条同步链路原来只认 `source_system + source_id` **一条**幂等键。
+ *   而教学侧的催费台账里，同一学生同一个费用项**本来就有一条行**
+ *   （演示数据 `source_system='local'` / 班主任登记 / 大学 `seed`），
+ *   财务单同步下来时按这条键匹配不上 → 插成第二行
+ *   → 催费页同一个学生的学费出现两条：老的一条「已缴」+ 新的一条「已核对」。
+ *   实测（2026-10-23）：初高 27 组、大学 10 组重复，全是这个成因。
+ *
+ * 【修法】命中顺序改成三级：
+ *   ① 本单自己   ：source_system='finance' + source_id=财务单id（原有幂等）
+ *   ② 同科目台账 ：同学号 + 同费用项 + **非财务来源**（本次新增，核心）
+ *   ③ 都没有     ：才 insert
+ *
+ * 【为什么②限定「非财务来源」】
+ *   同一学生同一费用项确实可能存在**多笔**收款（补缴 / 分期）—— 那是一人多单，
+ *   不该由同步逻辑替业务合并（金额相加会串账）。
+ *   → ②只对「教学侧自己登记的那条」生效；财务来源的行仍然一人一笔，各自走①。
+ *
+ * 【②命中后要不要改它的 source】
+ *   要。一并更新成本单的 source_system/source_id，等于把这条台账「认领」到财务单上，
+ *   下次同步直接走①命中，行为稳定、可追溯。
+ * ============================================================ */
+async function findUrgeTarget(
+  conn: Parameters<typeof tbl>[0],
+  dbName: string,
+  table: string,
+  stage: 'jh' | 'class' | 'job',
+  opt: { sourceId: string; studentNo: string; feeType: number },
+): Promise<Record<string, any> | null> {
+  /** ① 本单自己 */
+  const own = (await tbl(conn, dbName, table, stage)
+    .where({ source_system: 'finance', source_id: opt.sourceId })
+    .first()) as Record<string, any> | undefined;
+  if (own) return own;
+
+  /**
+   * ② 同学号 + 同费用项，且**不是**财务同步来的那条
+   *
+   * ⚠️ 不能写 `.whereNot({ source_system: 'finance' })`：
+   *    MySQL 三值逻辑下 `NULL <> 'finance'` 结果是 NULL（不成立），
+   *    会把「来源为空的老台账」整片漏掉 → 又退回「新增一行」的老路。
+   *    → 必须写 raw 条件把 NULL 也算作「非财务」。
+   */
+  const rows = (await tbl(conn, dbName, table, stage)
+    .where({ student_no: opt.studentNo, fee_type: opt.feeType, is_deleted: false })
+    .whereRaw('(source_system IS NULL OR source_system <> ?)', ['finance'])
+    .orderBy('create_time', 'asc')
+    .limit(1)) as Record<string, any>[];
+  return rows[0] || null;
+}
+
 /** 按学号回查初高学生（查不到返回 null；跨库异常也返回 null，不抛） */
 async function findJhStudent(studentNo: string): Promise<Record<string, any> | null> {
   if (!studentNo) return null;
@@ -149,7 +233,9 @@ async function findJhStudent(studentNo: string): Promise<Record<string, any> | n
 }
 
 /**
- * 把一张缴费单推送到初高缴费台账（幂等：按 source_system+source_id upsert）
+ * 把一张缴费单推送到初高缴费台账
+ *
+ * ★ 幂等口径（2026-10-23）：命中已有台账就**就地改成财务的状态**，不新增行。
  *
  * ⚠️ 永不抛错 —— 同步失败只是初高页面的兜底数据旧一点，不该影响收款主流程。
  */
@@ -169,10 +255,16 @@ export async function syncFeeToJh(feeId: string): Promise<void> {
     if (!stu) return;
 
     const now = new Date();
-    const payload: Record<string, any> = {
-      id: String(row.id),
-      create_time: now,
-      create_by: 'finance-sync',
+    const feeType = Number(row.fee_type ?? 1);
+
+    /**
+     * 财务侧事实 —— **每次同步都覆盖**（update / insert 共用）
+     *
+     * ⚠️ 刻意不含 `create_time` / `create_by` / `id`：
+     *    这三项是「这条台账诞生那一刻」的事实，update 时不该被改
+     *    （create_time 被覆成本次同步时间会让「建单时间」失真）。
+     */
+    const facts: Record<string, any> = {
       update_time: now,
       update_by: 'finance-sync',
       is_deleted: false,
@@ -182,26 +274,53 @@ export async function syncFeeToJh(feeId: string): Promise<void> {
       class_id: stu.class_id ?? row.class_id ?? null,
       class_name: stu.class_name ?? row.class_name ?? null,
       dept_code: 1,
-      fee_type: Number(row.fee_type ?? 1),
+      fee_type: feeType,
       fee_amount: Number(row.amount ?? 0),
-      pay_status: Number(row.pay_status ?? 1),
-      pay_date: dateOnly(row.pay_date),
+      pay_status: urgePayStatusOf(row),
       expire_date: dateOnly(row.expire_date),
-      voucher_url: row.voucher_url || null,
-      period: row.period || null,
       source_system: 'finance',
       source_id: String(row.id),
     };
 
-    // MySQL：ON DUPLICATE KEY UPDATE（幂等键 uk_fee_source = source_system + source_id）
-    //
-    // ⚠️ 幂等性依赖 `uk_fee_source`：老表 `sms_class_jh.t_class_fee` 有这个唯一键，
-    //    而统一表 `t_uni_fee` **没有**（只有 PK(id) + idx_edu_stage）。
-    //    → 切读打开后靠 `payload.id`（= 财务单 id，确定性）命中主键来兜住幂等；
-    //      只有「不同来源但 id 相同」这种极端情况才会插成两行。
-    //    这不是 P3 引入的，属统一表的索引口径差异，已登记待 P5/P6 拍板。
-    const upsert = await tblIns(CONN, JH_DB, JH_FEE_TABLE, JH_STAGE, payload);
-    await upsert.onConflict(['source_system', 'source_id']).merge(payload);
+    /**
+     * ★ 2026-10-23：收款展示字段**只有财务确实有值时才覆盖**。
+     *
+     * 背景（用户反馈）：核对后缴费状态变了，但「实缴金额 / 缴费方式」这类字段没了。
+     * 这几项是班主任在催费页「登记缴费」时写进台账的**本地收款事实**：
+     * 财务表只有 `voucher_url` / `pay_date` / `period`，**没有** `pay_method` / `paid_amount`。
+     * 照抄 `row.xxx ?? null` 的话，财务那边为空就把本地登记好的信息冲成空 ——
+     * 用户看到的就是「钱交过了、方式没了」。
+     * 所以这里一律「有值才写」，没值就保持台账原值（不传该列 = update 不碰它）。
+     */
+    const payDate = dateOnly(row.pay_date);
+    if (payDate) facts.pay_date = payDate;
+    if (row.voucher_url) facts.voucher_url = row.voucher_url;
+    if (row.period) facts.period = row.period;
+
+    /**
+     * ★ 2026-10-23：三级命中（详见 findUrgeTarget 的注释）
+     *   —— 命中已有台账就「在原地改成财务的状态」，不再新增一行。
+     */
+    const target = await findUrgeTarget(CONN, JH_DB, JH_FEE_TABLE, JH_STAGE, {
+      sourceId: String(row.id),
+      studentNo: String(row.student_no || ''),
+      feeType,
+    });
+
+    if (target) {
+      // update 路径必须过 uniUpdCols（列名翻译 + 剔统一表没有的列 + NOT NULL 兜底）
+      const patch = await uniUpdCols(CONN, JH_DB, JH_FEE_TABLE, facts);
+      await tbl(CONN, JH_DB, JH_FEE_TABLE, JH_STAGE)
+        .where({ id: target.id })
+        .update(patch as never);
+    } else {
+      await tblIns(CONN, JH_DB, JH_FEE_TABLE, JH_STAGE, {
+        id: String(row.id),
+        create_time: now,
+        create_by: 'finance-sync',
+        ...facts,
+      });
+    }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn(`[finance→class-jh] 缴费单 ${feeId} 同步异常（不影响本次操作）：${(e as Error).message}`);
@@ -251,11 +370,11 @@ export async function syncFeesToJh(feeIds: string[]): Promise<void> {
  *      而初高财务是 J26xxx、教务初高是 S2026xxx，两套号 → 回查不到就跳过
  *      （这是数据口径问题，不是代码问题，见 4.4 记忆）。
  *
- * 【幂等键】`source_system='finance' + source_id=财务单id`
- *   ⚠️ 统一表 t_uni_urge **没有** (source_system, source_id) 唯一索引
- *      （只有普通索引 idx_source）→ 不能靠 onConflict 兜底，
- *      改成「先查后写」：查到就 update，查不到才 insert。
- *      这是本文件里唯一不走 onConflict 的一条，原因见上。
+ * 【幂等键（2026-10-23 升级）】
+ *   ① source_system='finance' + source_id=财务单id → ② 同学号 + 同费用项 → ③ 新建
+ *   ⚠️ 不用 onConflict：统一表 t_uni_urge 没有 (source_system, source_id) 唯一索引
+ *      （只有普通索引 idx_source），knex 的 onConflict 在 MySQL 上只认主键
+ *      → 会每次同步都插一行新记录。
  * ============================================================ */
 
 /** 大学催费副本（老表名；切读层会自动映射到 t_uni_urge） */
@@ -283,7 +402,7 @@ async function findClassStudent(studentNo: string): Promise<Record<string, any> 
 }
 
 /**
- * 把一张财务缴费单推送到大学部催费副本（幂等：source_system + source_id）
+ * 把一张财务缴费单推送到大学部催费副本（★ 2026-10-23：命中已有台账就改状态，不新增）
  *
  * ⚠️ 永不抛错 —— 同步失败只是大学催费页少一条数据，不该影响收款主流程。
  */
@@ -303,12 +422,17 @@ export async function syncFeeToClassUrge(feeId: string): Promise<void> {
     if (!stu) return;
 
     const now = new Date();
-    const payStatus = Number(row.pay_status ?? 1);
+    // ★ 财务打回 → 6 核对失败（见 urgePayStatusOf）
+    const payStatus = urgePayStatusOf(row);
 
-    /** 财务侧事实（每次同步都覆盖） */
-    const payload: Record<string, any> = {
-      create_time: now,
-      create_by: 'finance-sync',
+    /**
+     * 财务侧事实 —— **每次同步都覆盖**（update / insert 共用）
+     *
+     * ⚠️ 刻意不含 `create_time` / `create_by` / `id`：见 syncFeeToJh 里的同款说明。
+     * ⚠️ 刻意不含 `urge_count`：催收进度是催费表的本地业务状态，
+     *    财务改一次单就把「已经催了 3 次」清回 0 会直接打乱班主任的节奏。
+     */
+    const facts: Record<string, any> = {
       update_time: now,
       update_by: 'finance-sync',
       is_deleted: false,
@@ -329,26 +453,32 @@ export async function syncFeeToClassUrge(feeId: string): Promise<void> {
     };
 
     /**
-     * 【先查后写，而不是 onConflict】
-     *   统一表 t_uni_urge 没有 (source_system, source_id) 唯一索引
-     *   （只有普通索引 idx_source）→ knex 的 onConflict 在 MySQL 上只认**主键**
-     *   → 每次同步都会插一行新记录（催费页出现重复单）。
-     *   所以改成：先按幂等键查，查到就 update（按主键），查不到才 insert。
+     * ★ 2026-10-23：三级命中（详见 findUrgeTarget 的注释）
+     *   —— 命中已有台账就「在原地改成财务的状态」，不再新增一行。
+     *
+     * 【为什么仍然不用 onConflict】
+     *   统一表 t_uni_urge 没有 (source_system, source_id) 唯一索引（只有普通索引 idx_source），
+     *   knex 的 onConflict 在 MySQL 上只认**主键** → 每次同步都会插一行新记录。
+     *   → 走「先查后写」，且查询范围扩大到业务键（同学号 + 同费用项）。
      */
-    const existed = (await tbl(CONN, URGE_DB, CLASS_URGE_TABLE, CLASS_STAGE)
-      .where({ source_system: 'finance', source_id: String(row.id) })
-      .first()) as Record<string, any> | undefined;
+    const target = await findUrgeTarget(CONN, URGE_DB, CLASS_URGE_TABLE, CLASS_STAGE, {
+      sourceId: String(row.id),
+      studentNo: String(row.student_no || ''),
+      feeType: Number(row.fee_type ?? 1),
+    });
 
-    if (existed) {
-      // update 路径必须过 uniUpdCols（列名翻译 + 剔统一表没有的列）
-      const patch = await uniUpdCols(CONN, URGE_DB, CLASS_URGE_TABLE, payload);
+    if (target) {
+      // update 路径必须过 uniUpdCols（列名翻译 + 剔统一表没有的列 + NOT NULL 兜底）
+      const patch = await uniUpdCols(CONN, URGE_DB, CLASS_URGE_TABLE, facts);
       await tbl(CONN, URGE_DB, CLASS_URGE_TABLE, CLASS_STAGE)
-        .where({ id: existed.id })
+        .where({ id: target.id })
         .update(patch as never);
     } else {
       await tblIns(CONN, URGE_DB, CLASS_URGE_TABLE, CLASS_STAGE, {
         id: String(row.id),
-        ...payload,
+        create_time: now,
+        create_by: 'finance-sync',
+        ...facts,
         // 催收进度：新建时给初值（催费页要显示催收状态）
         urge_count: 0,
       });
@@ -369,7 +499,7 @@ export async function syncFeeToClassUrge(feeId: string): Promise<void> {
  * 【只推 dept_code = 3（就业部）且学号能在 sms_job.t_student_base 回查到的单】
  *   和初高那条同一套判据：部门对 + 学号能对上，才说明确实是这个部门的学生。
  *
- * 【幂等键】`source_system='finance' + source_id=财务单id`（唯一索引 uk_job_fee_source）
+ * 【幂等键（2026-10-23 升级）】① source_system + source_id → ② 同学号 + 同费用项 → ③ 新建
  *
  * 【⚠️ 不覆盖本地字段】
  *   财务侧只负责「金额 / 到期日 / 缴费状态 / 凭证 / 缴费信息」这些事实。
@@ -378,16 +508,27 @@ export async function syncFeeToClassUrge(feeId: string): Promise<void> {
  *   所以 merge 的 payload 里刻意不含这些列。
  * ============================================================ */
 
-/** 就业催费单（跨库全限定名） */
-const JOB_FEE_TABLE = 'sms_job.t_job_fee_call';
+/**
+ * ★ 2026-10-23 修：**不能再裸写 sms_job 老表**
+ *   就业催费页（`routes/feeCall.route.ts`）读的是切读层 → 统一表 `t_uni_fee`(job)。
+ *   而这里原来写的是 `sms_job.t_job_fee_call`（老表），属于「切读后写得进、读不回」——
+ *   财务核对完，就业催费页一条财务单都看不到（实测 t_uni_fee job 里 finance 来源 0 行）。
+ *   → 改用 `tbl` / `tblIns` 切读写。
+ */
+/** 就业库（让切读层补库名前缀 / 认 edu_stage） */
+const JOB_DB = 'sms_job';
+/** 就业催费单（老表名；切读层映射到 t_uni_fee） */
+const JOB_FEE_TABLE = 't_job_fee_call';
 /** 就业学生表（按学号回查学生 ID / 班级 / 班主任） */
-const JOB_STUDENT_TABLE = 'sms_job.t_student_base';
+const JOB_STUDENT_TABLE = 't_student_base';
+/** 统一表 edu_stage 取值：就业 */
+const JOB_STAGE = 'job' as const;
 
 /** 按学号回查就业学生（查不到返回 null；跨库异常也返回 null，不抛） */
 async function findJobStudent(studentNo: string): Promise<Record<string, any> | null> {
   if (!studentNo) return null;
   try {
-    const row = (await db(JOB_STUDENT_TABLE)
+    const row = (await tbl(CONN, JOB_DB, JOB_STUDENT_TABLE, JOB_STAGE)
       .where({ student_no: studentNo, is_deleted: false })
       .first()) as Record<string, any> | undefined;
     return row || null;
@@ -397,7 +538,7 @@ async function findJobStudent(studentNo: string): Promise<Record<string, any> | 
 }
 
 /**
- * 把一张财务缴费单推送到就业催费单（幂等：按 source_system + source_id upsert）
+ * 把一张财务缴费单推送到就业催费单（★ 2026-10-23：命中已有台账就改状态，不新增）
  *
  * ⚠️ 永不抛错 —— 同步失败只是就业催费页少一条数据，不该影响收款主流程。
  */
@@ -417,17 +558,22 @@ export async function syncFeeToJob(feeId: string): Promise<void> {
     if (!stu) return;
 
     const now = new Date();
-    const payStatus = Number(row.pay_status ?? 1);
+    // ★ 财务打回 → 6 核对失败（见 urgePayStatusOf）
+    const payStatus = urgePayStatusOf(row);
+    const feeType = Number(row.fee_type ?? 2);
 
-    /** 财务侧事实（每次同步都覆盖） */
-    const payload: Record<string, any> = {
-      id: String(row.id),
-      create_time: now,
-      create_by: 'finance-sync',
+    /**
+     * 财务侧事实 —— **每次同步都覆盖**（update / insert 共用）
+     *
+     * ⚠️ 刻意不含 `create_time` / `create_by` / `id`：见 syncFeeToJh 里的同款说明。
+     * ⚠️ 刻意不含 `call_status` / `call_reason`：催收进度是教学侧的本地业务状态，
+     *    财务改一次单就把「催缴中」打回「待催缴」，班主任的节奏会被冲掉。
+     */
+    const facts: Record<string, any> = {
       update_time: now,
       update_by: 'finance-sync',
       is_deleted: false,
-      fee_type: Number(row.fee_type ?? 2),
+      fee_type: feeType,
       student_id: stu.id,
       student_no: String(row.student_no || ''),
       student_name: String(stu.student_name || row.student_name || ''),
@@ -440,31 +586,64 @@ export async function syncFeeToJob(feeId: string): Promise<void> {
       due_date: dateOnly(row.expire_date),
       // ★ 状态直接搬财务的（与初高同码），前端不再折算
       pay_status: payStatus,
-      pay_method: row.pay_method ?? null,
-      paid_amount: row.paid_amount ?? null,
-      pay_date: dateOnly(row.pay_date) || null,
-      voucher_url: row.voucher_url || null,
-      pay_remark: row.remark || null,
       source_system: 'finance',
       source_id: String(row.id),
     };
 
     /**
-     * 新建时补上「催收进度」的初始值。
-     * ⚠️ 只在 insert 生效：knex 的 merge(payload) 只更新 payload 里出现的列，
-     *    下面这行如果留在 payload 里，update 时会把人工改过的催收进度冲掉。
+     * ★★ 2026-10-23 修正：**绝不在这里写 `pay_method` / `paid_amount`**。
+     *
+     * 用户反馈「财务核对后状态变了，但实缴金额、缴费方式这些字段没了」，根因就在这两行：
+     *   `pay_method: row.pay_method ?? null` / `paid_amount: row.paid_amount ?? null`
+     * 而财务表 `t_finance_fee` **根本没有这两列** → row 上永远是 undefined
+     * → 每次财务核对回写都把就业催费单登记好的「微信支付 / 500 元」冲成空。
+     *
+     * 「钱怎么交的」只有催费侧登记时才写（feeCall.route.ts 的 /voucher），
+     * 财务那边没有权威来源，就**不许拿来覆盖**。
+     *
+     * 其余收款字段同理：财务有值才覆盖，为空时保持台账原值。
+     * `pay_remark` 也**不覆盖** —— 它是班主任登记时写的催费备注，
+     * 和财务的 `remark`（财务内部备注/核对说明）不是一回事。
      */
-    const insertOnly = {
-      call_status: payStatus === 2 || payStatus === 3 ? 3 : 1,
-      call_reason: '财务缴费单同步',
-      applicant_id: 'finance-sync',
-      applicant_name: '财务同步',
-    };
+    const payDate = dateOnly(row.pay_date);
+    if (payDate) facts.pay_date = payDate;
+    if (row.voucher_url) facts.voucher_url = row.voucher_url;
 
-    await db(JOB_FEE_TABLE)
-      .insert({ ...payload, ...insertOnly })
-      .onConflict(['source_system', 'source_id'])
-      .merge(payload);
+    /** ★ 2026-10-23：三级命中（详见 findUrgeTarget 的注释）—— 命中就改状态，不新增 */
+    const target = await findUrgeTarget(CONN, JOB_DB, JOB_FEE_TABLE, JOB_STAGE, {
+      sourceId: String(row.id),
+      studentNo: String(row.student_no || ''),
+      feeType,
+    });
+
+    if (target) {
+      const patch = await uniUpdCols(CONN, JOB_DB, JOB_FEE_TABLE, facts);
+      await tbl(CONN, JOB_DB, JOB_FEE_TABLE, JOB_STAGE)
+        .where({ id: target.id })
+        .update(patch as never);
+    } else {
+      await tblIns(CONN, JOB_DB, JOB_FEE_TABLE, JOB_STAGE, {
+        id: String(row.id),
+        create_time: now,
+        create_by: 'finance-sync',
+        ...facts,
+        /**
+         * 新建时才补「催收进度」初值。
+         * ⚠️ 不能进 facts：update 时它会把班主任改过的催收进度冲掉。
+         * ★ 核对失败(6) 也算「已缴清」：钱交过了，只是凭证被打回，
+         *   不该在催收进度上显示成「待催缴」。
+         */
+        call_status:
+          payStatus === PayStatus.PAID ||
+          payStatus === PayStatus.VERIFIED ||
+          payStatus === PayStatus.REJECTED
+            ? 3
+            : 1,
+        call_reason: '财务缴费单同步',
+        applicant_id: 'finance-sync',
+        applicant_name: '财务同步',
+      });
+    }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn(`[finance→job] 缴费单 ${feeId} 同步异常（不影响本次操作）：${(e as Error).message}`);

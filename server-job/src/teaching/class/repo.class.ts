@@ -32,7 +32,7 @@ import { fmtDate, fmtDateTime } from '../shared/format';
 import type { ClassRepo } from './types';
 import { tbl, readPhaseCode, phaseCodeCol, tblIns } from '../shared/uniTable';
 import { applyClassScope } from '../shared/dataScope';
-import { resolvePhaseCodeFromScheme } from '../shared/stageSchemes';
+import { resolvePhaseCodeFromScheme, resolveSchemeStageName } from '../shared/stageSchemes';
 
 const T = 't_class_info';
 const STUDENT_T = 't_class_student';
@@ -113,7 +113,14 @@ function mapRow(r: Record<string, any>, studentCount: number | null): ClassRow {
     deptCode: numOrNull(r.dept_code),
     deptName: DEPT_NAME[Number(r.dept_code)] ?? '',
     phaseCode: phase,
-    phaseName: phase === null ? '' : (PHASE_NAME[phase] ?? ''),
+    // ★ 2026-10-23：阶段名方案优先、字典兜底（同 repo.classJh 口径）
+    phaseName: phase === null ? '' : (str(r.scheme_stage_name) || PHASE_NAME[phase] || ''),
+    // ★ 2026-10-26 合并取对方：阶段名口径按上面这行（方案 > 字典）。
+    //   但 dto.ClassRow 的方案三列仍是必填（前端【编辑班级】要回显阶段方案下拉），
+    //   这里只把三列原样下发，不参与任何筛选/显示判断。
+    schemeId: str(r.scheme_id),
+    schemeStageId: str(r.scheme_stage_id),
+    schemeStageName: str(r.scheme_stage_name),
     headTeacherId: str(r.head_teacher_id),
     headTeacherName: str(r.head_teacher_name),
     teacherId: str(r.teacher_id),
@@ -248,11 +255,16 @@ export const repo: ClassRepo = {
      * → 兜底取到 13（实训），建出来的班阶段全是错的。
      */
     const derivedPhaseCode = await resolvePhaseCodeFromScheme(body.deptCode, body.schemeStageId);
-    set(phaseCodeCol(), body.phaseCode ?? derivedPhaseCode);
+    const phaseCode = body.phaseCode ?? derivedPhaseCode;
+    set(phaseCodeCol(), phaseCode);
     // ★ 2026-10-16：阶段方案三字段（null = 清空选择；不传 = 不改）
     set('scheme_id', body.schemeId);
     set('scheme_stage_id', body.schemeStageId);
-    set('scheme_stage_name', body.schemeStageName);
+    set(
+      'scheme_stage_name',
+      // ★ 2026-10-23：前端漏传阶段名时服务端按「方案 + 阶段码」反查兜底
+      body.schemeStageName ?? (await resolveSchemeStageName(body.schemeId, body.phaseCode)),
+    );
     set('head_teacher_id', body.headTeacherId);
     set('head_teacher_name', body.headTeacherName);
     set('teacher_id', body.teacherId);
@@ -268,7 +280,12 @@ export const repo: ClassRepo = {
     set('room', body.classroom);
     set('open_date', body.openDate);
     // ★ 2026-10-21：班级编号（三部门统一必填 + 同表唯一）
-    set('class_code', body.classCode === undefined ? undefined : String(body.classCode ?? '').trim());
+    // ★ 2026-10-23：「班级编号只能新建班级可创建，编辑班级里的不可更改」
+    //   → 编辑（有 body.id）时忽略传上来的编号，库里保持创建时的值。
+    set(
+      'class_code',
+      body.id || body.classCode === undefined ? undefined : String(body.classCode ?? '').trim(),
+    );
     // ★ 这张表没 close_date / remark
     if (body.classStatus !== undefined) payload.class_status = body.classStatus;
 
@@ -279,10 +296,10 @@ export const repo: ClassRepo = {
      * 它的 saveBody 不带 classCode → 交接会被「班级编号必填」拦死。
      * 表单提交时空串被 route 转成 null（不是 undefined），所以「清空编号再保存」仍会报必填。
      */
-    if (body.classCode !== undefined) {
+    if (body.classCode !== undefined && !body.id) {
       const code = String(body.classCode ?? '').trim();
       if (!code) throw new Error('班级编号必填');
-      await assertClassCodeUnique(code, body.id);
+      await assertClassCodeUnique(code);
     }
 
     if (body.id) {

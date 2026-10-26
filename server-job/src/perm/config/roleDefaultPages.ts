@@ -144,13 +144,27 @@ export const ROLE_DEFAULT_PAGES: Record<string, string[]> = {
     'finance||费用标准',
     'finance||退费管理',
   ],
-  /** 就业老师（5 页） */
+  /** 就业老师（6 页） */
   JOB_STAFF: [
     'workbench||工作台',
     'teach||复盘填写',
     'teach||学生档案',
     'teach||就业日志',
     'teach||数据统计',
+    /**
+     * ★ 2026-10-23：「班级管理」
+     *
+     * 用户报障：交接给就业老师后，他看不到交接的班级 / 班级详情 / 交接记录。
+     * 根因有两层，这是第二层：
+     *   ① `pagePermissionSource.ts` 的静态表里 JOB_STAFF 没有 `job:class:view`（已补）；
+     *   ② 就算静态表有，`removeCodesOfRevokedPages()` 会按**权限树**把
+     *      「一个动作都没勾」的页面码剔掉 —— 就业老师的树里根本没有「班级管理」
+     *      这个功能点，补了也还是被收回。
+     * 所以两处必须一起加：静态表（第 ③ 层） + 本表（权限树初始授权）。
+     *
+     * 只给「查看」：交接动作仍由学管/校长操作，就业老师是接手方。
+     */
+    'teach||班级管理',
   ],
   /** 项目经理（9 页） */
   RM_PROJECT: [

@@ -36,12 +36,19 @@ import type {
 } from '../shared/dto';
 import { STUDENT_DEDUP_PRIORITY, STUDENT_STAGES, STUDENT_STAGE_NAME } from '../shared/dto';
 import { assertStageCodeEx, visibleStagesEx } from '../shared/stageAccess';
+// ★ 2026-10-23：学生档案的「全校学籍通行码」要读账号的真实页面码集合
+import { getUserPagePermissions } from '../../utils/pagePermissionSource';
 import { listClassesByStage } from '../shared/classOptions';
 import { loadStagePlanOptions, mergePhaseOptions } from '../shared/stagePlans';
 import { loadSchemeStagesForStage } from '../shared/stageSchemes';
 import { nextStudentNoForClass, phaseCodeOfClass } from '../shared/studentNo';
+// ★ 2026-10-25 学籍状态变更（休学/复学）要通知财务冻结/解冻
+import { syncStudentStatusToFinance } from '../../utils/financeClient';
 import { db } from '../../utils/db';
-import { StudentStatus } from 'shared-types';
+import { StudentStatus, STUDENT_STATUS_NAME } from 'shared-types';
+import { CONSULT_TO_STUDENT_STATUS } from 'shared-types/consult';
+import { remotePost } from '../../shared/http';
+import { config } from '../../config';
 import type { StudentRepo, StudentStat } from './types';
 import { assertStudentsInScope } from '../shared/dataScope';
 import { randomUUID } from 'crypto';
@@ -82,14 +89,48 @@ const MODULE: Record<StudentStage, string> = {
 
 const LABEL = '学生档案';
 
+/**
+ * ★★ 2026-10-23「全校学籍通行码」—— 教务老师（ACAD_STAFF）看学生档案的口径
+ *
+ * 【问题】教务老师在「职位权限分配」里被授予「学生档案」页，
+ *   它在权限库里拿到的页面码是 `edu:student:view`（原教务档案页：**全校**学生名单）。
+ *   而本页的三个学段各自只需 `classjh:/class:/job:` 前缀的码 ——
+ *   `edu:student:view` 一个都不匹配 →
+ *     · 前端菜单判定（教学域学段码）恒 false → 侧栏没有「学生档案」
+ *     · 后端 requireAnyPage 直接 403
+ *   表象就是「权限勾了，教务却看不到这个页面」（用户 2026-10-23 反馈）。
+ *
+ * 【口径】把 `edu:student:view` 当作**本页的全校通行码**：
+ *   命中它 = 三个真实部门（初高部 / 大学部 / 就业部）全部可见，
+ *   与「档案 = 全校学生名单」的原始业务定义一致。
+ *
+ * ⚠️ 只作用于**学生档案**这一页（其它域没有这个通行码），
+ *    也不会给账号凭空补出别的页面码 —— 不动权限库的既有口径。
+ * ⚠️ 不加「教务」部门页签：2026-10-21 用户口径（edu 只是教务宿舍模块的学生副本，
+ *    在档案里再列一遍既重复又对不上号）仍然有效，这里只是把数据范围放开到三个真实部门。
+ */
+const FULL_SCHOOL_PASS_CODES: readonly string[] = ['edu:student:view'];
+
+/** 该账号是否持有「全校学籍」通行码 */
+async function hasFullSchoolPass(user: any): Promise<boolean> {
+  if (!user) return false;
+  if (user.permissions?.includes('*')) return true;
+  const allowed = await getUserPagePermissions(user.roles || []);
+  return FULL_SCHOOL_PASS_CODES.some((c) => allowed.includes(c));
+}
+
 const nameOf = (s: StudentStage): string => STUDENT_STAGE_NAME[s];
 const moduleOf = (s: StudentStage): string => MODULE[s];
 
-export function assertStageView(user: any, stage: StudentStage): Promise<void> {
+export async function assertStageView(user: any, stage: StudentStage): Promise<void> {
+  // 通行码 → 全校三个部门都可进（不再看单个学段码与学段所属模块）
+  if (await hasFullSchoolPass(user)) return;
   return assertStageCodeEx(user, stage, CODES, LABEL, nameOf, moduleOf);
 }
 
-export function visibleStages(user: any): Promise<StudentStage[]> {
+export async function visibleStages(user: any): Promise<StudentStage[]> {
+  // 通行码 → 三个真实部门全给（顺序沿用 STUDENT_STAGES，界面顺序不受影响）
+  if (await hasFullSchoolPass(user)) return [...STUDENT_STAGES];
   return visibleStagesEx(user, STUDENT_STAGES, CODES, LABEL, nameOf, moduleOf);
 }
 
@@ -190,6 +231,76 @@ function dedupeByStudentNo(rows: StudentRow[]): StudentRow[] {
 }
 
 /* ============================================================
+ * ★ 2026-10-23 批注：「转正式的按钮删掉，然后状态同步咨询那边的学生状态」
+ *
+ * 【口径】
+ *   · 转正不再由班主任手动发起（前端【转正式】弹窗已删）；
+ *   · 学生的「试学中 / 预在读 / 正式在读」以**咨询侧状态为准**：
+ *     档案读列表/详情时，按学号去咨询侧批量取一次状态，换算成学籍状态；
+ *     与库内不一致的就**回写教学主档**，保证列表、详情、花名册、统计看到的是同一套值。
+ *   · 只在这三档之间同步（3 试学中 / 4 预在读 / 5 正式在读）：
+ *     教学侧一旦进入 6 休学 / 7 退学 / 8 实训中 / 9 待就业 / 10 已就业 就不归咨询管，
+ *     否则「休学」「退学审批链」的结果会被咨询侧状态覆盖回去。
+ *   · 咨询侧指向「退费中 / 已退费 / 流失 / 未通过」时**不跟**（换算出来是 7/11），
+ *     退学、流失在教学侧有独立审批链，不能因为咨询点一下就改学籍。
+ *   · 查不到咨询记录（教学自己新建的学生）→ 原样保留教学状态。
+ *   · 咨询模块不可用 → 直接跳过，列表照常打开（不能因为跨模块超时让档案页打不开）。
+ * ============================================================ */
+const CONSULT_SYNCABLE = new Set<number>([StudentStatus.TRIAL, 4, StudentStatus.STUDYING]);
+const CONSULT_SYNC_TARGETS = new Set<number>([StudentStatus.TRIAL, 4, StudentStatus.STUDYING]);
+
+async function syncConsultStatuses(rows: StudentRow[]): Promise<void> {
+  const todo = rows.filter((r) => r.studentNo && CONSULT_SYNCABLE.has(Number(r.studentStatus)));
+  if (!todo.length) return;
+
+  const nos = [...new Set(todo.map((r) => String(r.studentNo).trim()).filter(Boolean))];
+  let items: Array<{ studentNo: string; consultState: number }> = [];
+  try {
+    // ⚠️ remotePost 的签名是 (module, url, body, opts) —— body 和 opts 别写串了
+    const res: any = await remotePost(
+      'consult',
+      '/api/consult/student/internal/states-by-nos',
+      { nos },
+      { timeout: 3000, headers: { 'x-internal-token': config.internalToken } },
+    );
+    items = (res?.items || []) as Array<{ studentNo: string; consultState: number }>;
+    if (!items.length) return;
+  } catch {
+    return; // 咨询不可用：沿用教学自己的状态
+  }
+
+  const byNo = new Map(items.map((i) => [String(i.studentNo), Number(i.consultState || 0)]));
+
+  // 按学段分组，最后批量回写
+  const pending: Record<string, Array<{ id: string; status: number }>> = {};
+  for (const r of todo) {
+    const consultState = byNo.get(String(r.studentNo).trim());
+    if (consultState == null) continue;
+    const mapped = Number(CONSULT_TO_STUDENT_STATUS[consultState] ?? 0);
+    if (!CONSULT_SYNC_TARGETS.has(mapped)) continue;
+    if (mapped === Number(r.studentStatus)) continue;
+    r.studentStatus = mapped;
+    r.studentStatusName = STUDENT_STATUS_NAME[mapped] ?? '';
+    (pending[r.stage] ||= []).push({ id: r.studentId, status: mapped });
+  }
+
+  for (const [stage, list] of Object.entries(pending)) {
+    const ids = list.map((x) => x.id);
+    if (!ids.length) continue;
+    try {
+      // 逐条改（同一页里同一状态的往往只有几个），避免 IN + CASE 那种复杂 SQL
+      for (const x of list) {
+        await tbl(db, 'sms_job', 't_student_base', stage as StudentStage)
+          .where({ id: x.id })
+          .update({ student_status: x.status, update_time: new Date() });
+      }
+    } catch (e: any) {
+      console.warn('[syncConsultStatuses] 回写学籍失败', stage, e?.message);
+    }
+  }
+}
+
+/* ============================================================
  * 对外能力
  * ============================================================ */
 
@@ -199,7 +310,10 @@ export async function listStudents(
 ): Promise<{ total: number; page: number; size: number; list: StudentRow[] }> {
   const { rows } = await mergedRows(q, user);
   const start = (q.page - 1) * q.size;
-  return { total: rows.length, page: q.page, size: q.size, list: rows.slice(start, start + q.size) };
+  const list = rows.slice(start, start + q.size);
+  // ★ 2026-10-23：状态跟咨询侧同步（只同步本页，避免整表打咨询）
+  await syncConsultStatuses(list);
+  return { total: rows.length, page: q.page, size: q.size, list };
 }
 
 export async function summaryStudents(q: StudentListQuery, user: any): Promise<StudentStat> {
@@ -207,6 +321,7 @@ export async function summaryStudents(q: StudentListQuery, user: any): Promise<S
   const out: StudentStat = {
     total: rows.length,
     studying: 0,
+    training: 0,
     trial: 0,
     suspended: 0,
     quit: 0,
@@ -214,6 +329,8 @@ export async function summaryStudents(q: StudentListQuery, user: any): Promise<S
   };
   for (const r of rows) {
     if (r.studentStatus === StudentStatus.STUDYING) out.studying += 1;
+    /* ★ 实训中（就业部的「在校」形态）：单独计一档，不再落到空档 */
+    if (r.studentStatus === StudentStatus.TRAINING) out.training += 1;
     if (r.studentStatus === StudentStatus.TRIAL) out.trial += 1;
     if (r.studentStatus === StudentStatus.SUSPENDED) out.suspended += 1;
     if (r.studentStatus === StudentStatus.QUIT) out.quit += 1;
@@ -232,6 +349,8 @@ export async function getStudentDetail(
   await assertStudentsInScope(stage, [id], user, '该学生');
   const d = await REPOS[stage].detail(id, user);
   if (!d) throw new BizError(BizCode.STUDENT_NOT_FOUND, '学生不存在或没有访问权限');
+  // ★ 2026-10-23：详情也跟咨询侧对齐（与列表同一口径，见 syncConsultStatuses）
+  await syncConsultStatuses([d.base]);
   // ★ 2026-10-21：详情「阶段」也要显示方案阶段名（与列表同一口径）
   await attachSchemeStageNames([d.base]);
   // ★ 2026-10-20 升云记录：按学号挂到详情上（升云后大学那条是新 id，只有学号两边一致）
@@ -342,8 +461,10 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
    *     ① 库里已经是退学(7) → 传上来的状态必须还是 7，想改就报错（前端下拉也已 disabled）；
    *     ② 顺便把 payload 里的状态钉成 7，防止绕过前端改出别的值。
    *   ⚠️ 新增（没有 id）不受影响，见 statusLock.ts 的说明。 */
+  let prevStatus: number | null = null;
   if (body.id) {
     const current = await getStudentStatus(body.stage, body.id);
+    prevStatus = Number(current);
     if (isStatusLocked(current)) {
       if (body.studentStatus !== undefined && Number(body.studentStatus) !== Number(current)) {
         throw new BizError(BizCode.PARAM_ERROR, lockedStatusMessage('该学生'));
@@ -360,14 +481,50 @@ export async function saveStudent(body: StudentSaveBody, user: any): Promise<Stu
     const phase = await phaseCodeOfClass(body.stage, body.classId);
     if (phase !== null) body.phaseCode = phase;
   }
+  let saved: StudentSaveResult;
   try {
-    return await REPOS[body.stage].save(body, user?.userId || 'system');
+    saved = await REPOS[body.stage].save(body, user?.userId || 'system');
   } catch (e) {
     // 仓储抛的 Error 多为「学号已存在」这类业务校验 → 转成 40302/400 让前端能显示原文
     const msg = (e as Error).message || '保存失败';
     if (/学号/.test(msg)) throw new BizError(BizCode.STUDENT_NO_EXISTS, msg);
     throw new BizError(BizCode.PARAM_ERROR, msg);
   }
+
+  /**
+   * ★ 2026-10-25 学籍状态变更 → 通知财务冻结/解冻
+   *
+   * 财务 `/api/finance/freeze/sync` 早就有「休学 → 自动冻结餐费/住宿费、
+   * 非休学 → 解冻」的实现，咨询侧也会调，但教学侧一直没接：
+   * 实测把学生改成休学(6)，`t_finance_freeze` 一条记录都没有。
+   *
+   * 只在**状态真的变了**时才调（保存一次不传状态就调，会平白多一次跨模块请求）；
+   * 失败不阻断保存（财务挂了不能让学生档案存不进去）。
+   */
+  const nextStatus =
+    body.studentStatus !== undefined && body.studentStatus !== null
+      ? Number(body.studentStatus)
+      : prevStatus;
+  if (prevStatus !== null && nextStatus !== null && prevStatus !== nextStatus) {
+    try {
+      const r = await syncStudentStatusToFinance({
+        studentId: String(body.id),
+        studentStatus: nextStatus,
+        studentNo: body.studentNo || undefined,
+        studentName: body.studentName || undefined,
+        classId: body.classId || undefined,
+        className: body.className || undefined,
+        deptCode: body.deptCode ?? undefined,
+      });
+      if (r.freezeCount) saved.frozenCount = r.freezeCount;
+      if (r.unfreezeCount) saved.unfrozenCount = r.unfreezeCount;
+    } catch (e) {
+      // 跨模块失败只记日志，不回滚学籍
+      console.warn('[teaching] 学籍状态同步财务失败（不阻断）：', (e as Error).message);
+    }
+  }
+
+  return saved;
 }
 
 export async function removeStudent(

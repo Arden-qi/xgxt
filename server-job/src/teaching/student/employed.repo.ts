@@ -92,6 +92,16 @@ export async function markEmployed(
   if (from === StudentStatus.EMPLOYED) {
     throw new BizError(BizCode.PARAM_ERROR, '该学生已是「已就业」，该操作不可重复');
   }
+  /**
+   * ★ 2026-10-23 用户口径：**只有状态是「待就业」的学生才能标记已就业**。
+   *   原来只挡了「已是已就业」，在读/试学/实训中/休学都能被一键标成已就业。
+   */
+  if (from !== StudentStatus.WAIT_EMPLOY) {
+    throw new BizError(
+      BizCode.PARAM_ERROR,
+      `只有「待就业」的学生才能标记已就业（当前：${STUDENT_STATUS_NAME[from] ?? from}）`,
+    );
+  }
   assertStatusUnlocked(from, '该学生');
 
   await qbOf(stage).where({ id }).update({

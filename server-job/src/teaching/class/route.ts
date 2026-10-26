@@ -101,9 +101,19 @@ function buildSaveBody(b: Record<string, any>, stage: ClassStage) {
     classCode: strOrNull(b.classCode),
     deptCode,
     phaseCode,
-    /* ★ 2026-10-20：原「阶段方案」三字段（schemeId / schemeStageId / schemeStageName）已删除 ——
-     *   它们指向 t_class_stage_scheme 那套从未建表的实现；班级表里也从来没有这三列。
-     *   阶段统一只落 phase_code（阶段码），方案只作为前端筛选阶段的手段。 */
+    /**
+     * ★ 2026-10-23 恢复：阶段方案三字段**要落库**。
+     *
+     *   10-20 曾以「t_class_stage_scheme 从未建表、班级表没有这三列」为由删除透传，
+     *   但 10-22 的方案化改造已经给三学段班级表加了
+     *   `scheme_id / scheme_stage_id / scheme_stage_name` 三列（t_uni_class 实查有），
+     *   各 repo.save 也都在写 —— 只有这里被删掉，导致**编辑班级选了方案保存后不生效**
+     *   （用户实测：应用新建的班级阶段方案 cg 后再编辑，方案回到空）。
+     *   口径：null = 清空选择（用户在下拉里点了 ×），undefined = 不改。
+     */
+    schemeId: strOrNull(b.schemeId),
+    schemeStageId: strOrNull(b.schemeStageId),
+    schemeStageName: strOrNull(b.schemeStageName),
     headTeacherId: strOrNull(b.headTeacherId),
     headTeacherName: strOrNull(b.headTeacherName),
     teacherId: strOrNull(b.teacherId),

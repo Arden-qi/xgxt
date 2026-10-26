@@ -14,8 +14,11 @@
  * 【自取数据】调用方只要给 userId（可选再给一行列表数据做首屏秒开）：
  *   detail + 权限模块树 + 各职位权限映射 全在本组件内拉取。
  *
- * ⚠️ 「查看权限 / 编辑权限」不再跳「职位权限分配」页（跳过去还不知道要点哪个职位），
- *    直接在本弹窗之上叠一层权限树弹窗（PermTreeDialog），就地看 / 就地改。
+ * ★ 2026-10-23 按用户要求：「所属职位」表格的「操作」列已**整列删除**
+ *   （原为「查看权限 / 编辑权限」两个就地弹权限树的入口）。
+ *   用户口径：账号详情里不要这两个操作，也不要「操作」这一列 —— 三处入口共用本组件，
+ *   故账号管理 / 部门管理（部门下账号弹窗）/ 职位管理（职位下人员 → 账号详情）
+ *   一次性全部去掉。要看 / 改职位权限，请走「职位权限分配」页。
  *
  * ★ 2026-10-19 起：底部「去编辑」按钮已**彻底删除**（用户最终要求：不要这个按钮）。
  *   删之前它是可关的，三处入口按三轮要求逐个关掉 ——
@@ -32,10 +35,8 @@
 import { computed, ref, watch } from 'vue';
 import type { PermModule, PermRoleListItem, PermUserListItem, RolePermMap } from 'shared-types/perm';
 import ProtoDialog from './ProtoDialog.vue';
-import PermTreeDialog from './PermTreeDialog.vue';
-import { roleApi, userApi, assignApi, menuApi } from '@/perm/api/perm';
+import { roleApi, userApi, menuApi } from '@/perm/api/perm';
 import { roleIconOf } from '@/perm/utils/roleIcon';
-import { toast } from '@/perm/utils/toast';
 
 const props = withDefaults(
   defineProps<{
@@ -122,8 +123,34 @@ const permLoading = ref(false);
 const allRoles = ref<PermRoleListItem[]>([]);
 const modules = ref<PermModule[]>([]);
 
+/**
+ * 部门展示名：改成「教学部-初中部」这种带上级的完整路径
+ *
+ * 【为什么不用 detail.deptName】
+ *   账号创建时选的是**具体学段**（初中部 / 高中部 / 大学部 / 实训管理 / 就业管理），
+ *   但 deptName 只有自己那一级 ——「初中部」单看不出是教学部还是谁的。
+ *   后端已在列表项里带出 deptPath（按部门树一路向上拼），这里优先用它，
+ *   老接口 / 老缓存没这个字段时退回 deptName，不至于显示空白。
+ */
+const deptLabel = computed(() => {
+  const d = detail.value;
+  if (!d) return '—';
+  return d.deptPath || d.deptName || '—';
+});
+
 /** 职位 id → 该职位权限映射（按需拉、拉过就缓存） */
 const rolePerms = ref<Record<string, RolePermMap>>({});
+
+/**
+ * ★ 2026-10-25 账号是否处于停用状态。
+ *
+ *   「所属职位」表格的「状态」列原来直接摆职位自身的启用状态 —— 账号都停用了，
+ *   职位行还挂着绿色「启用」，看起来像详情页状态没同步（用户截图指出的问题）。
+ *   实际口径应该是【有效状态】：账号停用后，该账号名下所有职位都不可用，
+ *   状态列一律按「停用（账号已停用）」展示；账号正常时才显示职位自身状态。
+ *   这是展示逻辑修正，对所有账号（现有 + 以后新增）一律生效。
+ */
+const accountDisabled = computed(() => String(detail.value?.userStatus || '') === '已停用');
 
 const detailTitle = computed(() => {
   const d = detail.value;
@@ -211,8 +238,18 @@ function moduleCards(map: RolePermMap): ModuleCard[] {
 /** 详情卡片上的「有效权限动作」总数（并集去重后的动作数） */
 const effectivePermCount = computed(() => actionCount(mergedMap(detail.value?.roleIds || [])));
 
+/**
+ * ★ 2026-10-23：只列**真有动作**的板块。
+ *
+ *   原来把权限树的 5 个板块全铺出来，没有动作的显示「❌ 无权限」。
+ *   用户因此以为「咨询经理的账号详情里还有财务管理」—— 明明写着 0/6，
+ *   但那是因为动作行历史残留（已按 assignScope 过滤掉）。
+ *   现在空板块不再渲染：「有效权限明细」只呈现这个人**实际拥有**的东西。
+ */
 const detailCards = computed<ModuleCard[]>(() =>
-  detail.value ? moduleCards(mergedMap(detail.value.roleIds)) : [],
+  detail.value
+    ? moduleCards(mergedMap(detail.value.roleIds)).filter((m) => m.rows.length > 0)
+    : [],
 );
 
 /** 确保这些职位的权限映射已在本地 */
@@ -267,51 +304,10 @@ watch(
   { immediate: true },
 );
 
-/* ============================================================
- * 「查看权限 / 编辑权限」→ 就地叠一层权限树弹窗（不跳页）
- * ============================================================ */
-
-const treeOpen = ref(false);
-const treeReadonly = ref(true);
-const treeRole = ref<DetailRole | null>(null);
-const treePerms = ref<RolePermMap>({});
-const treeLoading = ref(false);
-
-/** ⚠️ PermTreeDialog 内部是 el-dialog，`title` 按纯文本渲染（不走 v-html），别塞 HTML */
-const treeTitle = computed(() => {
-  const r = treeRole.value;
-  if (!r) return '配置权限';
-  return `${treeReadonly.value ? '查看权限' : '编辑权限'} · ${r.roleName}`;
-});
-
-async function openRolePerm(r: DetailRole, readonly: boolean): Promise<void> {
-  treeRole.value = r;
-  treeReadonly.value = readonly;
-  treePerms.value = {};
-  treeOpen.value = true;
-  treeLoading.value = true;
-  try {
-    const d = await assignApi.tree(r.id);
-    treePerms.value = d.perms || {};
-    if (!modules.value.length) modules.value = d.modules || [];
-  } catch {
-    /* 已提示 */
-  } finally {
-    treeLoading.value = false;
-  }
-}
-
-async function onTreeConfirm(perms: RolePermMap): Promise<void> {
-  const r = treeRole.value;
-  if (!r) return;
-  try {
-    const res = await assignApi.save(r.id, perms);
-    toast(`「${r.roleName}」权限已保存，共 ${res.permCount} 项`, 'ok');    rolePerms.value[r.id] = { ...perms }; // 让上层「有效权限明细」立刻跟着变
-    await loadDetail(props.userId);
-  } catch {
-    /* 已提示 */
-  }
-}
+/* ★ 2026-10-23 按用户要求：本组件内「查看权限 / 编辑权限」入口（连同就地叠的
+ *   PermTreeDialog 弹窗、openRolePerm / onTreeConfirm 及 tree* 状态）**全部删除**。
+ *   用户口径：账号详情里不要这两个操作，连「操作」这一整列都不要。
+ *   要看 / 改某职位权限，走「职位权限分配」页，不要在账号详情里再开一个口子。 */
 </script>
 
 <template>
@@ -344,7 +340,7 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
             <span v-if="detail.needChangePwd" class="tag w">需首次改密</span>
           </div>
           <div class="desc" style="margin-top: 3px">
-            {{ detail.deptName }} · {{ (detail.roleNames || []).join('、') || '无职位' }}
+            {{ deptLabel }} · {{ (detail.roleNames || []).join('、') || '无职位' }}
           </div>
         </div>
         <div style="text-align: right; flex: 0 0 auto">
@@ -368,9 +364,9 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
           </div>
         </div>
         <div class="f"><label>手机号</label><div class="num">{{ detail.phone }}</div></div>
-        <div class="f"><label>所属部门</label><div>{{ detail.deptName }}</div></div>
+        <div class="f"><label>所属部门</label><div>{{ deptLabel }}</div></div>
         <div class="f"><label>账号状态</label><div>{{ detail.userStatus }}</div></div>
-        <div class="f"><label>创建人</label><div>{{ detail.createBy || '—' }}</div></div>
+        <!-- ★ 2026-10-23 按用户要求删除「创建人」字段（原型遗留，业务上无用） -->
         <div class="f"><label>创建时间</label><div class="desc num">{{ detail.createTime }}</div></div>
         <div class="f"><label>最后登录</label><div class="desc num">{{ detail.lastLoginTime || '—' }}</div></div>
         <div class="f">
@@ -382,15 +378,15 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
       <!-- 所属职位 -->
       <div class="divider"></div>
       <div class="sec-t">
-        <span class="bar"></span>所属职位 <span class="desc">（可多职位，权限取并集；可就地查看 / 编辑该职位权限）</span>
+        <span class="bar"></span>所属职位 <span class="desc">（可多职位，权限取并集）</span>
       </div>
+      <!-- ★ 2026-10-23：「操作」整列删除（原「查看权限 / 编辑权限」） -->
       <table v-if="detailRoles.length" class="tb">
         <thead>
           <tr>
             <th>职位</th>
             <th>权限数</th>
             <th>状态</th>
-            <th>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -398,13 +394,16 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
             <td><b>{{ r.icon }} {{ r.roleName }}</b></td>
             <td class="num">{{ r.permCount }} 项</td>
             <td>
-              <span v-if="r.roleStatus === '启用'" class="tag g">启用</span>
-              <span v-else class="tag gy">停用</span>
-            </td>
-            <td>
-              <span class="lk" @click="openRolePerm(r, true)">查看权限</span>
-              <span class="sep">|</span>
-              <span class="lk" @click="openRolePerm(r, false)">编辑权限</span>
+              <!-- ★ 2026-10-25：账号已停用时按「有效状态」展示 —— 职位行统一「停用（账号已停用）」，
+                   不再原样摆职位自身的启用状态（账号停用后职位实际不可用） -->
+              <template v-if="accountDisabled">
+                <span class="tag gy">停用</span>
+                <div class="desc" style="font-size: 11px; margin-top: 2px">账号已停用</div>
+              </template>
+              <template v-else>
+                <span v-if="r.roleStatus === '启用'" class="tag g">启用</span>
+                <span v-else class="tag gy">停用</span>
+              </template>
             </td>
           </tr>
         </tbody>
@@ -415,6 +414,9 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
       <div class="divider"></div>
       <div class="sec-t"><span class="bar"></span>有效权限明细（合并结果）</div>
       <div v-if="permLoading || detailLoading" class="empty"><div class="ic">⏳</div>正在计算权限并集…</div>
+      <div v-else-if="!detailCards.length" class="notice d">
+        ✕<div>该账号所属职位还没有任何有效权限动作，请到「页面管理 → 职位」授权页面，再到「职位权限分配」勾动作。</div>
+      </div>
       <div
         v-else
         style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px"
@@ -455,15 +457,4 @@ async function onTreeConfirm(perms: RolePermMap): Promise<void> {
       <button class="btn pri" type="button" @click="visible = false">关闭</button>
     </template>
   </ProtoDialog>
-
-  <!-- ★ 叠在详情之上：查看 / 编辑某个职位的权限，不跳页 -->
-  <PermTreeDialog
-    v-model="treeOpen"
-    :title="treeTitle"
-    :modules="modules"
-    :perms="treePerms"
-    :readonly="treeReadonly"
-    :subtitle="treeRole ? treeRole.icon + ' ' + treeRole.roleName : ''"
-    @confirm="onTreeConfirm"
-  />
 </template>
