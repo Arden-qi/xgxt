@@ -39,6 +39,9 @@
  *     · 「催费 / 缴费」标题与菜单（「催费」）不一致 → 统一成「催费」。
  *   现在台账 = 菜单 = **5 板块 33 页**，两边逐条对得上。
  *
+ * ★ 2026-10-26 用户要求：教学域 fee 模块名称由「催费」改为「缴费」，
+ *   `domainConfig.ts` 的菜单名与这里的 `title` 同步改，页面管理列表才不会又出现两个名字。
+ *
  * ⚠️⚠️ 2026-10-22（第二次核对）用户又指出「系统设置」也不在图里，要求去掉：
  *     · 「系统设置 /class-jh/setting」（classjh:setting:view）→ 本次删掉。
  *   台账 = **5 板块 32 页**（教学管理 13 页）。
@@ -275,10 +278,10 @@ const TEACH: RegistryBoard = {
     },
     {
       key: 'fee',
-      title: '催费',
+      title: '缴费',
       path: '/teaching/fee',
       pageCodes: ['classjh:fee:view', 'class:urge:view', 'job:feeCall:view', 'edu:fee:view'],
-      remark: '各学段费用催办与缴费台账',
+      remark: '各部门缴费台账与费用催办',
     },
     {
       key: 'refund',
