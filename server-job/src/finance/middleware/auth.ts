@@ -206,6 +206,11 @@ const FIN_ROLE_OPERATIONS: Record<string, string[]> = {
     'finance:fee:add', 'finance:fee:verify', 'finance:fee:delete',
     'finance:refund:apply', 'finance:refund:pay',
     'finance:freeze:manage', 'finance:standard:manage',
+    // ★ 2026-10-26：费用标准页「催费设置」页签（提前天数 + 催费名单）
+    //   读、写各一个码，与权限树 finance||费用标准||查看催费名单 / 保存催费设置 对应。
+    //   写在静态表里的作用：**没被职位权限分配动过的**财务账号照旧可用（零影响），
+    //   一旦管理员在树里取消勾选，roleActionOverlay 会按权限树收口。
+    'finance:urge:view', 'finance:urge:manage',
     // 财务侧的学员档案维护（routes/student.route.ts 用的就是这三个码）
     'consult:student:add', 'consult:student:edit', 'consult:student:delete',
   ],

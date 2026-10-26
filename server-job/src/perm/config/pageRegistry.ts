@@ -173,7 +173,7 @@ const FINANCE: RegistryBoard = {
     { key: 'freeze', title: '冻结名单', path: '/finance/freeze', remark: '批量冻结 / 解冻' },
     { key: 'refund', title: '退费管理', path: '/finance/refund', remark: '退费审批与执行' },
     { key: 'bill', title: '账单明细', path: '/finance/bill', remark: '逐笔账单流水' },
-    { key: 'standard', title: '费用标准', path: '/finance/standard', remark: '各类型费用标准配置' },
+    { key: 'standard', title: '费用标准', path: '/finance/standard', remark: '各类型费用标准配置 · 催费设置（提前天数）' },
   ],
 };
 
