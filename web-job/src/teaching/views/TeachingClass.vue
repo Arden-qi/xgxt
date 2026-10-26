@@ -61,8 +61,18 @@
           <el-option v-for="s in stageOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
       </el-form-item>
-      <el-form-item v-if="phaseOptions.length" label="阶段">
-        <el-select v-model="query.phaseCode" clearable placeholder="全部" style="width: 140px">
+      <!-- ★ 2026-10-26 批注：「点击查询才可以查到，未点界面不动」
+           「阶段」原来用 v-if="phaseOptions.length" —— 选部门的那一刻它突然出现，
+           把「状态 / 关键字 / 查询」整排往右推，看着就是"闪一下"。
+           现在改成**恒定占位**：没选部门（没阶段可选项）时置灰禁用，行宽永远不变。 -->
+      <el-form-item label="阶段">
+        <el-select
+          v-model="query.phaseCode"
+          clearable
+          placeholder="全部"
+          style="width: 140px"
+          :disabled="!phaseOptions.length"
+        >
           <el-option v-for="p in phaseOptions" :key="p.value" :label="p.label" :value="p.value" />
         </el-select>
       </el-form-item>
