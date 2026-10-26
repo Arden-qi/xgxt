@@ -428,8 +428,10 @@
         ④ 学生改成**搜索框**（姓名/学号前后模糊），选项显示「姓名（学号）」区分重名；
            班级与学生联动：选了班级只搜这个班的学生；
         ⑤ 选学生后自动显示当前宿舍位置；
-        ⑥ 调换宿舍：先选类别（男寝/女寝）→ 楼栋 → 目标床位（下拉列出各宿舍空床位）；
-        ⑦ 日期自动取当天、只读；原因必填、≤100 字。
+        ⑥ 调换宿舍：★ 不再让用户选「类别」，改为按学生性别自动判定
+           （男生→男寝、女生→女寝）→ 楼栋 → 目标床位（下拉只列对应性别的空床位）；
+        ⑦ 退宿申请：学生下拉**只列该班「休学(6) / 退学(7)」的学生**；
+        ⑧ 日期自动取当天、只读；原因必填、≤100 字。
     -->
     <el-dialog v-model="changeVisible" title="发起调宿 / 退宿申请" width="680px" top="6vh">
       <el-form label-width="100px">
@@ -488,40 +490,54 @@
           <el-tag v-else type="info" size="small">该学生当前未入住宿舍</el-tag>
         </el-form-item>
 
-        <!-- 调换宿舍：类别 → 楼栋 → 空床位 -->
+        <!-- 调换宿舍：楼栋 → 宿舍号 → 床位号 三级联动（★ 类别已去掉，按学生性别自动判定：男→男寝 / 女→女寝） -->
         <template v-if="changeForm.bizType === 1">
-          <el-form-item label="类别" required>
-            <el-radio-group v-model="changeForm.category" @change="onChangeCategory">
-              <el-radio :value="1">男寝</el-radio>
-              <el-radio :value="2">女寝</el-radio>
-            </el-radio-group>
+          <el-form-item v-if="curStudent" label="目标宿舍类型">
+            <el-tag :type="changeForm.category === 2 ? 'danger' : 'primary'" size="small" effect="plain">
+              {{ changeForm.category === 2 ? '女寝' : '男寝' }}
+            </el-tag>
+            <el-text type="info" size="small" class="ml12">按学生性别自动判定，男生只能换到男寝、女生只能换到女寝</el-text>
           </el-form-item>
           <el-form-item label="楼栋" required>
             <el-select v-model="changeForm.building" placeholder="选择楼栋" style="width: 100%" @change="loadChangeRooms">
               <el-option v-for="b in changeBuildings" :key="b" :label="b" :value="b" />
             </el-select>
           </el-form-item>
-          <el-form-item label="目标床位" required>
+          <el-form-item label="宿舍号" required>
             <el-select
-              v-model="changeForm.targetBedId"
+              v-model="changeForm.targetRoomId"
               filterable
               :disabled="!changeForm.building"
-              :placeholder="changeForm.building ? '选择空余床位（宿舍 · 床位）' : '请先选择楼栋'"
+              :placeholder="changeForm.building ? '选择宿舍号' : '请先选择楼栋'"
               style="width: 100%"
               :loading="changeRoomsLoading"
             >
-              <el-option-group v-for="r in changeRoomsWithBeds" :key="r.roomId" :label="`${r.building} ${r.room}（余 ${r.remaining} 床）`">
-                <el-option
-                  v-for="b in r.freeBeds"
-                  :key="b.bedId"
-                  :label="`${r.building} ${r.room} · ${b.bedLabel}`"
-                  :value="b.bedId"
-                />
-              </el-option-group>
+              <el-option
+                v-for="r in changeRoomsWithBeds"
+                :key="r.roomId"
+                :label="`${r.room}（余 ${r.remaining} 床）`"
+                :value="r.roomId"
+              />
             </el-select>
-            <div v-if="changeForm.building && !changeRoomsWithBeds.length && !changeRoomsLoading" class="tdv-hint">
-              该楼栋暂无空余床位
+            <div v-if="changeForm.building && !changeRoomsLoading && !changeRoomsWithBeds.length" class="tdv-hint">
+              该楼栋暂无空余床位的宿舍
             </div>
+          </el-form-item>
+          <el-form-item label="床位号" required>
+            <el-select
+              v-model="changeForm.targetBedId"
+              filterable
+              :disabled="!changeForm.targetRoomId"
+              :placeholder="changeForm.targetRoomId ? '选择空余床位' : '请先选择宿舍号'"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="b in changeTargetRoomBeds"
+                :key="b.bedId"
+                :label="b.bedLabel"
+                :value="b.bedId"
+              />
+            </el-select>
           </el-form-item>
         </template>
 
@@ -1354,7 +1370,7 @@ const curStudent = ref<AllocateStudentRow | null>(null);
 const changeBuildings = ref<string[]>([]);
 const changeRooms = ref<AllocateRoomRow[]>([]);
 const changeRoomsLoading = ref(false);
-/** 只保留还有空床位的房间，下拉里按房间分组列床位 */
+/** 只保留还有空床位的房间（宿舍号下拉），选中后再列该宿舍的空床位 */
 const changeRoomsWithBeds = computed(() =>
   changeRooms.value.filter(
     (r) =>
@@ -1363,6 +1379,12 @@ const changeRoomsWithBeds = computed(() =>
       (!r.locked || r.assignedTo === curStudent.value?.className),
   ),
 );
+/** 当前选中的目标宿舍 */
+const changeTargetRoom = computed(() =>
+  changeRoomsWithBeds.value.find((r) => r.roomId === changeForm.targetRoomId),
+);
+/** 目标宿舍号下的空床位（床位号下拉） */
+const changeTargetRoomBeds = computed(() => changeTargetRoom.value?.freeBeds || []);
 
 /** 本地当天日期（不用 toISOString —— 那是 UTC，早上 8 点前会变成昨天） */
 function todayStr(): string {
@@ -1378,6 +1400,7 @@ const changeForm = reactive({
   studentId: '',
   category: 1,
   building: '',
+  targetRoomId: '',
   targetBedId: '',
   changeDate: todayStr(),
   changeReason: '',
@@ -1390,6 +1413,7 @@ function resetChangeForm() {
     studentId: '',
     category: 1,
     building: '',
+    targetRoomId: '',
     targetBedId: '',
     changeDate: todayStr(),
     changeReason: '',
@@ -1428,18 +1452,26 @@ async function openChange() {
 async function onChangeClass() {
   changeForm.studentId = '';
   curStudent.value = null;
+  changeForm.targetRoomId = '';
   changeForm.targetBedId = '';
   await searchChangeStudents('');
 }
 
-/** 学生搜索（远程）：空关键字 = 列出该班全部学生 */
+/** 学生搜索（远程）：空关键字 = 列出该班全部学生
+ *  ★ 退宿申请（bizType=2）只列「休学(6) / 退学(7)」的学生；调换宿舍（bizType=1）列全班 */
 async function searchChangeStudents(keyword: string) {
   studentLoading.value = true;
   try {
-    const list = await searchAllocateStudents({
+    const params: {
+      className?: string;
+      keyword?: string;
+      statuses?: number[];
+    } = {
       className: changeForm.className || undefined,
       keyword: keyword || undefined,
-    });
+    };
+    if (changeForm.bizType === 2) params.statuses = [6, 7];
+    const list = await searchAllocateStudents(params);
     // 保留当前已选学生，避免刷新候选后 el-select 把选中项显示成 id
     const cur = curStudent.value;
     changeStudents.value =
@@ -1455,6 +1487,7 @@ async function searchChangeStudents(keyword: string) {
 async function onChangeStudent(studentId: string) {
   const s = changeStudents.value.find((x) => x.studentId === studentId) || null;
   curStudent.value = s;
+  changeForm.targetRoomId = '';
   changeForm.targetBedId = '';
   if (s) {
     changeForm.category = s.gender === 2 ? 2 : 1;
@@ -1462,14 +1495,17 @@ async function onChangeStudent(studentId: string) {
   }
 }
 
-/** 切换类型：调宿时按学生性别预选类别；退宿不需要目标宿舍 */
+/** 切换类型：调宿时按学生性别预选类别；退宿不需要目标宿舍；并按类型重新过滤学生名单 */
 async function onChangeBizType() {
+  changeForm.studentId = '';
+  curStudent.value = null;
+  changeForm.targetRoomId = '';
   changeForm.targetBedId = '';
+  changeStudents.value = [];
+  // ★ 类型切换 → 重新拉学生（退宿只列休学/退学、调宿列全班）
+  await searchChangeStudents('');
   if (changeForm.bizType === 1) {
-    if (curStudent.value) {
-      changeForm.category = curStudent.value.gender === 2 ? 2 : 1;
-    }
-    // 没选学生时也要保证当前类别的楼栋已经加载出来
+    // 没选学生时按默认类别（男寝）加载楼栋；选学生后由 onChangeStudent 按性别自动切换
     await onChangeCategory();
   }
 }
@@ -1477,6 +1513,7 @@ async function onChangeBizType() {
 /** 类别变化 → 重拉该类别楼栋，清空楼栋 / 床位 */
 async function onChangeCategory() {
   changeForm.building = '';
+  changeForm.targetRoomId = '';
   changeForm.targetBedId = '';
   changeRooms.value = [];
   try {
@@ -1486,8 +1523,9 @@ async function onChangeCategory() {
   }
 }
 
-/** 楼栋变化 → 拉该楼栋的房间与空床位 */
+/** 楼栋变化 → 拉该楼栋的宿舍与空床位（宿舍号/床位号清空重选） */
 async function loadChangeRooms() {
+  changeForm.targetRoomId = '';
   changeForm.targetBedId = '';
   if (!changeForm.building) {
     changeRooms.value = [];
@@ -1529,14 +1567,16 @@ async function doCreateChange() {
       ElMessage.warning('请选择楼栋');
       return;
     }
-    if (!changeForm.targetBedId) {
-      ElMessage.warning('请选择目标床位');
+    if (!changeForm.targetRoomId) {
+      ElMessage.warning('请选择宿舍号');
       return;
     }
-    targetRoom = changeRooms.value.find((r) =>
-      r.freeBeds.some((b) => b.bedId === changeForm.targetBedId),
-    );
-    if (!targetRoom) {
+    if (!changeForm.targetBedId) {
+      ElMessage.warning('请选择床位号');
+      return;
+    }
+    targetRoom = changeTargetRoom.value;
+    if (!targetRoom || !targetRoom.freeBeds.some((b) => b.bedId === changeForm.targetBedId)) {
       ElMessage.warning('目标床位不存在或已被占用，请重新选择');
       return;
     }

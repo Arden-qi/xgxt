@@ -1863,6 +1863,23 @@ export interface DormBedRow {
   className: string | null;
 }
 
+/**
+ * ★ 2026-10-26：班级名下分派到的房间（含床位）
+ * 用于学生档案「新增学生」时的 楼栋号 → 宿舍号 → 床位号 三级联动。
+ */
+export interface DormClassRoomRow {
+  roomId: string;
+  /** 楼栋名（如「1号楼」）—— 联动第一级 */
+  building: string;
+  /** 房号（如「101」） */
+  room: string;
+  /** 宿舍编号「楼栋-房号」（如「1号楼-101」）—— 直接入库 dorm_no */
+  dormNo: string;
+  bedCount: number;
+  occupiedCount: number;
+  beds: DormBedRow[];
+}
+
 /** 在住学生行 */
 export interface DormResidentRow {
   /** 所属学段（合并视图里同一房间号可能来自不同学段，前端要靠它区分） */

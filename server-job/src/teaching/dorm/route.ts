@@ -193,6 +193,25 @@ teachingDormRouter.get(
   }),
 );
 
+/**
+ * 4.3 班级名下的宿舍（★ 2026-10-26：学生档案新增学生时联动选择用）
+ *
+ *   楼栋号 → 宿舍号 → 床位号 三级联动的数据源：按班级的分派关系取房间，
+ *   每间房附床位（含占用者），前端把占用床禁选。
+ *   班主任只能查自己带的班（数据范围在 service 里校验）。
+ */
+teachingDormRouter.get(
+  '/class-rooms',
+  wrap(async (req, res) => {
+    res.json(
+      ok(
+        await svc.listClassRooms(optStage(req.query.stage), str(req.query.className) || '', req.user),
+        '查询成功',
+      ),
+    );
+  }),
+);
+
 /** 5. 楼栋下拉 */
 teachingDormRouter.get(
   '/buildings',

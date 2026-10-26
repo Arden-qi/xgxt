@@ -345,11 +345,16 @@ async function run() {
       row.edu_stage = t.stage;
       /* ③ 补阶段码：老表 stage → 统一表 stage_code（切读层显式不做这件事） */
       if (uniCols.has('stage_code')) row.stage_code = (old as any).stage ?? null;
-      /* ④ 补统一表专有列（如 t_uni_dorm_bed.room_id，见 EXTRA_COLS 注释） */
+      /* ④ 补统一表专有列（如 t_uni_dorm_bed.room_id，见 EXTRA_COLS 注释）
+       *   ★ 2026-10-26 修正：仅当目标列「尚未有非空值」时才补。
+       *   反例：jh 的 `t_class_bed` 源表**自带** room_id/room_no 真实值（如 JHROOM-1 / 2-01），
+       *   而 EXTRA_COLS 用 `old.dorm_id ?? ''` 会把它俩**覆盖成空串**，
+       *   导致所有 jh 床位 room_id=''、bed_no 跨房间重复 → 撞 uk_dorm_bed（整批 16 行失败）。
+       *   源表没有 dorm_id 列时 old.dorm_id 为 undefined → 仍走原逻辑补值，job 床位不受影响。 */
       const extra = EXTRA_COLS[t.uni];
       if (extra) {
         for (const [k, v] of Object.entries(extra(old))) {
-          if (uniCols.has(k)) row[k] = v;
+          if (uniCols.has(k) && (row[k] === undefined || row[k] === null || row[k] === '')) row[k] = v;
         }
       }
       /* ④-b 实训出勤明细：attendance_id 指向当天汇总行（见上方 sumIdByClassDate 说明） */

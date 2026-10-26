@@ -27,6 +27,7 @@ import type {
   DormAssignBody,
   DormChangeCreateBody,
   DormChangeRow,
+  DormClassRoomRow,
   DormListQuery,
   DormResidentRow,
   DormRow,
@@ -35,6 +36,7 @@ import type {
   DormSummary,
   TeachingStage,
 } from '../shared/dto';
+import { resolveMyClasses } from './myClasses';
 import { TEACHING_STAGES, TEACHING_STAGE_NAME, DORM_CATEGORY_NAME } from '../shared/dto';
 import {
   DORM_BED_PER_ROOM_DEFAULT,
@@ -415,6 +417,44 @@ export async function listCheckinClasses(
     out.push(r);
   }
   return out;
+}
+
+/**
+ * ★ 2026-10-26：班级名下的宿舍（学生档案新增学生时「楼栋→宿舍→床位」三级联动）
+ *
+ * 按 `t_edu_dorm_assignment` 的分派关系取房间，每间房带床位（含占用者）。
+ * 数据范围：班主任/教员/助教只能查自己带的班；教务/校长/学管/管理员不限制。
+ */
+export async function listClassRooms(
+  stage: TeachingStage | undefined,
+  className: string,
+  user: any,
+): Promise<{ buildings: string[]; rooms: DormClassRoomRow[] }> {
+  const name = (className || '').trim();
+  if (!name) return { buildings: [], rooms: [] };
+  const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
+  if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有宿舍管理的访问权限');
+  if (stage) await assertStageView(user, stage);
+
+  // 班主任只能查自己名下的班级（跨学段查，班主任可能带别学段的班）
+  const mine = await resolveMyClasses(user);
+  if (!mine.privileged && !mine.names.includes(name) && !mine.ids.includes(name)) {
+    throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只能选择自己班级名下的宿舍');
+  }
+
+  const parts = await Promise.all(stages.map((s) => REPOS[s].classRooms(name)));
+  const seen = new Set<string>();
+  const rooms: DormClassRoomRow[] = [];
+  for (const r of parts.flat()) {
+    if (seen.has(r.roomId)) continue;
+    seen.add(r.roomId);
+    rooms.push(r);
+  }
+  const buildings: string[] = [];
+  for (const r of rooms) {
+    if (r.building && !buildings.includes(r.building)) buildings.push(r.building);
+  }
+  return { buildings, rooms };
 }
 
 /** 楼栋下拉（合并三学段，同名去重 —— 楼栋名只是个标签，不是实体） */
