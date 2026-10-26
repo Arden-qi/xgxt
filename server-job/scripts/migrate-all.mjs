@@ -72,6 +72,13 @@ const ORDER = [
 const POST_STEPS = [
   ['scripts/fix-consult-columns.mjs', '咨询表补列', 'sms_consult'],
   ['scripts/_migrate-finance-refund-20261022.mjs', '财务退费结构', 'sms_finance', ['--apply']],
+  /*
+   * ★ 2026-10-26：教学域「催费」→「缴费」改名。
+   *   只改代码不改权限库 → 页面名与 t_perm_menu.item_name 对不上，
+   *   非管理员账号的 rolePageDefaults 推导不出 /teaching/fee，侧栏整块消失。
+   *   脚本幂等；已经改过 / 新库（导入的 sms_perm.sql 已是新名字）都会秒过。
+   */
+  ['scripts/fix-teach-fee-item-name.mjs', '教学缴费改名', 'sms_perm'],
 ];
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));

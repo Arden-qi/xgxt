@@ -15,6 +15,7 @@
     "migrate:class-jh": "knex migrate:latest --env class-jh",
     "migrate:consult": "node scripts/fix-consult-columns.mjs",
     "fix:consult": "node scripts/fix-consult-columns.mjs",
+    "fix:fee-name": "node scripts/fix-teach-fee-item-name.mjs",
     "db:check": "node scripts/db-check.mjs",
     "db:regen-perm": "node scripts/regen-init-perm.cjs",
     "db:verify-init": "node scripts/verify-init-sql.cjs",
