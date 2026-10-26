@@ -10,6 +10,10 @@ import { requirePerm } from '../../lib/permGuard';
 import { rowsToCamel } from '../../lib/case';
 import { now, today } from '../../lib/ids';
 import { FeeTypeName, PayStatusName } from '../../lib/dict';
+// ★ 2026-10-26 催费名单数据源改为「财务账单到期日」
+import { listUrgeByExpire, getUrgeAheadDays } from '../../../finance/services/urge.service';
+// ★ 2026-10-26 其余字段以学生档案为准
+import { lookupStudentArchive } from '../../../teaching/shared/studentArchive';
 import { applySyncScope } from '../shared/syncScope';
 import { resolveSyncStudentId } from '../shared/studentRef';
 import { wrap } from '../../middleware/error';
@@ -248,70 +252,99 @@ urgeRouter.get(
     const query = q<z.infer<typeof urgeListSchema>>(req);
     const t = today();
 
-    const base = SYNC();
-    notDeleted(base);
-    await applySyncScope(base, user);
-    if (query.classId) base.where('class_id', query.classId);
-    if (query.feeType) base.where('fee_type', query.feeType);
-    // ★ 2026-10-20：缴费状态按「展示口径」筛。
-    //   财务侧不写 4（逾期只存在于列注释里），过了到期日的行库里还是「待缴」，
-    //   所以「逾期」= 库里就是 4，或者「待缴 + 已过到期日」；「待缴」则要排掉已过期的。
-    if (query.payStatus === PayStatus.OVERDUE) {
-      base.where(function (this: Knex.QueryBuilder) {
-        this.where('pay_status', PayStatus.OVERDUE).orWhere(function (this: Knex.QueryBuilder) {
-          this.where('pay_status', PayStatus.UNPAID).andWhere('expire_date', '<', t);
-        });
-      });
-    } else if (query.payStatus === PayStatus.UNPAID) {
-      base.where('pay_status', PayStatus.UNPAID).andWhere('expire_date', '>=', t);
-    } else if (query.payStatus) {
-      base.where('pay_status', query.payStatus);
-    }
-    if (query.startDate) base.where('expire_date', '>=', query.startDate);
-    if (query.endDate) base.where('expire_date', '<=', query.endDate);
-    // 仅看紧急（= 未结清 且 已过应缴日）
-    // ★ 2026-10-25：原来是 `whereNot(pay_status, PAID)`，把「已核对(3)」「核对失败(6)」
-    //   也算进紧急了 —— 钱都交过了不该催。改成与就业 `feeCall.route.ts` 同口径的白名单。
-    if (query.onlyOverdue) {
-      base
-        .whereIn('pay_status', [PayStatus.UNPAID, PayStatus.OVERDUE])
-        .andWhere('expire_date', '<', t);
-    }
-    if (query.keyword) {
-      const k = query.keyword;
-      base.where(function (this: Knex.QueryBuilder) {
-        this.where('student_no', 'like', `%${k}%`).orWhere('student_name', 'like', `%${k}%`);
-      });
-    }
-    base.orderBy('expire_date', 'asc');
-
-    const paged = await paginate(base, query, async (qb) => {
-      const rows = (await qb) as Array<Record<string, unknown>>;
-      return rows.map((r) => {
-        const c = rowsToCamel<Record<string, unknown>>([r])[0];
-        const expire = r.expire_date as string;
-        const rawPayStatus = Number(r.pay_status ?? 0);
-        const paid = rawPayStatus === PayStatus.PAID;
-        const overdueDays = paid ? 0 : daysBetween(expire, t);
-        // ★ 2026-10-20：逾期按到期日派生（库里可能还写着「待缴」）
-        const payStatus =
-          rawPayStatus === PayStatus.UNPAID && overdueDays > 0 ? PayStatus.OVERDUE : rawPayStatus;
-        const amount = Number(r.amount ?? 0);
-        return {
-          ...c,
-          feeTypeName: FeeTypeName[r.fee_type as number] ?? '未知',
-          payStatus,
-          payStatusName: PayStatusName[payStatus] ?? '未知',
-          amountYuan: (amount / 100).toFixed(2),
-          overdueDays,
-          isOverdue: overdueDays > 0,
-          // ★ 2026-10-21：登记缴费五列（与初高 t_class_fee 同口径），大学行也能显示实缴/方式/日期/凭证
-          payMethodName: r.pay_method != null ? PAY_METHOD_NAME[Number(r.pay_method)] ?? '' : '',
-        };
-      });
+    /**
+     * ★ 2026-10-26 用户口径：大学部催费名单也改为**以财务账单到期日为准**
+     *   （与初高同一套：只催餐费/住宿费/保险费，提前 N 天，N 在财务费用标准页配置）
+     */
+    const aheadDays = await getUrgeAheadDays();
+    // ★ 2026-10-26 必须按部门过滤，否则三个部门页签会看到同一批人
+    const fin = await listUrgeByExpire(aheadDays, {
+      keyword: query.keyword,
+      feeType: query.feeType,
+      deptCode: 2, // 大学部
     });
 
-    return ok(res, pageData(paged.total, paged.page, paged.size, paged.list), '查询成功');
+    // 匹配本地催缴副本行（执行催收 / 登记缴费要拿行 id）
+    const stuIds = [...new Set(fin.rows.map((r) => r.studentId))].filter(Boolean);
+    const syncMap = new Map<string, any>();
+    if (stuIds.length) {
+      const rows = (await notDeleted(SYNC()).whereIn('student_id', stuIds).select('*')) as any[];
+      for (const r of rows) syncMap.set(`${r.student_id}::${r.fee_type}`, r);
+    }
+
+    let list = fin.rows.map((r) => {
+      const local = syncMap.get(`${r.studentId}::${r.feeType}`);
+      const payStatus = r.remainDays < 0 ? PayStatus.OVERDUE : PayStatus.UNPAID;
+      const amount = Number(local?.amount ?? r.suggestAmount ?? 0);
+      return {
+        // 有本地副本就用它的 id（催收/登记能落库），没有就合成一个只读 id
+        id: local?.id ?? `fin-${r.studentId}-${r.feeType}`,
+        studentId: r.studentId,
+        studentNo: r.studentNo,
+        studentName: r.studentName,
+        classId: r.classId ?? null,
+        className: r.className ?? null,
+        feeType: r.feeType,
+        feeTypeName: FeeTypeName[r.feeType] ?? '未知',
+        amount,
+        amountYuan: (amount / 100).toFixed(2),
+        payStatus,
+        payStatusName: PayStatusName[payStatus] ?? '未知',
+        expireDate: r.expireDate,
+        remainDays: r.remainDays,
+        overdueDays: r.remainDays < 0 ? -r.remainDays : 0,
+        isOverdue: r.remainDays < 0,
+        payMethod: local?.pay_method ?? null,
+        payMethodName:
+          local?.pay_method != null ? PAY_METHOD_NAME[Number(local.pay_method)] ?? '' : '',
+        paidAmount: local?.paid_amount ?? null,
+        payDate: local?.pay_date ?? null,
+        voucherUrl: local?.voucher_url ?? null,
+        urgeCount: Number(local?.urge_count ?? 0),
+      };
+    });
+
+    /**
+     * ★ 2026-10-26 用户口径：催费行里除「费用信息」外的字段，一律以**学生档案**为准
+     *   （姓名/学号/班级/部门/手机号/家长手机号/班主任）。
+     *   财务账单上的这些是建单快照，学生换班改号后不会更新。
+     */
+    const arch = await lookupStudentArchive(list.map((x: any) => x.studentId));
+    list = list.map((x: any) => {
+      const a = arch[x.studentId];
+      if (!a) return x;
+      return {
+        ...x,
+        studentNo: a.studentNo || x.studentNo,
+        studentName: a.studentName || x.studentName,
+        classId: a.classId ?? x.classId,
+        className: a.className ?? x.className,
+        deptCode: a.deptCode ?? x.deptCode,
+        phone: a.phone,
+        parentPhone: a.parentPhone,
+        headTeacherName: a.headTeacherName,
+      };
+    });
+
+    // ---- 与原来同口径的筛选（状态/日期/仅看紧急/班级）----
+    if (query.classId) list = list.filter((x) => x.classId === query.classId);
+    if (query.payStatus) list = list.filter((x) => x.payStatus === query.payStatus);
+    const sd = query.startDate;
+    const ed = query.endDate;
+    if (sd) list = list.filter((x) => x.expireDate >= sd);
+    if (ed) list = list.filter((x) => x.expireDate <= ed);
+    if (query.onlyOverdue) list = list.filter((x) => x.remainDays < 0);
+
+    const total = list.length;
+    const pageNo = Number(query.page || 1);
+    const size = Number(query.size || 20);
+    const paged = list.slice((pageNo - 1) * size, pageNo * size);
+
+    return ok(
+      res,
+      pageData(total, pageNo, size, paged),
+      `查询成功（按财务账单到期日，提前 ${aheadDays} 天）`,
+    );
   }),
 );
 
@@ -524,9 +557,21 @@ urgeRouter.post(
      * 「只读副本」的边界仍然守：**只推这一张单的收款事实，不改财务的任何其它状态（3 已核对必须财务自己写）**。
      */
     const srcRow = rec as Record<string, any>;
-    if (srcRow.source_system === 'finance' && srcRow.source_id) {
+    /**
+     * ★ 2026-10-25 修：财务单定位改以 `finance_fee_id` 为准（老口径兜底）。
+     *
+     *   10-23 的 ID 统一之后，新单据只写 `finance_fee_id`，`source_id` 恒为空；
+     *   而这里原来判的是 `source_system === 'finance' && source_id`、
+     *   并且用 `source_id` 当财务单号 → **条件永远不成立、同步从未执行**，
+     *   表现就是「登记缴费后催费变已缴、财务单还是待缴，财务点不动核对」。
+     *   与文件里判重/口径统一（finance_fee_id 为准）保持一致。
+     */
+    const financeFeeId =
+      String(srcRow.finance_fee_id ?? '').trim() ||
+      (srcRow.source_system === 'finance' && srcRow.source_id ? String(srcRow.source_id) : '');
+    if (financeFeeId) {
       await pushVoucherToFinance({
-        financeFeeId: String(srcRow.source_id),
+        financeFeeId,
         voucherUrl: voucherUrl ?? null,
         payDate: b.payDate,
         remark: b.remark ?? null,

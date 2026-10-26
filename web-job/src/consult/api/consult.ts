@@ -51,6 +51,8 @@ import type {
   ConsultInstallmentCreatePayload,
   ConsultInstallmentPayPayload,
   ConsultStudentLedger,
+  // ★ 2026-10-26 招生老师候选（新建学生 · 市场来源）
+  ConsultRecruitTeacher,
 } from 'shared-types/consult';
 
 /* ============================================================
@@ -197,6 +199,16 @@ export function recordLoss(payload: RecordLossPayload): Promise<null> {
 /** 咨询师选项（分配用） */
 export function fetchConsultants(): Promise<Array<{ id: string; name: string; title: string }>> {
   return http.get('/api/consult/student/consultants');
+}
+
+/**
+ * ★ 2026-10-26 招生老师候选（新建学生 · 来源=「市场来源」时的下拉）
+ *
+ * 用户口径：「选了市场来源之后选择招生老师，手机号是一起的」
+ *   → 选项来自系统真实账号，phone 随人带出（选中即回填手机号）。
+ */
+export function fetchRecruitTeachers(): Promise<ConsultRecruitTeacher[]> {
+  return http.get<ConsultRecruitTeacher[]>('/api/consult/student/recruiters');
 }
 
 /**
@@ -518,10 +530,12 @@ export function fetchRefundPrefill(
     incomeAmount: number;
     trialStart?: string;
     /**
-     * ★ 2026-10-22 试学期间最早可选日（= 进班试学日 `trial_start`）
-     * null / 没有值时表示该生没有进班记录，前端不设下限
+     * ★ 2026-10-22 / 2026-10-23 试学期间最早可选日
+     * 取值链：trial_start（进班日）→ 入班历史日 → 建档日，正常一定有值
      */
     earliestTrialStart?: string | null;
+    /** 最早可选日的来源，前端据此写提示文案 */
+    earliestSource?: 'TRIAL_START' | 'CLASS_HISTORY' | 'CREATE_TIME';
   }
 > {
   return http.get('/api/consult/refund/prefill', { consultStudentId });

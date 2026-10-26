@@ -160,6 +160,8 @@ try {
 
 /** 表名 → 所在库列表 */
 const tableToDbs = new Map();
+/** 某库是否有某表 */
+const tableIn = (schema, t) => (tableToDbs.get(t) || []).includes(schema);
 {
   const [rows] = await conn.query('select table_schema, table_name from information_schema.tables');
   for (const r of rows) {
@@ -167,6 +169,47 @@ const tableToDbs = new Map();
     if (!tableToDbs.has(t)) tableToDbs.set(t, []);
     tableToDbs.get(t).push(r.TABLE_SCHEMA);
   }
+}
+
+/**
+ * ★ 2026-10-26：识别「已归一」的历史表名，别再报成缺表。
+ *
+ *   背景：一键启动会跑本脚本做自检。统一表归一（P8）之后，
+ *   初高/大学/就业那批老表（t_class_refund、t_class_room、t_job_approval …）
+ *   在库里**已经 DROP**，但代码里仍保留它们的字面量（tbl() 会按 UNI_MAP 改写成 t_uni_*）。
+ *   本脚本只比「代码里的表名字面量 vs 库」，不知道映射 →
+ *   每次启动都刷一屏「❌ 缺表」，实际功能全正常（走的是统一表）。
+ *
+ *   口径：只要该老表在 UNI_MAP 里有映射、且映射到的统一表在库里存在，
+ *   就判为「已归一（走统一表）」，不计入问题；统一表也缺才是真缺表。
+ */
+const UNI_MAP = (() => {
+  const map = new Map(); // 老表基础名 -> 统一表集合
+  try {
+    const src = fs.readFileSync(path.join(SERVER_ROOT, 'src/teaching/shared/uniTable.ts'), 'utf8');
+    for (const m of src.matchAll(/'([a-z0-9_]+)\.([a-z0-9_]+)'\s*:\s*'([a-z0-9_]+)'/g)) {
+      const base = m[2];
+      const uni = m[3];
+      if (!/^t_/.test(base) || !/^t_/.test(uni)) continue;
+      if (!map.has(base)) map.set(base, new Set());
+      map.get(base).add(uni);
+    }
+  } catch {
+    /* 读不到映射表就退回原口径（照常报缺表） */
+  }
+  return map;
+})();
+
+/** 统一表开关关掉时不做"已归一"豁免（那时老表是真要用的） */
+const UNI_MODE = String(env.TEACHING_UNI_TABLE ?? '1') !== '0';
+
+/** 该老表是否「已归一且统一表存在」→ 可以跳过 */
+function normalizedTo(t) {
+  if (!UNI_MODE) return null;
+  const unis = UNI_MAP.get(t);
+  if (!unis) return null;
+  const alive = [...unis].filter((u) => tableToDbs.has(u));
+  return alive.length ? alive : null;
 }
 
 const problems = [];
@@ -183,12 +226,50 @@ if (!ONLY_INIT) {
       refs.get(t).add(path.relative(SERVER_ROOT, f));
     }
   }
-  const missing = [...refs.keys()].filter((t) => !tableToDbs.has(t)).sort();
-  lines.push(`代码引用表名：${refs.size} 个；库里找不到：${missing.length} 个`);
+  const absent = [...refs.keys()].filter((t) => !tableToDbs.has(t)).sort();
+  const normalized = absent.filter((t) => normalizedTo(t));
+  const missing = absent.filter((t) => !normalizedTo(t));
+  lines.push(
+    `代码引用表名：${refs.size} 个；库里找不到：${absent.length} 个` +
+      (normalized.length ? `（其中 ${normalized.length} 个已归一到统一表，不计问题）` : ''),
+  );
+  for (const t of normalized) {
+    lines.push(`  ℹ️ 已归一 ${t} → ${normalizedTo(t).join('/')}（老表已 DROP，代码走统一表）`);
+  }
   for (const t of missing) {
     const where = [...refs.get(t)].slice(0, 3).join('、') + (refs.get(t).size > 3 ? ' …' : '');
     lines.push(`  ❌ 缺表 ${t}   ← ${where}`);
     problems.push(`缺表 ${t}`);
+  }
+}
+
+/**
+ * ★ 2026-10-26 补：带库名的引用（'sms_edu.t_edu_dorm_assignment' 这种）原来根本没检查 ——
+ *   裸表名正则要求引号紧跟表名，写成 `schema.table` 就漏掉了。
+ *   这里按「指定库是否存在这张表 / 是否已归一」判断，属于**补盲区**，正常不产生噪声。
+ */
+if (!ONLY_INIT) {
+  const qualRefs = new Map(); // schema.table -> 文件集合
+  for (const f of walk(SRC_DIR)) {
+    const code = stripComments(fs.readFileSync(f, 'utf8'));
+    for (const m of code.matchAll(/['"`]([a-z0-9_]+)\.(t_[a-z0-9_]+)['"`]/g)) {
+      const k = `${m[1]}.${m[2]}`;
+      if (!qualRefs.has(k)) qualRefs.set(k, new Set());
+      qualRefs.get(k).add(path.relative(SERVER_ROOT, f));
+    }
+  }
+  const bad = [];
+  for (const [k] of qualRefs) {
+    const [sch, t] = k.split('.');
+    if (tableIn(sch, t)) continue;
+    if (normalizedTo(t)) continue;      // 老表已归一，运行期会改写
+    if (tableToDbs.has(t)) continue;    // 别的库有同名表（历史写法，能跑）
+    bad.push(k);
+  }
+  lines.push(`带库名引用：${qualRefs.size} 个；其中指向不存在的 ${bad.length} 个`);
+  for (const k of bad.sort()) {
+    lines.push(`  ❌ 缺表 ${k}   ← ${[...qualRefs.get(k)].slice(0, 3).join('、')}`);
+    problems.push(`缺表 ${k}`);
   }
 }
 
@@ -211,7 +292,11 @@ if (!ONLY_CODE) {
     const [rows] = await conn.query('select table_name from information_schema.tables where table_schema=?', [db]);
     for (const r of rows) actual.add(r.TABLE_NAME);
 
-    const missing = created.filter((t) => !actual.has(t));
+    /* ★ 2026-10-26：init SQL 里仍会建那批老表（给老环境用），
+       统一表模式下库里没有它们属于正常 → 不计「库里缺」。 */
+    const missingRaw = created.filter((t) => !actual.has(t));
+    const missing = missingRaw.filter((t) => !normalizedTo(t));
+    const normalizedGap = missingRaw.filter((t) => normalizedTo(t));
     const extra = [...actual].filter((t) => !created.includes(t));
     /* ★ 2026-10-23：除了表，**列**也要比 —— 这次的事故就是「表在、列缺」，
      *   只比表名完全查不出来（t_class_stage_scheme_stage 少 stage_code）。 */
@@ -232,6 +317,9 @@ if (!ONLY_CODE) {
     if (missing.length) {
       lines.push(`     库里缺（${missing.length}）：${missing.join('、')}`);
       problems.push(`${db} 缺 ${missing.length} 张`);
+    }
+    if (normalizedGap.length) {
+      lines.push(`     （另有 ${normalizedGap.length} 张老表已归一到统一表，库里没有属正常）`);
     }
     if (extra.length) lines.push(`     库里多（${extra.length}）：${extra.join('、')}`);
   }

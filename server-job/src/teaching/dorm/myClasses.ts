@@ -131,3 +131,77 @@ export async function resolveMyClasses(user: any): Promise<MyClassInfo> {
 
   return { privileged: false, names: [...names], ids: [...ids] };
 }
+
+/**
+ * ★ 2026-10-25：「教务分配给班主任的楼栋」。
+ *
+ * 用户口径：班主任登录后，宿舍页的**楼栋下拉**只应出现教务分派给本班的楼栋，
+ * 而不是全部楼栋（原来下拉是全量，班主任能看到别人班/女寝的楼）。
+ *
+ * 判定：
+ *   · 校长 / 教务 / 学管 / 管理员（privileged）→ 返回 null（不限制，仍看全部）；
+ *   · 班主任 → 按 `sms_edu.t_edu_dorm_assignment` 里**本班**分派到的房间，
+ *     反查房间的 building 去重；
+ *   · 本班尚无分派记录时，回退到「本班在读学生已入住的楼栋」——
+ *     否则下拉会完全空白，连自己学生住的楼都筛不到。
+ *
+ * 返回：null = 不限制；[] = 确实没有任何可分派的楼栋。
+ */
+export async function scopedBuildingNames(user?: any): Promise<string[] | null> {
+  if (!user) return null;
+  const mine = await resolveMyClasses(user);
+  if (mine.privileged) return null;
+
+  const ASSIGN = 'sms_edu.t_edu_dorm_assignment';
+  const ROOM = 'sms_common.t_uni_dorm_room';
+  const STUDENT = 'sms_common.t_uni_student';
+  const names = new Set<string>();
+
+  /* ① 本班分派到的房间 → 楼栋 */
+  if (mine.names.length) {
+    try {
+      const assigned = (await db(ASSIGN)
+        .whereIn('class_name', mine.names)
+        .where({ is_deleted: false })
+        .distinct('room_id')) as any[];
+      const roomIds = assigned.map((a) => str(a.room_id)).filter(Boolean);
+      if (roomIds.length) {
+        const rooms = (await db(ROOM)
+          .whereIn('id', roomIds)
+          .where({ is_deleted: false })
+          .distinct('building')) as any[];
+        for (const r of rooms) if (str(r.building)) names.add(str(r.building));
+      }
+    } catch {
+      /* 分派表不可用 → 走下面的兜底 */
+    }
+  }
+
+  /* ② 兜底：本班在读学生已入住的楼栋 */
+  if (!names.size) {
+    try {
+      const rows = (await db(STUDENT)
+        .where({ is_deleted: false })
+        .whereIn('student_status', [3, 5, 8])
+        .whereNotNull('dorm_id')
+        .andWhere('dorm_id', '<>', '')
+        .andWhere((w: any) => {
+          if (mine.ids.length) w.orWhereIn('class_id', mine.ids);
+          if (mine.names.length) w.orWhereIn('class_name', mine.names);
+        })
+        .distinct('dorm_id')) as any[];
+      const ids = rows.map((r) => str(r.dorm_id)).filter(Boolean);
+      if (ids.length) {
+        const rooms = (await db(ROOM)
+          .whereIn('id', ids)
+          .where({ is_deleted: false })
+          .distinct('building')) as any[];
+        for (const r of rooms) if (str(r.building)) names.add(str(r.building));
+      }
+    } catch {
+      /* 查询失败 → 返回空集合（宁可少给，不给越权数据） */
+    }
+  }
+
+  return [...names];
+}

@@ -18,6 +18,8 @@
  *   jh classjh:dorm:view / class class:dorm:view / job job:dorm:view
  */
 
+import { scopedBuildingNames } from './myClasses';
+import { listBuildings as listBuildingDict } from './building.service';
 import { BizCode, hasRole, RoleCode } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { makeRepo } from './repo.uni';
@@ -25,6 +27,7 @@ import type {
   DormAssignBody,
   DormChangeCreateBody,
   DormChangeRow,
+  DormClassRoomRow,
   DormListQuery,
   DormResidentRow,
   DormRow,
@@ -33,6 +36,7 @@ import type {
   DormSummary,
   TeachingStage,
 } from '../shared/dto';
+import { resolveMyClasses } from './myClasses';
 import { TEACHING_STAGES, TEACHING_STAGE_NAME, DORM_CATEGORY_NAME } from '../shared/dto';
 import {
   DORM_BED_PER_ROOM_DEFAULT,
@@ -415,10 +419,49 @@ export async function listCheckinClasses(
   return out;
 }
 
+/**
+ * ★ 2026-10-26：班级名下的宿舍（学生档案新增学生时「楼栋→宿舍→床位」三级联动）
+ *
+ * 按 `t_edu_dorm_assignment` 的分派关系取房间，每间房带床位（含占用者）。
+ * 数据范围：班主任/教员/助教只能查自己带的班；教务/校长/学管/管理员不限制。
+ */
+export async function listClassRooms(
+  stage: TeachingStage | undefined,
+  className: string,
+  user: any,
+): Promise<{ buildings: string[]; rooms: DormClassRoomRow[] }> {
+  const name = (className || '').trim();
+  if (!name) return { buildings: [], rooms: [] };
+  const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
+  if (!stages.length) throw new BizError(BizCode.NO_OPERATION_PERMISSION, '没有宿舍管理的访问权限');
+  if (stage) await assertStageView(user, stage);
+
+  // 班主任只能查自己名下的班级（跨学段查，班主任可能带别学段的班）
+  const mine = await resolveMyClasses(user);
+  if (!mine.privileged && !mine.names.includes(name) && !mine.ids.includes(name)) {
+    throw new BizError(BizCode.NO_OPERATION_PERMISSION, '只能选择自己班级名下的宿舍');
+  }
+
+  const parts = await Promise.all(stages.map((s) => REPOS[s].classRooms(name)));
+  const seen = new Set<string>();
+  const rooms: DormClassRoomRow[] = [];
+  for (const r of parts.flat()) {
+    if (seen.has(r.roomId)) continue;
+    seen.add(r.roomId);
+    rooms.push(r);
+  }
+  const buildings: string[] = [];
+  for (const r of rooms) {
+    if (r.building && !buildings.includes(r.building)) buildings.push(r.building);
+  }
+  return { buildings, rooms };
+}
+
 /** 楼栋下拉（合并三学段，同名去重 —— 楼栋名只是个标签，不是实体） */
 export async function listBuildings(
   stage: TeachingStage | undefined,
   user: any,
+  dormType?: number,
 ): Promise<Array<{ value: string; label: string }>> {
   const stages: TeachingStage[] = stage ? [stage] : await visibleStages(user);
   if (!stages.length) return [];
@@ -433,7 +476,38 @@ export async function listBuildings(
       out.push(b);
     }
   }
-  return out;
+
+  /**
+   * ★ 2026-10-25 修：楼栋下拉要跟着「类别（男寝/女寝）」过滤。
+   *
+   *   用户实测：班主任选「男寝」后，楼栋下拉里仍出现 5 号楼（女寝），
+   *   因为这里原来只按学段取楼栋，完全没看类别。
+   *   口径：类别在「系统设置 → 楼栋设置」的 t_dorm_building.category（1 男 / 2 女）；
+   *   该楼栋**没维护类别**（null/0）时保留 —— 不能因为没配置就把楼藏起来。
+   */
+  /**
+   * ★ 2026-10-25：班主任只看「教务分派给本班」的楼栋。
+   *   原来是全量楼栋，班主任能看到别班/女寝的楼（用户口径：下拉只出现分派给我的楼）。
+   *   教务/校长/学管/管理员（privileged）不受限制。
+   */
+  const scope = await scopedBuildingNames(user);
+  const filteredByScope = scope === null ? out : out.filter((b) => scope.includes(b.value));
+
+  if (!dormType) return filteredByScope;
+  try {
+    const dict = await listBuildingDict();
+    const catOf = new Map<string, number>();
+    for (const b of dict) {
+      if (b.category === null || b.category === undefined) continue;
+      catOf.set(b.buildingName, Number(b.category));
+    }
+    return filteredByScope.filter((b) => {
+      const c = catOf.get(b.value);
+      return c === undefined || c === 0 || c === Number(dormType);
+    });
+  } catch {
+    return filteredByScope;
+  }
 }
 
 /** 元信息：只返回当前用户可见的学段 */

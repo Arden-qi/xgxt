@@ -251,3 +251,43 @@ export function fetchStandardAmount(
 ): Promise<FeeStandardGetResult> {
   return http.get<FeeStandardGetResult>('/api/finance/standard/get', query);
 }
+
+/* ============================================================
+ * ★ 2026-10-26 催费提醒（按财务账单到期日：餐费/住宿费/保险费）
+ * ============================================================ */
+
+export interface UrgeExpireRow {
+  studentId: string;
+  studentNo: string;
+  studentName: string;
+  className?: string;
+  deptName?: string;
+  feeType: number;
+  feeTypeName: string;
+  expireDate: string;
+  remainDays: number;
+  suggestAmount?: number;
+  latestPayDate?: string;
+}
+
+/** 读催费提前天数 */
+export function fetchUrgeAheadDays(): Promise<{ days: number }> {
+  return http.get<{ days: number }>('/api/finance/urge/ahead-days');
+}
+
+/** 改催费提前天数 */
+export function saveUrgeAheadDays(days: number): Promise<{ days: number }> {
+  return http.post<{ days: number }>('/api/finance/urge/ahead-days', { days });
+}
+
+/** 催费名单（按账单到期日） */
+export function fetchUrgeList(query?: {
+  className?: string;
+  keyword?: string;
+  feeType?: number;
+}): Promise<{ rows: UrgeExpireRow[]; total: number; aheadDays: number }> {
+  return http.get<{ rows: UrgeExpireRow[]; total: number; aheadDays: number }>(
+    '/api/finance/urge/list',
+    query,
+  );
+}

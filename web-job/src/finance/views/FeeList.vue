@@ -145,15 +145,18 @@
         <el-table-column prop="className" label="班级" width="100">
           <template #default="{ row }">{{ dash(row.className) }}</template>
         </el-table-column>
-        <el-table-column label="缴费类型" width="120" align="center">
+        <el-table-column label="缴费类型" width="200" align="center">
           <template #default="{ row }">
-            <div>{{ row.feeTypeName }}</div>
             <!--
-              ★ 2026-10-19 用户口径：总金额下面要知道包含什么。
-                列表放不下明细，先在这里标「含 N 项」，点详情看分项。
+              ★ 2026-10-26 用户要求：多种费用一起缴费时「缴费类型全写上」
+              （原来只显示第一项学费 + 「等 N 项」，打开详情也只看到学费）
+              现在直接列全：学费、餐费、住宿费、保险费、杂费
             -->
+            <div class="type-cell">
+              {{ row.feeTypeNames?.length ? row.feeTypeNames.join('、') : row.feeTypeName }}
+            </div>
             <div v-if="(row.itemCount || 1) > 1" class="voucher-group">
-              含 {{ row.itemCount }} 项
+              合计 {{ formatAmount(row.amount) }}
             </div>
           </template>
         </el-table-column>
@@ -165,11 +168,28 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="金额" width="120" align="right">
+        <!--
+          ★ 2026-10-26 应缴 / 实缴 / 优惠（用户口径：缴费单里要看到这三个数）
+          优惠 = 应缴 - 实缴，为 0 时不占地方（老单据在迁移里已回填成无优惠）。
+        -->
+        <el-table-column label="应缴 / 实缴" width="148" align="right">
           <template #default="{ row }">
-            <span class="money" :class="{ due: row.payStatus === PayStatus.UNPAID }">
-              {{ formatAmount(row.amount) }}
-            </span>
+            <div class="fee-money">
+              <div class="fm-line">
+                <span class="fm-k">应缴</span>
+                <span class="fm-v">{{ formatAmount(row.standardAmount ?? row.amount) }}</span>
+              </div>
+              <div class="fm-line">
+                <span class="fm-k">实缴</span>
+                <span class="fm-v" :class="{ due: row.payStatus === PayStatus.UNPAID }">
+                  {{ formatAmount(row.amount) }}
+                </span>
+              </div>
+              <div v-if="row.discount" class="fm-line fm-discount">
+                <span class="fm-k">优惠</span>
+                <span class="fm-v">-{{ formatAmount(row.discount) }}</span>
+              </div>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="payStatusName" label="缴费状态" width="100" align="center">
@@ -266,211 +286,22 @@
       </div>
     </el-card>
 
-    <!-- ============ 详情弹窗 ============ -->
-    <el-dialog v-model="detailVisible" title="缴费单详情" width="720px" top="6vh">
-      <el-descriptions v-if="detail" :column="2" border size="small">
-        <el-descriptions-item label="学号">{{ dash(detail.studentNo) }}</el-descriptions-item>
-        <el-descriptions-item label="姓名">{{ detail.studentName }}</el-descriptions-item>
-        <el-descriptions-item label="班级">{{ dash(detail.className) }}</el-descriptions-item>
-        <el-descriptions-item label="部门">{{ dash(detail.deptName) }}</el-descriptions-item>
-        <el-descriptions-item label="缴费类型">{{ detail.feeTypeName }}</el-descriptions-item>
-        <el-descriptions-item label="金额">
-          <span class="amount">{{ formatAmount(detail.amount) }}</span>
-          <!-- ★ 2026-10-19 一张凭证覆盖多张单据时，本单只是其中一项 -->
-          <div v-if="(detail.voucherGroupCount || 1) > 1" class="voucher-group">
-            本单为其中一项，该凭证合计 {{ formatAmount(detail.voucherGroupAmount) }}
-            （共 {{ detail.voucherGroupCount }} 笔）
-          </div>
-        </el-descriptions-item>
-        <el-descriptions-item label="缴费状态">
-          <el-tag :type="payStatusTagType(detail.payStatus)" size="small">
-            {{ detail.payStatusName }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="费用周期">{{ dash(detail.period) }}</el-descriptions-item>
-        <el-descriptions-item label="缴费日期">{{ dash(detail.payDate) }}</el-descriptions-item>
-        <el-descriptions-item label="到期日期">{{ dash(detail.expireDate) }}</el-descriptions-item>
-        <el-descriptions-item label="是否已核对">
-          <el-tag :type="detail.isVerified ? 'success' : 'info'" size="small">
-            {{ detail.isVerified ? '已核对' : '未核对' }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="核对人">{{ dash(detail.verifiedByName) }}</el-descriptions-item>
-        <el-descriptions-item label="是否入账">
-          <el-tag :type="detail.isInBill ? 'success' : 'info'" size="small">
-            {{ detail.isInBill ? '已入账单' : '未入账' }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="核对时间">{{ dash(detail.verifiedTime) }}</el-descriptions-item>
-        <el-descriptions-item v-if="detail.isRejected" label="打回原因" :span="2">
-          <span class="reject-text">{{ dash(detail.rejectReason) }}</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="备注" :span="2">{{ dash(detail.remark) }}</el-descriptions-item>
-      </el-descriptions>
-
-      <!--
-        ============ 这笔钱包含什么（总金额下面列的小列）============
-
-        ★ 2026-10-19 用户口径：
-          一张凭证 = 交的总金额，总金额下面列出包含的费用项。
-          合计单（家长一次转一笔钱交多类费用）才有明细；
-          单项单的物品就是「缴费类型」那一行，不重复列。
-      -->
-      <div v-if="detail && (detail.items?.length || 0) > 1" class="items-block">
-        <div class="items-head">
-          <span class="items-title">这笔钱包含</span>
-          <span class="items-total">
-            共 {{ detail.items?.length }} 项 · 合计 {{ formatAmount(detail.amount) }}
-          </span>
-        </div>
-        <el-table :data="detail.items" size="small" border>
-          <el-table-column prop="feeTypeName" label="费用项" min-width="140" />
-          <el-table-column label="应缴" width="120" align="right">
-            <template #default="{ row }">¥{{ row.standardAmountYuan }}</template>
-          </el-table-column>
-          <el-table-column label="实缴" width="120" align="right">
-            <template #default="{ row }">
-              <span class="items-amount">¥{{ row.amountYuan }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="优惠" width="120" align="right">
-            <template #default="{ row }">
-              <span v-if="row.discount > 0" class="items-discount">
-                -¥{{ row.discountYuan }}
-              </span>
-              <span v-else class="dash">—</span>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div class="items-note">
-          实缴合计 = 本单金额 = 缴费凭证上的金额，财务按整单核对一次即可。
-        </div>
-      </div>
-
-      <!-- ============ 缴费凭证（截图 + 转账单号）============ -->
-      <div v-if="detail" class="voucher-block">
-        <div class="voucher-head">
-          <span class="voucher-title">缴费凭证</span>
-          <el-tag v-if="detail.hasVoucher" type="success" size="small" effect="plain">已上传</el-tag>
-          <el-tag v-else type="info" size="small" effect="plain">未上传</el-tag>
-        </div>
-
-        <!-- 有凭证：左右布局，左边截图右边信息 -->
-        <div v-if="detail.hasVoucher" class="voucher-body">
-          <!-- 截图 -->
-          <div class="voucher-thumb-wrap">
-            <el-image
-              :src="voucherFullUrl(detail.voucherUrl)"
-              :preview-src-list="[voucherFullUrl(detail.voucherUrl)]"
-              :initial-index="0"
-              fit="cover"
-              class="voucher-thumb"
-              :preview-teleported="true"
-              hide-on-click-modal
-            >
-              <template #placeholder>
-                <div class="thumb-loading">
-                  <el-icon class="is-loading"><Loading /></el-icon>
-                </div>
-              </template>
-              <template #error>
-                <div class="thumb-error">
-                  <el-icon><PictureFilled /></el-icon>
-                  <span>截图加载失败</span>
-                </div>
-              </template>
-            </el-image>
-            <div class="thumb-tip">点击查看原图</div>
-          </div>
-
-          <!-- 转账信息 -->
-          <div class="voucher-info">
-            <div class="info-row">
-              <span class="info-label">转账单号</span>
-              <span class="info-value mono">{{ dash(detail.voucherNo) }}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">上传时间</span>
-              <span class="info-value">{{ dash(detail.voucherTime) }}</span>
-            </div>
-            <!--
-              ★ 2026-10-19 一次缴清多项费用：一张转账截图覆盖多张单据，
-                截图金额是合计，本单只是其中一项 —— 这里明确写出来。
-            -->
-            <div v-if="(detail.voucherGroupCount || 1) > 1" class="info-row">
-              <span class="info-label">凭证覆盖</span>
-              <span class="info-value">
-                共 {{ detail.voucherGroupCount }} 笔 · 合计
-                <b>{{ formatAmount(detail.voucherGroupAmount) }}</b>
-                <span class="voucher-group-inline">（本单 {{ formatAmount(detail.amount) }}）</span>
-              </span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">凭证规则</span>
-              <span class="info-value">
-                <el-tag
-                  :type="detail.voucherReusable ? 'warning' : 'info'"
-                  size="small"
-                  effect="plain"
-                >
-                  {{ detail.voucherReusable ? '可多人共用' : '一人一张' }}
-                </el-tag>
-              </span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">凭证截图</span>
-              <span class="info-value">
-                <el-button link type="primary" size="small" @click="openPreview(detail.voucherUrl)">
-                  查看大图
-                </el-button>
-                <el-button link type="primary" size="small" @click="openInNewTab(detail.voucherUrl)">
-                  新窗口打开
-                </el-button>
-              </span>
-            </div>
-
-            <!-- 餐费场景：同一张凭证还被谁用了 -->
-            <div v-if="detail.sharedVoucherBy?.length" class="info-row shared-row">
-              <span class="info-label">共用此凭证</span>
-              <span class="info-value">
-                <el-tag
-                  v-for="s in detail.sharedVoucherBy"
-                  :key="s.id"
-                  size="small"
-                  type="warning"
-                  effect="plain"
-                  class="shared-tag"
-                >
-                  {{ s.studentName }}（{{ s.studentNo || '—' }}）· {{ s.feeTypeName }}
-                </el-tag>
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <!--
-          无凭证（★ 2026-10-23：已收款但现金/线下收款没有转账截图）
-          这种单也进核对台，所以提示语不能再说「尚未上传凭证」——
-          那会让人以为班主任漏传了，实际是这笔本来就没有截图。
-        -->
-        <el-empty
-          v-else
-          :image-size="70"
-          description="无电子凭证（现金 / 线下收款，可直接核对入账）"
-        />
-      </div>
-
-      <template #footer>
-        <el-button @click="detailVisible = false">关闭</el-button>
+    <!--
+      缴费单详情 · 与账单明细共用同一个组件（2026-10-26 用户要求）
+      原来这里是内联的一大段，账单明细那边另写了一份，样式和字段都不一致；
+      抽成 FeeDetailDialog 后两边完全一样。
+    -->
+    <FeeDetailDialog v-model="detailVisible" :fee="detail">
+      <template #footer-actions="{ detail: d }">
         <el-button
-          v-if="detail?.canVerify"
+          v-if="d?.canVerify"
           type="success"
-          @click="detail && (detailVisible = false, handleVerify(detail))"
+          @click="detailVisible = false; handleVerify(d)"
         >
           核对这笔
         </el-button>
       </template>
-    </el-dialog>
+    </FeeDetailDialog>
 
     <!-- 凭证大图预览（点缩略图或「查看大图」都会打开） -->
     <el-image-viewer
@@ -548,6 +379,7 @@ import {
   batchVerifyFee,
 } from '@/finance/api/finance';
 import { formatAmount, payStatusTagType, dash } from '@/finance/utils/finance';
+import FeeDetailDialog from '@/finance/components/FeeDetailDialog.vue';
 
 /* ---------- 列表 ---------- */
 
@@ -997,7 +829,73 @@ onMounted(async () => {
   color: #443432;
 }
 
+/* ★ 2026-10-26 列表里的「应缴 / 实缴 / 优惠」三行 */
+.fee-money {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.35;
+}
+
+.fm-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.fm-k {
+  font-size: 11px;
+  color: #A2938E;
+}
+
+.fm-v {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #443432;
+}
+
+.fm-v.due {
+  color: #8A5A2B;
+}
+
+.fm-discount .fm-k,
+.fm-discount .fm-v {
+  color: #B8741A;
+}
+
+/* ★ 2026-10-26 详情弹窗里的应缴 / 实缴 / 优惠 */
+.detail-money {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dm-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.dm-k {
+  font-size: 11.5px;
+  color: #A2938E;
+  min-width: 28px;
+}
+
+.dm-discount {
+  font-weight: 600;
+  color: #B8741A;
+}
+
 /* 一张凭证覆盖多张单据时的小字说明（共 N 笔 · 合计 ¥X） */
+/* ★ 2026-10-26 合并单「等 N 项」标记 */
+.item-more {
+  font-size: 11.5px;
+  color: #B8741A;
+  font-weight: 600;
+}
+
 .voucher-group {
   margin-top: 2px;
   font-size: 11px;

@@ -40,7 +40,7 @@ import { BizCode, STUDENT_STATUS_NAME, StudentStatus } from 'shared-types';
 import { BizError } from '../../middleware/errorHandler';
 import { db } from '../../utils/db';
 import { CLASS_STATUS, CLASS_STATUS_NAME } from '../shared/dto';
-import { tbl } from '../shared/uniTable';
+import { tbl, uniDb } from '../shared/uniTable';
 import { LOCKED_STUDENT_STATUSES } from '../shared/statusLock';
 import { assertStageView } from './service';
 
@@ -147,7 +147,19 @@ async function rosterStudentIds(classId: string, stage: EmploymentStage): Promis
   const roster = (await tbl(db, 'sms_job', ROSTER_T, stage)
     .where({ class_id: classId, is_deleted: 0 })
     .select('student_id')) as Array<Record<string, any>>;
-  return roster.map((r) => String(r.student_id)).filter(Boolean);
+  const ids = roster.map((r) => String(r.student_id)).filter(Boolean);
+  if (ids.length) return ids;
+
+  /**
+   * ★ 2026-10-25：花名册为空时按**学生档案的 class_id** 兜底。
+   *   在班级管理里「部门=就业部」直接建的班（edu_stage='emp'）不写花名册表，
+   *   只按花名册查会提示「该班级没有学生」，升就业/已就业都点不动。
+   */
+  const rows = (await uniDb('t_uni_student')
+    .where({ class_id: classId, is_deleted: 0 })
+    .whereIn('edu_stage', ['job', 'emp'])
+    .select('id')) as Array<Record<string, any>>;
+  return rows.map((r) => String(r.id)).filter(Boolean);
 }
 
 export async function upgradeClassToEmployment(
@@ -171,18 +183,32 @@ export async function upgradeClassToEmployment(
   //   退学(7) 虽然也落在 whereNotIn 里，但它是**永久锁** → 必须单独排除，
   //   否则一次【升就业】就把退学学生改成「待就业」，花名册里那条退学记录凭空消失。
   //   见 shared/statusLock.ts（LOCKED_STUDENT_STATUSES）。
-  const updated = await tbl(db, 'sms_job', STUDENT_T, stage)
+  /**
+   * ★ 2026-10-25：先按班级自己的学段更新；命中 0 行时回退「job / emp 两学段」。
+   *   就业部学生的档案在库里可能落在另一个学段（学生 999 就是 edu_stage='job'），
+   *   只按 stage 注入会更新 0 行 → 班级状态改了、学生状态没改。
+   */
+  const patch = {
+    student_status: StudentStatus.WAIT_EMPLOY,
+    update_time: new Date(),
+    update_by: user?.userId || 'system',
+  };
+  const blocked = [
+    StudentStatus.WAIT_EMPLOY,
+    StudentStatus.EMPLOYED,
+    ...LOCKED_STUDENT_STATUSES,
+  ];
+  let updated = await tbl(db, 'sms_job', STUDENT_T, stage)
     .whereIn('id', ids)
-    .whereNotIn('student_status', [
-      StudentStatus.WAIT_EMPLOY,
-      StudentStatus.EMPLOYED,
-      ...LOCKED_STUDENT_STATUSES,
-    ])
-    .update({
-      student_status: StudentStatus.WAIT_EMPLOY,
-      update_time: new Date(),
-      update_by: user?.userId || 'system',
-    });
+    .whereNotIn('student_status', blocked)
+    .update(patch);
+  if (!Number(updated)) {
+    updated = await uniDb('t_uni_student')
+      .whereIn('id', ids)
+      .whereIn('edu_stage', ['job', 'emp'])
+      .whereNotIn('student_status', blocked)
+      .update(patch);
+  }
 
   /* ★ 2026-10-21 批注第 2 条：升就业成功 → 班级状态改为「待就业」
    *   已经是「已就业(7)」的班不动（终态，不能被再次升就业拉回来）。 */
@@ -234,9 +260,16 @@ async function buildProgress(
   ids: string[],
   stage: EmploymentStage,
 ): Promise<EmploymentProgressResult> {
-  const rows = (await tbl(db, 'sms_job', STUDENT_T, stage)
+  let rows = (await tbl(db, 'sms_job', STUDENT_T, stage)
     .whereIn('id', ids)
     .select('id', 'student_no', 'student_name', 'student_status')) as Array<Record<string, any>>;
+  /* ★ 2026-10-25：同上，按学段查不到就回退两学段（就业部学生可能挂在别的学段） */
+  if (!rows.length) {
+    rows = (await uniDb('t_uni_student')
+      .whereIn('id', ids)
+      .whereIn('edu_stage', ['job', 'emp'])
+      .select('id', 'student_no', 'student_name', 'student_status')) as Array<Record<string, any>>;
+  }
 
   // 状态码 → 该状态的学生名单
   const bucket = new Map<number, EmploymentProgressStudent[]>();

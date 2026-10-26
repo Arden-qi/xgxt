@@ -98,8 +98,13 @@ billRouter.get(
   validate(studentListSchema),
   wrap(async (req, res) => {
     const q = (req as any).validated as z.infer<typeof studentListSchema>;
-    const { rows, total } = await listBillStudents(q);
-    res.json(page(rows, total, q));
+    const { rows, total, classSummary } = await listBillStudents(q);
+    const payload = page(rows, total, q);
+    // ★ 2026-10-26 筛选了班级时，附带该班总额与按类型拆分（前端在列表上方展示）
+    if (classSummary) {
+      (payload.data as any).classSummary = classSummary;
+    }
+    res.json(payload);
   }),
 );
 
