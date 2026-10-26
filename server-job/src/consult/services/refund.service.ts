@@ -495,6 +495,10 @@ async function reportToFinance(
        * 与真实来源不符（用户反馈：单据是咨询提交的）。
        */
       sourceType: RefundSourceType.CONSULT,
+      // ★ 2026-10-26 必须带上游单号：财务出款后靠它回写「学生已流失」
+      sourceModule: 'consult',
+      sourceStage: 'jh',
+      sourceRefundId: String(row.id),
       remark: `咨询模块退费单 ${row.refund_no}（试学 ${row.trial_days} 天，扣减 ¥${centToYuan(row.deduct_total)}）`,
     });
 

@@ -71,8 +71,14 @@ const ORDER = [
  */
 const POST_STEPS = [
   ['scripts/fix-consult-columns.mjs', '咨询表补列', 'sms_consult'],
-  /* ★ 2026-10-26 合并上游：财务退费结构（3 列 + 明细表 + 唯一索引），第 4 位是透传给脚本的参数 */
+
+  /* 财务库（没有 knex env，只能走独立脚本显式指定连接） */
   ['scripts/_migrate-finance-refund-20261022.mjs', '财务退费结构', 'sms_finance', ['--apply']],
+  // ★ 2026-10-26 账单到期日 + 缴费单应缴金额（本次改动）
+  ['scripts/_migrate-finance-bill-expire-20261026.mjs', '账单到期日/应缴金额', 'sms_finance', ['--apply']],
+  // ★ 2026-10-26 催费设置表（提前天数等 KV 配置）
+  ['scripts/_migrate-finance-setting-20261026.mjs', '催费设置表', 'sms_finance', ['--apply']],
+
   /**
    * ★ 2026-10-22：咨询状态对账
    *
