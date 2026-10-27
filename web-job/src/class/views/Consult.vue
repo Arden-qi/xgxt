@@ -103,8 +103,18 @@
     </div>
 
     <el-table v-loading="loadingTable" :data="tableRows" size="small" border style="margin-top: 12px">
-      <el-table-column prop="consultNo" label="咨询单号" width="150">
-        <template #default="{ row }"><span class="mono">{{ row.consultNo }}</span></template>
+      <!-- ★ 2026-10-27：显示咨询侧收款单号（SK…）；consultNo 是幂等键，不作为展示 -->
+      <el-table-column label="咨询单号" width="160">
+        <template #default="{ row }">
+          <el-tooltip
+            v-if="row.consultNoText"
+            :content="row.consultNoTip || row.consultNoText"
+            placement="top"
+          >
+            <span class="mono">{{ row.consultNoText }}</span>
+          </el-tooltip>
+          <span v-else style="color: var(--el-text-color-placeholder)">—</span>
+        </template>
       </el-table-column>
       <el-table-column prop="studentName" label="姓名" width="100" />
       <el-table-column label="性别" width="64">
@@ -147,7 +157,14 @@
   <el-dialog v-model="receiveVisible" title="接收学员" width="720px" top="5vh" destroy-on-close>
     <el-form ref="receiveRef" :model="receiveForm" :rules="receiveRules" label-width="110px" label-position="right">
       <el-form-item label="学员">
-        <el-input :model-value="activeConsult ? `${activeConsult.studentName} · ${activeConsult.consultNo}` : ''" disabled />
+        <el-input
+          :model-value="
+            activeConsult
+              ? `${activeConsult.studentName} · ${activeConsult.consultNoText || '—'}`
+              : ''
+          "
+          disabled
+        />
       </el-form-item>
       <!-- ★ 2026-10-06：接受班级只读 —— 由咨询 / 初高推送时决定，此处不可改 -->
       <el-form-item label="接受班级">
