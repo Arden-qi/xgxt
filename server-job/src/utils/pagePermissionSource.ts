@@ -726,6 +726,10 @@ const FINANCE_ACTION_CODES_NOT_IN_TREE: string[] = [
   'finance:fee:add',
   'finance:fee:delete',
   'finance:refund:apply',
+  // ★ 2026-10-27 merge：权限树有点位（urgeView/urgeSet）但 PERM_POINT_TO_ACTION_CODES
+  //   未登记这两个码；原 FIN_ROLE_OPERATIONS 私有表靠手抄兜底，私有表删除后由这里接管。
+  'finance:urge:view',
+  'finance:urge:manage',
   'consult:student:add',
   'consult:student:edit',
   'consult:student:delete',

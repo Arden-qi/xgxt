@@ -57,6 +57,8 @@
     "fix:perm-consistency:apply": "tsx scripts/fix-perm-consistency.ts --apply",
     "sync:page-actions": "tsx scripts/sync-role-page-actions.ts",
     "sync:page-actions:apply": "tsx scripts/sync-role-page-actions.ts --apply",
+    "sync:perm-tree": "tsx scripts/sync-perm-tree-actions.ts",
+    "sync:perm-tree:apply": "tsx scripts/sync-perm-tree-actions.ts --apply",
     "audit:perm": "node ../tools/_audit_perm_all.mjs"
   },
   "dependencies": {

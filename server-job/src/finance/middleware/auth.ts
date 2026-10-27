@@ -210,7 +210,6 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
  *     · 中央表 = 静态兜底（该角色"默认"能干这些）
  *     · 权限树 overlay = 管理员在「职位权限分配」里的显式增删（优先于兜底）
  * ============================================================ */
-
 /** 门户级角色码 —— 只有这些说明 token 里没有业务角色，需要回查 */
 const PORTAL_ONLY_ROLES = new Set(['SYS_ADMIN', 'SYS_STAFF', 'ROLE_SERVICE']);
 

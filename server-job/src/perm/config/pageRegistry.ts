@@ -176,7 +176,7 @@ const FINANCE: RegistryBoard = {
     { key: 'freeze', title: '冻结名单', path: '/finance/freeze', remark: '批量冻结 / 解冻' },
     { key: 'refund', title: '退费管理', path: '/finance/refund', remark: '退费审批与执行' },
     { key: 'bill', title: '账单明细', path: '/finance/bill', remark: '逐笔账单流水' },
-    { key: 'standard', title: '费用标准', path: '/finance/standard', remark: '各类型费用标准配置' },
+    { key: 'standard', title: '费用标准', path: '/finance/standard', remark: '各类型费用标准配置 · 催费设置（提前天数）' },
   ],
 };
 
@@ -274,7 +274,7 @@ const TEACH: RegistryBoard = {
       title: '宿舍管理',
       path: '/teaching/dorm',
       pageCodes: ['classjh:dorm:view', 'class:dorm:view', 'job:dorm:view'],
-      remark: '各学段宿舍分派、调换与退宿',
+      remark: '四个页签：宿舍房间 / 分派宿舍 / 申请审批 / 楼栋设置',
     },
     {
       key: 'fee',
