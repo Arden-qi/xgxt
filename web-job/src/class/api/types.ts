@@ -532,6 +532,8 @@ export interface ConsultReceivePayload {
   dormId?: string | null;
   dormNo?: string | null;
   bedNo?: number | null;
+  /** 床位 id（与 dormId 同源，便于后端直接写床位占用） */
+  bedId?: string | null;
   remark?: string | null;
   /** 末班 / 重修转入：为 true 时封班班级也可接收，且不新建学生档案 */
   repeatIn?: boolean;
