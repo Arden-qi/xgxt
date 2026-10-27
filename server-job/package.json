@@ -15,6 +15,7 @@
     "migrate:class-jh": "knex migrate:latest --env class-jh",
     "migrate:consult": "node scripts/fix-consult-columns.mjs",
     "fix:consult": "node scripts/fix-consult-columns.mjs",
+    "fix:fee-name": "node scripts/fix-teach-fee-item-name.mjs",
     "fix:consult-state": "node scripts/repair-consult-state.mjs",
     "fix:trial-start": "node scripts/repair-trial-start.mjs",
     "fix:refund-state": "node scripts/repair-refund-state.mjs",

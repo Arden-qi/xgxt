@@ -27,7 +27,8 @@ import { db, knexRaw } from '../utils/db';
 import { BizError } from '../middleware/errorHandler';
 import { nextBillNoForPay } from '../utils/orderNo';
 import { getStandard, isVoucherReusable, expectedSourceOf } from './fee-standard.service';
-import { addMonths } from '../utils/dateMath';
+// ★ 2026-10-26 到期日计算抽公共（回填脚本 / 催费读侧走同一份规则）
+import { computeExpireDate, expireUnitOf } from './expire';
 import { findArchiveStudent } from './student-archive';
 // ★ 2026-10-22 核对到账后立即回推咨询侧（推进学生状态 + 同步教学学籍）
 import { remotePost } from '../../shared/http';
@@ -603,13 +604,8 @@ async function calcExpireDate(
   payDate: string,
 ): Promise<string | null> {
   const feeType = Number(row.fee_type);
-  const unit: 'M' | 'Y' | null =
-    feeType === FeeType.MEAL || feeType === FeeType.ACCOMMODATION
-      ? 'M'
-      : feeType === FeeType.INSURANCE
-        ? 'Y'
-        : null;
-  if (!unit) return null;
+  // 没有到期概念的费用（学费/试学费/押金/校服…）直接返回
+  if (!expireUnitOf(feeType)) return null;
 
   // 取该费用在该部门的标准价（没有标准就算不出来，留空而不是瞎算）
   let std = 0;
@@ -620,12 +616,6 @@ async function calcExpireDate(
     std = 0;
   }
   if (std <= 0) return null;
-
-  const paid = Number(row.amount) || 0;
-  // 缴了钱至少给一个周期（优惠后不足一个标准价时，不能让到期日不动）
-  let units = Math.floor(paid / std);
-  if (units < 1) units = 1;
-  const months = unit === 'Y' ? units * 12 : units;
 
   // 该生该费用「已入账」账单里最晚的到期日 —— 续费从这里接
   const prev = await t(BILL_TABLE)
@@ -640,8 +630,14 @@ async function calcExpireDate(
     .first();
 
   const prevDate = prev?.d ? toDateStr(prev.d) : undefined;
-  const base = prevDate && prevDate > payDate ? prevDate : payDate;
-  return addMonths(base, months);
+  // ★ 计算规则统一在 services/expire.ts（回填脚本走同一份，避免两套口径）
+  return computeExpireDate({
+    feeType,
+    amount: Number(row.amount) || 0,
+    payDate,
+    stdAmount: std,
+    prevExpire: prevDate,
+  });
 }
 
 export async function verifyFee(
